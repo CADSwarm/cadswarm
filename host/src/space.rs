@@ -62,7 +62,18 @@ const QUERIES: &[&str] = &[
 ];
 
 impl Space {
+    /// Connect as the running host: rejoin at a new fence, superseding any older host process.
     pub fn connect(cfg: &HostConfig) -> Result<Space> {
+        Self::open(cfg, true)
+    }
+
+    /// Connect alongside a running host (e.g. `cadswarm-host invite`) and reuse its fence, so the
+    /// running host is not superseded.
+    pub fn attach(cfg: &HostConfig) -> Result<Space> {
+        Self::open(cfg, false)
+    }
+
+    fn open(cfg: &HostConfig, rejoin: bool) -> Result<Space> {
         let conn = DbConnection::builder()
             .with_uri(cfg.uri.as_str())
             .with_database_name(cfg.db.as_str())
@@ -79,6 +90,9 @@ impl Space {
         let space = Space { conn };
         // The subscription must be applied before rejoin, so `v_me` shows the new fence.
         space.wait_for(Duration::from_secs(20), |s| s.me().is_some())?;
+        if !rejoin {
+            return Ok(space);
+        }
         let before = space.fence();
         space.rejoin("host")?;
         space.wait_for(Duration::from_secs(20), |s| s.fence() > before)?;
