@@ -9,6 +9,9 @@ import { findingLines } from './panels';
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 const STEP_LABEL: Record<string, string> = { new: 'Sent', planning: 'Plan', building: 'Build', reviewing: 'Review', ready: 'Ready' };
+/** The short label is for the row; this is what a title or screen reader says in full. */
+const STEP_FULL: Record<string, string> = { new: 'Request sent', planning: 'Planning the parts',
+  building: 'Building the parts', reviewing: 'Reviewer checking the model', ready: 'Ready to download' };
 
 function time(ms: number) {
   const d = new Date(ms);
@@ -25,7 +28,7 @@ function buildBubble(s: State, b: Extract<ThreadItem, { type: 'build' }>['brief'
   return `<div class="bubble build${b.status === 'failed' ? ' failed' : b.status === 'cancelled' ? ' cancelled' : ''}">
       <p class="bubble-text">${esc(b.text)}</p>
       <ol class="steps" aria-label="Build progress">
-        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''}>${STEP_LABEL[st]}</li>`).join('')}
+        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''} title="${STEP_FULL[st]}" aria-label="${STEP_FULL[st]}">${STEP_LABEL[st]}</li>`).join('')}
       </ol>
       <p class="meta">${b.status === 'failed' ? '<span class="err">Stopped: see Team ▸ Activity</span>'
         : b.status === 'cancelled' ? 'Cancelled: nobody works on it now'
