@@ -59,15 +59,17 @@ CadSwarm turns FreeCAD into a shared workspace for a small team of people and th
 - **Coordination the database enforces.** Object locks, fenced leases, revisions, a shared `Params`
   sheet with FreeCAD expressions, transactional rollback inside FreeCAD, heartbeats, stale
   detection and takeover. An agent that touches a part it does not hold has its whole op aborted.
-- **A Droid reviewer.** When the parts are built, a Factory Droid agent inspects the model with a
-  restricted tool set: clashes, board fit (measured PCB, mounting holes, port cutouts) and
-  printability. It files tasks with precise fixes, and cannot change geometry itself.
+- **An optional Droid reviewer.** When a host has Factory Droid installed, `cadswarm-host
+  init-reviewer` turns on a reviewer that inspects the model with a restricted tool set: clashes,
+  board fit (measured PCB, mounting holes, port cutouts) and printability. It files tasks with
+  precise fixes, and cannot change geometry itself. The demo host has no Droid, so the demo runs
+  without this step; the module still refuses any write op from a `reviewer` member.
 - **Hand off, not start over.** Someone leaving can hand their locks, tasks and a note to an AI; the
   new agent accepts the handoff and continues from the owner's recent ops.
 - **Knowledge that accumulates.** On an Elastic project, agents look up board dimensions from
-  ingested datasheets through hybrid search, recall similar finished designs, and read lessons
-  distilled by a scheduled Workflow from previous reviewers' findings, so the second case for a
-  board starts from what the first one learned.
+  ingested datasheets through hybrid search and recall similar finished designs, so the second case
+  for a board starts from what the first one learned. When a reviewer has run, a scheduled Workflow
+  also distils its findings into per-board lessons that the planner reads.
 - **Files and output that are safe by default.** Sandboxed project files with history and no silent
   overwrites, snapshots, STEP/STL export, and a phone web app that shows the same live state.
 
@@ -98,8 +100,11 @@ preview, pairing by invite, and handoff controls.
 datasheets, finished designs and distilled lessons. Datasheet PDFs are chunked into documents with
 `semantic_text`; the Jina embedding endpoint and `.jina-reranker-v3.5` turn a plain-language
 question into a precise passage, with ES|QL filtering by `board_id` when the agent names the board.
-Finished briefs are indexed back as design memory, and a scheduled Workflow counts reviewer
-problems with ES|QL and writes one lesson document per board+problem that later agents read.
+When a brief's export completes, the host indexes the finished design, with its final parameters and
+any review findings, back into `cadswarm-designs`, so the next planner recalls it; a scheduled
+Workflow counts reviewer problems with ES|QL and writes one lesson document per board+problem. With
+no reviewer configured a design carries no problems, so the Workflow still runs but has nothing to
+distil — which is the state of the demo project.
 
 **Factory Droid for review.** The reviewer uses `droid-sdk` with `restrict_tools` limited to
 inspection and reporting, joins as a `reviewer` member, logs every tool call to `activity`, and
@@ -136,10 +141,12 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 - A working beginner path: install FreeCAD, double-click one file, follow the guide, and join a team
   with an invite — including automatic first-use downloads with checksums.
 - Elastic is live, not a diagram: 6 datasheet documents indexed, hybrid + reranked search that
-  returns the right passages for a plain-language board question, designs written back as memory,
-  and a `distil-lessons` Workflow that ran end to end and wrote real lessons from a finished design.
+  returns the right passages for a plain-language board question, and a design-memory round trip we
+  re-ran live — a finished enclosure indexed by the host, recalled first for a differently worded
+  request, and re-indexed after we deleted it. The `distil-lessons` Workflow runs and completes; it
+  has nothing to write until a reviewer supplies findings.
 - The Droid reviewer runs from the host, shows its work in the activity feed, and has a safe failure
-  mode.
+  mode; it is optional, and off on the demo host because Droid is not installed there.
 - Tests are part of the story: the Rust host suite, a Python suite covering the module adapter,
   guide, hosting, Elastic and the reviewer, and a web suite for the store, panels and viewer math.
 
@@ -195,22 +202,24 @@ CadSwarm enclosure in FreeCAD.
 invite code and the detected AI helper. Say: "No CAD or coding experience: pick the helper you
 already use."
 
-**0:35–1:05 — Two agents build live.** FreeCAD with the team panel. Send a brief: "A pocket case for
-a Seeed XIAO ESP32C3 with a lid and a USB cutout." Show the planner's tasks, then parts appearing in
-owner colors as two agents build. Mention Params and board dimensions.
+**0:35–1:05 — Two agents build live.** FreeCAD with the team panel. Send a brief: "An enclosure for
+an ESP32-S3-DevKitC-1 with a lid and a USB cutout." Show the planner's tasks, then parts appearing in
+owner colors as agents build. Mention Params and board dimensions.
 
 **1:05–1:30 — The database protects the work.** On the phone web app (or panel), steer: "make the
 lid 20 mm tall". Then ask the other agent to change the base plate: it is refused, "locked by …",
 and messages the owner. Change a shared `Params` value and show the dependent part recompute.
 
-**1:30–1:55 — Review and handoff.** The last task completes; Droid's review appears: a clash and a
-port cutout that is too low, with tasks for the owners. Fix them; the reviewer passes. Show "Hand off
-now" as a person leaves, and the new agent accepting.
+**1:30–1:55 — The design finishes.** The last task completes and the brief turns `ready`: open the
+exported STL in the viewer and the Params sheet with the values the swarm settled on. Say: "The
+export is also a hand-off to memory — the finished design, its parameters and any review findings go
+back into Elastic." (The Droid reviewer is optional and off on this host; see the scope note.)
 
-**1:55–2:15 — Knowledge.** In Kibana: the board datasheet chunks, a hybrid search for mounting
-holes (show the reranker lifting the right passage), a finished design recalled from
-`cadswarm-designs`, and the `distil-lessons` Workflow's lessons next to the review that produced
-them. "Elastic remembers what the team learned, so the next design starts smarter."
+**1:55–2:15 — Knowledge.** In Kibana: the board datasheet chunks, a hybrid search for USB cutout
+dimensions (show the reranker lifting the right passage), then the finished design in
+`cadswarm-designs` with its parameters, recalled for a differently worded request. Show the
+`distil-lessons` Workflow and its last run completed. "Elastic remembers what the team built, so the
+next design starts smarter."
 
 **2:15–2:35 — Output and installation.** Export STEP/STL and open the result. Show the guide's
 first-use download with checksum verification, and the GitHub Actions release page. "One file into
@@ -221,22 +230,26 @@ repo URL and the mock web link.
 
 ### Fill the Elastic indices before recording
 
-`cadswarm-designs` and `cadswarm-lessons` start empty and fill from real work, so record the
-knowledge segment after the demo brief has finished:
+`cadswarm-designs` fills itself: finish one brief through the host and, when the export completes,
+the host indexes it (`index_design`) with its final params and any review findings. Verified live by
+deleting the document and letting the host re-export: it came back. `cadswarm-lessons` only fills
+from reviewer findings, so it stays empty on a host without Droid; do not promise documents there.
 
-1. Finish one brief through the host. When it reaches `ready`, the host indexes it into
-   `cadswarm-designs` (`[host] op ... index_design`), which also gives the planner its memory.
-2. Distil lessons now instead of waiting for the 10-minute schedule:
+1. Finish one brief through the host and confirm `cadswarm-designs` has it.
+2. Run the Workflow once so the last execution shows `completed` (the scheduled trigger also fires
+   every 10 minutes). Use the workflow's real id — it is assigned on create:
 
    ```powershell
-   curl.exe -s -X POST "$env:KIBANA_URL/api/workflows/workflow/distil-lessons/run" `
+   curl.exe -s "$env:KIBANA_URL/api/workflows" -H "Authorization: ApiKey $env:ELASTIC_API_KEY"
+   curl.exe -s -X POST "$env:KIBANA_URL/api/workflows/workflow/distil-lessons-3/run" `
      -H "Authorization: ApiKey $env:ELASTIC_API_KEY" -H "Content-Type: application/json" `
-     -d '{\"inputs\":{}}'
+     -H "kbn-xsrf: true" -d '{\"inputs\":{}}'
    ```
 
-   Then `GET /api/workflows/workflow/distil-lessons/executions` shows `status: completed`, and
-   `cadswarm-lessons` holds one document per board+problem with a `count`.
-3. Leave one hybrid search open in a Kibana tab so the segment starts from a warm query.
+   `GET /api/workflows/executions/<id>` then shows both steps `completed`. With no reviewer there
+   are no problems, so `cadswarm-lessons` stays at 0 documents and the run is still a success.
+3. Leave one hybrid search and the `cadswarm-designs` document open in Kibana tabs so the segment
+   starts from a warm query.
 
 ### Scope note for the Elastic segment
 
@@ -245,3 +258,15 @@ validated board spec for a board outside the local library. It is not part of th
 its model sits on a trial quota that answers `429`, and the shipped path answers board questions
 from the local library plus datasheet search, which needs no model. The code keeps the expert as a
 best-effort extra that degrades to the library, so nothing in the demo depends on it.
+
+### What the demo does not claim
+
+Two optional pieces are shipped but not shown, because this host cannot run them:
+
+- **The Droid reviewer.** `cadswarm.reviewer` runs on `droid-sdk`; without the Droid CLI the host
+  never enables it, so a brief goes `building → ready` with no review. It is why
+  `cadswarm-lessons` stays empty: with no findings there is nothing to distil.
+- **Agent Builder** (`cadswarm-board-expert`), on a trial model quota that answers `429` for now.
+
+Everything the video does show — board search, design memory, the Workflow run, the export — ran
+against the live project on 2026-10-24.
