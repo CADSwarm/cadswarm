@@ -16,6 +16,7 @@ steps:
         | WHERE problems IS NOT NULL
         | STATS count = COUNT(*) BY board_id, problems
         | WHERE count >= 1
+        | EVAL updated_at = NOW()
         | SORT count DESC
         | LIMIT 200
   - name: write_lessons
@@ -32,4 +33,4 @@ steps:
             problem: "{{ foreach.item[2] }}"
             count: "{{ foreach.item[0] }}"
             lesson: "Seen {{ foreach.item[0] }} time(s) on {{ foreach.item[1] }}: {{ foreach.item[2] }}. Design to avoid it."
-            updated_at: "{{ execution.startedAt }}"
+            updated_at: "{{ foreach.item[3] }}"

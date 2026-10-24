@@ -68,6 +68,10 @@ def ingest(elastic, sources, fetch=urlopen_bytes):
         is_pdf = "pdf" in ctype or s["url"].lower().endswith(".pdf")
         text = pdf_to_text(data) if is_pdf else html_to_text(data.decode("utf-8", "replace"))
         text = text[:MAX_CHARS]
+        if not text.strip():
+            # Scanned and vector-only PDFs extract nothing; indexing a blank document only hides that.
+            print(f"skip {s['url']}: no text extracted (scanned or vector-only?)", file=sys.stderr)
+            continue
         doc_id = hashlib.sha256(s["url"].encode()).hexdigest()[:20]
         elastic.es("PUT", f"/cadswarm-boards/_doc/{doc_id}", {
             "board_id": s["board_id"], "title": s["title"], "source_url": s["url"],

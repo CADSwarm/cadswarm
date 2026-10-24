@@ -84,6 +84,8 @@ def test_search_is_hybrid_rrf_reranked_by_jina_and_filterable():
     inner = rr["retriever"]["rrf"]["retrievers"]
     kinds = [list(r["standard"]["query"]["bool"]["must"][0]["match"].keys())[0] for r in inner]
     assert kinds == ["text", "content"]
+    # Elasticsearch rejects a reranker window larger than the inner rrf's, so both are 50.
+    assert rr["retriever"]["rrf"]["rank_window_size"] == rr["rank_window_size"] == 50
     assert inner[0]["standard"]["query"]["bool"]["filter"] == [{"term": {"board_id": "raspberry-pi-pico"}}]
     assert b["size"] == 3
 

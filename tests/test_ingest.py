@@ -26,3 +26,12 @@ def test_ingest_indexes_one_document_per_source_with_its_metadata():
     assert path.startswith("/cadswarm-boards/_doc/")
     assert doc["board_id"] == "b1" and doc["source_url"] == "https://x/a.html"
     assert "50 mm" in doc["content"] and doc["text"] == doc["content"]
+
+
+def test_a_source_with_no_extractable_text_is_skipped_not_indexed_blank():
+    # Scanned/vector-only PDFs (the Pi 4 mechanical drawing) extract to nothing; a blank document
+    # in the index would look like knowledge and answer nothing.
+    src = [{"board_id": "b1", "title": "T", "url": "https://x/a.html"}]
+    fake = FakeElastic()
+    n = ingest(fake, src, fetch=lambda url: (b"<script>var x=1</script>", "text/html"))
+    assert n == 0 and fake.docs == []

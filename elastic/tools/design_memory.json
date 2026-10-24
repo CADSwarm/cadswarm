@@ -2,4 +2,4 @@
  "description": "Search past CadSwarm designs: what was requested, which board, which problems the reviewer found.",
  "configuration": {
    "query": "FROM cadswarm-designs METADATA _score | WHERE MATCH(content, ?query) | SORT _score DESC | KEEP brief_id, board_id, request, problems, outcome, _score | LIMIT 5",
-   "params": {"query": {"type": "keyword", "description": "The new request, to find similar past designs"}}}}
+   "params": {"query": {"type": "string", "description": "The new request, to find similar past designs"}}}}
