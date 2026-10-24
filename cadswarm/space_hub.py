@@ -56,6 +56,7 @@ class SpaceHub:
         self._seq = 0
         self.routes = [
             ("POST", r"/heartbeat", self.heartbeat), ("POST", r"/leave", self.leave),
+            ("POST", r"/pointer", self.pointer_route),
             ("GET", r"/model", self.model), ("GET", r"/objects/(?P<name>[^/]+)", self.get_object),
             ("POST", r"/ops", self.ops), ("POST", r"/locks", self.lock), ("POST", r"/locks/release", self.release),
             ("POST", r"/interference", self.interference), ("POST", r"/printability", self.printability),
@@ -178,6 +179,28 @@ class SpaceHub:
         except HubRequestError:
             pass  # presence is best-effort; never block a tool on it
 
+    def move_pointer(self, obj, point=None, mode="pointing", label=""):
+        """Point at `obj` (at `point` [x, y, z] when given). Best-effort, like log_activity."""
+        try:
+            self._f("move_pointer", obj or "", [float(c) for c in (point or [])][:3], mode, (label or "")[:60])
+        except (HubRequestError, TypeError, ValueError):
+            pass
+
+    def pointer_route(self, body):
+        point, mode = body.get("point") or [], body.get("mode") or "pointing"
+        if point and len(point) != 3:
+            raise HubRequestError(400, {"error": "point must be [x, y, z]", "code": "bad_args"})
+        if not point and body.get("object"):  # no spot given: the part's own anchor vertex
+            point = (self.run_op("get_object", {"name": body["object"]}) or {}).get("anchor") or []
+        self._f("move_pointer", body.get("object") or "", [float(c) for c in point], mode, (body.get("label") or "")[:60])
+        return {"object": body.get("object") or "", "point": point, "mode": mode}
+
+    def _point_after(self, kind, r):
+        """After an op, rest this member's pointer on the vertex the worker picked for it."""
+        target = r.get("pointer") if isinstance(r, dict) else None
+        if isinstance(target, dict) and target.get("object") and len(target.get("point") or []) == 3:
+            self.move_pointer(target["object"], target["point"], "pointing", kind.replace("_", " "))
+
     # ------------------------------------------------------------------ lookups
 
     def _names(self):
@@ -240,7 +263,9 @@ class SpaceHub:
         while time.time() < deadline:
             rows = self._rows("v_op", f"id = '{op_id}'")
             if rows and rows[0]["status"] == "done":
-                return self._result(rows[0]["result_json"])
+                r = self._result(rows[0]["result_json"])
+                self._point_after(kind, r)
+                return r
             if rows and rows[0]["status"] in ("failed", "rejected"):
                 code = rows[0]["error_code"] or "op_error"
                 raise HubRequestError(409 if rows[0]["status"] == "rejected" else 422,
@@ -309,6 +334,8 @@ class SpaceHub:
 
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})
+        if info.get("anchor"):
+            self.move_pointer(name, info["anchor"], "inspecting", f"looking at {name}")
         info["locked_by"] = next((self._names().get(l["holder"]) for l in self._rows("v_lock") if l["object"] == name), None)
         return info
 

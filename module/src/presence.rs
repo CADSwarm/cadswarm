@@ -11,7 +11,7 @@ pub fn log_activity(ctx: &ReducerContext, fence: u32, kind: String, summary: Str
     let summary: String = summary.chars().take(300).collect();
     ctx.db.activity().insert(Activity { id: 0, ws: m.ws, member: m.id, kind, summary: summary.clone(), at_ms: now_ms(ctx) });
     if let Some(first) = target.first() {
-        set_pointer(ctx, m.ws, m.id, first, vec![], "pointing", &summary, "");
+        set_pointer(ctx, m.ws, m.id, first, point_on(ctx, m.id, first), "pointing", &summary, "");
     }
     Ok(())
 }

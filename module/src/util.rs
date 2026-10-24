@@ -112,6 +112,12 @@ pub fn system_message(ctx: &ReducerContext, ws: u64, to: &str, body: String, kin
     });
 }
 
+/// The exact spot `member` is already pointing at on `object`, or empty. Server-side moves to the
+/// same part keep it, so a pointer does not jump back to the part's box on every tool call.
+pub fn point_on(ctx: &ReducerContext, member: u64, object: &str) -> Vec<f32> {
+    ctx.db.pointer().member().find(&member).filter(|p| p.object == object).map(|p| p.point).unwrap_or_default()
+}
+
 /// Server-side pointer moves bump `seq`, so clients can drop out-of-order updates.
 pub fn set_pointer(
     ctx: &ReducerContext,

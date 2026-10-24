@@ -165,6 +165,13 @@ def get_object(name: str) -> dict:
 
 
 @mcp.tool()
+def point_at(name: str, point: list[float] | None = None, mode: str = "pointing", label: str | None = None) -> dict:
+    """Show the team where you are working: your cursor moves onto `name` in everyone's 3D view, at
+    `point` [x, y, z] in mm (default: a corner on the part's top face). mode: pointing, inspecting or editing."""
+    return call("POST", "/pointer", {"object": name, "point": point or [], "mode": mode, "label": label or ""})
+
+
+@mcp.tool()
 def wait_for_changes(seconds: float = 20.0) -> dict:
     """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it.
     New instructions people sent you from FreeCAD come back in `commands`: do those first."""
