@@ -28,6 +28,11 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
                               "back_down": True}, r["chat_jump"]
     assert r["toast"] == "✓  Created task “Lid”"  # confirmations reach people who never open the console
     assert "teammate's computer" in r["away_tip"]
+    # The Remote tab hands a phone one code: its link opens the public site, and the QR is that link.
+    assert r["remote"]["link"].startswith("https://cadswarm.design/app/#t="), r["remote"]
+    assert r["remote"]["no_horizontal_overflow"], r["remote"]
+    assert r["remote"]["qr_pixmap"] == (r["remote"]["qr_modules"] > 0), r["remote"]
+    assert "One code works once" in r["remote"]["note"], r["remote"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).

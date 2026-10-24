@@ -18,14 +18,16 @@ import queue
 import re
 import threading
 import time
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import FreeCAD as App
 import FreeCADGui as Gui
 import Part
 from PySide import QtCore, QtGui
 
+from .. import hosting, qr, ticket
 from ..client import HubRequestError, load_json, save_json
+from ..invite import InviteError, read_invite
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
@@ -67,6 +69,19 @@ def host_dir_for(db):
             return folder if (json.load(f) or {}).get("db") == db else ""
     except (OSError, ValueError, TypeError):
         return ""
+
+
+LOCAL_WEB_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def web_url_for_phone():
+    """Where a phone should open the build. The host's own address wins, unless only this computer can
+    reach it (`localhost`), which a phone never can; then the public site is the honest answer."""
+    folder = host_dir_for(prefs().GetString("Db"))
+    url = ((hosting.host_config(folder) or {}).get("web_url") or "") if folder else ""
+    if not url or (urlsplit(url).hostname or "") in LOCAL_WEB_HOSTS:
+        return hosting.DEFAULT_WEB_URL
+    return url.rstrip("/")
 
 
 # Distinct, colorblind-friendlier hues (Tableau 10), handed out in join order so two
@@ -598,6 +613,9 @@ class TeamPanel(QtGui.QDockWidget):
         self.outbox = []        # messages sent but not yet back from the team: shown greyed in the chat
         self.new_activity = 0
         self.completed_at = 0.0  # when @-completion last filled in a name (its Enter must not also send)
+        self.remote_for = ""     # the team the Remote tab's code was minted for (a new team needs a new code)
+        self.remote_url = ""
+        self.remote_code = ""
         self.suggestions = {"setting": [], "style": []}  # what AI helpers suggested, waiting for a person
         self.answered = set()   # suggestions answered here, hidden until the team's list catches up
         self.fetching = False
@@ -624,8 +642,8 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner_text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         bl.addWidget(self.banner_text)
         brow = QtGui.QHBoxLayout()
-        self.invite_button = action_button("Invite a teammate", "Copy a new single-use invite code for a teammate",
-                                           invite_teammates)
+        self.invite_button = action_button("Invite a teammate", "Show the code and QR a teammate's phone scans",
+                                           self.show_remote)
         self.banner_button = action_button("", "", self.banner_action)
         brow.addWidget(self.invite_button)
         brow.addWidget(self.banner_button)
@@ -807,6 +825,49 @@ class TeamPanel(QtGui.QDockWidget):
         self.library = library_ui.LibraryTab(session)
         self.tabs.addTab(self.library, "Library")
 
+        # -------------------------------------------------------------- Remote
+        # The one place a phone gets in: the QR a camera scans, and the same link as text.
+        page = QtGui.QWidget()
+        tl = page_layout(page)
+        tl.addWidget(caption("Your phone runs this build"))
+        card = QtGui.QFrame()
+        card.setObjectName("card")
+        rl = QtGui.QVBoxLayout(card)
+        rl.setContentsMargins(14, 14, 14, 14)
+        rl.setSpacing(10)
+        self.remote_qr = QtGui.QLabel()
+        self.remote_qr.setObjectName("qr")
+        self.remote_qr.setAlignment(QtCore.Qt.AlignCenter)
+        self.remote_qr.setMinimumHeight(190)
+        self.remote_qr.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        rl.addWidget(self.remote_qr)
+        self.remote_lede = QtGui.QLabel(
+            "Point your phone's camera at this code. The phone joins this team as you: you can watch the "
+            "model, chat with everyone and steer the build while you're away from the desk.")
+        self.remote_lede.setWordWrap(True)
+        self.remote_lede.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        rl.addWidget(self.remote_lede)
+        self.remote_link = QtGui.QLineEdit()
+        self.remote_link.setReadOnly(True)
+        self.remote_link.setPlaceholderText("the link appears here once you're in a team")
+        self.remote_link.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
+        self.remote_link.setToolTip("The same invite as a link. Send it in a chat if a scan isn't handy.")
+        rl.addWidget(self.remote_link)
+        row = QtGui.QHBoxLayout()
+        self.remote_copy = action_button("Copy link", "Copy the phone link", self.copy_remote_link)
+        self.remote_new = action_button("New code", "Make a fresh code for the next phone", self.mint_remote)
+        row.addWidget(self.remote_copy)
+        row.addWidget(self.remote_new)
+        rl.addLayout(row)
+        tl.addWidget(card)
+        self.remote_note = QtGui.QLabel("")
+        self.remote_note.setWordWrap(True)
+        self.remote_note.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        tl.addWidget(self.remote_note)
+        tl.addStretch(1)
+        self.remote_page = page
+        self.tabs.addTab(page, "Remote")
+
         # --------------------------------------------------------------- Tools
         page = QtGui.QWidget()
         tl = page_layout(page)
@@ -911,12 +972,80 @@ class TeamPanel(QtGui.QDockWidget):
         if self.tabs.widget(index) is self.activity_page:
             self.new_activity = 0
             self.tabs.setTabText(index, "Activity")
+        if self.tabs.widget(index) is self.remote_page:
+            self.refresh_remote()
 
     def show_tab(self, page):
         self.tabs.setCurrentWidget(page)
 
     def show_tasks(self):
         self.show_tab(self.tasks_page)
+
+    # ------------------------------------------------------------------- Remote
+
+    def show_remote(self):
+        """Open the one place a phone joins from (the QR and the same link as text)."""
+        self.show_tab(self.remote_page)
+
+    def refresh_remote(self):
+        """Fill the Remote tab: a fresh code the first time, the same one after that."""
+        if self.session.state != "connected":
+            self.remote_for = ""
+            self.remote_url = self.remote_code = ""
+            self.remote_qr.clear()
+            self.remote_qr.setMinimumHeight(0)
+            self.remote_link.clear()
+            self.remote_note.setText("Start or join a team first. Then this tab shows the code your phone scans.")
+            return
+        db = prefs().GetString("Db")
+        if self.remote_for != db or not self.remote_url:
+            self.mint_remote()
+            return
+        self.remote_link.setText(self.remote_url)
+        self.remote_link.setCursorPosition(0)
+        self.paint_remote()
+
+    def mint_remote(self):
+        """Mint one single-use invite and show it as a link (and, when we can draw it, a QR)."""
+        if not self.session.ensure_connected("invite a teammate"):
+            return
+        try:
+            code = self.session.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"))
+            t = read_invite(code)
+            t.pop("project", None)  # the phone link carries the ticket; the project name rides in the code
+            url = ticket.phone_url(web_url_for_phone(), ticket.encode(t))
+        except HubRequestError as e:
+            self.remote_note.setText(friendly_error(e, self.session.client.hub))
+            return
+        except (InviteError, ValueError, TypeError) as e:
+            self.remote_note.setText(f"That code came back damaged: {e}")
+            return
+        self.remote_for = prefs().GetString("Db")
+        self.remote_code = code
+        self.remote_url = url
+        self.remote_link.setText(url)
+        self.remote_link.setCursorPosition(0)
+        self.paint_remote()
+        self.remote_note.setText("One code works once, and only while this computer is on with CadSwarm running. "
+                                 "Make a new code for the next phone.")
+
+    def paint_remote(self):
+        rows = qr.rows(self.remote_url) if self.remote_url else []
+        if not rows:
+            self.remote_qr.clear()  # no drawing program yet: the link below still gets the phone in
+            self.remote_qr.setMinimumHeight(0)
+            return
+        self.remote_qr.setMinimumHeight(0)
+        room = self.remote_qr.width() or self.width() - 40 or 220
+        self.remote_qr.setPixmap(qr_pixmap(rows, room, self.devicePixelRatioF()))
+
+    def copy_remote_link(self):
+        if not self.remote_url:
+            self.refresh_remote()
+        if not self.remote_url:
+            return
+        QtGui.QApplication.clipboard().setText(self.remote_url)
+        self.flash("Phone link copied")
 
     # ------------------------------------------------------------------ window size
 
@@ -1062,6 +1191,11 @@ class TeamPanel(QtGui.QDockWidget):
             self.banner_button.style().unpolish(self.banner_button)
             self.banner_button.style().polish(self.banner_button)
         self.invite_button.setVisible(s.state == "connected")
+        if s.state != "connected" and self.remote_url:  # a code minted for the team you just left is dead weight
+            self.remote_for = self.remote_url = self.remote_code = ""
+            if getattr(self, "remote_page", None) is not None:
+                self.remote_qr.clear()
+                self.remote_link.clear()
 
     def banner_action(self):
         s = self.session
@@ -1806,6 +1940,25 @@ def action_button(label, tip, fn):
     b.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
     b.clicked.connect(lambda _=False: fn())
     return b
+
+
+def qr_pixmap(rows, pixels=240, ratio=1.0):
+    """The Remote tab's QR: one solid block per dark module, so no hairlines break a scan."""
+    count = len(rows)
+    cell = max(2, min(8, int(pixels * ratio) // max(count, 1)))
+    pix = QtGui.QPixmap(count * cell, count * cell)
+    pix.fill(QtGui.QColor("#ffffff"))
+    painter = QtGui.QPainter(pix)
+    painter.setPen(QtCore.Qt.NoPen)
+    painter.setBrush(QtGui.QColor("#000000"))
+    for y, row in enumerate(rows):
+        for x, dark in enumerate(row):
+            if dark == "1":
+                painter.drawRect(QtCore.QRect(x * cell, y * cell, cell, cell))
+    painter.end()
+    if ratio > 1:
+        pix.setDevicePixelRatio(ratio)
+    return pix
 
 
 def dot_colour(owner_id):

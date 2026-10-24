@@ -107,6 +107,10 @@ failed task creation leaves the text in the composer and toasts the error.
 
 ## QR scanning
 
+- The host shows the code, not a terminal: the FreeCAD panel's **Remote** tab mints one single-use
+  invite and draws it as a QR (`cadswarm-host qr` prints the modules, the panel paints them) beside
+  the same link as text and **Copy link**. "Invite a teammate" in the panel header opens that tab.
+  A host whose `web_url` only reaches this computer (`localhost`) shows the public site instead.
 - `Scan invite QR` opens a full-screen camera view with a framed target and a manual-entry link.
 - The scanner uses `BarcodeDetector` when the browser provides it, otherwise `jsqr` against a
   downscaled canvas. Both run in a throttled `requestAnimationFrame` loop.

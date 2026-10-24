@@ -77,5 +77,6 @@ mod tests {
     fn the_phone_url_puts_the_ticket_in_the_fragment() {
         assert_eq!(phone_url("https://x.github.io/cadswarm/", "ABC"), "https://x.github.io/cadswarm/#t=ABC");
         assert_eq!(phone_url("http://localhost:5173", "ABC"), "http://localhost:5173/#t=ABC");
+        assert_eq!(phone_url("https://cadswarm.design/app", "ABC"), "https://cadswarm.design/app/#t=ABC");
     }
 }

@@ -105,6 +105,10 @@ more or less room) and scrolls when the window is short. It has three parts:
   most 30 times an hour, so two helpers can't keep waking each other.
 - **Team tools ▾** has editing a part yourself, shared sizes, clash checks, STEP export, project files,
   snapshots, reports and storage.
+- **Remote** is where a phone joins from: the host mints one single-use code and shows it as a QR, with
+  the same link as text. Scan it with the phone's camera (or send the link) and the phone opens the
+  live build: the model, the chat and the `@` commands, from the sofa. One code works once, and only
+  while the computer hosting the team is on; **New code** makes the next one.
 
 **Changing a part yourself.** Select the part in the 3D view and choose **the Tools tab ▸ ✎ Edit a part yourself…**. While the
 editor is open, the part is held by you, so no helper can change it at the same time. Type a new size
@@ -461,7 +465,9 @@ files.
   files, exports, snapshots and storage, so the host must stay on while the team works.
 - **Invite codes are `cadswarm-2:` codes.** Each one works once and expires after a day. Make a new one
   for each teammate from the guide's invite page or the team panel's **Invite** button. They carry the
-  database address and can be pasted as text, as a bare ticket, or as a phone link (`#t=`).
+  database address and can be pasted as text, as a bare ticket, or as a phone link (`#t=`). The team
+  panel's **Remote** tab shows that phone link as a QR; phone links point at
+  `https://cadswarm.design/app` unless the host was started with its own `--web-url`.
 
 ## What `cadswarm setup` writes
 
