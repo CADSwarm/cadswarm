@@ -19,8 +19,8 @@ TOML_BEGIN, TOML_END = "# >>> cadswarm (managed by `cadswarm setup`)", "# <<< ca
 
 CLIENTS = {
     "claude": {"label": "Claude Code", "exe": "claude",
-               "install_url": "https://docs.anthropic.com/en/docs/claude-code/setup"},
-    "codex": {"label": "Codex", "exe": "codex", "install_url": "https://github.com/openai/codex"},
+               "install_url": "https://code.claude.com/docs/en/setup"},
+    "codex": {"label": "Codex", "exe": "codex", "install_url": "https://learn.chatgpt.com/docs/codex/cli"},
 }
 
 AGENT_DOC = """{begin}
@@ -42,7 +42,9 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
   save with `if_exists="replace"` and its `expected_version`. `save_snapshot` before risky changes.
   Never write files any other way; your own working folder is not shared with the team.
 - Finish with `report_result` (evidence: object names, volumes, interference) and release locks.
-- Team context (who holds what, what changed) is injected before each of your prompts.
+- Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
+  team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
+  `model_status` and `get_inbox` yourself first.
 {end}
 """
 

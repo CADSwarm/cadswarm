@@ -38,6 +38,8 @@ def cmd_setup(a):
         print("Next: run `codex` here. Codex only loads .codex/config.toml for TRUSTED projects: accept the "
               "trust prompt, or add to ~/.codex/config.toml:\n"
               f"  [projects.{json.dumps(project)}]\n  trust_level = \"trusted\"")
+        print("Then, in Codex, type /hooks and trust the CadSwarm hook. Codex skips new or changed hooks until "
+              "you do, so without this your helper won't see its team's updates. Do it again after updating CadSwarm.")
 
 
 PROJECT_README = """This folder is a CadSwarm team project.

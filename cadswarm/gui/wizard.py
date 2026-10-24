@@ -477,8 +477,22 @@ class SetupWizard(QtGui.QDialog):
         box.setMaximumHeight(80)
         lay.addWidget(box)
         copy = QtGui.QPushButton("Copy invite code")
-        copy.clicked.connect(lambda: copy_to_clipboard(code, copy))
+        copy.clicked.connect(lambda: copy_to_clipboard(box.toPlainText(), copy))
         lay.addWidget(copy, 0, QtCore.Qt.AlignLeft)
+        ips = hosting.local_ips() if self.p.GetString("HostPort") else []
+        if len(ips) > 1:
+            lay.addWidget(label("This computer has more than one network address. If teammates can't join, "
+                                "pick the one on the network you share (for example your Tailscale one):", "hint"))
+            pick = QtGui.QComboBox()
+            pick.addItems(ips)
+            lay.addWidget(pick, 0, QtCore.Qt.AlignLeft)
+
+            def use_address(ip):
+                new = make_invite(f"http://{ip}:{self.p.GetString('HostPort')}", self.p.GetString("HostToken"),
+                                  self.p.GetString("ProjectName") or self.project)
+                self.p.SetString("InviteCode", new)
+                box.setPlainText(new)
+            pick.currentTextChanged.connect(use_address)
         folder = self.p.GetString("HostDataDir")
         if folder:
             row = QtGui.QHBoxLayout()
@@ -488,7 +502,10 @@ class SetupWizard(QtGui.QDialog):
             row.addWidget(show)
             lay.addLayout(row)
         lay.addWidget(label("<b>Good to know</b><br>"
-                            "• Teammates need to be on the same Wi-Fi or network as this computer.<br>"
+                            "• Teammates need to be on the same Wi-Fi or network as this computer. Venue or guest "
+                            "Wi-Fi may block that; a phone hotspot everyone joins works.<br>"
+                            "• The first time, Windows may ask to allow access through its firewall. Click "
+                            "<b>Allow access</b>, or teammates can't connect.<br>"
                             "• Keep this computer on while your team works. Your project is saved as you go.<br>"
                             "• You can copy the code again any time from the team panel (“Invite”).", "hint"))
         lay.addStretch(1)
@@ -548,7 +565,10 @@ class SetupWizard(QtGui.QDialog):
                 self.join_error.setText("Couldn't reach your teammate's computer. Check that:<br>"
                                         "• you're on the same Wi-Fi or network,<br>"
                                         "• their computer is on and CadSwarm is running there,<br>"
-                                        "• the invite code is their latest one.")
+                                        "• the invite code is their latest one.<br>"
+                                        "Venue or guest Wi-Fi often stops computers from reaching each other. "
+                                        "Try a phone hotspot that you both join, or "
+                                        "<a href='https://tailscale.com'>Tailscale</a>.")
             else:
                 self.join_error.setText(panel.friendly_error(e, inv["hub"]))
             return
@@ -702,7 +722,7 @@ class SetupWizard(QtGui.QDialog):
 
     def page_launch(self):
         label_ = CLIENTS[self.client]["label"]
-        w, lay = self.page(f"Start {label_}", "Three quick steps and your helper is on the team.")
+        w, lay = self.page(f"Start {label_}", "A few quick steps and your helper is on the team.")
         lay.addWidget(label("<b>1.</b> Open your helper in its workspace folder:"))
         open_btn = QtGui.QPushButton(f"Open {label_}")
         open_btn.setObjectName("primary")
@@ -710,12 +730,18 @@ class SetupWizard(QtGui.QDialog):
         open_btn.clicked.connect(self.open_helper)
         lay.addWidget(open_btn, 0, QtCore.Qt.AlignLeft)
         lay.addWidget(self.open_status)
-        trust = ("If it asks whether you trust this folder, choose <b>Yes</b>."
-                 if self.client == "claude" else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
+        trust = ("Claude Code will ask whether you trust this folder and may ask to approve the “cadswarm” "
+                 "tools — say <b>Yes</b>." if self.client == "claude"
+                 else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
         lay.addWidget(label(f"<b>2.</b> A window opens. {trust} If it asks you to sign in, follow its steps."))
         role = "lead" if self.mode == "host" else "member"
         prompt = FIRST_PROMPT[role].format(project=self.project)
-        lay.addWidget(label("<b>3.</b> Paste this as your first message and press Enter:"))
+        if self.client == "codex":
+            lay.addWidget(label("<b>3.</b> Type <code>/hooks</code> and trust the <b>CadSwarm</b> hook. Codex skips "
+                                "hooks you haven't approved, so without this it won't see its team's updates. "
+                                "Do it again after updating CadSwarm."))
+        n = 4 if self.client == "codex" else 3
+        lay.addWidget(label(f"<b>{n}.</b> Paste this as your first message and press Enter:"))
         box = QtGui.QPlainTextEdit(prompt)
         box.setReadOnly(True)
         box.setMaximumHeight(70)

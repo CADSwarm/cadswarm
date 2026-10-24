@@ -51,6 +51,24 @@ def install_deps(python, on_line=None):
                            f"delete the folder {target} and retry.")
 
 
+def local_ips():
+    """This computer's IPv4 addresses a teammate might reach, the default-route one (`lan_ip()`) first.
+
+    Skips loopback and link-local (169.254.x.x) addresses.
+    """
+    found = [lan_ip()]
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            found.append(info[4][0])
+    except OSError:
+        pass
+    out = []
+    for ip in found:
+        if ip not in out and not ip.startswith(("127.", "169.254.")):
+            out.append(ip)
+    return out or [lan_ip()]
+
+
 def lan_ip():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         try:

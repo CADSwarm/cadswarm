@@ -102,3 +102,21 @@ def test_resuming_a_saved_signin_without_fence(tmp_path):
     ident = c.join("secret", "carol")
     assert ident["participant_id"] == first["participant_id"] and ident["fence"] == first["fence"] + 1
     assert "objects" in c.get("/model")
+
+
+def test_local_ips_default_route_first_and_filters(monkeypatch):
+    from cadswarm import hosting
+    monkeypatch.setattr(hosting, "lan_ip", lambda: "192.168.1.5")
+    fake = [(2, 1, 6, "", (ip, 0)) for ip in ("127.0.0.1", "169.254.3.4", "100.64.1.9", "192.168.1.5", "10.0.0.2")]
+    monkeypatch.setattr(hosting.socket, "getaddrinfo", lambda *a, **k: fake)
+    assert hosting.local_ips() == ["192.168.1.5", "100.64.1.9", "10.0.0.2"]
+
+
+def test_local_ips_falls_back_when_lookup_fails(monkeypatch):
+    from cadswarm import hosting
+
+    def boom(*a, **k):
+        raise OSError("no dns")
+    monkeypatch.setattr(hosting, "lan_ip", lambda: "10.1.1.1")
+    monkeypatch.setattr(hosting.socket, "getaddrinfo", boom)
+    assert hosting.local_ips() == ["10.1.1.1"]

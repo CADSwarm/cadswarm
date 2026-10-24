@@ -8,8 +8,8 @@ CLIs add to the model's context. Contract borrowed from Amoeba's prompt hooks:
   coordination context must never block a prompt.
 * Bounded: one request with a ~1.8s budget, output capped well under Codex's
   ~2,500-token hook limit.
-* Project folder: Claude's stdin carries `cwd`; Codex's UserPromptSubmit stdin
-  does not, so fall back to the process cwd (Codex runs hooks from the project).
+* Project folder: both CLIs' stdin carries `cwd` (a common hook input field, in Codex's docs too);
+  fall back to the process cwd if it is missing (both run hooks from the project).
 """
 import json
 import os

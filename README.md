@@ -25,9 +25,16 @@ list) and you're back with your team. If you hosted the team, its server starts 
 own after a reboot until you do).
 
 **Good to know**
-- You need an AI helper installed: [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup)
-  or [Codex](https://github.com/openai/codex). The guide detects which ones you have and links to
+- You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup)
+  or [Codex](https://learn.chatgpt.com/docs/codex/cli). The guide detects which ones you have and links to
   install instructions.
+- The first time you open Claude Code in a helper's folder it will ask whether you trust the folder
+  and may ask to approve the "cadswarm" tools. Say yes to both.
+- The first time a team starts on Windows, a firewall window may ask to let Python/FreeCAD talk on
+  your network. Click **Allow access** or your teammates won't be able to join.
+- Venue or guest Wi-Fi (hackathons, cafes, schools) often stops computers from reaching each other.
+  If a teammate can't join, put everyone on a phone hotspot, or use [Tailscale](https://tailscale.com)
+  and pick the Tailscale address on the invite page.
 - Teammates must be on the same Wi-Fi or network as the person who started the team, and that
   computer needs to stay on while you work. For remote teams, see *Hosting for remote teams* below.
 - The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`. Nothing is
@@ -139,7 +146,7 @@ python -m venv .venv; .venv\Scripts\pip install -e ".[test]"
 # 2. Each person wires their own agent in their own folder
 .venv\Scripts\cadswarm setup --client claude --hub http://HOST:8765 --token TOKEN --name alice-claude --role lead --dir ..\alice
 .venv\Scripts\cadswarm setup --client codex  --hub http://HOST:8765 --token TOKEN --name bob-codex --dir ..\bob
-#    then run `claude` / `codex` in that folder. (Codex: trust the project so .codex/config.toml loads.)
+#    then run `claude` / `codex` in that folder. (Codex: trust the project so .codex/config.toml loads, then type `/hooks` in Codex and trust the CadSwarm hook.)
 
 # 3. Install this checkout into FreeCAD as the CadSwarm add-on (same as the double-click installer)
 .venv\Scripts\cadswarm install-workbench
@@ -168,7 +175,7 @@ Teammates paste that code into the guide's **Join a teammate's project** page as
 | Client | Files |
 |---|---|
 | Claude Code | `.mcp.json` (cadswarm server), `.claude/settings.json` (UserPromptSubmit hook, `enabledMcpjsonServers`, `mcp__cadswarm` allowed), `CLAUDE.md` section |
-| Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section |
+| Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CadSwarm hook (again after updating CadSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
 | both | `.cadswarm/config.json` (hub, token, name, role), and after first run `.cadswarm/identity.json` (bearer token, git-ignored) |
 
 The prompt hook injects a team block before every prompt: who holds which parts, open tasks,
