@@ -20,10 +20,10 @@ def evidence_line():
             f"Droid {e['factory']['droid']} / droid-sdk {e['factory']['sdk']}")
 
 
-def _review(reviews):
-    """The newest round, not the newest row: what the brief's state reflects."""
-    rows = reviews or []
-    return sorted(rows, key=lambda r: int(r.get("round") or 0))[-1] if rows else None
+def _review(reviews, brief_id=""):
+    """The newest round of this brief, not the newest row or another brief's round."""
+    rows = [r for r in (reviews or []) if brief_id and r.get("brief") == brief_id]
+    return sorted(rows, key=lambda r: (int(r.get("round") or 0), r.get("at") or 0))[-1] if rows else None
 
 
 def _findings(review):
@@ -35,6 +35,7 @@ def cards(session, database=""):
     model = session.model or {}
     members = model.get("participants") or []
     objects = model.get("objects") or []
+    parts = [o for o in objects if o.get("name") != "Params"]
     params = model.get("params") or {}
     tasks = session.tasks or []
     briefs = session.briefs or []
@@ -43,7 +44,7 @@ def cards(session, database=""):
     held = sum(1 for m in members for lock in (m.get("locks") or []) if lock != "Params")
     done = sum(1 for t in tasks if t.get("status") == "done")
     brief = sorted(briefs, key=lambda b: b.get("at") or 0, reverse=True)[0] if briefs else None
-    review = _review(reviews)
+    review = _review(reviews, (brief or {}).get("id") or "")
     findings = _findings(review)
     reviewer = next((m for m in members if m.get("kind") == "reviewer"), None)
     filed = sum(1 for t in tasks if reviewer and t.get("created_by_name") == reviewer.get("name"))
@@ -58,7 +59,7 @@ def cards(session, database=""):
             "facts": [
                 ("database", database or "this workspace"),
                 ("members", f"{active} active · {len(members)} joined"),
-                ("model", f"{len(objects)} parts · {len(params)} params · {held} held"),
+                ("model", f"{len(parts)} parts · {len(params)} params · {held} held"),
                 ("work", f"{sum(1 for t in tasks if t.get('status') == 'open')} open tasks · {done}/{len(tasks)} done"),
                 ("events", f"seq {seq} · the Activity tab is the live feed"),
             ],

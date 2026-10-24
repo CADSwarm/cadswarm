@@ -19,9 +19,13 @@ export interface Card {
 
 export interface Finding { object: string; problem: string }
 
-/** The newest verdict for the highest round: the review the brief's state reflects. */
-export function latestReviewOf(reviews: Pick<Review, 'round' | 'passed' | 'findingsJson'>[]): Review | undefined {
-  return [...reviews].sort((a, b) => a.round - b.round).slice(-1)[0] as Review | undefined;
+/** The newest verdict for this brief: the review the brief's state reflects. */
+export function latestReviewOf(
+  reviews: Array<Pick<Review, 'round' | 'passed' | 'findingsJson'> & { brief?: string }>,
+  briefId?: string,
+): Review | undefined {
+  const wanted = briefId ? reviews.filter(r => r.brief === briefId) : [...reviews];
+  return wanted.sort((a, b) => a.round - b.round).slice(-1)[0] as Review | undefined;
 }
 
 /** The findings of a review, tolerant of the empty or truncated JSON a crashed reviewer leaves. */
@@ -49,11 +53,14 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
   const done = s.ops.filter(o => o.status === 'done').length;
   const lastSeq = s.activity.length ? Math.max(...s.activity.map(a => a.id)) : 0;
   const brief = [...s.briefs].sort((a, b) => b.updatedMs - a.updatedMs)[0];
-  const review = latestReviewOf(s.reviews);
+  const review = latestReviewOf(s.reviews, brief?.id);
   const findings = parseFindings(review);
   const reviewer = s.members.find(m => m.kind === 'reviewer');
   const trace = reviewer ? s.activity.filter(a => a.member === reviewer.id) : [];
   const filed = trace.filter(a => a.summary.includes('create_task')).length;
+  const parts = s.objects.filter(o => o.name !== 'Params').length;
+  // Params is the shared spreadsheet, not a part, and its lock is not a held part (same as the FreeCAD panel).
+  const held = s.locks.filter(l => l.object !== 'Params').length;
 
   return [
     {
@@ -63,7 +70,7 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
       facts: [
         ['database', project || 'this workspace'],
         ['members', `${online} active · ${s.members.length} joined`],
-        ['model', `${s.objects.length} parts · ${s.params.length} params · ${s.locks.length} held`],
+        ['model', `${parts} parts · ${s.params.length} params · ${held} held`],
         ['work', `${s.tasks.filter(t => t.status === 'open').length} open tasks · ${done}/${s.ops.length} ops done`],
         ['events', `${s.activity.length} activity rows · seq ${lastSeq}`],
       ],

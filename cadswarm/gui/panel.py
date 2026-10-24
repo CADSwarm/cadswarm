@@ -1669,7 +1669,7 @@ class TeamPanel(QtGui.QDockWidget):
         elif t["status"] == "done":
             text = "This task is done. Double-click it to see the result."
         elif t["status"] == "cancelled":
-            text = "This task was cancelled. Delete it if it was never started."
+            text = "This task was cancelled. Its result is kept; leave it in the Cancelled group."
         else:
             text = ""
         self.task_hint.setText(f"<small style='color:#8b949e'>{text}</small>" if text else "")

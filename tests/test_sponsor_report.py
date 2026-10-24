@@ -6,7 +6,8 @@ from cadswarm.gui.sponsors import cards, evidence_line
 
 def session(**over):
     base = dict(
-        model={"seq": 12, "params": {"wall": 2.4}, "objects": [{"name": "Base"}, {"name": "Lid"}],
+        model={"seq": 12, "params": {"wall": 2.4},
+               "objects": [{"name": "Base"}, {"name": "Lid"}, {"name": "Params"}],
                "participants": [
                    {"id": 1, "name": "carol", "kind": "human", "client": "freecad", "status": "active", "locks": []},
                    {"id": 2, "name": "ann-claude", "kind": "agent", "client": "claude", "status": "active",
@@ -20,8 +21,9 @@ def session(**over):
         briefs=[{"id": "b_old", "board": "", "at": 1},
                 {"id": "b_new", "board": "esp32-s3-devkitc-1", "at": 5}],
         reviews=[
-            {"round": 2, "passed": False, "findings": ["The wall is 1.1 mm.", "The cutout is 1.8 mm high."]},
-            {"round": 1, "passed": False, "findings": ["The reviewer did not report a verdict."]},
+            {"brief": "b_new", "round": 2, "passed": False,
+             "findings": ["The wall is 1.1 mm.", "The cutout is 1.8 mm high."]},
+            {"brief": "b_new", "round": 1, "passed": False, "findings": ["The reviewer did not report a verdict."]},
         ],
     )
     base.update(over)
@@ -56,6 +58,17 @@ def test_elastic_gets_the_newest_brief_its_board_and_the_findings():
     assert ("design memory", "b_new · 2 problems") in elastic["facts"]
     assert elastic["list"]["rows"] == ["esp32-s3-devkitc-1::The wall is 1.1 mm.",
                                        "esp32-s3-devkitc-1::The cutout is 1.8 mm high."]
+
+
+def test_the_newest_brief_does_not_borrow_another_briefs_review():
+    # An old brief's round 3 must not be shown as the new brief's verdict.
+    s = session(reviews=[
+        {"brief": "b_old", "round": 3, "passed": True, "findings": []},
+        {"brief": "b_new", "round": 1, "passed": False, "findings": ["The lid clips."]},
+    ])
+    factory = card(cards(s), "Factory.ai")
+    assert ("last review", "round 1 · 1 findings") in factory["facts"]
+    assert factory["list"]["rows"] == ["The lid clips."]
 
 
 def test_says_so_when_nothing_is_set_up_yet():

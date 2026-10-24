@@ -1,5 +1,5 @@
 import type { Api, Printability } from '../api';
-import type { Brief, Review, State, Store, Workspace } from '../store';
+import type { Review, State, Store, Workspace } from '../store';
 import { esc } from './esc';
 
 /** Findings are free-form JSON from the reviewer; pull readable lines out of whatever shape arrives. */
@@ -28,15 +28,16 @@ export function reviewHeadline(r: Pick<Review, 'round' | 'passed'>): string {
   return `Round ${r.round} ${r.passed ? 'passed' : 'asks for changes'}`;
 }
 
-function newestBrief(s: Pick<State, 'briefs'>): Brief | undefined {
-  return [...s.briefs].sort((a, b) => b.updatedMs - a.updatedMs)[0];
-}
-
-/** The review the model's state reflects: the newest round of the newest brief. */
+/**
+ * The review the downloadable model reflects: the latest round of the newest brief that has a finished
+ * model (the same brief the Model tab exports, modelBrief in panels.ts). A newer unfinished request must
+ * not make an older model's verdict read as missing or different.
+ */
 export function shownReview(s: Pick<State, 'briefs' | 'reviews'>): Review | undefined {
-  const brief = newestBrief(s);
-  const pool = brief ? s.reviews.filter(r => r.brief === brief.id) : s.reviews;
-  return [...pool].sort((a, b) => b.round - a.round || b.atMs - a.atMs)[0];
+  const brief = [...s.briefs].filter(b => b.stlHash).sort((a, b) => b.updatedMs - a.updatedMs)[0];
+  if (!brief) return undefined;
+  return [...s.reviews].filter(r => r.brief === brief.id)
+    .sort((a, b) => b.round - a.round || b.atMs - a.atMs)[0];
 }
 
 /** The review block in the Model tab. Rebuilds only when the round changes. */
@@ -138,10 +139,14 @@ export function mountPrinter(el: HTMLElement, store: Store, api: Api | null) {
     }
     const check = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-print-check]');
     if (!check || !api) return;
+    const inputs = [...el.querySelectorAll<HTMLInputElement>('[data-bed]')];
+    const [x, y, z] = inputs.map(bedValue);
+    const problem = bedError(x, y, z);
+    if (problem) { notice(problem); return; }
     const label = check.textContent;
     check.disabled = true;
     check.textContent = 'Checking…';
-    const result = await api.checkPrintability();
+    const result = await api.checkPrintability([x, y, z]);
     const box = el.querySelector<HTMLElement>('[data-print-result]');
     if (box) box.innerHTML = result ? printCard(result) : '';
     check.disabled = false;

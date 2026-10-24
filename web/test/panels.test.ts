@@ -74,10 +74,17 @@ describe('panel helpers', () => {
     expect(reviewFindings('[{"object":"Base","problem":"the wall is 1.1 mm"}]')).toEqual(['Base: the wall is 1.1 mm']);
     expect(reviewFindings('not json')).toEqual(['not json']);
     const said = shownReview({
-      briefs: [{ id: 'b_1', updatedMs: 1 }, { id: 'b_2', updatedMs: 5 }],
+      briefs: [{ id: 'b_1', updatedMs: 1, stlHash: 'aa'.repeat(32) }, { id: 'b_2', updatedMs: 5, stlHash: 'bb'.repeat(32) }],
       reviews: [{ brief: 'b_2', round: 1, atMs: 1 }, { brief: 'b_2', round: 2, atMs: 3 }, { brief: 'b_1', round: 9, atMs: 9 }],
     } as never);
     expect(said?.round).toBe(2);
+    // A newer unfinished request must not hide the verdict that belongs to the downloadable model.
+    const older = shownReview({
+      briefs: [{ id: 'b_1', updatedMs: 1, stlHash: 'aa'.repeat(32) }, { id: 'b_2', updatedMs: 9, stlHash: '' }],
+      reviews: [{ brief: 'b_1', round: 3, atMs: 2, passed: true }, { brief: 'b_2', round: 1, atMs: 9, passed: false }],
+    } as never);
+    expect(older?.round).toBe(3);
+    expect(shownReview({ briefs: [{ id: 'b_3', updatedMs: 1, stlHash: '' }], reviews: [] } as never)).toBeUndefined();
   });
   it('keeps the printer bed between 20 and 2000 mm on each side', () => {
     expect(bedError(256, 256, 256)).toBe('');
