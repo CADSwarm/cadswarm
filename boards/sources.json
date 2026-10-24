@@ -1,0 +1,14 @@
+[
+  {"board_id": "raspberry-pi-pico", "title": "Raspberry Pi Pico datasheet", "type": "datasheet",
+   "url": "https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf"},
+  {"board_id": "raspberry-pi-4", "title": "Raspberry Pi 4 mechanical drawing", "type": "drawing",
+   "url": "https://datasheets.raspberrypi.com/rpi4/raspberry-pi-4-mechanical-drawing.pdf"},
+  {"board_id": "raspberry-pi-4", "title": "Raspberry Pi 4 product brief", "type": "datasheet",
+   "url": "https://datasheets.raspberrypi.com/rpi4/raspberry-pi-4-product-brief.pdf"},
+  {"board_id": "esp32-s3-devkitc-1", "title": "ESP32-S3-DevKitC-1 user guide", "type": "product_page",
+   "url": "https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html"},
+  {"board_id": "arduino-uno-r3", "title": "Arduino Uno R3 product page", "type": "product_page",
+   "url": "https://docs.arduino.cc/hardware/uno-rev3/"},
+  {"board_id": "seeed-xiao-esp32c3", "title": "Seeed XIAO ESP32C3 wiki", "type": "product_page",
+   "url": "https://wiki.seeedstudio.com/XIAO_ESP32C3_Getting_Started/"}
+]
