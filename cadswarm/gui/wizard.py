@@ -887,8 +887,8 @@ class SetupWizard(QtGui.QDialog):
             status = hosting.host_status(data_dir)
             if status.get("pid"):
                 self.p.SetString("HostPid", str(status["pid"]))  # a stale PID would make "Stop hosting" do nothing
-            if mode == "local" and hosting.pid_on_port(hosting.LOCAL_PORT):
-                self.p.SetString("SpacetimePid", str(hosting.pid_on_port(hosting.LOCAL_PORT)))
+            # Never adopt whatever listens on the local port: it may be another team's database (or a
+            # developer's own `spacetime start`), and "Stop hosting" must only stop what we started.
             return
         log("Starting your team's server")
         info = hosting.start_team(self.python, data_dir, mode, db, on_log=log)
