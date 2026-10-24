@@ -67,16 +67,17 @@ pub fn next_action(s: &BriefState) -> Action {
         "building" if s.open + s.active == 0 => {
             if s.exporting {
                 Action::Wait
-            } else if s.blocked > 0 {
-                // A blocked part is missing from the model, so this brief is not ready. A person
-                // can cancel the blocked task to build the rest.
-                Action::Fail("a task is blocked; a person needs to steer".into())
             } else if s.done > 0 {
+                // Finished parts are delivered even when another task is blocked: the export skips
+                // parts no done task promised, and the blocked task keeps its question on the board.
+                // Failing here would throw those parts away for a decision that is still open.
                 if s.reviewer_enabled {
                     Action::Review
                 } else {
                     Action::Export
                 }
+            } else if s.blocked > 0 {
+                Action::Fail("no part was built: a task is blocked; a person needs to steer".into())
             } else if s.cancelled > 0 {
                 Action::Fail("every task was stopped; a person needs to steer".into())
             } else if s.planned {
@@ -547,8 +548,8 @@ mod tests {
         assert_eq!(next_action(&st("building")), Action::Wait);
         // A cancelled task does not hide finished work: the build still reviews and exports.
         assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
-        // A blocked part does: the model would be missing it, so a person must steer.
-        assert!(matches!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Fail(_)));
+        // Nor does a blocked one: its part is skipped on purpose and its question stays on the board.
+        assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Export);
     }
 
     #[test]
