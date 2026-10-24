@@ -5,14 +5,31 @@
 Each teammate's AI helper (Claude Code or Codex) builds part of one shared 3D model, live.
 You watch the parts appear in FreeCAD and chat with the helpers to steer them.
 
-## Get started (Windows, about 5 minutes)
+## Get started (about 5 minutes)
+
+**Quick install:** paste one line into a terminal. It downloads CadSwarm, finds FreeCAD (and offers to
+install the official FreeCAD if you don't have it), puts CadSwarm into FreeCAD, offers a shortcut, and opens
+FreeCAD.
+
+| | Paste this |
+|---|---|
+| **Windows** (PowerShell) | `irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 \| iex` |
+| **macOS** (Terminal) | `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh \| bash` |
+| **Linux** (terminal) | `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh \| bash` |
+
+Or install by hand:
 
 1. **Install FreeCAD** (free) from [freecad.org/downloads](https://www.freecad.org/downloads.php).
-   Default options are fine.
+   Default options are fine. On Linux, use the official AppImage: the snap, Flatpak and distro packages
+   have no Python of their own, so with them you can join a team but not start one (the installer offers to
+   fetch the official FreeCAD for you).
 2. **Download CadSwarm**: on this page click the green **Code** button, then **Download ZIP**.
    Unzip it anywhere, for example your Downloads folder.
-3. **Double-click `Install CadSwarm.cmd`** in the unzipped folder. It puts CadSwarm into FreeCAD,
-   offers a desktop shortcut, and opens FreeCAD.
+3. **Run the installer** in the unzipped folder:
+   - Windows: double-click **`Install CadSwarm.cmd`**.
+   - macOS: double-click **`Install CadSwarm.command`** (if macOS says it can't be opened, right-click it,
+     choose **Open**, then **Open** again).
+   - Linux: run `bash "Install CadSwarm.sh"` (or right-click it and choose **Run as a Program**).
 4. **Follow the guide that opens in FreeCAD.**
    - *First person on the team:* choose **Start a new team project**, name it, and copy the
      **invite code** to your teammates.
@@ -37,8 +54,12 @@ own after a reboot until you do).
   and pick the Tailscale address on the invite page.
 - Teammates must be on the same Wi-Fi or network as the person who started the team, and that
   computer needs to stay on while you work. For remote teams, see *Hosting for remote teams* below.
-- The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`. Nothing is
-  installed into FreeCAD itself.
+- The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm` (macOS and Linux:
+  `~/.local/share/CadSwarm`). Nothing is installed into FreeCAD itself. On Linux, an official FreeCAD the
+  installer fetched for you is unpacked there too (`FreeCAD-<version>`, about 3 GB).
+- Installer options (macOS/Linux, after `| bash -s --` or on `install/install.sh`): `--yes` (no questions;
+  never downloads FreeCAD), `--get-freecad`, `--no-shortcut`, `--no-launch`. `CADSWARM_FREECAD` picks a
+  specific FreeCAD; `CADSWARM_REF` makes the quick install use another branch or tag.
 - When you start a team, the guide asks **where to save the project** (default
   `Documents\CadSwarm\<project name>`). If you pick a folder that already has other things in it,
   the project gets its own subfolder there, so your files are never mixed in or overwritten.

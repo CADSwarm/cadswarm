@@ -24,8 +24,10 @@ import time
 import traceback
 
 FREECAD_BIN = os.environ.get("CADSWARM_FREECAD_BIN")
-if FREECAD_BIN and FREECAD_BIN not in sys.path:
-    sys.path.append(FREECAD_BIN)
+# FreeCAD's module sits beside python on Windows (bin/) and in lib/ in the macOS and Linux bundles.
+for _d in ([FREECAD_BIN, os.path.join(FREECAD_BIN, os.pardir, "lib")] if FREECAD_BIN else []):
+    if os.path.isdir(_d) and os.path.abspath(_d) not in sys.path:
+        sys.path.append(os.path.abspath(_d))
 
 MAX_ELEMENTS = 300_000   # estimated tets; a finer mesh is coarsened and the report says so
 TOOL_TIMEOUT = int(os.environ.get("CADSWARM_FEA_TOOL_TIMEOUT", "600"))

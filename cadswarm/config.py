@@ -64,16 +64,22 @@ def freecad_candidates():
     roots = [os.path.join(env.get("LOCALAPPDATA", ""), "Programs"),
              env.get("ProgramFiles", r"C:\Program Files"),
              env.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-             "/usr/lib/freecad", "/Applications"]
+             "/usr/lib/freecad", "/Applications", os.path.expanduser("~/Applications")]
     found = {}  # python path -> version key
+    # The official Linux AppImage, unpacked by CadSwarm's installer into <app dir>/FreeCAD-<version>/.
+    managed = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~/.local/share"), "CadSwarm")
     for root in roots:
         for pat in (os.path.join(root, "FreeCAD*", "bin"),
-                    os.path.join(root, "FreeCAD.app", "Contents", "Resources", "bin")):
+                    os.path.join(root, "FreeCAD*.app", "Contents", "Resources", "bin")):
             for bin_dir in glob.glob(pat):
                 py = _python_in(bin_dir)
                 if py:
                     found.setdefault(os.path.normpath(py),
                                      _version_key(os.path.basename(os.path.dirname(bin_dir))))
+    for bin_dir in glob.glob(os.path.join(managed, "FreeCAD-*", "squashfs-root", "usr", "bin")):
+        py = _python_in(bin_dir)
+        if py:
+            found.setdefault(os.path.normpath(py), _version_key(bin_dir.split("FreeCAD-")[-1]))
     for exe in ("freecadcmd", "FreeCADCmd"):
         hit = shutil.which(exe)
         if hit:

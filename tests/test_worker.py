@@ -113,6 +113,8 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nolocal"))
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "nopf"))
     monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "nopf86"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "noappdata"))  # CadSwarm's own unpacked FreeCAD
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))        # ~/Applications
     monkeypatch.setattr(config, "_registry_installs", lambda: [])
     monkeypatch.setattr(config.shutil, "which", lambda name: None)
     return tmp_path
@@ -159,6 +161,13 @@ def test_registry_version_beats_folder_ranking(clean_env, monkeypatch):
     reg = _install(clean_env / "other", "FC")
     monkeypatch.setattr(config, "_registry_installs", lambda: [(str(clean_env / "other" / "FC"), "1.1.4")])
     assert config.find_freecad_python() == os.path.normpath(reg)
+
+
+def test_freecad_unpacked_by_the_installer_is_found(clean_env):
+    bin_dir = clean_env / "noappdata" / "CadSwarm" / "FreeCAD-1.1.4" / "squashfs-root" / "usr" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").write_text("")
+    assert config.find_freecad_python() == os.path.normpath(bin_dir / "python")
 
 
 def test_explicit_env_wins_and_missing_raises(clean_env, monkeypatch):

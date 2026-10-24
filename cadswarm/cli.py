@@ -88,13 +88,13 @@ def cmd_hub(a):
 
 
 ADDON_IGNORE = shutil.ignore_patterns(".git", ".venv", "*.egg-info", "__pycache__", ".pytest_cache",
-                                     "cadswarm-data", "exports", ".cadswarm", "*.pyc")
+                                     "cadswarm-data", "exports", ".cadswarm", "*.pyc", "node_modules", "target")
 
 
 def freecad_mod_dir(fc_py=None):
     fc_py = fc_py or find_freecad_python()
     user_dir = subprocess.run(
-        [fc_py, "-c", "import sys,os; sys.path.append(os.path.dirname(sys.executable)); "
+        [fc_py, "-c", "import sys,os; b=os.path.dirname(sys.executable); sys.path += [b, os.path.join(b, '..', 'lib')]; "
                       "import FreeCAD; print(FreeCAD.getUserAppDataDir())"],
         capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
     return os.path.join(user_dir, "Mod")

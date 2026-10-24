@@ -133,8 +133,9 @@ def main():
     out = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
     os.dup2(2, 1)
     sys.stdout = sys.stderr
-    if req.get("freecad_bin") and req["freecad_bin"] not in sys.path:
-        sys.path.append(req["freecad_bin"])
+    for d in ([req["freecad_bin"], os.path.join(req["freecad_bin"], os.pardir, "lib")] if req.get("freecad_bin") else []):
+        if os.path.isdir(d) and os.path.abspath(d) not in sys.path:  # bin/ on Windows, lib/ on macOS and Linux
+            sys.path.append(os.path.abspath(d))
     import FreeCAD
     import Part
     out.write(json.dumps({"started": True}) + "\n")
