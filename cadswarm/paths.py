@@ -7,7 +7,9 @@ packages the server side needs are pip-installed once into a private folder
 folder on their path, so FreeCAD's own packages are never shadowed.
 Stdlib only: imported by FreeCAD's GUI, the launcher and the CLI alike.
 """
+import glob
 import os
+import platform
 import re
 import shutil
 import site
@@ -105,6 +107,45 @@ def resolve_project_folder(chosen, project):
 def projects_dir():
     docs = os.path.join(os.path.expanduser("~"), "Documents")
     return os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "CadSwarm")
+
+
+def droid_exe():
+    """The Droid program the SDK can start: a real executable, not npm's shell shim.
+
+    droid_sdk spawns Droid with asyncio.create_subprocess_exec, which needs an executable image.
+    On Windows `droid` on PATH is a script (droid.cmd / droid.ps1), so that spawn fails with
+    "Droid executable was not found" even though `droid` works in a terminal. npm unpacks the
+    native binary into the platform package beside the shim; prefer that, or a native
+    install on PATH. On macOS and Linux the shim is a script with a shebang, which runs fine.
+
+    CADSWARM_DROID_EXE overrides everything (a copy of droid that is not on PATH).
+    """
+    override = os.environ.get("CADSWARM_DROID_EXE")
+    if override:
+        return override
+    if os.name != "nt":
+        return shutil.which("droid") or "droid"
+    native = shutil.which("droid.exe")
+    if native:
+        return native
+    arm = platform.machine().lower() in ("arm64", "aarch64")
+    names = ["cli-win32-arm64"] if arm else ["cli-win32-x64", "cli-win32-x64-baseline"]
+    dirs = []
+    for base in (os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            dirs.append(os.path.join(base, "npm", "node_modules", "droid"))
+    shim = shutil.which("droid") or shutil.which("droid.cmd")
+    if shim:  # ...\npm\droid.cmd -> ...\npm\node_modules\droid
+        dirs.append(os.path.join(os.path.dirname(os.path.abspath(shim)), "node_modules", "droid"))
+    for pkg in dirs:
+        for name in names:
+            exe = os.path.join(pkg, "node_modules", "@factory", name, "bin", "droid.exe")
+            if os.path.isfile(exe):
+                return exe
+        found = glob.glob(os.path.join(pkg, "node_modules", "@factory", "cli-win32-*", "bin", "droid.exe"))
+        if found:
+            return sorted(found)[0]
+    return shutil.which("droid") or "droid"
 
 
 def freecad_python():
