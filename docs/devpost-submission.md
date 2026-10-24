@@ -163,7 +163,7 @@ Actions · Windows
 ## Try it out
 
 - **Code:** [TBD — public GitHub repository URL]
-- **Release / downloads:** [TBD — GitHub Releases `v0.1.0` URL]
+- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.0
 - **Web app:** [TBD — Pages or Vercel URL] (append `?mock` to try it without a team)
 - **Video:** [TBD — YouTube/Vimeo URL]
 - **Run it:** install FreeCAD, download the repository ZIP, double-click `Install CadSwarm.cmd`,
@@ -208,3 +208,24 @@ FreeCAD; the pinned database and team server arrive on first use."
 
 **2:35–2:45 — Close.** "CadSwarm: your team's AI helpers, one live model, a printable part." Show the
 repo URL and the mock web link.
+
+### Fill the Elastic indices before recording
+
+`cadswarm-designs` and `cadswarm-lessons` start empty and fill from real work, so record the
+knowledge segment after the demo brief has finished:
+
+1. Finish one brief through the host. When it reaches `ready`, the host indexes it into
+   `cadswarm-designs` (`[host] op ... index_design`), which also gives the planner its memory.
+2. Distil lessons now instead of waiting for the 10-minute schedule:
+
+   ```powershell
+   curl.exe -s -X POST "$env:KIBANA_URL/api/workflows/workflow/distil-lessons/run" `
+     -H "Authorization: ApiKey $env:ELASTIC_API_KEY" -H "Content-Type: application/json" `
+     -d '{\"inputs\":{}}'
+   ```
+
+   Then `GET /api/workflows/workflow/distil-lessons/executions` shows `status: completed`, and
+   `cadswarm-lessons` holds one document per board+problem with a `count`.
+
+If the Board expert answers `429`, that is the Agent Builder trial quota on its default Claude
+model, not a CadSwarm failure: the search, ingest, design memory and Workflow paths do not use it.
