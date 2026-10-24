@@ -53,6 +53,8 @@ enum Cmd {
         #[arg(long, default_value = "member")]
         role: String,
     },
+    /// Create the Droid reviewer member (once) and its folder, so briefs get reviewed.
+    InitReviewer,
     /// Run the executor and brief orchestration until stopped.
     Run,
 }
@@ -91,6 +93,19 @@ fn main() -> Result<()> {
             println!("ticket: {t}\nphone:  {url}\n");
             let qr = qrcode::QrCode::new(url.as_bytes())?;
             println!("{}", qr.render::<qrcode::render::unicode::Dense1x2>().quiet_zone(true).build());
+        }
+        Cmd::InitReviewer => {
+            let cfg = HostConfig::load(&cli.data)?;
+            let space = space::Space::attach(&cfg)?;
+            let ticket = mint_invite(&space, &cfg, "reviewer", "member")?;
+            let dir = cfg.data_dir.join("agents").join("reviewer");
+            std::fs::create_dir_all(&dir)?;
+            let ok = std::process::Command::new(&cfg.cadswarm_python)
+                .args(["-m", "cadswarm.cli", "setup", "--client", "droid", "--invite", &ticket, "--name", "reviewer", "--dir"])
+                .arg(&dir)
+                .status()?;
+            anyhow::ensure!(ok.success(), "cadswarm setup for the reviewer failed");
+            println!("reviewer ready in {}", dir.display());
         }
         Cmd::Run => run(&HostConfig::load(&cli.data)?)?,
     }

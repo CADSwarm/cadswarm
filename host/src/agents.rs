@@ -108,6 +108,11 @@ impl Agent {
         Ok(Agent { name: name.into(), child, started: Instant::now() })
     }
 
+    /// An already-spawned process (the reviewer runs `python -m cadswarm.reviewer`, not an agent CLI).
+    pub fn from_child(name: &str, child: Child) -> Agent {
+        Agent { name: name.into(), child, started: Instant::now() }
+    }
+
     /// False once it exited or was killed for running past the timeout.
     pub fn alive(&mut self) -> bool {
         if self.started.elapsed() > AGENT_TIMEOUT {
@@ -155,6 +160,25 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
     )
 }
 
+/// The first line is `accept_handoff` on purpose: it hands over the locks and tasks atomically,
+/// so the new agent owns the work before it reads anything else.
+pub fn handoff_prompt(handoff_id: &str, context_json: &str) -> String {
+    let ctx: serde_json::Value = serde_json::from_str(context_json).unwrap_or_default();
+    let from = ctx["from"].as_str().unwrap_or("a teammate");
+    let note = ctx["note"].as_str().filter(|n| !n.is_empty()).unwrap_or("(no note: infer it from their recent work)");
+    format!(
+        "You are picking up exactly where {from} left off in the shared CadSwarm FreeCAD model.\n\
+         FIRST call accept_handoff(handoff_id=\"{handoff_id}\"): it gives you their locked parts and tasks.\n\
+         Their note, which is your main instruction: {note}\n\
+         Where they left off (JSON: what they were pointing at, the parts they hold, their in-progress tasks, \
+         their last activity, ops and messages):\n{context_json}\n\n\
+         Continue their work, do not start over: read model_status and get_object for the parts they hold, use their \
+         recent ops to see what they were in the middle of, finish it binding dimensions to Params, run \
+         check_interference, report_result on each of their tasks, and send_message to {from} with a short summary \
+         of what you did. Stop when their tasks are done."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +223,13 @@ mod tests {
         let c = cli_candidates("codex", None, "", Path::new("H:/home"), Path::new("A:/appdata"));
         assert!(c.iter().all(|p| !p.display().to_string().contains("native-binary")));
         assert!(c.iter().any(|p| p.display().to_string().contains("codex")));
+    }
+
+    #[test]
+    fn the_handoff_prompt_leads_with_accepting_and_the_persons_note() {
+        let ctx = r#"{"from":"carol","note":"make the lip 1 mm thinner","pointer":{"object":"Lid"},"locks":["Lid"],"tasks":[]}"#;
+        let p = handoff_prompt("h_1", ctx);
+        assert!(p.find("accept_handoff").unwrap() < p.find("make the lip 1 mm thinner").unwrap());
+        assert!(p.contains("carol") && p.contains("Lid") && p.contains("h_1"));
     }
 }

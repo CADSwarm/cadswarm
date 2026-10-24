@@ -4,9 +4,11 @@ use crate::agents::Agent;
 use crate::boards::{load_boards, seed_params, Board};
 use crate::config::HostConfig;
 use crate::space::Space;
+use anyhow::Context;
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::process::Command;
 
 pub const MAX_WORKERS: usize = 3;
 pub const MAX_REVIEW_ROUNDS: u32 = 3;
@@ -92,6 +94,7 @@ struct Runtime {
     workers: Vec<Agent>,
     export_op: Option<String>,
     reviewer: Option<Agent>,
+    review_round: u32,
     reviewed_round: u32,
     spawned: usize,
 }
@@ -100,6 +103,7 @@ pub struct Orchestrator {
     cfg: HostConfig,
     boards: BTreeMap<String, Board>,
     runs: HashMap<String, Runtime>,
+    handoffs: HashMap<String, Agent>,
     reviewer_enabled: bool,
 }
 
@@ -127,10 +131,34 @@ impl Orchestrator {
                 eprintln!("[host] no board library found; briefs start without measured params");
                 BTreeMap::new()
             });
-        Orchestrator { cfg, boards, runs: HashMap::new(), reviewer_enabled: false }
+        // The reviewer only runs once someone has created its member folder (`init-reviewer`).
+        let reviewer_enabled =
+            cfg.data_dir.join("agents").join("reviewer").join(".cadswarm").join("config.json").exists();
+        Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), reviewer_enabled }
     }
 
     pub fn tick(&mut self, space: &Space) {
+        // A person handed work to an agent: one agent per open handoff, until it accepts and finishes.
+        // An agent that dies before accepting leaves the handoff open; dropping it here makes the
+        // next tick spawn a fresh one.
+        for h in space.open_handoffs() {
+            if self.handoffs.contains_key(&h.id) {
+                continue;
+            }
+            let name = format!("handoff-{}", h.id.trim_start_matches("h_"));
+            let started = crate::mint_invite(space, &self.cfg, "agent", "member").and_then(|ticket| {
+                Agent::spawn(&self.cfg, &name, &ticket, &crate::agents::handoff_prompt(&h.id, &h.context_json))
+            });
+            match started {
+                Ok(agent) => {
+                    eprintln!("[host] handoff {}: started {name}", h.id);
+                    self.handoffs.insert(h.id.clone(), agent);
+                }
+                Err(e) => eprintln!("[host] handoff {}: {e:#}", h.id),
+            }
+        }
+        self.handoffs.retain(|_, a| a.alive());
+
         for b in space.briefs() {
             if b.status == "ready" || b.status == "failed" {
                 continue;
@@ -189,6 +217,13 @@ impl Orchestrator {
             reviewed_round: rt.reviewed_round,
         };
 
+        // A reviewer that exits without a verdict would leave the brief in `reviewing` forever.
+        if b.status == "reviewing" && rt.review_round > 0 && !state.reviewer_alive && review.map(|(r, _)| r < rt.review_round).unwrap_or(true) {
+            eprintln!("[host] brief {}: reviewer round {} exited without a verdict", b.id, rt.review_round);
+            space.set_brief(&b.id, "failed", &json!({"error": "the reviewer exited without a verdict"}).to_string())?;
+            return Ok(());
+        }
+
         match next_action(&state) {
             Action::Wait => {}
             Action::Seed => {
@@ -229,7 +264,20 @@ impl Orchestrator {
                 space.set_brief(&b.id, "building", "")?;
             }
             Action::Review => {
-                // P1: the Droid reviewer is started here (python -m cadswarm.reviewer --brief <id>).
+                let round = review.map(|(r, _)| r + 1).unwrap_or(1);
+                let dir = self.cfg.data_dir.join("agents").join("reviewer");
+                std::fs::create_dir_all(&dir)?;
+                let log = std::fs::File::create(dir.join(format!("review-{}-{round}.log", b.id.trim_start_matches("b_"))))?;
+                eprintln!("[host] brief {}: starting reviewer round {round}", b.id);
+                let child = Command::new(&self.cfg.cadswarm_python)
+                    .args(["-m", "cadswarm.reviewer", "--brief", &b.id, "--round", &round.to_string(), "--dir"])
+                    .arg(&dir)
+                    .stdout(log.try_clone()?)
+                    .stderr(log)
+                    .spawn()
+                    .context("starting cadswarm.reviewer")?;
+                rt.reviewer = Some(Agent::from_child("reviewer", child));
+                rt.review_round = round;
                 space.set_brief(&b.id, "reviewing", "")?;
             }
             Action::Export => {
