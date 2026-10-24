@@ -44,10 +44,10 @@ Phone stand/
   files/               notes, plans, BOMs and scripts the AI helpers saved, in subfolders that
     parts/base/notes.md  grow as the project does
     docs/bom.csv
-  exports/             3D files (STEP/STL), each with a new name, never overwritten
-  snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd")
+  exports/             3D files (STEP/STL), each with a new name, never overwritten or auto-deleted
+  snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd"), never auto-deleted
   AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
-  .cadswarm-team/      the team server's data, plus every older version of every file
+  .cadswarm-team/      the team server's data, plus older versions of files (the last 20 of each)
   README.txt           explains the above to anyone browsing the folder
 ```
 
@@ -60,13 +60,34 @@ The team server enforces these rules; it doesn't just ask the AI helpers to foll
 
 - **Sandboxed.** Helpers can only write inside `files/`. Paths with `..`, absolute or drive paths,
   hidden or Windows-reserved names, and symlinks or junctions that point outside are refused. File
-  types are on an allow-list, with size limits of 5 MB per file and 500 MB per project.
+  types are on an allow-list, with size limits per file: 5 MB for text (notes, scripts, CSV), 100 MB
+  for binary CAD and media files (STEP, STL, 3MF, FCStd, DXF, PDF, images).
 - **No silent overwrites.** Saving onto an existing file is refused unless the helper asks for
   `new_name` (saves as `notes-2.md`) or `replace` with the version it last read. If someone changed
   the file since then, including a person editing it by hand, the save is refused.
-- **Nothing is lost.** Replaced, moved and deleted files are kept in history and can be restored.
-  If your file is replaced by a teammate, you're told.
+- **Old versions are kept, within limits.** Replaced, moved and deleted files go to history and can be
+  restored: the last 20 versions of each file are kept (and everything from the last day). A deleted
+  file always keeps its latest version. Older versions beyond that are removed for good. If your file is
+  replaced by a teammate, you're told.
 - **Atomic writes.** A crash never leaves half a file.
+
+### Disk space and the project limit
+
+Big projects are welcome, but the host's computer is protected and a project can't get stuck:
+
+- **Disk guard.** Before anything that adds data (saving a file, a snapshot, an export), the team server
+  checks free space on the drive. It refuses if less than 2 GB would be left (or 10% of the drive, if
+  that is smaller) and says so in plain words (`disk_full`).
+- **Project limit: 20 GB by default**, counting files, older versions, snapshots and exports together.
+  The host can change it in **Team tools > Storage and free up space...** (0 means no project limit; the
+  disk guard still applies), or with the environment variable `CADSWARM_PROJECT_LIMIT_GB` when starting the
+  hub. History retention (20 versions, 24 hours) is changed in the same place.
+- **Free up space.** The same dialog shows what is using the room and lets a person trim older versions,
+  delete old snapshots (always keeping the newest few) and old exports. Snapshots and exports are never
+  deleted automatically, and AI helpers can look (`storage_status`) but can't delete: they're told to ask
+  a person.
+- Binary files up to 100 MB are accepted over HTTP; a 100 MB save briefly needs about 500 MB of RAM on the
+  host while it is decoded.
 - **Model scripts can't write files.** `run_part_script` can't `open()` files, can't import
   `os`/`shutil`/`subprocess`, and can't call `doc.saveAs`, `shape.exportStep` and the like. This
   guards against accidents and naive misuse; in-process Python can't be fully sandboxed, so only
@@ -160,7 +181,7 @@ the prompt goes through without it.
 - **Locks:** `lock_objects`, `release_objects`
 - **Modelling:** `create_primitive`, `create_extrusion`, `boolean`, `set_props`, `set_placement`,
   `delete_object`, `set_param`, `run_part_script`
-- **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`
+- **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
 - **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
   `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,

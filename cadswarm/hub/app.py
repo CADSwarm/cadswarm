@@ -165,6 +165,21 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
     def restore(body: dict = Body(...), p=Depends(me)):
         return hub.restore_file(p["id"], body.get("path"), body.get("version"), body.get("expected_version"))
 
+    @app.get("/project/storage")
+    def storage(p=Depends(me)):
+        return hub.storage_status()
+
+    @app.post("/project/storage/prune")
+    def storage_prune(body: dict = Body(default={}), p=Depends(me)):
+        return hub.prune_storage(p["id"], body)
+
+    @app.post("/project/storage/settings")
+    def storage_settings(request: Request, body: dict = Body(...), p=Depends(me)):
+        # The host's own FreeCAD talks to its hub over loopback; teammates come in over the network.
+        if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+            raise HubError(403, "host_only", "Only the computer hosting the team can change its storage limits.")
+        return hub.set_storage_settings(p["id"], body)
+
     @app.post("/project/snapshot")
     def save_snapshot(body: dict = Body(default={}), p=Depends(me)):
         return hub.snapshot(p["id"], body.get("label", ""))

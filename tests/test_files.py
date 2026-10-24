@@ -240,10 +240,9 @@ def test_short_8dot3_names_are_refused(env):
     assert e.value.code == "bad_path"
 
 
-def test_history_and_trash_count_toward_the_quota(env, monkeypatch):
-    from cadswarm.hub import files as files_mod
-    monkeypatch.setattr(files_mod, "MAX_TOTAL_BYTES", 100)
+def test_history_and_trash_count_toward_the_quota(env):
     hub, _, _, a, _ = env
+    hub.files.storage.update({"project_limit_gb": 100 / 1024 ** 3})
     hub.save_file(a, "big.md", text="x" * 40)
     hub.save_file(a, "big.md", text="y" * 40, if_exists="replace", expected_version=1)  # 40 live + 40 history
     with pytest.raises(HubError) as e:  # live size alone (40+40) would fit; history makes it 120

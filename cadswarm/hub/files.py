@@ -10,9 +10,11 @@ the agents:
 * No silent overwrites. Saving onto an existing file is refused unless the caller asks for
   `if_exists="new_name"` (a free name like `notes-2.md`) or `if_exists="replace"` with the
   `expected_version` they last read — the same optimistic check model objects use.
-* Nothing is lost. Before a file is replaced, moved away or deleted, its current bytes are
+* Old versions are kept. Before a file is replaced, moved away or deleted, its current bytes are
   copied into `.cadswarm-team/history/`, including edits someone made outside CadSwarm
-  (detected by hash), and any old version can be restored as a new version.
+  (detected by hash), and any old version can be restored as a new version. History is trimmed
+  to the newest 20 versions per file plus everything from the last day (a deleted file always
+  keeps its latest version); storage.py also holds the disk guard and the project budget.
 * Atomic. Content is written to a temp file in the same folder, flushed, then renamed
   over the target, so a crash never leaves half a file.
 
@@ -27,10 +29,12 @@ import shutil
 import time
 import unicodedata
 
+from .storage import FileError, Storage  # FileError is re-exported: callers import it from here
+
 TEXT_EXT = {".md", ".txt", ".json", ".csv", ".py", ".fcmacro", ".svg", ".yaml", ".yml", ".toml", ".html", ".xml"}
 BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".step", ".stp", ".stl", ".fcstd", ".dxf", ".3mf"}
-MAX_FILE_BYTES = 5 * 1024 * 1024
-MAX_TOTAL_BYTES = 500 * 1024 * 1024
+MAX_TEXT_BYTES = 5 * 1024 * 1024       # agents write text token by token, so it stays small
+MAX_BINARY_BYTES = 100 * 1024 * 1024   # CAD/media files come from programs; see the README for the memory cost
 MAX_DEPTH = 8
 MAX_PATH_CHARS = 180
 RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$",
@@ -45,12 +49,6 @@ CREATE TABLE IF NOT EXISTS file_history (
   path TEXT NOT NULL, version INTEGER NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL,
   author TEXT, saved_at REAL NOT NULL, stored_as TEXT NOT NULL, reason TEXT NOT NULL);
 """
-
-
-class FileError(Exception):
-    def __init__(self, status, code, message, **data):
-        super().__init__(message)
-        self.status, self.code, self.data = status, code, data
 
 
 def sha256(data):
@@ -87,6 +85,7 @@ class ProjectFiles:
         self.history_dir = layout["history"]
         self.trash_dir = layout["trash"]
         self.db, self.clock = db, clock
+        self.storage = Storage(layout, db, clock)
         os.makedirs(self.root, exist_ok=True)
         self.db.executescript(SCHEMA)
 
@@ -199,6 +198,9 @@ class ProjectFiles:
             raise FileError(404, "not_found", f"There's no file {clean!r}. Use list_files to see what exists.")
         data = self.disk_bytes(clean)
         text_ext = os.path.splitext(clean)[1].lower() in TEXT_EXT
+        if not text_ext and rec["size"] > MAX_TEXT_BYTES:  # base64 of a big CAD file would swamp an agent's context
+            raise FileError(413, "too_big_to_read", f"{clean!r} is {rec['size'] // (1024 * 1024)} MB, too big to send inline. "
+                            "Ask a person to open it from FreeCAD (Team tools > Project files > Save a copy).")
         out = {"path": clean, "version": rec["version"], "size": rec["size"], "author": rec["author"],
                "updated_at": rec["updated_at"]}
         if text_ext:
@@ -248,17 +250,19 @@ class ProjectFiles:
 
     # ----------------------------------------------------------- writing
 
-    def _keep(self, clean, rec, data, reason):
+    def _keep(self, clean, rec, data, reason, stored=None):
         """Copy the current bytes into history before they are replaced, moved or deleted.
+        `stored` names a place that will already hold them (a deleted file's trash entry): nothing is copied.
         Returns an undo handle for `_unkeep`, for when the change that follows fails."""
         base = os.path.join(self.history_dir, *clean.split("/")[:-1],
                             f"{clean.split('/')[-1]}@v{rec['version']}-{int(self.clock() * 1000)}")
-        stored, n = base, 2
-        while os.path.exists(stored):  # never overwrite an earlier history copy
-            stored, n = f"{base}-{n}", n + 1
-        os.makedirs(os.path.dirname(stored), exist_ok=True)
-        with open(stored, "wb") as f:
-            f.write(data)
+        if stored is None:
+            stored, n = base, 2
+            while os.path.exists(stored):  # never overwrite an earlier history copy
+                stored, n = f"{base}-{n}", n + 1
+            os.makedirs(os.path.dirname(stored), exist_ok=True)
+            with open(stored, "wb") as f:
+                f.write(data)
         cur = self.db.execute("INSERT INTO file_history VALUES (?,?,?,?,?,?,?,?)",
                               (clean, rec["version"], rec["sha256"], rec["size"], rec["author"], self.clock(), stored, reason))
         return stored, cur.lastrowid
@@ -288,15 +292,13 @@ class ProjectFiles:
                 pass
             raise
 
-    def _total_bytes(self):
-        """Live files plus every kept older version (history also covers the trash: a deleted file's bytes are there)."""
-        return self.db.execute("SELECT (SELECT COALESCE(SUM(size), 0) FROM files) + "
-                               "(SELECT COALESCE(SUM(size), 0) FROM file_history) AS s").fetchone()["s"]
+    def _check_room(self, extra, transient=0):
+        """Disk guard and project budget (storage.py); `extra` bytes are about to be added."""
+        self.storage.check_add(extra, transient)
 
-    def _check_quota(self, extra):
-        if self._total_bytes() + extra > MAX_TOTAL_BYTES:
-            raise FileError(413, "quota", "The project's files folder is full (500 MB, counting older saved versions "
-                            "and deleted files).")
+    @staticmethod
+    def _limit_for(clean):
+        return MAX_TEXT_BYTES if os.path.splitext(clean)[1].lower() in TEXT_EXT else MAX_BINARY_BYTES
 
     def free_name(self, clean):
         stem, ext = os.path.splitext(clean)
@@ -321,8 +323,11 @@ class ProjectFiles:
                 data = base64.b64decode(base64_data, validate=True)
             except Exception:
                 raise FileError(400, "bad_args", "base64 content couldn't be decoded.")
-        if len(data) > MAX_FILE_BYTES:
-            raise FileError(413, "too_big", f"Files can be at most {MAX_FILE_BYTES // (1024 * 1024)} MB.")
+        limit = self._limit_for(clean)
+        if len(data) > limit:
+            kind = "Text files" if limit == MAX_TEXT_BYTES else "Binary files like this"
+            raise FileError(413, "too_big", f"{kind} can be at most {limit // (1024 * 1024)} MB (this one is "
+                            f"{len(data) // (1024 * 1024)} MB).")
         if if_exists not in ("error", "new_name", "replace"):
             raise FileError(400, "bad_args", "if_exists must be error, new_name or replace.")
         current = self.reconcile(clean)
@@ -347,7 +352,8 @@ class ProjectFiles:
             raise FileError(409, "stale_version", f"{clean!r} doesn't exist any more; it may have been moved or deleted.",
                             path=clean, currentVersion=0)
         # replaced bytes stay in history and keep counting, so a replace adds len(data) on top
-        self._check_quota(len(data))
+        # (briefly the old bytes sit in three places: live, the history copy, and beside the temp file)
+        self._check_room(len(data), replaced["size"] if replaced else 0)
         kept = self._keep(clean, replaced, self.disk_bytes(clean), "replaced") if replaced else None
         try:
             self._atomic_write(clean, data)
@@ -358,6 +364,7 @@ class ProjectFiles:
         version = (replaced["version"] + 1) if replaced else 1
         self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
                         (clean, version, sha256(data), len(data), author, self.clock()))
+        self.storage.prune_path(clean)
         return {"path": clean, "version": version, "size": len(data), "replaced": bool(replaced),
                 "previous_author": replaced["author"] if replaced else None,
                 "renamed_from": requested if if_exists == "new_name" and clean != requested else None}
@@ -377,12 +384,13 @@ class ProjectFiles:
         if self.reconcile(d) is not None:
             raise FileError(409, "file_exists", f"{d!r} already exists; nothing was moved or overwritten.", path=d)
         data = self.disk_bytes(s)
-        self._check_quota(len(data))  # the old bytes go to history while the moved copy stays live
+        self._check_room(len(data))  # the old bytes go to history while the moved copy stays live
         os.makedirs(os.path.dirname(self.full(d)), exist_ok=True)
         os.replace(self.full(s), self.full(d))  # if this fails nothing has been recorded yet
         self._keep(s, rec, data, f"moved to {d}")
         self.db.execute("DELETE FROM files WHERE path=?", (s,))
         self.db.execute("INSERT INTO files VALUES (?,?,?,?,?,?)", (d, 1, rec["sha256"], rec["size"], author, self.clock()))
+        self.storage.prune_path(s)
         return {"from": s, "to": d}
 
     @_guard
@@ -392,18 +400,20 @@ class ProjectFiles:
         rec = self.reconcile(clean)
         if rec is None:
             raise FileError(404, "not_found", f"There's no file {clean!r}.")
-        kept = self._keep(clean, rec, self.disk_bytes(clean), f"deleted by {author}")
         base = os.path.join(self.trash_dir, f"{int(self.clock())}-{clean.replace('/', '__')}")
         trash, n = base, 2
         while os.path.exists(trash):  # same path deleted twice in a second, or 'a/b.md' vs 'a__b.md'
             trash, n = f"{base}-{n}", n + 1
         os.makedirs(self.trash_dir, exist_ok=True)
+        # The trash entry IS the history copy (one set of bytes, not two), so retention cleans it up too.
+        kept = self._keep(clean, rec, None, f"deleted by {author}", stored=trash)
         try:
             shutil.move(self.full(clean), trash)
         except OSError:
             self._unkeep(kept)
             raise
         self.db.execute("DELETE FROM files WHERE path=?", (clean,))
+        self.storage.prune_path(clean)
         return {"deleted": clean, "recoverable": True}
 
     @_guard
@@ -426,7 +436,7 @@ class ProjectFiles:
                             path=clean, currentVersion=now, author=current["author"] if current else None)
         with open(row["stored_as"], "rb") as f:
             data = f.read()
-        self._check_quota(len(data))
+        self._check_room(len(data), current["size"] if current else 0)
         kept = self._keep(clean, current, self.disk_bytes(clean), f"replaced by restore of v{version}") if current else None
         try:
             self._atomic_write(clean, data)
@@ -437,6 +447,7 @@ class ProjectFiles:
         new_version = (current["version"] + 1) if current else version
         self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
                         (clean, new_version, sha256(data), len(data), author, self.clock()))
+        self.storage.prune_path(clean)
         return {"path": clean, "version": new_version, "restored_from": version}
 
 
