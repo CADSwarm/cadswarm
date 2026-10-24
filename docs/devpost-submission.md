@@ -31,7 +31,8 @@ Devpost's field limits (the sections below are sized for the "built with a story
   (published 2026-10-24 with `--delete-data=never`), and the team server shows `active` in `v_member`.
 - [x] Elastic, counted live on 2026-10-24: `cadswarm-boards` 6 datasheet documents for 5 boards
   (raspberry-pi-4, arduino-uno-r3, esp32-s3-devkitc-1, raspberry-pi-pico, seeed-xiao-esp32c3),
-  `cadswarm-designs` 1, `cadswarm-lessons` 0 (no reviewer findings yet).
+  `cadswarm-designs` 1, `cadswarm-lessons` 4 (the four design problems the Droid reviewer found in
+  `b_demo_2`, distilled by the `distil-lessons-4` workflow).
 
 ## Project name
 
@@ -218,6 +219,12 @@ Actions · Windows
 | Elastic | `elastic/setup.json`, `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | JINA `semantic_text` hybrid search with the reranker over board datasheets; design memory written back by the host; Agent Builder agents; the `distil-lessons` Workflow. |
 | Best Hardware | The printed enclosure | [TBD — photo of the printed part, from T7d] |
 | Most Technically Complex | `rules/src/lib.rs` (fences, locks, stale sweep, `check_take_over`); `host/src/executor.rs` (`spill`: results over 32 KB become artifacts); `cadswarm/worker/sandbox.py`, `sandbox_win.py`, `script_runner.py` | Fenced leases, object locks and takeover enforced in reducers; handoff of locks and tasks; large results spilled out of the op table; agent part scripts run in a sandbox. |
+
+In the web app, press `?debug` (or `Shift+D`, or the **sponsors** chip in the sidebar) to open the
+sponsors panel. It shows, per sponsor, what the app can prove from live state: the SpacetimeDB tables
+and member kinds the session is reading, the Factory Droid review round with its findings and tool
+calls, and the Elastic index counts (stamped in `web/src/ui/sponsor-evidence.ts` with the date they
+were taken, because the browser store does not hold those numbers).
 
 ## Team
 
