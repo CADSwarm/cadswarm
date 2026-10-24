@@ -25,8 +25,8 @@ describe('pasting an invite code', () => {
 
   it('explains what is wrong in plain words', () => {
     expect(() => readInvite('')).toThrow(/Paste the invite code/);
-    expect(() => readInvite('cadswarm-1:abc')).toThrow(/older CadSwarm/);
-    expect(() => readInvite('hello there')).toThrow(/doesn't look like a CadSwarm invite/);
+    expect(() => readInvite('cadswarm-1:abc')).toThrow(/older CADSwarm/);
+    expect(() => readInvite('hello there')).toThrow(/doesn't look like a CADSwarm invite/);
     expect(() => readInvite(CODE.slice(0, 40))).toThrow(/incomplete/);
   });
 });

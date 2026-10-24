@@ -1,10 +1,10 @@
-/* CadSwarm web: the team panel from the site, made real. Dark, flat, monospace for names and numbers.
+/* CADSwarm web: the team panel from the site, made real. Dark, flat, monospace for names and numbers.
    Same tokens as website/index.html so a screenshot of either reads as the same product. */
 :root {
   --bg: #0a0a0a; --surface: #121212; --surface-2: #181818;
   --line: rgba(244, 243, 241, .10); --line-strong: rgba(244, 243, 241, .18);
   --text: #f4f3f1; --body: #d4d2cd; --muted: #8f8d88; --bone: #e8e2d4; --ink-on-light: #0a0a0a;
-  /* owner colours: the same order CadSwarm hands them out in FreeCAD */
+  /* owner colours: the same order CADSwarm hands them out in FreeCAD */
   --own-1: #4c9be0; --own-2: #f0913a; --own-3: #4fb35a; --own-4: #e5534b;
   --ok: #4fb35a; --warn: #e3b341; --err: #e5534b; --refused: #f0a29d;
 
@@ -228,13 +228,20 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .field, .compose-field { display: flex; align-items: flex-end; gap: 8px; padding: 4px 4px 4px 14px; border: .5px solid var(--line);
   border-radius: 20px; background: var(--solid); }
 .compose-field { position: relative; }
-.field textarea, .compose-field textarea { flex: 1; min-height: 32px; max-height: 140px; margin: 0; padding: 6px 0; border: 0; outline: 0; resize: none;
+.field textarea, .compose-field textarea { flex: 1; min-height: 32px; margin: 0; padding: 6px 0; border: 0; outline: 0; resize: none;
   background: none; color: var(--fg); font: var(--font); font-size: 16px; line-height: 1.3; }
+/* The composer grows with what you type; it never shows a scrollbar. */
+.compose-field textarea { max-height: none; overflow-y: hidden; }
 .field textarea:focus-visible, .compose-field textarea:focus-visible { outline: none; }
 .field:focus-within, .compose-field:focus-within { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent); }
-.send { flex: none; width: 32px; height: 32px; margin: 0; padding: 0; border: 0; border-radius: 50%; background: var(--bone);
-  color: var(--ink-on-light); font: 700 17px/1 var(--font-body); cursor: pointer; }
-.send:disabled { opacity: .35; }
+.send { flex: none; display: grid; place-items: center; width: 34px; height: 34px; margin: 0 1px 0 0; padding: 0;
+  border: 0; border-radius: 11px; background: var(--bone); color: var(--ink-on-light); cursor: pointer;
+  transition: transform .12s ease, opacity .12s ease; }
+.send svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; }
+.send:active { transform: scale(.94); }
+.send:disabled { opacity: .35; cursor: default; }
+.send:focus-visible { outline: 2px solid var(--bone); outline-offset: 2px; }
 .compose-hint { margin: 6px 4px 0; font-size: 11px; line-height: 1.4; color: var(--muted); }
 .compose-hint b { color: var(--fg); font-weight: 600; }
 .mention-menu { position: absolute; z-index: 5; left: 0; right: 0; bottom: calc(100% + 8px); max-height: 240px; overflow: auto;
@@ -246,24 +253,82 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .mention-name { font-weight: 600; }
 .mention-detail { font-size: 11px; color: var(--muted); text-align: right; }
 
-/* ---- Start / join screens ---- */
-.welcome, .pair { padding: 20px 18px; overflow: auto; }
-.welcome h1, .pair h1 { font: 700 28px/1.15 var(--font); letter-spacing: -0.02em; margin: 6px 0 8px; }
-.welcome p { color: var(--muted); }
+/* ---- First screen: one quiet way in (scan a QR or paste the code) ---- */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0; }
+.join, .signin { display: flex; flex-direction: column; min-height: 100%; height: 100%; height: 100dvh; overflow: auto;
+  padding: calc(env(safe-area-inset-top) + 22px) 22px calc(env(safe-area-inset-bottom) + 18px); }
+.signin { align-items: center; justify-content: center; color: var(--muted); text-align: center; }
+.join-head { display: flex; align-items: center; gap: 10px; flex: none; }
+.join-mark { width: 16px; height: 16px; border-radius: 5px; background: var(--bone); transform: rotate(45deg); }
+.join-brand { font: 600 15px/1 var(--font-body); letter-spacing: -0.01em; }
+.join-body { flex: 1; display: flex; flex-direction: column; justify-content: center; width: 100%; max-width: 420px;
+  margin: 0 auto; padding: 28px 0; }
+.join-body h1 { margin: 0 0 10px; font: 650 30px/1.15 var(--font-body); letter-spacing: -0.025em; }
+.join-lede { margin: 0 0 24px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+.join-scan { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-height: 52px;
+  border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-2); color: var(--text);
+  font: 600 16px/1 var(--font-body); cursor: pointer; }
+.join-scan svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
+.join-scan:disabled { opacity: .45; cursor: default; }
+.join-or { display: flex; align-items: center; gap: 12px; margin: 20px 0 14px; color: var(--muted); font-size: 12px; }
+.join-or::before, .join-or::after { content: ''; flex: 1; border-top: .5px solid var(--line); }
+.join-form { display: flex; flex-direction: column; }
+.join-form textarea { width: 100%; min-height: 84px; max-height: 160px; padding: 12px 14px; border: .5px solid var(--line);
+  border-radius: 12px; background: var(--surface-2); color: var(--text); font: 13px/1.5 var(--font-mono);
+  resize: vertical; }
+.join-form textarea::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); }
+.join-go { width: 100%; min-height: 50px; margin-top: 12px; border: 0; border-radius: 14px; background: var(--bone);
+  color: var(--ink-on-light); font: 600 17px/1 var(--font-body); cursor: pointer; }
+.join-go:disabled { opacity: .5; cursor: default; }
+.join-error { min-height: 18px; margin: 10px 0 0; color: var(--err); font-size: 13px; line-height: 1.4; }
+.join-fine { margin: 18px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.join-foot { display: flex; align-items: baseline; gap: 8px; flex: none; width: 100%; max-width: 420px; margin: 0 auto;
+  padding-top: 12px; border-top: .5px solid var(--line); font-size: 12px; color: var(--muted); }
+.join-last-db { font: 600 12px/1 var(--font-mono); color: var(--body); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.join-switch { margin-left: auto; padding: 6px 0; border: 0; background: none; color: var(--accent);
+  font: 600 12px/1 var(--font-body); cursor: pointer; }
+
+/* ---- Camera overlay: scan the invite QR ---- */
+.scan { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; background: #000; }
+.scan-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-target { position: absolute; left: 50%; top: 40%; width: min(62vw, 250px); aspect-ratio: 1;
+  transform: translate(-50%, -50%); }
+.scan-target span { position: absolute; width: 28px; height: 28px; border: 3px solid var(--bone); }
+.scan-target span:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 12px; }
+.scan-target span:nth-child(2) { right: 0; top: 0; border-left: 0; border-bottom: 0; border-top-right-radius: 12px; }
+.scan-target span:nth-child(3) { left: 0; bottom: 0; border-right: 0; border-top: 0; border-bottom-left-radius: 12px; }
+.scan-target span:nth-child(4) { right: 0; bottom: 0; border-left: 0; border-top: 0; border-bottom-right-radius: 12px; }
+.scan-panel { position: absolute; left: 0; right: 0; bottom: 0; padding: 24px 22px calc(env(safe-area-inset-bottom) + 20px);
+  text-align: center; background: linear-gradient(to top, rgb(0 0 0 / .92), rgb(0 0 0 / 0)); }
+.scan-hint { margin: 0 0 8px; color: var(--text); font-size: 14px; line-height: 1.4; }
+.scan-error { margin: 0 0 8px; color: var(--refused); font-size: 13px; line-height: 1.4; }
+.scan-error:empty { display: none; }
+.scan-actions { display: flex; gap: 10px; justify-content: center; margin-top: 10px; }
+.scan-actions button { min-height: 46px; padding: 0 18px; border: .5px solid var(--line-strong); border-radius: 999px;
+  background: rgb(244 243 241 / .14); color: var(--text); font: 600 14px/1 var(--font-body); cursor: pointer; }
+.scan-actions .scan-cancel { background: var(--bone); color: var(--ink-on-light); border-color: transparent; }
+.scan-cancel:focus-visible, .scan-manual:focus-visible { outline-color: var(--bone); }
+
+/* ---- Name form after an invite is redeemed ---- */
+.pair { width: 100%; max-width: 420px; padding: 20px 18px; margin: 0 auto; text-align: left; }
+.pair h1 { font: 700 28px/1.15 var(--font); letter-spacing: -0.02em; margin: 6px 0 8px; }
 label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 0; }
 label > input, label > textarea, label > select { display: block; width: 100%; margin-top: 6px; padding: 11px 14px;
   border: 0; border-radius: 10px; background: var(--group); color: var(--fg); font: var(--font); font-size: 16px; }
 label > textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-.pair button[type=submit], .welcome button[type=submit] { display: block; width: 100%; margin-top: 16px; min-height: 50px;
+.pair button[type=submit] { display: block; width: 100%; margin-top: 16px; min-height: 50px;
   border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-fg); font: 600 17px/1 var(--font-body); cursor: pointer; }
 .pair button:disabled { opacity: .5; }
 textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 1px; }
 
 /* ---- Toast ---- */
-.toast { position: fixed; left: 16px; right: 16px; bottom: 20px; z-index: 10; max-width: 420px; margin: 0 auto; padding: 12px 16px;
-  border-radius: 14px; background: var(--panel); color: var(--fg); -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px);
-  border: .5px solid var(--line); box-shadow: var(--shadow); font-size: 14px; animation: toast-in .2s ease-out; }
+/* A quiet line under the header, in the sheet's flow, so it never covers the composer. */
+.toast { flex: none; margin: 8px 12px 0; padding: 9px 12px; border-radius: 12px; background: var(--surface-2); color: var(--body);
+  border: .5px solid var(--line); font-size: 13px; line-height: 1.4; animation: toast-in .2s ease-out; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 
 /* ---- Phones: the model full screen, the chat in a draggable sheet ---- */
@@ -319,7 +384,11 @@ textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-
   .panels[data-stop="peek"] .composer { margin-top: auto; }
   .panels[data-stop="half"] .sheet-last, .panels[data-stop="full"] .sheet-last { display: none; }
   .panels[data-stop="half"] .tabbar, .panels[data-stop="full"] .tabbar { display: flex; }
-  .toast { top: calc(env(safe-area-inset-top) + 58px); bottom: auto; }
+  .toast { margin: 6px 12px 0; font-size: 12.5px; }
+  /* The peek is exactly one composer tall: the notice takes the hint's line, never its field. */
+  .panels[data-stop="peek"] .toast:not([hidden]) { display: -webkit-box; -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2; overflow: hidden; }
+  .panels[data-stop="peek"].has-notice .compose-hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .tab.active, .toast, .panels, .sheet-toggle svg { animation: none; transition: none; }

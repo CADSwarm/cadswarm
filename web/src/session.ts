@@ -19,6 +19,11 @@ export function forgetSession(uri: string, db: string) {
   try { localStorage.removeItem(key(uri, db)); } catch { /* ignore */ }
 }
 
+/** Stop offering the remembered build on the join screen. */
+export function forgetLast() {
+  try { localStorage.removeItem('cadswarm:last'); } catch { /* ignore */ }
+}
+
 export function lastDb(): { uri: string; db: string } | null {
   try {
     const v = JSON.parse(localStorage.getItem('cadswarm:last') ?? 'null');

@@ -85,11 +85,12 @@ export function clock(ms: number): string {
 
 export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '',
                              topbar: HTMLElement | null = null) {
+  el.classList.remove('has-notice');
   el.innerHTML = `
     <div class="grabber" data-grabber aria-hidden="true"><span></span></div>
     <header class="sheet-head">
       <button type="button" class="sheet-title" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
-        <span class="sheet-kicker">CadSwarm</span>
+        <span class="sheet-kicker">CADSwarm</span>
         <b data-project>this build</b>
         <span class="sheet-last" data-sheet-last></span>
       </button>
@@ -98,6 +99,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg>
       </button>
     </header>
+    <div class="toast" role="status" aria-live="polite" hidden></div>
     <nav class="tabbar" role="tablist" aria-label="Sections">
       ${TABS.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}" aria-controls="tab-${id}">
         <svg viewBox="0 0 24 24" aria-hidden="true">${ICON[id]}</svg><span>${label}</span><span class="badge" data-count="${id}"></span></button>`).join('')}
@@ -136,8 +138,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       </div></div>
       <div class="panel-sec"><div data-handoff></div>
         <span class="section-label">Precision settings</span><div data-settings></div></div>
-    </section>
-    <div class="toast" role="status" aria-live="polite" hidden></div>`;
+    </section>`;
 
   if (topbar) topbar.innerHTML = `
     <div class="topbar-title"><b data-project>this build</b></div>
@@ -310,8 +311,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       const toast = $('.toast');
       toast.textContent = s.notice.text;
       toast.hidden = false;
+      el.classList.add('has-notice'); // at the peek, the hint gives its line to the notice
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { toast.hidden = true; }, 5000);
+      toastTimer = setTimeout(() => { toast.hidden = true; el.classList.remove('has-notice'); }, 5000);
     }
   }
 

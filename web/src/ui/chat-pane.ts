@@ -75,7 +75,9 @@ export function mountChat(el: HTMLElement, store: Store, api: Api | null, picked
         <div class="mention-menu" data-mentions role="listbox" aria-label="Mention a helper or the team" hidden></div>
         <textarea data-text rows="1" placeholder="@helper what to do, or a message for your team"
                   aria-label="Message the team"${api ? '' : ' disabled'}></textarea>
-        <button type="submit" class="send" aria-label="Send"${api ? '' : ' disabled'}>↑</button>
+        <button type="submit" class="send" aria-label="Send"${api ? '' : ' disabled'}>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
       </div>
       <p class="compose-hint"><b>@name</b> gives a helper a task · <b>@team</b> plans and builds a request ·
         <b>@all</b> tells every helper · no @ is chat between people.</p>
@@ -167,7 +169,7 @@ export function mountChat(el: HTMLElement, store: Store, api: Api | null, picked
   });
 
   // ---- composer ----
-  const grow = () => { text.style.height = 'auto'; text.style.height = `${Math.min(text.scrollHeight, 140)}px`; };
+  const grow = () => { text.style.height = 'auto'; text.style.height = `${text.scrollHeight}px`; };
   const hasTeam = () => parseMentions(text.value, store.state.members.filter(m => m.kind !== 'human').map(m => m.name))
     .special.has('team');
   const syncBoard = () => { boardRow.hidden = !(hasTeam() && boards.length > 0); };

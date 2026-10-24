@@ -1,6 +1,8 @@
 // The phone's draggable chat sheet: pointer drag with a live height, a snap to the nearest detent on
-// release, a header tap for keyboard/AT, and a `cadswarm:inset`-style callback so the viewer can frame
-// the model above it. On desktop the sheet is the fixed rail and this does nothing.
+// release, a header tap for keyboard/AT, and a callback so the viewer can frame the model above it.
+// On desktop the sheet is the fixed rail and this does nothing.
+//
+// Listeners are delegated from the sheet element, so re-rendering the panel markup keeps working.
 import { detents, nearestDetent, type SheetStop } from './sheet';
 
 export interface SheetControl {
@@ -10,27 +12,26 @@ export interface SheetControl {
   stop(): SheetStop;
 }
 
+const PHONE = '(max-width: 760px)';
+
 export function mountSheet(sheet: HTMLElement, onChange: (coveredPx: number) => void): SheetControl {
-  const grabber = sheet.querySelector<HTMLElement>('[data-grabber]');
-  const head = sheet.querySelector<HTMLElement>('.sheet-head');
-  const toggles = [...sheet.querySelectorAll<HTMLButtonElement>('[data-sheet-toggle]')];
-  const isPhone = () => matchMedia('(max-width: 760px)').matches;
+  const isPhone = () => matchMedia(PHONE).matches;
   let stop: SheetStop = (sheet.dataset.stop as SheetStop) || 'peek';
   let drag: { id: number; y: number; height: number; moved: boolean } | null = null;
   let suppressClickUntil = 0;
 
   function apply(next: SheetStop) {
     stop = next;
+    sheet.dataset.stop = next;
+    sheet.querySelectorAll<HTMLButtonElement>('[data-sheet-toggle]')
+      .forEach(b => b.setAttribute('aria-expanded', String(next !== 'peek')));
     if (!isPhone()) {
       sheet.style.height = '';
-      sheet.dataset.stop = next;
       onChange(0);
       return;
     }
     const height = Math.round(detents(window.innerHeight)[next]);
-    sheet.dataset.stop = next;
     sheet.style.height = `${height}px`;
-    toggles.forEach(b => b.setAttribute('aria-expanded', String(next !== 'peek')));
     onChange(height);
   }
 
@@ -40,20 +41,22 @@ export function mountSheet(sheet: HTMLElement, onChange: (coveredPx: number) => 
     apply(stop === 'full' ? 'half' : stop === 'peek' ? 'half' : 'full');
   }
 
-  toggles.forEach(b => b.addEventListener('click', e => {
+  sheet.addEventListener('click', e => {
+    if (!(e.target as HTMLElement).closest('[data-sheet-toggle]')) return;
     e.preventDefault();
     if (performance.now() < suppressClickUntil) return; // the click that ended a drag
     toggle();
-  }));
+  });
 
   function beginDrag(e: PointerEvent) {
     if (!isPhone() || e.button > 0) return;
+    if (!(e.target as HTMLElement).closest('[data-grabber], .sheet-head')) return;
     drag = { id: e.pointerId, y: e.clientY, height: sheet.getBoundingClientRect().height, moved: false };
     sheet.classList.add('dragging');
     try { sheet.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
     e.preventDefault();
   }
-  for (const surface of [grabber, head]) surface?.addEventListener('pointerdown', beginDrag);
+  sheet.addEventListener('pointerdown', beginDrag);
 
   sheet.addEventListener('pointermove', e => {
     if (!drag || e.pointerId !== drag.id) return;
@@ -67,17 +70,13 @@ export function mountSheet(sheet: HTMLElement, onChange: (coveredPx: number) => 
 
   function endDrag(e: PointerEvent) {
     if (!drag || e.pointerId !== drag.id) return;
-    const { moved, height } = drag;
+    const { moved } = drag;
     drag = null;
     sheet.classList.remove('dragging');
     try { sheet.releasePointerCapture(e.pointerId); } catch { /* already released */ }
-    if (!moved) { // a tap on the grabber or header
-      suppressClickUntil = performance.now() + 300;
-      toggle();
-      return;
-    }
     suppressClickUntil = performance.now() + 300;
-    apply(nearestDetent(sheet.getBoundingClientRect().height || height, window.innerHeight));
+    if (!moved) { toggle(); return; } // a tap on the grabber or header
+    apply(nearestDetent(sheet.getBoundingClientRect().height, window.innerHeight));
   }
   sheet.addEventListener('pointerup', endDrag);
   sheet.addEventListener('pointercancel', endDrag);
