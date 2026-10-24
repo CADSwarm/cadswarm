@@ -30,6 +30,7 @@ import type {
 import { newId } from './ids';
 import { saveSession } from './session';
 import { saveBytes } from './download';
+import { stripMentions } from './ui/mentions';
 
 const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param', 'v_op', 'v_task', 'v_activity',
   'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff', 'v_message', 'v_receipt', 'v_component',
@@ -52,6 +53,12 @@ export interface Api {
   cancelHandoff(id: string): void;
   /** An instruction for an AI helper (by name, or "all"): it does it first and its receipt says how far it got. */
   sendCommand(to: string, body: string, taskId?: string): string;
+  /** A task for one AI helper, so the instruction that follows can point at it. Rejects if the host refuses. */
+  createTask(input: { title: string; detail: string; objects: string[]; assignee: string }): Promise<string>;
+  /** Any team message: chat between people, or a command. Returns its id. */
+  sendMessage(to: string, body: string, kind: string, taskId?: string): string;
+  /** People talking to everyone: helpers read it as background, never as an order. */
+  sendChat(body: string): string;
   downloadArtifact(hash: string, filename: string): Promise<void>;
   /** Place a library part in the model; resolves true once the host has built it. */
   placeComponent(req: PlaceRequest): Promise<boolean>;
@@ -264,7 +271,7 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       },
       submitBrief: (text, board) => {
         const id = newId('b_');
-        void quiet(r.submitBrief({ fence: fence(), briefId: id, text, board }));
+        void quiet(r.submitBrief({ fence: fence(), briefId: id, text: stripMentions(text), board }));
         return id;
       },
       lock: names => quiet(r.lockObjects({ fence: fence(), names })),
@@ -292,11 +299,24 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         return id;
       },
       cancelHandoff: id => void quiet(r.cancelHandoff({ fence: fence(), handoffId: id })),
-      sendCommand: (to, body, taskId = '') => {
+      sendCommand: (to, body, taskId = '') => api.sendMessage(to, body, 'command', taskId),
+      createTask: async input => {
+        const taskId = newId('t_');
+        try {
+          await r.createTask({ fence: fence(), taskId, title: input.title, detail: input.detail,
+            objects: input.objects, assignee: input.assignee, brief: '' });
+        } catch (e) {
+          report(e);
+          throw new Error(splitError(e).message);
+        }
+        return taskId;
+      },
+      sendMessage: (to, body, kind, taskId = '') => {
         const id = newId('m_');
-        void quiet(r.sendMessage({ fence: fence(), messageId: id, to, body, kind: 'command', taskId }));
+        void quiet(r.sendMessage({ fence: fence(), messageId: id, to, body, kind, taskId }));
         return id;
       },
+      sendChat: body => api.sendMessage('all', body, 'chat'),
       placeComponent: req => req.family
         ? runOp('insert_standard_part', { family: req.family, size: req.size, name: req.name, label: req.label,
           ...(req.length ? { length: req.length } : {}) })
