@@ -164,6 +164,19 @@ Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to i
 `cargo build --release` in `host/` and `cargo build --release --target wasm32-unknown-unknown` in
 `module/`.
 
+Optional services read keys from the environment, never from the repo. Copy `.env.example` to `.env`
+(git-ignored) and run commands through the loader, which sets the variables for that process only:
+
+```powershell
+powershell -File scripts\with-env.ps1 python -m pytest -q
+powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --data .\team run
+```
+
+`.env.example` lists every variable: Elastic (`ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` for
+board knowledge and design memory), Factory's reviewer (`FACTORY_API_KEY`), the optional Cartesia
+voice key, agent API-key fallbacks, and developer overrides. SpacetimeDB publishing uses the CLI's
+stored login (`spacetime login`), not an environment variable.
+
 ```powershell
 cd cadswarm
 python -m venv .venv; .venv\Scripts\pip install -e ".[test]"
