@@ -5,7 +5,7 @@
 #
 #   powershell -File scripts\demo-up.ps1
 #   powershell -File scripts\demo-up.ps1 -SkipBuild
-#   powershell -File scripts\demo-up.ps1 -WebUrl https://<user>.github.io/cadswarm
+#   powershell -File scripts\demo-up.ps1 -WebUrl https://<your-vercel-site>/app/
 #   powershell -File scripts\demo-up.ps1 -AgentCommand C:\path\claude.exe,-p,{prompt},--model,sonnet
 #
 # -Data <dir>          data folder; default $env:USERPROFILE\Documents\Projects\cadswarm-demo
