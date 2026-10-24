@@ -5,3 +5,4 @@ __pycache__/
 cadswarm-data/
 exports/
 .cadswarm/
+target/
