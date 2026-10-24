@@ -21,12 +21,15 @@ is testable with a fake worker. Concepts carried over from Amoeba:
   consumed receipts, human steering first) mirror Amoeba's swarm.
 """
 import json
+import os
+import shutil
 import sqlite3
 import threading
 import time
 import uuid
 
 from ..config import ORPHAN_AFTER_SECONDS, STALE_AFTER_SECONDS
+from .files import FileError, ProjectFiles, safe_label, unique_path
 from .worker_client import WorkerError
 
 SCHEMA = """
@@ -75,7 +78,7 @@ def new_id(prefix):
 
 
 class Hub:
-    def __init__(self, worker, db_path, workspace_token, clock=time.time):
+    def __init__(self, worker, db_path, workspace_token, clock=time.time, layout=None):
         self.worker = worker
         self.workspace_token = workspace_token
         self.clock = clock
@@ -84,6 +87,89 @@ class Hub:
         self.db = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        self.layout = layout
+        self.files = ProjectFiles(layout, self.db, clock) if layout else None
+
+    # ---------------------------------------------------------- project files
+
+    def _files(self):
+        if self.files is None:
+            raise HubError(501, "no_project_folder", "This team server has no project folder for saved files.")
+        return self.files
+
+    def _file_call(self, fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except FileError as e:
+            raise HubError(e.status, e.code, str(e), **e.data)
+
+    def list_files(self, prefix=""):
+        with self.lock:
+            return self._file_call(self._files().listing, prefix)
+
+    def read_file(self, path):
+        with self.lock:
+            return self._file_call(self._files().read, path)
+
+    def raw_file(self, path):
+        with self.lock:
+            return self._file_call(self._files().raw, path)
+
+    def file_history(self, path):
+        with self.lock:
+            return self._file_call(self._files().history, path)
+
+    def save_file(self, pid, path, text=None, base64_data=None, if_exists="error", expected_version=None):
+        with self.lock:
+            me = self.name_of(pid)
+            r = self._file_call(self._files().save, path, me, text, base64_data, if_exists, expected_version)
+            self.emit("file_saved", pid, name=me, path=r["path"], version=r["version"], replaced=r["replaced"])
+            prev = r.get("previous_author")
+            if r["replaced"] and prev and prev != me:
+                to, _ = self.address(prev)
+                if to != "all" and not to.startswith("@"):
+                    self.system_message(to, f"{me} replaced your file {r['path']} (now version {r['version']}). "
+                                        f"Your version is kept; file_history('{r['path']}') can restore it.")
+            return r
+
+    def make_folder(self, pid, path):
+        with self.lock:
+            return self._file_call(self._files().make_folder, path)
+
+    def move_file(self, pid, src, dst):
+        with self.lock:
+            r = self._file_call(self._files().move, src, dst, self.name_of(pid))
+            self.emit("file_moved", pid, name=self.name_of(pid), **r)
+            return r
+
+    def delete_file(self, pid, path):
+        with self.lock:
+            r = self._file_call(self._files().delete, path, self.name_of(pid))
+            self.emit("file_deleted", pid, name=self.name_of(pid), path=r["deleted"])
+            return r
+
+    def restore_file(self, pid, path, version):
+        with self.lock:
+            r = self._file_call(self._files().restore, path, version, self.name_of(pid))
+            self.emit("file_saved", pid, name=self.name_of(pid), path=r["path"], version=r["version"], replaced=True)
+            return r
+
+    def snapshot(self, pid, label=""):
+        """Copy the live model into snapshots/ under a new, never-reused name."""
+        if not self.layout:
+            raise HubError(501, "no_project_folder", "This team server has no project folder.")
+        with self.lock:  # no op can be mid-save while we copy (ops hold this lock)
+            stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(self.clock()))
+            name = f"{stamp} {safe_label(label, 'snapshot')}.FCStd"
+            dest = unique_path(self.layout["snapshots"], name)
+            shutil.copy2(self.worker.doc_path, dest)
+            rel = os.path.relpath(dest, self.layout["root"]).replace("\\", "/")
+            self.emit("snapshot", pid, name=self.name_of(pid), file=rel)
+            return {"file": rel, "size": os.path.getsize(dest)}
+
+    def export_path(self, fmt, label=""):
+        stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(self.clock()))
+        return unique_path(self.layout["exports"], f"{safe_label(label, 'model')} {stamp}.{fmt}")
 
     # ------------------------------------------------------------------ helpers
 
@@ -577,7 +663,8 @@ class Hub:
                     lines.append(f"- {t['id']} [{t['status']}{' by ' + t['owner_name'] if t['owner_name'] else ''}] "
                                  f"{t['title']}")
             events = self.q("SELECT * FROM events WHERE seq > ? AND actor != ? AND kind IN "
-                            "('op','taken_over','stale','joined','task','task_reported') ORDER BY seq DESC LIMIT 12",
+                            "('op','taken_over','stale','joined','task','task_reported','file_saved','file_moved','file_deleted',"
+                            "'snapshot') ORDER BY seq DESC LIMIT 12",
                             since, pid)
             if events:
                 lines.append("Since your last prompt:")
@@ -586,6 +673,8 @@ class Hub:
                     if e["kind"] == "op":
                         lines.append(f"- {d['name']} {d['op']}: created {d['created']} modified {d['modified']} "
                                      f"deleted {d['deleted']} recomputed {d['recomputed']}")
+                    elif e["kind"] == "file_saved":
+                        lines.append(f"- {d['name']} saved files/{d['path']} (v{d['version']})")
                     else:
                         lines.append(f"- {e['kind']}: " + ", ".join(f"{k}={v}" for k, v in d.items()))
             unread = self._unconsumed(pid)

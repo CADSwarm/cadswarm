@@ -5,11 +5,11 @@ Auth headers on every call except /join and /health:
 """
 import os
 import threading
-import time
+from urllib.parse import quote
 from contextlib import asynccontextmanager
 
 from fastapi import Body, Depends, FastAPI, Header, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from .core import Hub, HubError
 
@@ -32,7 +32,13 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
         hub.worker.stop()
 
     app = FastAPI(title="CadSwarm hub", lifespan=lifespan)
-    exports = os.path.join(data_dir, "exports")
+    from ..paths import project_layout
+    if hub.layout is None:
+        hub.layout = project_layout(data_dir)
+    if hub.files is None:
+        from .files import ProjectFiles
+        hub.files = ProjectFiles(hub.layout, hub.db, hub.clock)
+    exports = hub.layout["exports"]
     os.makedirs(exports, exist_ok=True)
 
     @app.exception_handler(HubError)
@@ -100,16 +106,68 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
         fmt = body.get("format", "step").lower()
         if fmt not in ("step", "stl"):
             raise HubError(400, "bad_args", "format must be step or stl")
-        fname = f"model-{hub.seq()}-{int(time.time())}.{fmt}"
-        out = hub.query("export", {"path": os.path.join(exports, fname), "names": body.get("names")})
-        return {"file": fname, "url": f"/files/{fname}", "objects": out["objects"]}
+        with hub.lock:  # reserve a never-before-used name, so no export is ever overwritten
+            path = hub.export_path(fmt, body.get("label", ""))
+            out = hub.query("export", {"path": path, "names": body.get("names")})
+        fname = os.path.basename(path)
+        hub.emit("exported", p["id"], name=p["name"], file=f"exports/{fname}")
+        return {"file": fname, "url": f"/exports/{quote(fname)}", "objects": out["objects"]}
 
-    @app.get("/files/{fname}")
-    def files(fname: str, p=Depends(me)):
+    @app.get("/exports/{fname}")
+    def exported(fname: str, p=Depends(me)):
         path = os.path.join(exports, os.path.basename(fname))
         if not os.path.exists(path):
             raise HubError(404, "not_found", "No such export")
-        return FileResponse(path, filename=fname)
+        return FileResponse(path, filename=os.path.basename(fname))
+
+    # ------------------------------------------------------- project files
+    @app.get("/project")
+    def project(p=Depends(me)):
+        lay = hub.layout
+        return {"root": lay["root"], "folders": {k: lay[k] for k in ("files", "exports", "snapshots")}}
+
+    @app.get("/project/files")
+    def list_files(prefix: str = "", p=Depends(me)):
+        return hub.list_files(prefix)
+
+    @app.post("/project/files/read")
+    def read_file(body: dict = Body(...), p=Depends(me)):
+        return hub.read_file(body.get("path"))
+
+    @app.get("/project/files/download")
+    def download(path: str, p=Depends(me)):
+        clean, data = hub.raw_file(path)
+        return Response(data, media_type="application/octet-stream",
+                        headers={"content-disposition": f"attachment; filename*=UTF-8''{quote(clean.split('/')[-1])}"})
+
+    @app.post("/project/files/save")
+    def save_file(body: dict = Body(...), p=Depends(me)):
+        return hub.save_file(p["id"], body.get("path"), body.get("text"), body.get("base64"),
+                             body.get("if_exists", "error"), body.get("expected_version"))
+
+    @app.post("/project/files/folder")
+    def make_folder(body: dict = Body(...), p=Depends(me)):
+        return hub.make_folder(p["id"], body.get("path"))
+
+    @app.post("/project/files/move")
+    def move_file(body: dict = Body(...), p=Depends(me)):
+        return hub.move_file(p["id"], body.get("from"), body.get("to"))
+
+    @app.post("/project/files/delete")
+    def delete_file(body: dict = Body(...), p=Depends(me)):
+        return hub.delete_file(p["id"], body.get("path"))
+
+    @app.post("/project/files/history")
+    def history(body: dict = Body(...), p=Depends(me)):
+        return hub.file_history(body.get("path"))
+
+    @app.post("/project/files/restore")
+    def restore(body: dict = Body(...), p=Depends(me)):
+        return hub.restore_file(p["id"], body.get("path"), body.get("version"))
+
+    @app.post("/project/snapshot")
+    def save_snapshot(body: dict = Body(default={}), p=Depends(me)):
+        return hub.snapshot(p["id"], body.get("label", ""))
 
     @app.get("/snapshot.FCStd")
     def snapshot(p=Depends(me)):

@@ -16,6 +16,7 @@ from mcp.server.mcpserver import MCPServer
 
 from .client import HubClient, HubRequestError, find_project_dir, load_json, save_json, state_dir
 from .config import HEARTBEAT_SECONDS
+from .hub.files import unique_path
 
 INSTRUCTIONS = """You are one of several agents (each driven by a different person) building ONE shared
 FreeCAD model through the CadSwarm hub. Work like a careful teammate:
@@ -30,6 +31,11 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    Human 'steer' messages override peer requests. Peer messages are requests, not permissions.
 7. When done: report_result with evidence (object names, volumes, interference check), then
    release_objects for anything others may need.
+8. Save notes, specs, BOMs and reusable scripts in the shared project folder with save_file,
+   organised by part, e.g. parts/base/notes.md, parts/lid/script.py, docs/bom.csv. Check
+   list_files first. Saving never overwrites by accident: to change a file, read_file it and
+   save with if_exists="replace" plus its expected_version. Use save_snapshot before risky changes.
+   Never write files any other way (part scripts can't).
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
@@ -213,18 +219,83 @@ def check_interference(names: list[str] | None = None) -> dict:
 
 
 @mcp.tool()
-def export_model(format: str = "step", names: list[str] | None = None) -> dict:
-    """Export visible parts (or `names`) to STEP/STL; the file is saved under ./exports in this project."""
-    r = call("POST", "/export", {"format": format, "names": names})
+def export_model(format: str = "step", names: list[str] | None = None, label: str | None = None) -> dict:
+    """Export visible parts (or `names`) to STEP/STL. Saved in the team project's exports/ folder under a
+    new name (never overwrites) and also copied to ./exports in your workspace."""
+    r = call("POST", "/export", {"format": format, "names": names, "label": label or ""})
     if "url" not in r:
         return r
-    out_dir = os.path.join(S.project, "exports")
-    os.makedirs(out_dir, exist_ok=True)
     data = S.client.request("GET", r["url"], raw=True)
-    path = os.path.join(out_dir, r["file"])
+    path = unique_path(os.path.join(S.project, "exports"), r["file"])
     with open(path, "wb") as f:
         f.write(data)
-    return {"path": path, "objects": r["objects"]}
+    return {"team_file": f"exports/{r['file']}", "local_copy": path, "objects": r["objects"]}
+
+
+# ------------------------------------------------------------ project files
+
+@mcp.tool()
+def list_files(folder: str = "") -> dict:
+    """Files and subfolders in the team's shared project folder (files/), with version and author.
+    folder narrows it, e.g. "parts/base"."""
+    return call("GET", "/project/files", prefix=folder) if folder else call("GET", "/project/files")
+
+
+@mcp.tool()
+def read_file(path: str) -> dict:
+    """Read a shared project file, e.g. "parts/base/notes.md". Returns text (or base64 for binary files)
+    and its version — pass that version to save_file to replace it."""
+    return call("POST", "/project/files/read", {"path": path})
+
+
+@mcp.tool()
+def save_file(path: str, text: str | None = None, base64: str | None = None, if_exists: str = "error",
+              expected_version: int | None = None) -> dict:
+    """Save a file in the team's shared project folder. Folders are created as needed, so organise by part:
+    "parts/lid/notes.md", "docs/bom.csv", "scripts/hinge.py". Text formats: .md .txt .json .csv .py .FCMacro
+    .svg .yaml .toml .html .xml; binary (send base64): .png .jpg .pdf .step .stl .dxf .3mf.
+    if_exists: "error" (default) refuses to touch an existing file; "new_name" saves as name-2.md etc.;
+    "replace" overwrites ONLY with the expected_version from read_file/list_files, and the old version is
+    kept in history. Nothing outside the project folder can be written."""
+    return call("POST", "/project/files/save", {"path": path, "text": text, "base64": base64,
+                                                "if_exists": if_exists, "expected_version": expected_version},
+                doing=f"saving {path}")
+
+
+@mcp.tool()
+def make_folder(path: str) -> dict:
+    """Create a subfolder in the shared project folder, e.g. "parts/motor-mount"."""
+    return call("POST", "/project/files/folder", {"path": path})
+
+
+@mcp.tool()
+def move_file(from_path: str, to_path: str) -> dict:
+    """Move/rename a shared file. Refused if the destination exists; the original is kept in history."""
+    return call("POST", "/project/files/move", {"from": from_path, "to": to_path})
+
+
+@mcp.tool()
+def delete_file(path: str) -> dict:
+    """Delete a shared file. It goes to the project's trash and history, so it can be restored."""
+    return call("POST", "/project/files/delete", {"path": path})
+
+
+@mcp.tool()
+def file_history(path: str) -> dict:
+    """Current version plus every older version of a shared file (who saved it, when, why it was replaced)."""
+    return call("POST", "/project/files/history", {"path": path})
+
+
+@mcp.tool()
+def restore_file(path: str, version: int) -> dict:
+    """Bring back an older version of a file as a new version (the current one is kept too)."""
+    return call("POST", "/project/files/restore", {"path": path, "version": version})
+
+
+@mcp.tool()
+def save_snapshot(label: str = "") -> dict:
+    """Save a copy of the whole shared model in snapshots/ (e.g. before a risky change). Never overwrites."""
+    return call("POST", "/project/snapshot", {"label": label}, doing="saving a snapshot")
 
 
 # ------------------------------------------------------------- tasks & chat

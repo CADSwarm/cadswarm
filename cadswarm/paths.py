@@ -1,0 +1,117 @@
+"""Where things live, and how helper processes find their dependencies.
+
+Hobbyists never install Python: everything (the team server, each AI helper's
+MCP server, the prompt hook) runs in FreeCAD's own bundled Python. The few
+packages the server side needs are pip-installed once into a private folder
+(`deps_dir()`), never into FreeCAD itself, and only helper processes put that
+folder on their path — so FreeCAD's own packages are never shadowed.
+Stdlib only: imported by FreeCAD's GUI, the launcher and the CLI alike.
+"""
+import os
+import re
+import site
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LAUNCHER = os.path.join(ROOT, "cadswarm_launch.py")
+
+# Keep in step with pyproject.toml's [project].dependencies.
+DEPENDENCIES = ["fastapi>=0.110", "uvicorn>=0.29", "mcp>=2.3", "httpx>=0.27"]
+
+
+def app_dir():
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(base, "CadSwarm")
+
+
+def deps_dir():
+    """Per Python minor version: compiled wheels (pydantic-core, pywin32) are ABI-specific."""
+    explicit = os.environ.get("CADSWARM_DEPS")
+    if explicit:
+        return explicit
+    return os.path.join(app_dir(), f"pylib-py{sys.version_info.major}{sys.version_info.minor}")
+
+
+def activate_deps():
+    """Put the private deps folder FIRST on sys.path, processing its .pth files (pywin32 needs them)."""
+    d = deps_dir()
+    if not os.path.isdir(d):
+        return False
+    before = list(sys.path)
+    site.addsitedir(d)
+    added = [p for p in sys.path if p not in before]
+    sys.path[:] = added + [p for p in before if p not in added]
+    return True
+
+
+TEAM_DIR = ".cadswarm-team"
+
+
+def project_layout(root):
+    """Where everything lives inside a project folder the user chose.
+
+    model.FCStd      the live shared model (written only by the team server)
+    files/           AI helpers' saved files; subfolders grow as the project does
+    exports/         STEP/STL exports (never overwritten)
+    snapshots/       saved versions of the model
+    .cadswarm-team/  server internals, file history and trash
+
+    A folder made by an older CadSwarm (hub.sqlite at its top level) keeps its internals there.
+    """
+    root = os.path.abspath(root)
+    legacy = os.path.exists(os.path.join(root, "hub.sqlite"))
+    internal = root if legacy else os.path.join(root, TEAM_DIR)
+    return {
+        "root": root, "model": os.path.join(root, "model.FCStd"), "files": os.path.join(root, "files"),
+        "exports": os.path.join(root, "exports"), "snapshots": os.path.join(root, "snapshots"),
+        "internal": internal, "db": os.path.join(internal, "hub.sqlite"),
+        "token": os.path.join(internal, "workspace_token"), "log": os.path.join(internal, "hub.log"),
+        "history": os.path.join(internal, "history"), "trash": os.path.join(internal, "trash"),
+    }
+
+
+def is_project_folder(root):
+    return os.path.exists(project_layout(root)["db"])
+
+
+def resolve_project_folder(chosen, project):
+    """Where the project will really live, never mixing with (or overwriting) unrelated files.
+
+    Returns (folder, how): "existing" = continue a CadSwarm project already there,
+    "new" = an empty or new folder, "inside" = a fresh subfolder because `chosen` had other things in it.
+    """
+    chosen = os.path.normpath(chosen)
+    if is_project_folder(chosen):
+        return chosen, "existing"
+    if not os.path.exists(chosen) or (os.path.isdir(chosen) and not os.listdir(chosen)):
+        return chosen, "new"
+    base = os.path.join(chosen, re.sub(r'[<>:"/\\|?*]+', " ", project).strip() or "CadSwarm project")
+    if is_project_folder(base):
+        return base, "existing"
+    candidate, n = base, 2
+    while os.path.exists(candidate) and os.listdir(candidate):
+        candidate, n = f"{base} ({n})", n + 1
+    return candidate, "inside"
+
+
+def projects_dir():
+    docs = os.path.join(os.path.expanduser("~"), "Documents")
+    return os.path.join(docs if os.path.isdir(docs) else os.path.expanduser("~"), "CadSwarm")
+
+
+def freecad_python():
+    """FreeCAD's bundled python, from inside FreeCAD (where sys.executable is freecad.exe) or outside."""
+    exe = os.path.basename(sys.executable).lower()
+    if exe.startswith("python"):
+        return sys.executable
+    try:
+        import FreeCAD
+        home = FreeCAD.getHomePath()
+        for cand in (os.path.join(home, "bin", "python.exe"), os.path.join(home, "bin", "python3"),
+                     os.path.join(home, "bin", "python")):
+            if os.path.exists(cand):
+                return os.path.normpath(cand)
+    except ImportError:
+        pass
+    from .config import find_freecad_python
+    return find_freecad_python()

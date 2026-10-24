@@ -11,16 +11,18 @@ Networking runs on background threads (event long-poll, heartbeats, BREP
 fetches) that only ever push into a queue; a QTimer drains it on the GUI
 thread, so FreeCAD's document and Qt widgets are touched from one thread only.
 """
+import os
 import queue
 import threading
 import time
+from urllib.parse import urlencode
 
 import FreeCAD as App
 import FreeCADGui as Gui
 import Part
 from PySide import QtCore, QtGui
 
-from cadswarm_client import HubClient, HubRequestError
+from ..client import HubClient, HubRequestError
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -102,11 +104,21 @@ class Session:
         return connect_dialog(reason=f"To {purpose}, first join your team's session.")
 
     def try_auto_rejoin(self):
-        """Quietly rejoin the team used last time, so returning to the workbench just works."""
+        """Opening the workbench should just work: first time -> the setup guide; a host whose team
+        server stopped (e.g. after a reboot) -> the guide restarts it; otherwise quietly rejoin."""
         p = prefs()
         hub, token, name = p.GetString("HubUrl"), p.GetString("WorkspaceToken"), p.GetString("Name")
-        if self.connected or not (hub and token and name):
+        if self.connected:
             return
+        from .wizard import run_wizard
+        if not (hub and token and name):
+            QtCore.QTimer.singleShot(300, run_wizard)
+            return
+        if p.GetString("HostDataDir"):
+            from .. import hosting
+            if not hosting.health(f"http://127.0.0.1:{p.GetString('HostPort')}", timeout=1.5):
+                QtCore.QTimer.singleShot(300, lambda: run_wizard(start="reconnect"))
+                return
         try:
             self.connect(hub, token, name, timeout=3)
         except HubRequestError as e:
@@ -250,6 +262,7 @@ class Session:
 
     def apply_breps(self, objects):
         doc = self.mirror()
+        added = False
         for name, info in objects.items():
             if info is None:
                 continue
@@ -260,6 +273,7 @@ class Session:
             shape.importBrepFromString(info["brep"])
             if obj is None:
                 obj = doc.addObject("Part::Feature", name)
+                added = True
             obj.Shape = shape
             owner = info.get("locked_by")
             obj.Label = f"{info.get('label') or name} [{owner or 'unlocked'}]"
@@ -271,6 +285,22 @@ class Session:
                 except Exception:
                     pass
         doc.recompute()
+        if added:
+            self.frame_model()
+
+    def frame_model(self):
+        """Show the live model and fit it in view, so new parts are never off-screen or hidden
+        behind another tab (beginners don't know to press 'Fit all')."""
+        try:
+            gdoc = Gui.getDocument(MIRROR_DOC)
+            if Gui.ActiveDocument is None or Gui.ActiveDocument.Document.Name != MIRROR_DOC:
+                Gui.setActiveDocument(MIRROR_DOC)  # bring the live model's tab to the front
+            if not getattr(self, "_iso_done", False):
+                gdoc.ActiveView.viewIsometric()
+                self._iso_done = True
+            gdoc.ActiveView.fitAll()
+        except Exception as e:
+            warn(f"couldn't frame the model: {e}")
 
     def remove_objects(self, names):
         doc = self.mirror()
@@ -285,11 +315,7 @@ class Session:
         live = {o["name"] for o in self.client.get("/model")["objects"]}
         self.remove_objects([o.Name for o in mirror.Objects if o.Name not in live])
         self.refresh_meta()
-        try:
-            Gui.getDocument(MIRROR_DOC).ActiveView.viewIsometric()
-            Gui.SendMsgToActiveView("ViewFit")
-        except Exception:
-            pass
+        self.frame_model()
 
     def refresh_meta(self):
         if not self.client:
@@ -360,31 +386,37 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner_text.setWordWrap(True)
         self.banner_button = QtGui.QPushButton()
         self.banner_button.clicked.connect(self.banner_action)
+        self.invite_button = QtGui.QPushButton("Invite")
+        self.invite_button.setToolTip("Copy the invite code for teammates")
+        self.invite_button.clicked.connect(invite_teammates)
         brow.addWidget(self.banner_text, 1)
-        brow.addWidget(self.banner_button)
+        bcol = QtGui.QVBoxLayout()
+        bcol.addWidget(self.banner_button)
+        bcol.addWidget(self.invite_button)
+        brow.addLayout(bcol)
         lay.addWidget(self.banner)
         self.status = QtGui.QLabel("")
         self.status.setWordWrap(True)
         lay.addWidget(self.status)
 
-        lay.addWidget(QtGui.QLabel("<b>Team</b> (select a member to take over)"))
+        lay.addWidget(QtGui.QLabel("<b>Who's here</b> (people and their AI helpers)"))
         self.team = QtGui.QTreeWidget()
-        self.team.setHeaderLabels(["Member", "Status / locks"])
+        self.team.setHeaderLabels(["Name", "What they're doing / parts they hold"])
         self.team.setColumnWidth(0, 170)
         lay.addWidget(self.team, 2)
 
-        lay.addWidget(QtGui.QLabel("<b>Tasks</b>"))
+        lay.addWidget(QtGui.QLabel("<b>To-do list</b>"))
         self.task_list = QtGui.QTreeWidget()
-        self.task_list.setHeaderLabels(["Task", "Status", "Owner"])
+        self.task_list.setHeaderLabels(["Task", "Status", "Who"])
         self.task_list.setColumnWidth(0, 200)
         lay.addWidget(self.task_list, 2)
 
-        lay.addWidget(QtGui.QLabel("<b>Params</b> (shared dimensions)"))
+        lay.addWidget(QtGui.QLabel("<b>Shared sizes</b> (every part that uses one updates when it changes)"))
         self.params = QtGui.QLabel("-")
         self.params.setWordWrap(True)
         lay.addWidget(self.params)
 
-        lay.addWidget(QtGui.QLabel("<b>Chat</b> — your messages steer agents"))
+        lay.addWidget(QtGui.QLabel("<b>Chat</b> — AI helpers read your messages first"))
         self.chat = QtGui.QTextEdit()
         self.chat.setReadOnly(True)
         lay.addWidget(self.chat, 3)
@@ -402,22 +434,43 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addLayout(row)
 
         grid = QtGui.QGridLayout()
-        buttons = [("Lock selected", self.lock), ("Release selected", self.release),
-                   ("Force release", self.force_release), ("Take over member", self.take_over),
-                   ("New task…", self.new_task), ("Set param…", self.set_param),
-                   ("Interference", run_interference), ("Export STEP", run_export)]
-        for i, (label, fn) in enumerate(buttons):
+        buttons = [("Add a task…", self.new_task, "Add something to the team's to-do list"),
+                   ("Change a shared size…", self.set_param, "e.g. make every hole 5 mm"),
+                   ("Check for clashes", run_interference, "Find parts that overlap each other"),
+                   ("Save as 3D file…", run_export, "Save a STEP file for printing or other CAD programs")]
+        for i, (label, fn, tip) in enumerate(buttons):
             b = QtGui.QPushButton(label)
+            b.setToolTip(tip)
             b.clicked.connect(fn)
             grid.addWidget(b, i // 2, i % 2)
         lay.addLayout(grid)
+        more = QtGui.QToolButton()
+        more.setText("Team tools ▾")
+        more.setPopupMode(QtGui.QToolButton.InstantPopup)
+        menu = QtGui.QMenu(more)
+        for label, fn in (("Project files…", show_project_files), ("Open project folder", open_project_folder),
+                          ("Save a snapshot of the model", save_snapshot),
+                          (None, None),
+                          ("Add an AI helper…", add_helper), ("Invite teammates…", invite_teammates),
+                          (None, None),
+                          ("Hold the selected parts (only you can change them)", self.lock),
+                          ("Let go of the selected parts", self.release),
+                          ("Force-free the selected parts", self.force_release),
+                          ("Take over a teammate's work", self.take_over),
+                          (None, None), ("Stop hosting the team", stop_hosting)):
+            if label is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(label).triggered.connect(lambda _=False, f=fn: f())
+        more.setMenu(menu)
+        lay.addWidget(more, 0, QtCore.Qt.AlignRight)
         self.setWidget(w)
         self.show_state(session)
 
     BANNERS = {
         # state: (background, text color, headline, button)
         "disconnected": ("#fff4d6", "#5c4400", "You haven't joined a team session yet.",
-                         "Join team…"),
+                         "Get started…"),
         "offline": ("#fde2e1", "#7a1712", "Lost contact with your team. Retrying automatically…", "Retry now"),
         "ended": ("#fde2e1", "#7a1712", "You're no longer in the team session.", "Join again…"),
         "connected": ("#e3f6e8", "#14532d", "", "Leave"),
@@ -436,7 +489,8 @@ class TeamPanel(QtGui.QDockWidget):
             if left:
                 headline = "You left the team session. Your locks were released."
             detail = ("Join again to keep working with your team." if left else
-                      "Join to see the shared model, chat with your team's agents and steer their work."
+                      "Start or join a team to watch the shared model being built and chat with your "
+                      "team's AI helpers."
                       + (f"<br><i>{s.state_detail}</i>".replace("\n", " ") if s.state_detail else ""))
         elif s.state in ("offline", "ended"):
             detail = s.state_detail.replace("\n", "<br>")
@@ -445,8 +499,9 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner.setStyleSheet(f"QFrame {{ background: {bg}; border-radius: 6px; }} "
                                   f"QLabel {{ color: {fg}; background: transparent; }}")
         self.banner_button.setText(button)
+        self.invite_button.setVisible(s.state == "connected" and bool(prefs().GetString("InviteCode")))
         connected = s.state in ("connected", "offline")
-        self.msg.setPlaceholderText("Message your team's agents — press Enter to send" if connected else
+        self.msg.setPlaceholderText("Message your team's AI helpers — press Enter to send" if connected else
                                     "Type a message — you'll be asked to join your team first")
         if not connected:
             self.status.setText("")
@@ -467,20 +522,23 @@ class TeamPanel(QtGui.QDockWidget):
     def render(self, s):
         me = s.ident["name"] if s.ident else "?"
         self.show_state(s)
-        self.set_status(f"<small>Team hub {s.client.hub} · revision {s.model.get('seq')} · "
-                        f"{len(s.model['objects'])} objects in the shared model</small>")
+        parts = [o for o in s.model["objects"] if o.get("bbox")]
+        self.set_status(f"<small>{len(parts)} part{'s' if len(parts) != 1 else ''} in the shared model so far."
+                        + ("" if parts else " Nothing built yet — ask an AI helper to start!") + "</small>")
         self.team.clear()
         current = self.to.currentText()
         self.to.clear()
         self.to.addItem("all")
         for p in s.model["participants"]:
-            item = QtGui.QTreeWidgetItem([f"{p['name']} [{p['kind']}/{p['client'] or '?'}]",
-                                          f"{p['status']}" + (f" — {p['doing']}" if p.get("doing") else "")])
+            item = QtGui.QTreeWidgetItem([f"{p['name']} ({who_is(p)})",
+                                          STATUS_WORDS.get(p["status"], p["status"])
+                                          + (f" — {p['doing']}" if p.get("doing") else "")])
             item.setData(0, QtCore.Qt.UserRole, p["name"])
             r, g, b = owner_color(p["id"])
             item.setForeground(0, QtGui.QBrush(QtGui.QColor(int(r * 200), int(g * 200), int(b * 200))))
             for lock in p["locks"]:
-                QtGui.QTreeWidgetItem(item, [f"🔒 {lock}", ""])
+                if lock != "Params":
+                    QtGui.QTreeWidgetItem(item, [f"🔒 {lock}", "only they can change this part"])
             self.team.addTopLevelItem(item)
             item.setExpanded(True)
             if p["name"] != me:
@@ -489,25 +547,24 @@ class TeamPanel(QtGui.QDockWidget):
         self.to.setCurrentIndex(max(idx, 0))
         self.task_list.clear()
         for t in s.tasks:
-            self.task_list.addTopLevelItem(QtGui.QTreeWidgetItem([f"{t['id']} {t['title']}", t["status"],
-                                                                  t.get("owner_name") or ""]))
+            self.task_list.addTopLevelItem(QtGui.QTreeWidgetItem([t["title"], TASK_WORDS.get(t["status"], t["status"]),
+                                                                  t.get("owner_name") or t.get("assignee") or ""]))
         params = s.model.get("params") or {}
-        self.params.setText(", ".join(f"{k}={v}" for k, v in params.items()) or "(none yet)")
+        self.params.setText(", ".join(f"{k.replace('_', ' ')} = {v:g} mm" if isinstance(v, (int, float))
+                                      else f"{k.replace('_', ' ')} = {v}" for k, v in params.items()) or "(none yet)")
 
     def on_event(self, ev):
         k = ev["kind"]
-        stamp = time.strftime("%H:%M:%S", time.localtime(ev["ts"]))
+        stamp = f"<span style='color:#8b949e'>{time.strftime('%H:%M', time.localtime(ev['ts']))}</span>"
         if k == "message":
-            color = "#c0392b" if ev.get("message_kind") == "steer" else "#2c3e50"
-            self.chat.append(f"<span style='color:gray'>{stamp}</span> <b style='color:{color}'>{ev['name']}</b>"
-                             f" → {ev['to']}: {ev['body']}")
-        elif k == "op":
-            parts = [f"{label} {ev[key]}" for key, label in (("created", "created"), ("modified", "changed"),
-                     ("deleted", "deleted"), ("recomputed", "recomputed")) if ev.get(key)]
-            self.chat.append(f"<span style='color:gray'>{stamp} {ev['name']} {ev['op']}: {'; '.join(parts)}</span>")
-        elif k in ("stale", "taken_over", "joined", "left", "task", "task_claimed", "task_reported", "resumed"):
-            detail = ", ".join(f"{a}={b}" for a, b in ev.items() if a not in ("seq", "ts", "kind", "actor"))
-            self.chat.append(f"<span style='color:#8e44ad'>{stamp} {k}: {detail}</span>")
+            steer = ev.get("message_kind") == "steer"
+            to = "" if ev["to"] == "all" else f" <span style='color:#8b949e'>to {ev['to']}</span>"
+            color = "#e5484d" if steer else "#3e9be9"
+            self.chat.append(f"{stamp} <b style='color:{color}'>{ev['name']}</b>{to}: {ev['body']}")
+            return
+        line = describe_event(ev)
+        if line:
+            self.chat.append(f"{stamp} <span style='color:#a78bfa'>{line}</span>")
 
     # --- actions
     def send(self):
@@ -589,6 +646,72 @@ class TeamPanel(QtGui.QDockWidget):
         self.session.act("POST", "/locks/release", {"names": ["Params"]})
 
 
+CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper"}
+STATUS_WORDS = {"active": "here", "stale": "away — may be stuck", "left": "left"}
+TASK_WORDS = {"open": "not started", "claimed": "in progress", "awaiting_takeover": "waiting for someone",
+              "done": "done ✓", "blocked": "stuck"}
+
+
+def who_is(p):
+    if p.get("kind") == "human":
+        return "person"
+    return CLIENT_WORDS.get(p.get("client"), "AI helper")
+
+
+def names(items):
+    items = [i for i in items if i != "Params"]
+    return ", ".join(items[:4]) + (f" and {len(items) - 4} more" if len(items) > 4 else "")
+
+
+def describe_event(ev):
+    """One friendly sentence per team event (None = not worth showing)."""
+    k, who = ev["kind"], ev.get("name") or ev.get("taker") or "Someone"
+    if k == "op":
+        bits = []
+        if ev.get("created"):
+            bits.append(f"added {names(ev['created'])}")
+        changed = [n for n in ev.get("modified", []) if n != "Params"]
+        if changed:
+            bits.append(f"changed {names(changed)}")
+        if ev.get("deleted"):
+            bits.append(f"removed {names(ev['deleted'])}")
+        if "Params" in ev.get("modified", []):
+            bits.append("changed a shared size")
+        if ev.get("recomputed"):
+            bits.append(f"which updated {names(ev['recomputed'])}")
+        return f"{who} {', '.join(bits)}" if bits else None
+    if k == "joined":
+        kind = "person" if ev.get("participant_kind") == "human" else CLIENT_WORDS.get(ev.get("client"), "AI helper")
+        return f"{who} ({kind}) joined the team"
+    if k == "left":
+        return f"{who} left the team"
+    if k == "stale":
+        held = names(ev.get("locks") or [])
+        return f"{who} went quiet" + (f" while working on {held}" if held else "") + \
+            " — a teammate can take over their work (Team tools ▸ Take over)"
+    if k == "resumed":
+        return f"{who} is back"
+    if k == "taken_over":
+        return f"{ev.get('taker', who)} took over {ev.get('target')}'s work"
+    if k == "task":
+        return f"New task: “{ev.get('title')}”" + (f" for {ev['assignee']}" if ev.get("assignee") else "")
+    if k == "task_claimed":
+        return f"{who} started a task"
+    if k == "task_reported":
+        return f"{who} finished a task ✓" if ev.get("status") == "done" else f"{who} is stuck on a task"
+    if k == "file_saved":
+        return f"{who} {'updated' if ev.get('replaced') else 'saved'} files/{ev.get('path')}"
+    if k == "file_moved":
+        return f"{who} moved files/{ev.get('from')} to files/{ev.get('to')}"
+    if k == "file_deleted":
+        return f"{who} deleted files/{ev.get('path')} (it can be restored)"
+    if k == "snapshot":
+        return f"{who} saved a snapshot of the model ({ev.get('file')})"
+    if k == "exported":
+        return f"{who} saved a 3D file ({ev.get('file')})"
+    return None
+
+
 def hint(text):
     QtGui.QMessageBox.information(Gui.getMainWindow(), "CadSwarm", text)
 
@@ -658,63 +781,142 @@ class Cmd:
 
 
 def connect_dialog(reason=None):
-    """Join a team session. Returns True once joined. Errors stay in the dialog so a typo
-    can be fixed in place."""
-    show_panel()
-    p = prefs()
-    dlg = QtGui.QDialog(Gui.getMainWindow())
-    dlg.setWindowTitle("Join your team's CadSwarm session")
-    dlg.setMinimumWidth(460)
-    lay = QtGui.QVBoxLayout(dlg)
-    if reason:
-        why = QtGui.QLabel(f"<b>{reason}</b>")
-        why.setWordWrap(True)
-        lay.addWidget(why)
-    intro = QtGui.QLabel("Ask the teammate who started the hub (<code>cadswarm hub</code>) for its address and "
-                         "team code. Both are printed when it starts.")
-    intro.setWordWrap(True)
-    lay.addWidget(intro)
-    form = QtGui.QFormLayout()
-    hub = QtGui.QLineEdit(p.GetString("HubUrl") or "http://127.0.0.1:8765")
-    hub.setPlaceholderText("e.g. http://192.168.1.20:8765")
-    token = QtGui.QLineEdit(p.GetString("WorkspaceToken"))
-    token.setPlaceholderText("the workspace token the hub printed")
-    name = QtGui.QLineEdit(p.GetString("Name"))
-    name.setPlaceholderText("e.g. carol (shown to teammates and agents)")
-    form.addRow("Team hub address", hub)
-    form.addRow("Team code", token)
-    form.addRow("Your name", name)
-    lay.addLayout(form)
-    error = QtGui.QLabel("")
-    error.setWordWrap(True)
-    error.setStyleSheet("color: #b42318;")
-    lay.addWidget(error)
-    bb = QtGui.QDialogButtonBox(QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel)
-    bb.button(QtGui.QDialogButtonBox.Ok).setText("Join team")
-    lay.addWidget(bb)
-    joined = {"ok": False}
+    """Join (or set up) a team through the step-by-step guide. Returns True once joined."""
+    from .wizard import run_wizard
+    return run_wizard(reason=reason)
 
-    def attempt():
-        values = hub.text().strip(), token.text().strip(), name.text().strip()
-        missing = [label for label, v in zip(("team hub address", "team code", "your name"), values) if not v]
-        if missing:
-            error.setText("Please fill in " + ", ".join(missing) + ".")
-            return
-        error.setText("Joining…")
-        QtGui.QApplication.processEvents()
+
+def add_helper():
+    from .wizard import run_wizard
+    run_wizard(start="agent")
+
+
+def invite_teammates():
+    code = prefs().GetString("InviteCode")
+    if not code:
+        QtGui.QMessageBox.information(Gui.getMainWindow(), "CadSwarm",
+                                      "Ask whoever started the team for the invite code.")
+        return
+    QtGui.QApplication.clipboard().setText(code)
+    QtGui.QMessageBox.information(
+        Gui.getMainWindow(), "Invite teammates",
+        "The invite code is copied. Paste it to your teammates (email, Discord, text...).\n\n"
+        f"{code}\n\nThey open FreeCAD, pick CadSwarm, click Get started, then "
+        "\u201cJoin a teammate\u2019s project\u201d.")
+
+
+def stop_hosting():
+    from .wizard import stop_hosting as stop
+    stop()
+
+
+def hosted_project_folder():
+    folder = prefs().GetString("HostDataDir")
+    return folder if folder and os.path.isdir(folder) else None
+
+
+def open_project_folder():
+    folder = hosted_project_folder()
+    if not folder:
+        hint("The project folder is on the computer of the teammate who started the team. "
+             "Use Team tools ▸ Project files to see and copy what's in it.")
+        return
+    from .wizard import open_folder
+    open_folder(folder)
+
+
+def save_snapshot():
+    label, ok = QtGui.QInputDialog.getText(Gui.getMainWindow(), "Save a snapshot",
+                                           "Name this version of the model (optional):")
+    if ok:
+        r = SESSION.act("POST", "/project/snapshot", {"label": label.strip()}, purpose="save a snapshot")
+        if r:
+            hint(f"Saved {r['file']} in the project folder. Snapshots are never overwritten.")
+
+
+class ProjectFilesDialog(QtGui.QDialog):
+    """What the team has saved: browse, see versions and authors, save a copy."""
+
+    def __init__(self):
+        super().__init__(Gui.getMainWindow())
+        self.setWindowTitle("CadSwarm — project files")
+        self.resize(640, 460)
+        lay = QtGui.QVBoxLayout(self)
+        where = hosted_project_folder()
+        lay.addWidget(QtGui.QLabel(
+            "Notes, plans and scripts your team's AI helpers saved. Older versions are always kept."
+            + (f"<br><small>On this computer: {where}\\files</small>" if where else
+               "<br><small>They live on the computer of the teammate who started the team.</small>")))
+        self.tree = QtGui.QTreeWidget()
+        self.tree.setHeaderLabels(["Name", "Version", "Saved by", "When"])
+        self.tree.setColumnWidth(0, 280)
+        lay.addWidget(self.tree, 1)
+        row = QtGui.QHBoxLayout()
+        copy = QtGui.QPushButton("Save a copy…")
+        copy.clicked.connect(self.save_copy)
+        row.addWidget(copy)
+        if where:
+            folder = QtGui.QPushButton("Open project folder")
+            folder.clicked.connect(open_project_folder)
+            row.addWidget(folder)
+        row.addStretch(1)
+        close = QtGui.QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.load()
+
+    def load(self):
         try:
-            SESSION.connect(*values)
+            listing = SESSION.client.get("/project/files")
         except HubRequestError as e:
-            error.setText(friendly_error(e, values[0]))
+            hint(friendly_error(e))
             return
-        joined["ok"] = True
-        dlg.accept()
+        nodes = {"": self.tree.invisibleRootItem()}
 
-    bb.accepted.connect(attempt)
-    bb.rejected.connect(dlg.reject)
-    run = getattr(dlg, "exec", None) or dlg.exec_  # PySide6 (FreeCAD 1.1) vs PySide2
-    run()
-    return joined["ok"]
+        def folder_node(path):
+            if path in nodes:
+                return nodes[path]
+            parent, _, name = path.rpartition("/")
+            item = QtGui.QTreeWidgetItem(folder_node(parent), [f"📁 {name}", "", "", ""])
+            item.setExpanded(True)
+            nodes[path] = item
+            return item
+
+        for f in sorted(listing.get("folders", [])):
+            folder_node(f)
+        for f in listing.get("files", []):
+            parent, _, name = f["path"].rpartition("/")
+            when = time.strftime("%b %d %H:%M", time.localtime(f["updated_at"]))
+            item = QtGui.QTreeWidgetItem(folder_node(parent), [name, str(f["version"]), f["author"] or "", when])
+            item.setData(0, QtCore.Qt.UserRole, f["path"])
+        if not listing.get("files"):
+            QtGui.QTreeWidgetItem(self.tree, ["(nothing saved yet)", "", "", ""])
+
+    def save_copy(self):
+        item = self.tree.currentItem()
+        path = item.data(0, QtCore.Qt.UserRole) if item else None
+        if not path:
+            hint("Click a file first, then “Save a copy”.")
+            return
+        dest, _ = QtGui.QFileDialog.getSaveFileName(self, "Save a copy", path.split("/")[-1])
+        if not dest:
+            return  # the system dialog already asked before replacing an existing file
+        try:
+            data = SESSION.client.request("GET", "/project/files/download?" + urlencode({"path": path}), raw=True)
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        with open(dest, "wb") as f:
+            f.write(data)
+        say(f"Saved a copy of {path} to {dest}")
+
+
+def show_project_files():
+    if not SESSION.ensure_connected("see the project's files"):
+        return
+    dlg = ProjectFilesDialog()
+    (getattr(dlg, "exec", None) or dlg.exec_)()
 
 
 def lock_selected():
@@ -728,11 +930,17 @@ def release_selected():
 
 
 def register_commands():
-    Gui.addCommand("CadSwarm_Connect", Cmd("Join team…", "Join your team's shared CAD session", connect_dialog, False))
+    Gui.addCommand("CadSwarm_Connect", Cmd("Get started…", "Start or join a team, step by step",
+                                           lambda: connect_dialog(), False))
+    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect Claude Code or Codex to your team",
+                                             add_helper))
+    Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy the invite code for teammates", invite_teammates))
+    Gui.addCommand("CadSwarm_StopHosting", Cmd("Stop hosting", "Stop the team server on this computer",
+                                               stop_hosting, False))
     Gui.addCommand("CadSwarm_Panel", Cmd("Team panel", "Show presence, locks, tasks and chat", show_panel, False))
     Gui.addCommand("CadSwarm_Lock", Cmd("Lock selected", "Lock the selected mirror parts to you", lock_selected))
     Gui.addCommand("CadSwarm_Release", Cmd("Release selected", "Release your locks on the selected parts", release_selected))
-    Gui.addCommand("CadSwarm_Interference", Cmd("Interference check", "Find overlapping solids", run_interference))
-    Gui.addCommand("CadSwarm_Export", Cmd("Export STEP", "Export the shared model to STEP", run_export))
+    Gui.addCommand("CadSwarm_Interference", Cmd("Check for clashes", "Find parts that overlap", run_interference))
+    Gui.addCommand("CadSwarm_Export", Cmd("Save as 3D file…", "Save the shared model as a STEP file", run_export))
     Gui.addCommand("CadSwarm_Disconnect", Cmd("Leave team", "Leave the session (releases your locks)",
                                               lambda: SESSION.disconnect() if SESSION.connected else None, False))

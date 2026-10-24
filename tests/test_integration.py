@@ -105,3 +105,55 @@ def test_worker_restart_keeps_committed_work(hub_env):
     hub.worker.proc.wait()
     s, model = a("GET", "/model")  # transparently restarts from the saved FCStd
     assert s == 200 and "Ball" in {o["name"] for o in model["objects"]}
+
+
+def test_part_scripts_cannot_touch_files(hub_env, tmp_path):
+    http, hub, data = hub_env
+    a = agent(http, "erin-claude", "claude")
+    target = tmp_path / "victim.txt"
+    target.write_text("precious")
+    attempts = [
+        f"open(r'{target}', 'w').write('gone')",
+        "import os\nos.remove('x')",
+        "import shutil",
+        "import subprocess",
+        f"shape = Part.makeBox(1,1,1)\nshape.exportStep(r'{tmp_path / 'x.step'}')",
+        f"doc.saveAs(r'{tmp_path / 'x.FCStd'}')",
+        "__import__('os').system('echo hi')",
+    ]
+    for code in attempts:
+        s, r = op(a, "run_part_script", name="Evil", code=code)
+        assert s >= 400, (code, r)
+    assert target.read_text() == "precious" and not (tmp_path / "x.step").exists()
+    s, r = op(a, "run_part_script", name="Gear",  # ordinary geometry scripts still work
+              code="import math\nshape = Part.makeCylinder(10, 5)\nresult = {'pi': round(math.pi, 2)}")
+    assert s == 200 and r["result"]["result"] == {"pi": 3.14}
+
+
+def test_project_files_snapshots_and_exports_over_http(hub_env):
+    http, hub, data = hub_env
+    a = agent(http, "fay-claude", "claude")
+    b = agent(http, "gus-codex", "codex")
+    s, r = a("POST", "/project/files/save", {"path": "parts/base/notes.md", "text": "# Base"})
+    assert s == 200 and r["version"] == 1
+    s, r = b("POST", "/project/files/save", {"path": "parts/base/notes.md", "text": "overwrite!"})
+    assert s == 409 and r["code"] == "file_exists"
+    s, r = b("POST", "/project/files/read", {"path": "parts/base/notes.md"})
+    assert r["text"] == "# Base"
+    s, r = b("POST", "/project/files/save", {"path": "parts/base/notes.md", "text": "# Base v2",
+                                            "if_exists": "replace", "expected_version": r["version"]})
+    assert s == 200 and r["version"] == 2
+    s, r = a("GET", "/project/files")
+    assert "parts/base/notes.md" in [f["path"] for f in r["files"]]
+    s, blob = a("GET", "/project/files/download?path=parts/base/notes.md")
+    assert s == 200 and blob == b"# Base v2"
+    s, r = a("POST", "/project/files/save", {"path": "../escape.md", "text": "x"})
+    assert s == 400 and not (data / "escape.md").exists()
+    s, snap1 = a("POST", "/project/snapshot", {"label": "before lid"})
+    s, snap2 = a("POST", "/project/snapshot", {"label": "before lid"})
+    assert s == 200 and snap1["file"] != snap2["file"] and (data / snap2["file"]).exists()
+    s, e1 = a("POST", "/export", {"format": "step", "label": "Phone stand"})
+    s, e2 = a("POST", "/export", {"format": "step", "label": "Phone stand"})
+    assert e1["file"] != e2["file"] and e1["file"].startswith("Phone stand ")
+    s, blob = a("GET", e2["url"])
+    assert s == 200 and b"ISO-10303-21" in blob

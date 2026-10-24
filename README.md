@@ -1,10 +1,82 @@
 # CadSwarm
 
-**Your team's agents (Claude Code, Codex) building one live FreeCAD model together.**
+**Build 3D designs together with your team's AI helpers — no CAD or coding experience needed.**
 
-Each person runs their own agent CLI on their own machine. All of them edit the *same*
-FreeCAD document through a shared hub, and humans watch and steer from a FreeCAD workbench.
-They don't overwrite each other because:
+Each teammate's AI helper (Claude Code or Codex) builds part of one shared 3D model, live.
+You watch the parts appear in FreeCAD and chat with the helpers to steer them.
+
+## Get started (Windows, about 5 minutes)
+
+1. **Install FreeCAD** (free) from [freecad.org/downloads](https://www.freecad.org/downloads.php).
+   Default options are fine.
+2. **Download CadSwarm**: on this page click the green **Code** button, then **Download ZIP**.
+   Unzip it anywhere, for example your Downloads folder.
+3. **Double-click `Install CadSwarm.cmd`** in the unzipped folder. It puts CadSwarm into FreeCAD,
+   offers a desktop shortcut, and opens FreeCAD.
+4. **Follow the guide that opens in FreeCAD.**
+   - *First person on the team:* choose **Start a new team project**, name it, and copy the
+     **invite code** to your teammates.
+   - *Everyone else:* choose **Join a teammate's project** and paste the invite code.
+   - Then pick your AI helper. The guide connects it, opens it for you, gives you a first
+     message to paste, and tells you when it has joined the team.
+
+That's it. Next time, open the **CadSwarm** shortcut (or pick *CadSwarm* in FreeCAD's workbench
+list) and you're back with your team. If you hosted the team, its server starts again by itself.
+
+**Good to know**
+- You need an AI helper installed: [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup)
+  or [Codex](https://github.com/openai/codex). The guide detects which ones you have and links to
+  install instructions.
+- Teammates must be on the same Wi-Fi or network as the person who started the team, and that
+  computer needs to stay on while you work. For remote teams, see *Hosting for remote teams* below.
+- The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`. Nothing is
+  installed into FreeCAD itself.
+- When you start a team, the guide asks **where to save the project** (default
+  `Documents\CadSwarm\<project name>`). If you pick a folder that already has other things in it,
+  the project gets its own subfolder there, so your files are never mixed in or overwritten.
+
+## Your project folder
+
+```
+Phone stand/
+  model.FCStd          the live shared model (only the team server writes it)
+  files/               notes, plans, BOMs and scripts the AI helpers saved, in subfolders that
+    parts/base/notes.md  grow as the project does
+    docs/bom.csv
+  exports/             3D files (STEP/STL), each with a new name, never overwritten
+  snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd")
+  AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
+  .cadswarm-team/      the team server's data, plus every older version of every file
+  README.txt           explains the above to anyone browsing the folder
+```
+
+In FreeCAD, **Team tools > Project files...** lists what the team saved (version, who, when) and
+lets anyone save a copy. The host also gets **Open project folder**.
+
+### Saving is safe by design
+
+The team server enforces these rules; it doesn't just ask the AI helpers to follow them:
+
+- **Sandboxed.** Helpers can only write inside `files/`. Paths with `..`, absolute or drive paths,
+  hidden or Windows-reserved names, and symlinks or junctions that point outside are refused. File
+  types are on an allow-list, with size limits of 5 MB per file and 500 MB per project.
+- **No silent overwrites.** Saving onto an existing file is refused unless the helper asks for
+  `new_name` (saves as `notes-2.md`) or `replace` with the version it last read. If someone changed
+  the file since then, including a person editing it by hand, the save is refused.
+- **Nothing is lost.** Replaced, moved and deleted files are kept in history and can be restored.
+  If your file is replaced by a teammate, you're told.
+- **Atomic writes.** A crash never leaves half a file.
+- **Model scripts can't write files.** `run_part_script` can't `open()` files, can't import
+  `os`/`shutil`/`subprocess`, and can't call `doc.saveAs`, `shape.exportStep` and the like. This
+  guards against accidents and naive misuse; in-process Python can't be fully sandboxed, so only
+  team up with people you trust.
+
+---
+
+## How it works
+
+All the AI helpers edit the *same* FreeCAD document through a small team server, and humans watch
+and steer from the CadSwarm workbench. They don't overwrite each other because:
 
 - **Object locks.** You can only change objects you've locked, and anything you create is yours.
 - **Transactional rollback.** An op (including an arbitrary agent Python script) that touches
@@ -28,7 +100,9 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
                                               └────────────────────────────────────────────────────┘
 ```
 
-## Quick start
+## For developers: command line
+
+The guide above wraps these commands; they still work for scripting and remote hosting.
 
 Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to its
 `bin/python.exe`) and Python 3.11+.
@@ -45,13 +119,27 @@ python -m venv .venv; .venv\Scripts\pip install -e ".[test]"
 .venv\Scripts\cadswarm setup --client codex  --hub http://HOST:8765 --token TOKEN --name bob-codex --dir ..\bob
 #    then run `claude` / `codex` in that folder. (Codex: trust the project so .codex/config.toml loads.)
 
-# 3. Humans: install the workbench, restart FreeCAD, pick "CadSwarm", then CadSwarm > Connect...
+# 3. Install this checkout into FreeCAD as the CadSwarm add-on (same as the double-click installer)
 .venv\Scripts\cadswarm install-workbench
 ```
 
 For teammates on other machines, run the hub on a reachable host (LAN, or a tunnel such
 as Tailscale or ngrok). Each teammate needs this package and FreeCAD only if they run the
 workbench; agents need just Python.
+
+## Hosting for remote teams
+
+Invite codes made by the FreeCAD guide contain the host's local network address, so they work on
+the same Wi-Fi. For teammates elsewhere, put everyone on a private network such as
+[Tailscale](https://tailscale.com) (free for small teams), or run the hub on a reachable server.
+Then make an invite code with an address they can reach:
+
+```powershell
+python cadswarm_launch.py hub --data .	eam-model --token MY-TEAM-CODE        # on the host
+python cadswarm_launch.py invite --hub http://100.64.1.5:8765 --token MY-TEAM-CODE --project "Phone stand"
+```
+
+Teammates paste that code into the guide's **Join a teammate's project** page as usual.
 
 ## What `cadswarm setup` writes
 
@@ -71,7 +159,9 @@ the prompt goes through without it.
 - **Locks:** `lock_objects`, `release_objects`
 - **Modelling:** `create_primitive`, `create_extrusion`, `boolean`, `set_props`, `set_placement`,
   `delete_object`, `set_param`, `run_part_script`
-- **Checks and output:** `check_interference`, `export_model` (STEP/STL)
+- **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`
+- **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
+  `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
   `get_inbox`, `ack_messages`, `take_over`
 

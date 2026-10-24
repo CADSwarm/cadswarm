@@ -52,4 +52,7 @@ Start `claude` or `codex` in each folder and paste the prompt for that agent.
 5. **Crash and takeover.** Kill the Codex window mid-task. About 30s later the panel shows it
    *stale* with its locks still held. The lead calls `take_over('posts-codex')` (or a human uses
    *Take over member*) and finishes the job.
-6. **Output.** *Export STEP*, then open it in FreeCAD or any CAD tool.
+6. **Saving.** Ask lead-claude to "write a parts list". It saves `files/docs/bom.csv`. Ask
+   posts-codex to save the same file: it's refused ("already exists... nothing was overwritten")
+   until it reads the file and replaces that exact version. Open *Team tools > Project files* to see both.
+7. **Output.** *Export STEP*, then open it in FreeCAD or any CAD tool.

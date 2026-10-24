@@ -1,0 +1,210 @@
+"""Connecting an AI helper (Claude Code or Codex) in a project folder to a team.
+
+Shared by `cadswarm setup` and the FreeCAD setup wizard, so stdlib only. Agent
+configs launch `cadswarm_launch.py` by absolute path with an explicit Python —
+FreeCAD's bundled one for hobbyists — so nothing has to be on PATH or pip-installed
+into the agent's environment.
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+from .client import load_json, save_json, state_dir
+from .paths import LAUNCHER
+
+BEGIN, END = "<!-- cadswarm:begin -->", "<!-- cadswarm:end -->"
+TOML_BEGIN, TOML_END = "# >>> cadswarm (managed by `cadswarm setup`)", "# <<< cadswarm"
+
+CLIENTS = {
+    "claude": {"label": "Claude Code", "exe": "claude",
+               "install_url": "https://docs.anthropic.com/en/docs/claude-code/setup"},
+    "codex": {"label": "Codex", "exe": "codex", "install_url": "https://github.com/openai/codex"},
+}
+
+AGENT_DOC = """{begin}
+## CadSwarm: you are part of a team building one shared FreeCAD model
+
+Your teammates' agents (Claude Code, Codex) are editing the same live model right now.
+All CAD work goes through the `cadswarm` MCP tools — never edit .FCStd files directly.
+Your human may be new to CAD: explain what you build in plain words and keep dimensions in mm.
+
+- Start every task with `model_status` and `list_tasks`; `claim_task` before working.
+- `lock_objects` before changing anything; what you create is yours. Ask owners, don't override them.
+- Shared dimensions go in the `Params` sheet (`set_param`); bind geometry with expressions
+  like `Params.hole_pitch` so a change propagates to every part that depends on it.
+- After changes run `check_interference`; coordinate clashes with the other part's owner.
+- Read `get_inbox` often, `ack_messages` what you handled. Human `steer` messages come first.
+- Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
+  subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
+  `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and
+  save with `if_exists="replace"` and its `expected_version`. `save_snapshot` before risky changes.
+  Never write files any other way; your own working folder is not shared with the team.
+- Finish with `report_result` (evidence: object names, volumes, interference) and release locks.
+- Team context (who holds what, what changed) is injected before each of your prompts.
+{end}
+"""
+
+FIRST_PROMPT = {
+    "lead": "You're leading our team's CAD project \"{project}\". Ask me what we're building, then plan the "
+            "parts, put the shared sizes in Params, create one task per part for the team, and start on yours.",
+    "member": "I just joined our team's CAD project \"{project}\". Check the team's tasks, claim one that "
+              "nobody has started, and build it. Tell me in plain words what you're doing.",
+}
+
+
+def upsert_block(path, block, begin=BEGIN, end=END):
+    text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    if begin in text and end in text:
+        pre, rest = text.split(begin, 1)
+        text = pre + block.strip() + rest.split(end, 1)[1]
+    else:
+        text = (text.rstrip() + "\n\n" if text.strip() else "") + block.strip() + "\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def hook_command(python):
+    return f'"{python}" "{LAUNCHER}" hook'
+
+
+def _ours(command):
+    return "cadswarm_launch" in command or "cadswarm.prompt_hook" in command
+
+
+def setup_claude(project, python):
+    mcp_path = os.path.join(project, ".mcp.json")
+    mcp_cfg = load_json(mcp_path, {}) or {}
+    mcp_cfg.setdefault("mcpServers", {})["cadswarm"] = {
+        "command": python, "args": [LAUNCHER, "mcp"], "env": {"CADSWARM_PROJECT": project}}
+    with open(mcp_path, "w", encoding="utf-8") as f:
+        json.dump(mcp_cfg, f, indent=2)
+
+    settings_path = os.path.join(project, ".claude", "settings.json")
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    settings = load_json(settings_path, {}) or {}
+    groups = settings.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+    # Idempotent: drop any earlier cadswarm entry, keep everyone else's hooks.
+    groups[:] = [g for g in groups if not any(_ours(h.get("command", "")) for h in g.get("hooks", []))]
+    groups.append({"hooks": [{"type": "command", "command": hook_command(python), "timeout": 5}]})
+    enabled = settings.setdefault("enabledMcpjsonServers", [])
+    if "cadswarm" not in enabled:
+        enabled.append("cadswarm")
+    allow = settings.setdefault("permissions", {}).setdefault("allow", [])
+    if "mcp__cadswarm" not in allow:
+        allow.append("mcp__cadswarm")
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    upsert_block(os.path.join(project, "CLAUDE.md"), AGENT_DOC.format(begin=BEGIN, end=END))
+    return [mcp_path, settings_path, os.path.join(project, "CLAUDE.md")]
+
+
+def toml_string(s):
+    if "'" in s or "\n" in s:
+        return json.dumps(s)  # basic string; JSON escaping is valid TOML for these paths
+    return f"'{s}'"
+
+
+def setup_codex(project, python):
+    path = os.path.join(project, ".codex", "config.toml")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    if TOML_BEGIN in text:
+        pre, rest = text.split(TOML_BEGIN, 1)
+        text = pre.rstrip() + rest.split(TOML_END, 1)[1]
+    for table in ("[hooks]", "[mcp_servers.cadswarm]"):
+        if any(line.strip() == table for line in text.splitlines()):
+            raise ValueError(f"{path} already defines {table} outside CadSwarm's block; merge it by hand.")
+    block = "\n".join([
+        TOML_BEGIN,
+        "[mcp_servers.cadswarm]",
+        f"command = {toml_string(python)}",
+        f"args = [{toml_string(LAUNCHER)}, 'mcp']",
+        f"env = {{ CADSWARM_PROJECT = {toml_string(project)} }}",
+        "",
+        "# UserPromptSubmit injects team context (who holds which parts, what changed) before each prompt.",
+        "[hooks]",
+        f"UserPromptSubmit = [{{ hooks = [{{ type = 'command', command = {toml_string(hook_command(python))}, "
+        "timeout = 5 }] }]",
+        TOML_END, ""])
+    with open(path, "w", encoding="utf-8") as f:
+        f.write((text.rstrip() + "\n\n" if text.strip() else "") + block)
+    upsert_block(os.path.join(project, "AGENTS.md"), AGENT_DOC.format(begin=BEGIN, end=END))
+    return [path, os.path.join(project, "AGENTS.md")]
+
+
+def codex_home():
+    return os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+
+
+def codex_is_trusted(project):
+    path = os.path.join(codex_home(), "config.toml")
+    if not os.path.exists(path):
+        return False
+    text = open(path, encoding="utf-8").read()
+    return any(k in text for k in (f"[projects.{toml_string(project)}]", f"[projects.{json.dumps(project)}]"))
+
+
+def trust_in_codex(project):
+    """Codex silently ignores a project's .codex/config.toml until the folder is trusted."""
+    if codex_is_trusted(project):
+        return False
+    path = os.path.join(codex_home(), "config.toml")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
+    block = f"\n# Added by CadSwarm setup so Codex loads this folder's CadSwarm connection.\n" \
+            f"[projects.{toml_string(project)}]\ntrust_level = \"trusted\"\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text.rstrip() + "\n" + block if text.strip() else block.lstrip())
+    return True
+
+
+def write_agent_config(project, client, hub, token, name, role="member", python=None, fresh=False):
+    """Everything an AI helper in `project` needs to join the team. Returns the files written."""
+    if client not in CLIENTS:
+        raise ValueError(f"client must be one of {sorted(CLIENTS)}")
+    python = python or sys.executable
+    project = os.path.abspath(project)
+    os.makedirs(project, exist_ok=True)
+    save_json(os.path.join(state_dir(project), "config.json"), {
+        "hub": hub.rstrip("/"), "workspace_token": token, "name": name, "client": client, "role": role})
+    ident = os.path.join(state_dir(project), "identity.json")
+    if fresh and os.path.exists(ident):
+        os.remove(ident)
+    with open(os.path.join(state_dir(project), ".gitignore"), "w") as f:
+        f.write("*\n")  # identity.json holds a bearer token
+    written = setup_claude(project, python) if client == "claude" else setup_codex(project, python)
+    return written
+
+
+def find_agent_cli(client):
+    """Absolute path of the AI helper's command, or None. Looks beyond PATH because apps
+    started from the Start menu don't always see what a terminal sees."""
+    exe = CLIENTS[client]["exe"]
+    found = shutil.which(exe)
+    if found:
+        return found
+    home = os.path.expanduser("~")
+    candidates = [os.path.join(home, ".local", "bin", exe + ".exe"), os.path.join(home, ".local", "bin", exe),
+                  os.path.join(os.environ.get("APPDATA", ""), "npm", exe + ".cmd"),
+                  os.path.join("/usr/local/bin", exe), os.path.join("/opt/homebrew/bin", exe)]
+    return next((c for c in candidates if os.path.exists(c)), None)
+
+
+def open_agent_terminal(client, project):
+    """Open a terminal window in `project` running the AI helper. Returns a short status string."""
+    exe = find_agent_cli(client)
+    if not exe:
+        raise FileNotFoundError(f"{CLIENTS[client]['label']} isn't installed on this computer yet.")
+    if os.name == "nt":
+        subprocess.Popen(["cmd.exe", "/k", exe], cwd=project, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    elif sys.platform == "darwin":
+        script = f'tell application "Terminal" to do script "cd {json.dumps(project)[1:-1]} && {exe}"'
+        subprocess.Popen(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'])
+    else:
+        term = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("konsole")
+        if not term:
+            raise FileNotFoundError("Couldn't find a terminal program to open.")
+        subprocess.Popen([term, "-e", exe] if "gnome" not in term else [term, "--", exe], cwd=project)
+    return exe

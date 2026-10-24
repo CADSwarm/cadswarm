@@ -52,10 +52,11 @@ class HubClient:
 
     def headers(self):
         h = {"content-type": "application/json"}
-        if self.identity.get("participant_id"):
+        if self.identity.get("participant_id") and self.identity.get("token"):
             h["x-participant"] = self.identity["participant_id"]
             h["authorization"] = "Bearer " + self.identity["token"]
-            h["x-fence"] = str(self.identity["fence"])
+            if self.identity.get("fence") is not None:  # a saved sign-in being resumed has none yet
+                h["x-fence"] = str(self.identity["fence"])
         return h
 
     def request(self, method, path, body=None, params=None, timeout=None, raw=False):

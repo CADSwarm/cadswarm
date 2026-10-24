@@ -335,11 +335,45 @@ def op_set_param(a):
     return {"alias": alias, "cell": f"B{row}"}
 
 
+# Modules a part script may import: geometry and maths only. No os, shutil, subprocess,
+# pathlib, socket, ctypes… — scripts build shapes; saving files goes through save_file,
+# which never overwrites. This is a guard against accidents and naive misuse, not a
+# security boundary (Python cannot be fully sandboxed in-process): only work with
+# teammates you trust.
+SCRIPT_MODULES = {"math", "cmath", "random", "itertools", "functools", "collections", "statistics",
+                  "fractions", "decimal", "json", "re", "string", "dataclasses", "typing", "copy", "numbers",
+                  "FreeCAD", "App", "Part", "Sketcher", "PartDesign", "Mesh", "MeshPart", "numpy", "BOPTools"}
+# FreeCAD/OCC objects can write files themselves (shape.exportStep(path), doc.saveAs(path)…).
+SCRIPT_FILE_WRITE = re.compile(r"\.\s*(save|saveAs|saveCopy|write|writeInventor|export\w*)\s*\(")
+SCRIPT_BLOCKED_BUILTINS = {"open", "exec", "eval", "compile", "input", "breakpoint", "help", "exit", "quit",
+                           "globals", "vars", "memoryview", "__loader__", "__spec__"}
+
+
+def _script_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = name.split(".")[0]
+    if level or root not in SCRIPT_MODULES:
+        raise ImportError(f"Part scripts can't import {name!r}. Allowed: {', '.join(sorted(SCRIPT_MODULES))}. "
+                          "To save a file, use the save_file tool instead.")
+    return __import__(name, globals, locals, fromlist, level)
+
+
+def script_builtins():
+    import builtins
+    safe = {k: v for k, v in vars(builtins).items() if k not in SCRIPT_BLOCKED_BUILTINS}
+    safe["__import__"] = _script_import
+    return safe
+
+
 def op_run_part_script(a):
     """Run agent Python against the doc. Set `shape` to build/replace Part::Feature `name`."""
-    ns = {"App": App, "FreeCAD": FreeCAD, "Part": Part, "doc": doc, "Vector": Vector,
-          "Placement": Placement, "Rotation": Rotation, "math": math, "params": params_dict()}
-    exec(compile(a.get("code", ""), "<part_script>", "exec"), ns)
+    ns = {"__builtins__": script_builtins(), "App": App, "FreeCAD": FreeCAD, "Part": Part, "doc": doc,
+          "Vector": Vector, "Placement": Placement, "Rotation": Rotation, "math": math, "params": params_dict()}
+    code = a.get("code", "")
+    writer = SCRIPT_FILE_WRITE.search(code)
+    if writer:
+        raise OpError("not_allowed", f"Part scripts can't write files ({writer.group(1)}). "
+                      "Use save_file for notes and export_model for 3D files; both never overwrite.")
+    exec(compile(code, "<part_script>", "exec"), ns)
     shape = ns.get("shape")
     out = {}
     if shape is not None:
