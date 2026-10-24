@@ -88,7 +88,8 @@ if ($answer -notmatch "^[nN]") {
 }
 
 Say ""
-Say "All set! FreeCAD will open now and show you the CadSwarm guide." "Cyan"
+if ($NoLaunch) { Say "All set! Open FreeCAD and pick CadSwarm to see the guide." "Cyan" }
+else { Say "All set! FreeCAD will open now and show you the CadSwarm guide." "Cyan" }
 Say "(The first time FreeCAD starts it may ask about language and theme; any choice is fine.)" "Gray"
 if (-not $NoLaunch) { Start-Process -FilePath $FreeCAD -ArgumentList "`"$Opener`"" }
 Start-Sleep -Seconds 2

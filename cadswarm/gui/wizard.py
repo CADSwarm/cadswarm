@@ -561,8 +561,12 @@ class SetupWizard(QtGui.QDialog):
         self.hub_for_agent = inv["hub"]
         self.p.SetString("InviteCode", self.code_edit.toPlainText().strip())
         self.p.SetString("ProjectName", self.project)
-        for k in ("HostDataDir", "HostToken", "HostPort", "HostPid"):
-            self.p.SetString(k, "")  # this computer is not the host
+        # Forget this computer's hosting only if its own team server is gone: someone who hosts and then joins
+        # (their own invite, or another team) must still be able to "Stop hosting" the server they started.
+        port = self.p.GetString("HostPort")
+        if not (port and hosting.health(f"http://127.0.0.1:{port}")):
+            for k in ("HostDataDir", "HostToken", "HostPort", "HostPid"):
+                self.p.SetString(k, "")  # this computer is not the host
         self.show_page("agent")
 
     # ----------------------------------------------------------------- agent
@@ -631,7 +635,8 @@ class SetupWizard(QtGui.QDialog):
 
     def default_folder(self):
         # The helper's own workspace (it holds its sign-in), next to — never inside — the shared files/.
-        base = self.p.GetString("HostDataDir") if self.mode == "host" else ""
+        own_team = self.p.GetString("HostToken") and self.p.GetString("HostToken") == getattr(self, "token", None)
+        base = self.p.GetString("HostDataDir") if self.mode == "host" or own_team else ""
         base = base or os.path.join(projects_dir(), self.project or "Team project")
         return os.path.join(base, "AI helpers", f"{slug(self.name)}-{self.client}")
 
@@ -824,5 +829,6 @@ def stop_hosting():
         return
     panel.SESSION.disconnect()
     hosting.stop_hub(pid)
+    panel.SESSION.set_state("disconnected", panel.STOPPED_HOSTING)
     App.Console.PrintMessage("[CadSwarm] Stopped hosting. Your project is saved.\n")
 

@@ -21,7 +21,8 @@ You watch the parts appear in FreeCAD and chat with the helpers to steer them.
      message to paste, and tells you when it has joined the team.
 
 That's it. Next time, open the **CadSwarm** shortcut (or pick *CadSwarm* in FreeCAD's workbench
-list) and you're back with your team. If you hosted the team, its server starts again by itself.
+list) and you're back with your team. If you hosted the team, its server starts again when you open CadSwarm (it doesn't start on its
+own after a reboot until you do).
 
 **Good to know**
 - You need an AI helper installed: [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup)

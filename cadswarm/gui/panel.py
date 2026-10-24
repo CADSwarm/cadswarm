@@ -431,6 +431,8 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addWidget(self.chat, 3)
         row = QtGui.QHBoxLayout()
         self.to = QtGui.QComboBox()
+        self.to.setSizeAdjustPolicy(QtGui.QComboBox.AdjustToContents)  # show whole names, not "te:"
+        self.to.setMinimumContentsLength(8)
         self.to.addItem("all")
         self.msg = QtGui.QLineEdit()
         self.msg.setPlaceholderText("Message / steer an agent…")
@@ -495,9 +497,14 @@ class TeamPanel(QtGui.QDockWidget):
         detail = ""
         if s.state == "disconnected":
             left = s.state_detail == "You left the team session."
+            stopped = s.state_detail == STOPPED_HOSTING
             if left:
                 headline = "You left the team session. Your locks were released."
+            elif stopped:
+                headline = "You stopped hosting the team. Your project is saved."
             detail = ("Join again to keep working with your team." if left else
+                      "Your team's AI helpers are offline until you start it again "
+                      "(Get started ▸ Reconnect)." if stopped else
                       "Start or join a team to watch the shared model being built and chat with your "
                       "team's AI helpers."
                       + (f"<br><i>{s.state_detail}</i>".replace("\n", " ") if s.state_detail else ""))
@@ -812,6 +819,9 @@ def invite_teammates():
         "The invite code is copied. Paste it to your teammates (email, Discord, text...).\n\n"
         f"{code}\n\nThey open FreeCAD, pick CadSwarm, click Get started, then "
         "\u201cJoin a teammate\u2019s project\u201d.")
+
+
+STOPPED_HOSTING = "You stopped hosting the team."
 
 
 def stop_hosting():
