@@ -1,8 +1,8 @@
 # Elastic: board knowledge, design memory and lessons
 
-Optional. Without an Elastic project CadSwarm builds from the local board library and skips
-memory; with one, agents can look up board dimensions from datasheets, remember finished
-designs, and learn from reviewer findings.
+Elastic is a core part of CadSwarm: with an Elastic project configured on the host, agents look up
+board dimensions from datasheets, remember finished designs, and learn from reviewer findings.
+Without one the app degrades gracefully: it builds from the local board library and skips memory.
 
 Everything runs on the host machine inside the helper process. The API key stays in that
 process's environment and is never written to the repo, the database, or an agent's context.
@@ -13,7 +13,7 @@ process's environment and is never written to the repo, the database, or an agen
 | --- | --- | --- |
 | `cadswarm-boards` | `python -m cadswarm.ingest boards/sources.json` | `cadswarm.board_docs` tool, `lookup_board` helper op |
 | `cadswarm-designs` | `index_design` (`cadswarm.knowledge`) for a finished brief | `cadswarm.design_memory` tool, `recall_designs` helper op |
-| `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes), from reviewer findings | `cadswarm.board_lessons` tool, `lessons` helper op |
+| `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes), from reviewer findings | `cadswarm.board_lessons` tool, the `lessons` field of the `recall_designs` helper op |
 | `cadswarm-usage` | the helper's style memory, mirrored in bulk after each re-learn: every model change (person or agent), correction and finished brief | Kibana / Discover (how the team works) |
 | `cadswarm-style` | the same mirror: each learned or taught design-style rule with its status, confidence and evidence | `cadswarm.team_style` tool, the `cadswarm-style-analyst` agent |
 
@@ -38,7 +38,7 @@ Then, from this checkout:
 
 ```powershell
 pip install pypdf                       # only for PDF datasheets
-powershell -File ..\cadswarm-guide\scripts\with-env.ps1 .venv\Scripts\python.exe -m cadswarm.ingest boards\sources.json
+powershell -File scripts\with-env.ps1 .venv\Scripts\python.exe -m cadswarm.ingest boards\sources.json
 ```
 
 `elastic/setup.json` creates the inference endpoint and the three indices (idempotent).
