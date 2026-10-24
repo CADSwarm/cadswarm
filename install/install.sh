@@ -64,9 +64,10 @@ PYTHON=''; FREECAD_EXE=''; FREECAD_APP=''
 
 # 1. Find FreeCAD
 find_freecad_linux() {
-    # (a) extracted / tarball installs ship their own Python
-    for _bin in /opt/FreeCAD*/bin /opt/freecad*/bin \
-                "$HOME"/Applications/FreeCAD*/bin "$HOME"/.local/share/FreeCAD*/bin; do
+    # (a) tarballs (<FreeCAD>/bin) and extracted AppImages (<FreeCAD>/usr/bin) ship their own Python
+    for _bin in /opt/FreeCAD*/bin /opt/freecad*/bin /opt/FreeCAD*/usr/bin \
+                "$HOME"/Applications/FreeCAD*/bin "$HOME"/Applications/FreeCAD*/usr/bin \
+                "$HOME"/.local/share/FreeCAD*/bin "$HOME"/.local/share/FreeCAD*/usr/bin; do
         [ -d "$_bin" ] || continue
         _py=''
         for _c in python python3; do [ -x "$_bin/$_c" ] && { _py="$_bin/$_c"; break; }; done

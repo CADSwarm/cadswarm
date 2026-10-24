@@ -182,6 +182,15 @@ def test_linux_extracted_appimage_or_tarball(clean_env, monkeypatch):
     assert config.find_freecad_python() == os.path.normpath(py)
 
 
+def test_linux_extracted_appimage_layout(clean_env, monkeypatch):
+    monkeypatch.setattr(config, "_platform", lambda: "linux")
+    monkeypatch.setattr(config, "LINUX_FREECAD_LIBS", ())
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(clean_env))
+    py = _install(clean_env / "Applications", "FreeCAD", "python", ("usr", "bin"))  # --appimage-extract
+    assert config.find_freecad_python() == os.path.normpath(py)
+
+
 def test_explicit_env_wins_and_missing_raises(clean_env, monkeypatch):
     with pytest.raises(RuntimeError, match="FreeCAD not found"):
         config.find_freecad_python()

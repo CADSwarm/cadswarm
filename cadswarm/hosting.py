@@ -350,6 +350,10 @@ def host_env():
     package lives in the add-on folder, not site-packages) and the CLI's folder on PATH."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     env["PYTHONPATH"] = os.pathsep.join(p for p in (ROOT, env.get("PYTHONPATH")) if p)
+    # A downloaded host lives in the app folder, far from this checkout's board library.
+    boards = os.path.join(ROOT, "boards", "boards.json")
+    if not env.get("CADSWARM_BOARDS") and os.path.isfile(boards):
+        env["CADSWARM_BOARDS"] = boards
     st = spacetime_bin()
     if st:
         env["PATH"] = os.path.dirname(st) + os.pathsep + env.get("PATH", "")

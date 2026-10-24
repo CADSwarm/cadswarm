@@ -79,8 +79,10 @@ def _install_patterns():
         return [(os.path.join(r, "FreeCAD*.app", "Contents", "Resources", "bin"), 3)
                 for r in roots]
     roots = ["/opt", "/usr/local", os.path.expanduser("~/Applications"),
-             os.path.expanduser("~/.local/share")]  # AppImages and tarballs ship bin/python
-    return [(os.path.join(r, pat, "bin"), 1) for r in roots for pat in ("FreeCAD*", "freecad*")]
+             os.path.expanduser("~/.local/share")]
+    # Tarballs ship <FreeCAD>/bin/python; an extracted AppImage (--appimage-extract) has usr/bin/python.
+    return [(os.path.join(r, pat, *sub), len(sub)) for r in roots for pat in ("FreeCAD*", "freecad*")
+            for sub in (("bin",), ("usr", "bin"))]
 
 
 def freecad_candidates():
@@ -113,6 +115,14 @@ def freecad_candidates():
         if py:
             found[os.path.normpath(py)] = _version_key(ver) or _version_key(os.path.basename(where))
     return [p for p, _ in sorted(found.items(), key=lambda kv: (kv[1], kv[0]), reverse=True)]
+
+
+def freecad_import_dirs(python):
+    """Folders that make `import FreeCAD` work for `python`: next to it (Windows), its sibling lib
+    folder (macOS .app, extracted AppImage) and the distro lib folders (Linux). Existing ones only."""
+    bin_dir = os.path.dirname(os.path.abspath(python))
+    dirs = [bin_dir, os.path.join(os.path.dirname(bin_dir), "lib"), *LINUX_FREECAD_LIBS]
+    return [d for d in dirs if os.path.isdir(d)]
 
 
 def find_freecad_python():
