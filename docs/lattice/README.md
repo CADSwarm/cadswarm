@@ -67,6 +67,7 @@ Guides: [agent guide](agent-guide.md) (how helpers use and suggest it) and
 The [contract](../superpowers/specs/2026-10-24-lattice-contract.md) and the
 [original PicoGK plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) describe the earlier proposal; the
 [implementation plan](../superpowers/plans/2026-10-24-cadswarm-07-lighten.md) records what was built and why.
+The [PicoGK spike](spike-2026-10-24.md) records a throwaway headless test of that earlier kernel choice.
 
 ## Honest limits
 
