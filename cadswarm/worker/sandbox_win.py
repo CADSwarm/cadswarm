@@ -160,7 +160,7 @@ def _check(ok, what):
 def container_sid_string():
     """The AppContainer's SID as 'S-1-15-2-…', creating the (per-user, capability-less) profile if needed."""
     psid = PVOID()
-    hr = userenv.CreateAppContainerProfile(PROFILE_NAME, "CadSwarm script sandbox",
+    hr = userenv.CreateAppContainerProfile(PROFILE_NAME, "CADSwarm script sandbox",
                                            "Runs agent part scripts with no network or file access",
                                            None, 0, ctypes.byref(psid))
     if hr & 0xFFFFFFFF == HRESULT_ALREADY_EXISTS:

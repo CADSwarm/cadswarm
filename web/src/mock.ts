@@ -129,7 +129,12 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       });
     } else if (step === n + 2) {
       build(3, 2);
-      store.set({ tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })) });
+      store.set({
+        tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
+        // The reviewer keeps its own arrow and moves it to whatever it re-checks.
+        pointers: [...store.state.pointers.filter(p => p.member !== 5),
+          { member: 5, object: 'Lid', point: [], mode: 'inspecting', label: 're-checking the lid', op: '', seq: seq++, atMs: Date.now() }],
+      });
     } else if (step === n + 3) {
       store.set({
         reviews: [...store.state.reviews, { id: 'r_mock0002', brief: briefId, round: 2, passed: true, findingsJson: '[]',

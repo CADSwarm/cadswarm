@@ -1,4 +1,4 @@
-# CadSwarm lattice — operator guide
+# CADSwarm lattice — operator guide
 
 **Status:** proposed, 2026-10-24. **Nothing described here is installed yet.** The `install-lattice-engine`
 command, the `Lattice` tab and the engine do not exist until the
@@ -6,7 +6,7 @@ command, the `Lattice` tab and the engine do not exist until the
 operator-facing description of how the feature is meant to behave, so installation, support and rollout can be
 reviewed before code is written.
 
-**Audience:** the person hosting the CadSwarm team, and anyone supporting it.
+**Audience:** the person hosting the CADSwarm team, and anyone supporting it.
 **Related:** [contract](../superpowers/specs/2026-10-24-lattice-contract.md) ·
 [implementation plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) ·
 [evidence dossier](../superpowers/research/2026-10-24-implicit-build-evidence.md) ·
@@ -16,7 +16,7 @@ reviewed before code is written.
 
 ## 1. What it adds
 
-A `Lattice` dock tab beside `CadSwarm Team`, plus eight MCP tools for the team's AI helpers. A person or an agent
+A `Lattice` dock tab beside `CADSwarm Team`, plus eight MCP tools for the team's AI helpers. A person or an agent
 picks a closed part, chooses a standard lattice cell, sets cell size, wall/strut thickness, skin and open faces,
 and starts a job. The result is previewed as statistics (and optionally a coarse mesh), then applied to the model
 as a **new** object or exported as STL/3MF.
@@ -33,15 +33,15 @@ while a job runs. Only the final apply touches the model, briefly, inside the no
 | Item | Requirement |
 |---|---|
 | Host OS | Windows 10/11 x64 (primary), macOS arm64 (if the pinned PicoGK build supports it) |
-| CadSwarm | Current FastAPI/SQLite hub, FreeCAD 1.x worker, workbench installed |
-| FreeCAD | 1.x, as required by CadSwarm today |
+| CADSwarm | Current FastAPI/SQLite hub, FreeCAD 1.x worker, workbench installed |
+| FreeCAD | 1.x, as required by CADSwarm today |
 | .NET | **Not required on teammate machines.** The engine ships self-contained |
 | Disk | Room for the self-contained engine plus the project's lattice cache |
 | RAM | 8 GB free is the working assumption; the engine is capped at 8 GB by default |
 | Network | Only for the one-time engine download; generation is offline |
 
 **Linux is not supported in v1.** PicoGK's official NuGet package targets Windows x64 and macOS arm64. On Linux
-the tab reports the feature as unavailable and the rest of CadSwarm works normally.
+the tab reports the feature as unavailable and the rest of CADSwarm works normally.
 
 **Who needs the engine?** Only the computer that runs the **hub**. Jobs execute in the hub process on the host;
 teammates' tabs and agents talk to that hub. A teammate who merely joins someone else's team does not install
@@ -51,11 +51,11 @@ anything.
 
 ## 3. Install the engine
 
-Install it on the host, after CadSwarm itself works.
+Install it on the host, after CADSwarm itself works.
 
-1. Confirm the hub is running and the `CadSwarm Team` panel is healthy. Do not debug the lattice engine while the
+1. Confirm the hub is running and the `CADSwarm Team` panel is healthy. Do not debug the lattice engine while the
    base install is broken.
-2. In a terminal in the CadSwarm checkout (or the installed environment), run:
+2. In a terminal in the CADSwarm checkout (or the installed environment), run:
 
    ```powershell
    cadswarm install-lattice-engine
@@ -89,7 +89,7 @@ refused at apply with `engine_mismatch`; regenerate it. Existing exported files 
 
 ### 3.2 Uninstall
 
-Remove the engine folder, or uninstall it with the CadSwarm installer when that is offered. Uninstalling never
+Remove the engine folder, or uninstall it with the CADSwarm installer when that is offered. Uninstalling never
 touches project data, the model, `exports/` or `.cadswarm-team/`. The tab then shows the feature as unavailable
 and everything else keeps working.
 
@@ -113,7 +113,7 @@ scripts.
 
 ## 5. The `Lattice` tab
 
-Open it from the CadSwarm toolbar or menu (`CadSwarm_Lattice`). It is tabified with `CadSwarm Team` in the same
+Open it from the CADSwarm toolbar or menu (`CadSwarm_Lattice`). It is tabified with `CADSwarm Team` in the same
 dock area — the "another tab" requirement — and can be raised by clicking its tab. Closing it does not stop
 jobs.
 
@@ -189,7 +189,7 @@ The tab shows the reason instead of an empty table. Common cases:
 - unsupported platform — the host cannot run the engine; generate on a supported host.
 - a development path in `CADSWARM_LATTICE_ENGINE` is wrong or fails its probe.
 
-The rest of CadSwarm — modeling, locks, files, exports, other agents — is unaffected.
+The rest of CADSwarm — modeling, locks, files, exports, other agents — is unaffected.
 
 ---
 
@@ -257,7 +257,7 @@ message. They do not take down the hub.
 
 ### 7.4 Storage dialog
 
-**the CadSwarm panel's Tools tab > Storage and free up space...** shows a separate `lattice_cache` line alongside files, old
+**the CADSwarm panel's Tools tab > Storage and free up space...** shows a separate `lattice_cache` line alongside files, old
 versions, snapshots and exports, so lattice jobs do not hide inside the project total. The disk guard applies
 before a job starts and before a result is packaged; a refusal is `no_room`. The existing file/export guard still
 reports `disk_full`.
@@ -295,7 +295,7 @@ the output name with `lock_objects` is the agent-side convention; a human can lo
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `Lattice` command/tab missing | Workbench not reloaded, or old workbench install | Restart FreeCAD; re-run `cadswarm install-workbench`; check the CadSwarm workbench is active |
+| `Lattice` command/tab missing | Workbench not reloaded, or old workbench install | Restart FreeCAD; re-run `cadswarm install-workbench`; check the CADSwarm workbench is active |
 | Header says engine missing | Engine not installed on the host, or manifest invalid | Run `cadswarm install-lattice-engine`, restart the hub, check `/lattice/capabilities` |
 | `available: false`, reason `disabled` | `CADSWARM_LATTICE=off` | Remove the variable from the hub environment and restart |
 | `available: false`, unsupported platform | Linux or an unsupported architecture | Host the team on Windows x64 or macOS arm64 |
@@ -382,7 +382,7 @@ own contract revision.
 
 ## 13. Rollout checklist
 
-- [ ] Base CadSwarm works on the host: hub, panel, one agent, one export.
+- [ ] Base CADSwarm works on the host: hub, panel, one agent, one export.
 - [ ] Engine installed on the host and verified through `/lattice/capabilities`.
 - [ ] A small box generates, applies and exports STL and 3MF at the correct size.
 - [ ] A second teammate sees the job, but cannot apply/export it.

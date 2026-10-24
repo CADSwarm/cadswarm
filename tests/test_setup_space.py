@@ -66,7 +66,7 @@ def test_cli_setup_takes_any_invite_form(tmp_path, monkeypatch, capsys, code):
 def test_cli_setup_explains_a_bad_invite(tmp_path):
     with pytest.raises(SystemExit) as e:
         cli.main(["setup", "--client", "claude", "--invite", "cadswarm-1:abc", "--name", "x", "--dir", str(tmp_path)])
-    assert "older CadSwarm" in str(e.value)
+    assert "older CADSwarm" in str(e.value)
     assert not (tmp_path / ".cadswarm" / "config.json").exists()
 
 

@@ -66,7 +66,7 @@ def project_layout(root):
     snapshots/       saved versions of the model
     .cadswarm-team/  server internals, file history and trash
 
-    A folder made by an older CadSwarm (hub.sqlite at its top level) keeps its internals there.
+    A folder made by an older CADSwarm (hub.sqlite at its top level) keeps its internals there.
     """
     root = os.path.abspath(root)
     legacy = os.path.exists(os.path.join(root, "hub.sqlite"))
@@ -87,7 +87,7 @@ def is_project_folder(root):
 def resolve_project_folder(chosen, project):
     """Where the project will really live, never mixing with (or overwriting) unrelated files.
 
-    Returns (folder, how): "existing" = continue a CadSwarm project already there,
+    Returns (folder, how): "existing" = continue a CADSwarm project already there,
     "new" = an empty or new folder, "inside" = a fresh subfolder because `chosen` had other things in it.
     """
     chosen = os.path.normpath(chosen)
@@ -95,7 +95,7 @@ def resolve_project_folder(chosen, project):
         return chosen, "existing"
     if not os.path.exists(chosen) or (os.path.isdir(chosen) and not os.listdir(chosen)):
         return chosen, "new"
-    base = os.path.join(chosen, re.sub(r'[<>:"/\\|?*]+', " ", project).strip() or "CadSwarm project")
+    base = os.path.join(chosen, re.sub(r'[<>:"/\\|?*]+', " ", project).strip() or "CADSwarm project")
     if is_project_folder(base):
         return base, "existing"
     candidate, n = base, 2

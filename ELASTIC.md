@@ -1,6 +1,6 @@
 # Elastic: board knowledge, design memory and lessons
 
-Elastic is a core part of CadSwarm: with an Elastic project configured on the host, agents look up
+Elastic is a core part of CADSwarm: with an Elastic project configured on the host, agents look up
 board dimensions from datasheets, remember finished designs, and learn from reviewer findings.
 Without one the app degrades gracefully: it builds from the local board library and skips memory.
 

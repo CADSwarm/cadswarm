@@ -1,4 +1,4 @@
-"""Elastic for CadSwarm: board knowledge and design memory (stdlib only).
+"""Elastic for CADSwarm: board knowledge and design memory (stdlib only).
 
 Runs only on the host machine, inside the helper process; the API key never leaves it.
 """

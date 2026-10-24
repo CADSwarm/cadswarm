@@ -47,7 +47,7 @@ def read_pack(data):
         try:
             manifest = json.loads(z.read("manifest.json"))
         except KeyError:
-            raise PackError("bad_pack", "That zip has no manifest.json, so it isn't a CadSwarm library pack.")
+            raise PackError("bad_pack", "That zip has no manifest.json, so it isn't a CADSwarm library pack.")
         except ValueError:
             raise PackError("bad_pack", "The pack's manifest.json is not valid JSON.")
         if manifest.get("format") != FORMAT:

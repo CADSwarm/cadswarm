@@ -1,4 +1,4 @@
-"""The old CadSwarm hub's REST paths, answered by SpacetimeDB.
+"""The old CADSwarm hub's REST paths, answered by SpacetimeDB.
 
 The MCP server, prompt hook and FreeCAD workbench were written against `HubClient.get/post`
 and the JSON shapes `cadswarm/hub/core.py` returned. SpaceHub keeps those paths and shapes:
@@ -641,7 +641,7 @@ class SpaceHub(LibraryRoutes):
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CADSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
                  "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
@@ -737,7 +737,8 @@ class SpaceHub(LibraryRoutes):
         out = []
         for b in sorted(self._rows("v_brief"), key=lambda b: b["created_ms"], reverse=True)[:int(limit)]:
             mine = [t for t in tasks if t.get("brief") == b["id"]]
-            out.append({"id": b["id"], "text": b["text"], "status": b["status"], "by": names.get(b["by"], "?"),
+            out.append({"id": b["id"], "text": b["text"], "board": b["board"], "status": b["status"],
+                        "by": names.get(b["by"], "?"),
                         "at": b["created_ms"] / 1000, "tasks": len(mine),
                         "done": sum(1 for t in mine if t["status"] == "done"),
                         "stl": b["stl_hash"]})

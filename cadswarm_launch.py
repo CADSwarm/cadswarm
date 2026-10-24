@@ -1,4 +1,4 @@
-"""Single entry point for every CadSwarm helper process.
+"""Single entry point for every CADSwarm helper process.
 
     python cadswarm_launch.py mcp            # an AI helper's MCP server (Claude Code / Codex start this)
     python cadswarm_launch.py hook           # UserPromptSubmit hook (stdlib only, fast)
@@ -6,7 +6,7 @@
     python cadswarm_launch.py check          # is the MCP package importable?
     python cadswarm_launch.py <cli args>     # anything else goes to the `cadswarm` CLI
 
-Agent configs point at this file by absolute path, so they work whether CadSwarm
+Agent configs point at this file by absolute path, so they work whether CADSwarm
 lives in a dev checkout or inside FreeCAD's Mod folder, with any Python.
 """
 import os

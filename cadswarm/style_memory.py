@@ -1,4 +1,4 @@
-"""Team design style: CadSwarm learns how this team uses FreeCAD and its agents, and teaches the agents.
+"""Team design style: CADSwarm learns how this team uses FreeCAD and its agents, and teaches the agents.
 
 The loop (observe -> distil -> gate -> recall -> observe again):
 
@@ -454,7 +454,7 @@ class StyleMemory:
             return {"rewritten": 0}
         payload = [{"id": r["id"], "type": r["type"], "scope": r["scope"], "statement": r["template"],
                     "evidence": r["evidence"], "value": r["value"]} for r in rules]
-        reply = converse("Reword these CadSwarm team design-style rules. Answer with JSON only: "
+        reply = converse("Reword these CADSwarm team design-style rules. Answer with JSON only: "
                          '{"rules": [{"id": ..., "statement": ...}]}. Keep every id, use only numbers that '
                          "appear in a rule's statement or evidence, one imperative sentence each.\n"
                          + json.dumps(payload))
@@ -546,7 +546,7 @@ class StyleMemory:
         use = use[:limit]
         pending = self.db.execute("SELECT COUNT(*) FROM style_rules WHERE status='candidate'").fetchone()[0]
         lines = [f"- {'[confirmed] ' if r['status'] == 'confirmed' else ''}{r['statement']}" for r in use]
-        text = ("Team design style (learned from how this team works in CadSwarm; follow it, and ask a person "
+        text = ("Team design style (learned from how this team works in CADSwarm; follow it, and ask a person "
                 "before going against a confirmed rule):\n" + "\n".join(lines)) if lines else ""
         return {"text": text, "rules": [{k: r[k] for k in ("id", "type", "scope", "statement", "status",
                                                            "confidence")} for r in use],
@@ -607,7 +607,7 @@ def _rule(row):
 def main(argv=None):
     from cadswarm.paths import project_layout
     ap = argparse.ArgumentParser(prog="python -m cadswarm.style_memory",
-                                 description="Inspect what CadSwarm has learned about this team's design style.")
+                                 description="Inspect what CADSwarm has learned about this team's design style.")
     ap.add_argument("command", choices=["show", "distil", "export"])
     ap.add_argument("--project", default=os.environ.get("CADSWARM_PROJECT") or os.getcwd())
     ns = ap.parse_args(argv)
@@ -622,7 +622,7 @@ def main(argv=None):
     else:
         rules = style.rules()
         if not rules:
-            print("Nothing learned yet: finish a brief or edit the model through CadSwarm first.")
+            print("Nothing learned yet: finish a brief or edit the model through CADSwarm first.")
         for r in rules:
             ev = r["evidence"]
             print(f"[{r['status']:9}] {r['confidence']:.2f}  {r['statement']}  "

@@ -47,12 +47,164 @@ def test_platform_key_names_the_release_assets(monkeypatch):
     assert hosting.platform_key() == "linux-x86_64"
 
 
-def test_ensure_tools_does_nothing_when_everything_is_available(monkeypatch):
+def test_ensure_tools_does_nothing_when_there_is_nothing_of_ours_to_update(tmp_path, monkeypatch):
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(tmp_path / "app"))
     monkeypatch.setattr(hosting, "host_bin", lambda: "host")
     monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
     monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "_release_sums", lambda: pytest.fail("must not check the release"))
     monkeypatch.setattr(hosting, "_download", lambda *a, **k: pytest.fail("must not download"))
     assert hosting.ensure_tools() == {"host": "host", "spacetime": "spacetime", "wasm": "module"}
+
+
+def test_the_module_shipped_with_the_workbench_wins_over_a_downloaded_copy(tmp_path, monkeypatch):
+    root, app = tmp_path / "addon", tmp_path / "app"
+    (root / "module").mkdir(parents=True)
+    shipped = root / "module" / "cadswarm_module.wasm"
+    shipped.write_bytes(b"shipped")
+    (app / "module").mkdir(parents=True)
+    (app / "module" / "cadswarm_module.wasm").write_bytes(b"downloaded")
+    monkeypatch.delenv("CADSWARM_MODULE_WASM", raising=False)
+    monkeypatch.setattr(hosting, "ROOT", str(root))
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    assert hosting.module_wasm() == str(shipped)
+
+    built = root / "module" / "target" / "wasm32-unknown-unknown" / "release" / "cadswarm_module.wasm"
+    built.parent.mkdir(parents=True)
+    built.write_bytes(b"built")
+    assert hosting.module_wasm() == str(built)  # a local build still wins
+
+
+def test_a_shipped_module_is_never_replaced_by_a_download(tmp_path, monkeypatch):
+    root, app = tmp_path / "addon", tmp_path / "app"
+    (root / "module").mkdir(parents=True)
+    shipped = root / "module" / "cadswarm_module.wasm"
+    shipped.write_bytes(b"shipped")
+    (app / "module").mkdir(parents=True)
+    (app / "module" / "cadswarm_module.wasm").write_bytes(b"older download")
+    monkeypatch.delenv("CADSWARM_MODULE_WASM", raising=False)
+    monkeypatch.setattr(hosting, "ROOT", str(root))
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: "host")
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "_release_sums", lambda: pytest.fail("must not check the release"))
+    monkeypatch.setattr(hosting, "_download", lambda *a, **k: pytest.fail("must not download"))
+    assert hosting.ensure_tools()["wasm"] == str(shipped)
+
+
+def test_a_new_release_refreshes_the_downloaded_team_server(tmp_path, monkeypatch):
+    app = tmp_path / "app"
+    exe = app / "bin" / ("cadswarm-host.exe" if os.name == "nt" else "cadswarm-host")
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"old")
+    asset = "cadswarm-host-windows-x86_64.exe"
+    new = b"new"
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: str(exe))
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "platform_key", lambda: "windows-x86_64")
+    monkeypatch.setattr(hosting, "_release_sums", lambda: {asset: hashlib.sha256(new).hexdigest()})
+    calls = []
+
+    def download(url, dest, expect=None, on_line=None):
+        calls.append((url, dest, expect))
+        with open(dest, "wb") as f:
+            f.write(new)
+        return dest
+
+    monkeypatch.setattr(hosting, "_download", download)
+    lines = []
+    info = hosting.ensure_tools(lines.append)
+    assert calls == [(hosting.release_base() + "/" + asset, str(exe), hashlib.sha256(new).hexdigest())]
+    assert exe.read_bytes() == new and info["host"] == str(exe)
+    assert any("Updating the team server" in line for line in lines)
+
+
+def test_a_new_release_refreshes_the_downloaded_module(tmp_path, monkeypatch):
+    root, app = tmp_path / "addon", tmp_path / "app"
+    wasm = app / "module" / "cadswarm_module.wasm"
+    wasm.parent.mkdir(parents=True)
+    wasm.write_bytes(b"old")
+    new = b"new"
+    monkeypatch.delenv("CADSWARM_MODULE_WASM", raising=False)
+    monkeypatch.setattr(hosting, "ROOT", str(root))
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: "host")
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "platform_key", lambda: "windows-x86_64")
+    monkeypatch.setattr(hosting, "_release_sums",
+                        lambda: {hosting.MODULE_ASSET: hashlib.sha256(new).hexdigest()})
+    calls = []
+
+    def download(url, dest, expect=None, on_line=None):
+        calls.append((url, dest, expect))
+        with open(dest, "wb") as f:
+            f.write(new)
+        return dest
+
+    monkeypatch.setattr(hosting, "_download", download)
+    lines = []
+    info = hosting.ensure_tools(lines.append)
+    assert calls == [(hosting.release_base() + "/" + hosting.MODULE_ASSET, str(wasm),
+                      hashlib.sha256(new).hexdigest())]
+    assert wasm.read_bytes() == new and info["wasm"] == str(wasm)
+    assert any("Updating the team's database module" in line for line in lines)
+
+
+def test_a_moved_spacetime_version_refreshes_the_managed_cli(tmp_path, monkeypatch):
+    app = tmp_path / "app"
+    cli = app / "bin" / ("spacetime.exe" if os.name == "nt" else "spacetime")
+    cli.parent.mkdir(parents=True)
+    cli.write_bytes(b"old")
+    (app / "bin" / "release.json").write_text(json.dumps({"spacetime": "0.0.1"}), encoding="utf-8")
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: "host")
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: str(cli))
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    installed = []
+    monkeypatch.setattr(hosting, "_install_spacetime_release", lambda log: installed.append(True))
+    hosting.ensure_tools()
+    assert installed == [True]
+
+
+def test_an_offline_start_uses_the_tools_already_here(tmp_path, monkeypatch):
+    app = tmp_path / "app"
+    exe = app / "bin" / ("cadswarm-host.exe" if os.name == "nt" else "cadswarm-host")
+    wasm = app / "module" / "cadswarm_module.wasm"
+    exe.parent.mkdir(parents=True)
+    wasm.parent.mkdir(parents=True)
+    exe.write_bytes(b"host")
+    wasm.write_bytes(b"module")
+    monkeypatch.delenv("CADSWARM_MODULE_WASM", raising=False)
+    monkeypatch.setattr(hosting, "ROOT", str(tmp_path / "addon"))
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: str(exe))
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+
+    def offline():
+        raise RuntimeError("Couldn't check the CADSwarm downloads. Check your internet connection and try again.")
+
+    monkeypatch.setattr(hosting, "_release_sums", offline)
+    monkeypatch.setattr(hosting, "_download", lambda *a, **k: pytest.fail("must not download"))
+    lines = []
+    info = hosting.ensure_tools(lines.append)
+    assert info == {"host": str(exe), "spacetime": "spacetime", "wasm": str(wasm)}
+    assert any("Using the programs already here" in line for line in lines)
+
+
+def test_an_offline_start_still_explains_a_missing_tool(tmp_path, monkeypatch):
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(tmp_path / "app"))
+    monkeypatch.setattr(hosting, "host_bin", lambda: None)
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+
+    def offline():
+        raise RuntimeError("Check your internet connection and try again.")
+
+    monkeypatch.setattr(hosting, "_release_sums", offline)
+    with pytest.raises(RuntimeError, match="internet"):
+        hosting.ensure_tools()
 
 
 def test_ensure_tools_downloads_the_team_server_into_the_app_folder(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 """Runs ONE agent part script, in a throwaway child process the worker has confined (see sandbox.py).
 
-Standalone on purpose: stdlib plus FreeCAD, no imports from the rest of CadSwarm, so the worker can copy
+Standalone on purpose: stdlib plus FreeCAD, no imports from the rest of CADSwarm, so the worker can copy
 this single file into the sandbox's read-only folder and the child needs access to nothing else.
 
 Stdin carries one JSON request: {code, params, doc_path, freecad_bin, guards}.

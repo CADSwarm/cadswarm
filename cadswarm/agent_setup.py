@@ -28,7 +28,7 @@ CLIENTS = {
 }
 
 AGENT_DOC = """{begin}
-## CadSwarm: you are part of a team building one shared FreeCAD model
+## CADSwarm: you are part of a team building one shared FreeCAD model
 
 Your teammates' agents (Claude Code, Codex, Droid) are editing the same live model right now.
 All CAD work goes through the `cadswarm` MCP tools: never edit .FCStd files directly.
@@ -123,7 +123,7 @@ def _read_config(path):
             raise ValueError("top level isn't an object")
     except (OSError, ValueError) as e:
         raise ConfigFileError(
-            f"CadSwarm didn't change {path} because it couldn't read it ({e}). Your settings are untouched. "
+            f"CADSwarm didn't change {path} because it couldn't read it ({e}). Your settings are untouched. "
             "Fix the file (check for stray commas or comments), or rename it, then run setup again.") from None
     return data
 
@@ -132,7 +132,7 @@ def _dict_at(parent, key, path):
     """parent[key] as a dict, creating it; refuses (rather than crashes on) a value of the wrong type."""
     v = parent.setdefault(key, {})
     if not isinstance(v, dict):
-        raise ConfigFileError(f"CadSwarm didn't change {path} because \"{key}\" in it isn't the kind of "
+        raise ConfigFileError(f"CADSwarm didn't change {path} because \"{key}\" in it isn't the kind of "
                               "entry it expected. Your settings are untouched; fix or remove that entry and retry.")
     return v
 
@@ -140,7 +140,7 @@ def _dict_at(parent, key, path):
 def _list_at(parent, key, path):
     v = parent.setdefault(key, [])
     if not isinstance(v, list):
-        raise ConfigFileError(f"CadSwarm didn't change {path} because \"{key}\" in it isn't a list. "
+        raise ConfigFileError(f"CADSwarm didn't change {path} because \"{key}\" in it isn't a list. "
                               "Your settings are untouched; fix or remove that entry and retry.")
     return v
 
@@ -188,7 +188,7 @@ def setup_codex(project, python):
         text = pre.rstrip() + rest.split(TOML_END, 1)[1]
     for table in ("[hooks]", "[mcp_servers.cadswarm]"):
         if any(line.strip() == table for line in text.splitlines()):
-            raise ValueError(f"{path} already defines {table} outside CadSwarm's block; merge it by hand.")
+            raise ValueError(f"{path} already defines {table} outside CADSwarm's block; merge it by hand.")
     block = "\n".join([
         TOML_BEGIN,
         "[mcp_servers.cadswarm]",
@@ -227,7 +227,7 @@ def trust_in_codex(project):
     path = os.path.join(codex_home(), "config.toml")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     text = open(path, encoding="utf-8").read() if os.path.exists(path) else ""
-    block = f"\n# Added by CadSwarm setup so Codex loads this folder's CadSwarm connection.\n" \
+    block = f"\n# Added by CADSwarm setup so Codex loads this folder's CADSwarm connection.\n" \
             f"[projects.{toml_string(project)}]\ntrust_level = \"trusted\"\n"
     with open(path, "w", encoding="utf-8") as f:
         f.write(text.rstrip() + "\n" + block if text.strip() else block.lstrip())
@@ -356,14 +356,14 @@ def write_launcher(project, client, project_name, role="member"):
     if os.name == "nt":
         q = lambda t: '"' + t.replace('"', "'") + '"'  # noqa: E731  (cmd has no way to escape a quote here)
         text = "\r\n".join([
-            "@echo off", "rem Starts your CadSwarm AI helper (written by the CadSwarm guide).",
+            "@echo off", "rem Starts your CADSwarm AI helper (written by the CADSwarm guide).",
             f'cd /d "{project}"',
             f'if exist ".cadswarm\\started" ( "{exe}" {q(resume)} & goto :eof )',
             'type nul > ".cadswarm\\started"', f'"{exe}" {q(first)}', ""])
         path = os.path.join(sd, "start-helper.cmd")
     else:
         text = "\n".join([
-            "#!/bin/sh", "# Starts your CadSwarm AI helper (written by the CadSwarm guide).",
+            "#!/bin/sh", "# Starts your CADSwarm AI helper (written by the CADSwarm guide).",
             f"cd {_sh_quote(project)} || exit 1",
             f"if [ -f .cadswarm/started ]; then exec {_sh_quote(exe)} {_sh_quote(resume)}; fi",
             "touch .cadswarm/started", f"exec {_sh_quote(exe)} {_sh_quote(first)}", ""])

@@ -304,7 +304,7 @@ textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-
 .setting.bad input { outline: 2px solid var(--err, #cf222e); }
 button.ghost { background: none; color: var(--muted); border: 1px solid var(--line); }
 
-/* ---- Sponsors debug panel (`?debug`, Shift+D, or the sidebar's "sponsors" chip) ---- */
+/* ---- Sponsors panel (`?debug`, Shift+D, or the sidebar's "Sponsors" button) ---- */
 .sponsors { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px;
   background: rgb(10 10 10 / .84); backdrop-filter: blur(3px); }
 .sponsors-sheet { width: min(1080px, 100%); max-height: 100%; overflow: auto; padding: 20px 22px 14px;

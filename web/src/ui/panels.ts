@@ -108,7 +108,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   el.innerHTML = `
     <header class="sidebar-head">
       <span class="brand">CADSwarm</span>
-      <button type="button" class="debug-open" data-sponsors aria-haspopup="dialog" title="How CADSwarm uses its sponsors (debug: Shift+D)">sponsors</button>
+      <button type="button" class="debug-open" data-sponsors aria-haspopup="dialog" title="How CADSwarm uses its sponsors (Shift+D)">Sponsors</button>
       <span class="conn" data-conn></span>
     </header>
     <nav class="tabbar" role="tablist" aria-label="Sections">

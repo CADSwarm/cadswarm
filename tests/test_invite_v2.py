@@ -29,7 +29,7 @@ def test_base32_tickets_and_phone_links_are_accepted():
 
 
 def test_old_codes_get_a_clear_message():
-    with pytest.raises(InviteError, match="older CadSwarm"):
+    with pytest.raises(InviteError, match="older CADSwarm"):
         read_invite("cadswarm-1:eyJoIjoiaHR0cDovLzE5Mi4xNjguMS4yMDo4NzY1In0")
 
 
@@ -41,7 +41,7 @@ def test_a_code_without_a_database_is_damaged():
 
 @pytest.mark.parametrize("text, fragment", [
     ("", "Paste the invite code"),
-    ("http://192.168.1.20:8765", "doesn't look like a CadSwarm invite"),
+    ("http://192.168.1.20:8765", "doesn't look like a CADSwarm invite"),
     ("cadswarm-2:eyJ1cmkiOiJodHR0", "cut off"),
 ])
 def test_errors_are_plain_language(text, fragment):

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from cadswarm import paths
-from cadswarm.reviewer import REVIEW_TOOLS, activity_for, review_prompt
+from cadswarm.reviewer import REVIEW_TOOLS, activity_for, brief_objects, review_prompt
 
 
 def test_prompt_names_the_brief_the_board_the_bed_and_the_round():
@@ -33,6 +33,22 @@ def test_a_failed_tool_result_keeps_why_it_failed():
 def test_the_reviewer_cannot_reach_geometry_tools():
     assert not any(t.endswith(("create_primitive", "set_props", "run_part_script", "delete_object", "lock_objects"))
                    for t in REVIEW_TOOLS)
+
+
+def test_the_reviewer_gets_its_own_arrow():
+    # point_at only moves the reviewer's own pointer; it cannot touch geometry.
+    assert "cadswarm___point_at" in REVIEW_TOOLS
+    p = review_prompt({"id": "b_1", "text": "case"}, "Pico", [180, 180, 180], 1)
+    assert 'point_at("<part>")' in p
+
+
+def test_brief_objects_are_in_task_order_without_repeats():
+    tasks = [{"brief": "b_1", "objects": ["Base", "Lid"]},
+             {"brief": "b_2", "objects": ["Other"]},
+             {"brief": "b_1", "objects": '["Lid", "Standoff1"]'},
+             {"brief": "b_1", "objects": []}]
+    assert brief_objects(tasks, "b_1") == ["Base", "Lid", "Standoff1"]
+    assert brief_objects(None, "b_1") == []
 
 
 def test_the_review_checks_the_team_style_when_there_is_one():

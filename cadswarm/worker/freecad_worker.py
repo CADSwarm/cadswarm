@@ -1,4 +1,4 @@
-"""CadSwarm FreeCAD worker.
+"""CADSwarm FreeCAD worker.
 
 Runs inside FreeCAD's bundled Python (NOT the hub's venv) and owns the single
 live shared document. The hub talks to it over JSON lines on stdin/stdout,
@@ -456,7 +456,7 @@ def load_part_shape(path, fmt):
         import Mesh
         mesh = Mesh.Mesh(path)
         if mesh.CountFacets > MAX_STL_FACETS:
-            raise OpError("too_complex", f"That STL has {mesh.CountFacets} triangles; CadSwarm places STLs up to "
+            raise OpError("too_complex", f"That STL has {mesh.CountFacets} triangles; CADSwarm places STLs up to "
                                          f"{MAX_STL_FACETS}. Use the STEP file if there is one.")
         shape = Part.Shape()
         shape.makeShapeFromMesh(mesh.Topology, 0.05)
@@ -478,7 +478,7 @@ def load_part_shape(path, fmt):
     else:
         raise OpError("bad_args", f"Unknown part format {fmt!r}")
     if shape.isNull() or not shape.Faces:
-        raise OpError("bad_args", "The file has no geometry CadSwarm can read")
+        raise OpError("bad_args", "The file has no geometry CADSwarm can read")
     return shape
 
 

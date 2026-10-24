@@ -29,7 +29,7 @@ from ..client import HubRequestError, load_json, save_json
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, overlay, style_ui
+from . import library_ui, overlay, sponsors as sponsors_ui, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -804,6 +804,22 @@ class TeamPanel(QtGui.QDockWidget):
         self.library = library_ui.LibraryTab(session)
         self.tabs.addTab(self.library, "Library")
 
+        # ------------------------------------------------------------ Sponsors
+        page = QtGui.QWidget()
+        tl = page_layout(page)
+        tl.addWidget(caption("Sponsors"))
+        intro = QtGui.QLabel("The outside services this build runs on, and what this workspace is doing with them.")
+        intro.setWordWrap(True)
+        tl.addWidget(intro)
+        self.sponsors_box = QtGui.QLabel("")
+        self.sponsors_box.setWordWrap(True)
+        self.sponsors_box.setTextFormat(QtCore.Qt.RichText)
+        self.sponsors_box.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        tl.addWidget(self.sponsors_box)
+        tl.addStretch(1)
+        self.sponsors_page = page
+        self.tabs.addTab(page, "Sponsors")
+
         # --------------------------------------------------------------- Tools
         page = QtGui.QWidget()
         tl = page_layout(page)
@@ -1086,6 +1102,27 @@ class TeamPanel(QtGui.QDockWidget):
             self.keys["suggestions_read"] = True
             self.fetch_suggestions()
         self.render_review(s)
+        self.render_sponsors(s)
+
+    def render_sponsors(self, s):
+        """The three outside services, from the snapshot this refresh already read, plus the stamped evidence."""
+        database = (getattr(s.client, "cfg", {}) or {}).get("db", "")
+        parts = []
+        for card in sponsors_ui.cards(s, database):
+            facts = "<br>".join(
+                f"<span style='color:#8b949e'>{html.escape(key)}</span>&nbsp; {html.escape(str(value))}"
+                for key, value in card["facts"])
+            extra = ""
+            if card.get("list"):
+                extra = (f"<br><span style='color:#8b949e'>{html.escape(card['list']['title'])}</span><br>"
+                         + "<br>".join("· " + html.escape(row) for row in card["list"]["rows"]))
+            calls = ("<br>" + "<br>".join(
+                f"<span style='font-family:monospace'>{html.escape(call)}</span>" for call in card["calls"]))
+            parts.append(f"<p><b>{html.escape(card['name'])}</b>"
+                         f" <span style='color:#8b949e'>· {html.escape(card['role'])}</span><br>"
+                         f"{facts}{extra}{calls}</p>")
+        parts.append(f"<p><span style='color:#8b949e'>{html.escape(sponsors_ui.evidence_line())}</span></p>")
+        self.sponsors_box.setText("".join(parts))
 
     def render_review(self, s):
         """The newest reviewer round and the team's printer bed, in the words a teammate can act on."""

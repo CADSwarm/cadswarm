@@ -1,7 +1,7 @@
 /**
  * The sponsors panel: what each outside service does for CADSwarm, the exact calls we make, and the
- * live trace of it working in this workspace. It is a debug view (`?debug`, Shift+D, or the small
- * "sponsors" button in the sidebar), not part of the product's own story.
+ * live trace of it working in this workspace. It opens from the sidebar's "Sponsors" button, Shift+D,
+ * or `?debug`.
  */
 import type { Review, State, Store } from '../store';
 import { esc } from './esc';

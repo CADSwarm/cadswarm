@@ -59,9 +59,11 @@ own after a reboot until you do).
 - **Whoever starts a team** makes one extra download, about 50 MB: CADSwarm's team server plus the
   [SpacetimeDB](https://spacetimedb.com/) database program (pinned to 2.13.0). The guide fetches them
   into CADSwarm's app folder (`%APPDATA%\CadSwarm` on Windows, `~/Library/Application Support/CadSwarm`
-  on macOS, `~/.local/share/CadSwarm` on Linux) the first time you start a team, checks the SHA-256 of each file, and
-  needs nothing installed by hand. Teammates who join don't need them. (If your computer already has
-  both, the guide uses those instead.)
+  on macOS, `~/.local/share/CadSwarm` on Linux) the first time you start a team, checks the SHA-256 of
+  each file, and replaces an older download when a later release publishes a different one. The module
+  the workbench ships with is used as it is, so updating the workbench never leaves an old module
+  behind. Teammates who join don't need them. (A team server or SpacetimeDB already on your PATH is
+  used as it is.)
 - The team's database runs on SpacetimeDB's cloud (Maincloud) by default, so teammates can join from
   anywhere. The advanced "keep it on this computer" option is for offline or LAN-only demos; then
   everyone must share a network and Windows may ask to allow access through its firewall.
@@ -313,8 +315,9 @@ CADSwarm uses the Factory Droid SDK (`cadswarm/reviewer.py`) as the swarm's desi
 
 - **What starts it:** `cadswarm-host`, when every task of a brief is done (SpacetimeDB subscription), and again after the owners fix what it found. Nobody prompts it.
 - **What it checks:** collisions between parts, that the board actually fits (measured board dimensions, mounting holes, port cutouts), and printability (print bed size, closed solids, walls under 1.2 mm).
-- **What it can touch:** only inspection and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
+- **What it can touch:** only inspection, its own pointer and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
 - **Where you see its work:** every tool call and finding is written to the `activity` table and shown live in the app, and its verdict is stored in `review` and shown as a review card on the brief.
+- **Its arrow:** it is a member like any other, so it gets its own pointer in its own colour. The round parks it on the brief's first part and `point_at` moves it to whichever part it is checking, in FreeCAD's 3D view and the web viewer alike.
 
 Setup, once per team (needs `pip install droid-sdk` or `pip install -e ".[reviewer]"`, the `droid` CLI, and `FACTORY_API_KEY`):
 
@@ -370,10 +373,11 @@ The guide wraps these commands; they still work for scripting and CI.
 
 Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to its
 `bin/python.exe`) and Python 3.11+. When you host, the guide downloads the
-[SpacetimeDB CLI](https://spacetimedb.com/install) 2.13.0, `cadswarm-host` and the module into
-`%APPDATA%\CadSwarm` on first use; from a checkout you can also build them yourself with
-`cargo build --release` in `host/` and `cargo build --release --target wasm32-unknown-unknown` in
-`module/`.
+[SpacetimeDB CLI](https://spacetimedb.com/install) 2.13.0 and `cadswarm-host` into
+`%APPDATA%\CadSwarm` on first use, and refreshes them when a newer release changes them; the module
+comes from the workbench (or that download, on an older install). From a checkout you can also build
+them yourself with `cargo build --release` in `host/` and
+`cargo build --release --target wasm32-unknown-unknown` in `module/`.
 
 Optional services read keys from the environment, never from the repo. Copy `.env.example` to
 `cadswarm.env` next to the checkout (for example `Projects\cadswarm.env`, shared by every worktree) or
