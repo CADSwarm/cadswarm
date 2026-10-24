@@ -4,8 +4,7 @@ Date: 2026-10-23 (Cal Hacks 13.0; submission deadline Sun 2026-10-25 9:00 AM PT)
 Status: approved. Plans in `docs/superpowers/plans/2026-10-23-cadswarm-0*.md`; the overview's
 contract and "Contract changes log" win over this document where they differ.
 Team decisions (2026-10-23): SpacetimeDB is the core; the FreeCAD beginner setup from commit
-`fddfa28` stays on top of it; Elastic is core functionality; a Creao-built Cartesia voice pipeline
-is the stretch goal.
+`fddfa28` stays on top of it; Elastic is core functionality.
 
 ## The problem and who has it
 
@@ -52,7 +51,6 @@ team gets a printable STL. Nobody touches CAD unless they want to.
 | Most Technically Complex / Overall | Multi-agent CAD on one live model, transactional rollback in FreeCAD, a real-time backend, peer-to-peer file mesh. |
 | Best Hardware | A part the swarm designed, printed at the venue, on the judging table. |
 | Elastic | Messy datasheets turned into board specs agents act on: hybrid search with JINA embeddings and the JINA reranker on Elastic Cloud Serverless, an Agent Builder agent, and a Workflow that distils lessons from past designs. |
-| Creao + Cartesia (stretch) | A voice pipeline built with a Creao agent on Cartesia's voice agents: brief the swarm, read measurements aloud, steer and hand off hands-free. Creao's rule: its agent must do core work, confirmed at their booth first. |
 
 ## Scope and priorities
 
@@ -60,7 +58,7 @@ team gets a printable STL. Nobody touches CAD unless they want to.
 |---|---|
 | **P0 (the demo path)** | SpacetimeDB module replacing the hub's SQLite coordination; Rust host running FreeCAD ops and project-file ops from the queue and publishing previews and STL; Python MCP server and CLI moved to the SpacetimeDB HTTP API, keeping the file tools; the FreeCAD setup guide starting SpacetimeDB and the host instead of the hub; phone web app (pair, brief, live tree, activity, tasks, 3D preview, STL download); board library; swarm on demand for a brief; both deployment modes selectable, with the demo running on Maincloud. Live presence for agents: animated agent pointers, lock tints and edit highlights in the 3D view. Elastic board knowledge and design memory. |
 | **P1** | Handing off to an AI: an agent picks up exactly where a person left off (now, or automatically when they leave). Live presence for people: human pointers and selections from phones and laptop browsers. Local-mode reach: the host gateway, iroh tunnel for laptops and agents (pair once with a ticket), quick tunnel for phone browsers. Droid reviewer (fit, interference, printability); printer bed presets and checks. |
-| **P2** | iroh file mesh (full `.FCStd` and STEP between laptops and hosts); everyone's pointers drawn inside FreeCAD's panel; the Creao-built Cartesia voice pipeline (stretch, only after M2). |
+| **P2** | iroh file mesh (full `.FCStd` and STEP between laptops and hosts); everyone's pointers drawn inside FreeCAD's panel. |
 
 Not in scope: CAD state across several FreeCAD hosts, roles beyond lead and member, a native mobile
 app, direct geometry editing in the phone UI.
@@ -421,16 +419,6 @@ machines use queued op kinds (`lookup_board`, `recall_designs`) like FreeCAD que
 - **Risks:** datasheet values can be wrong (sources shown, reviewer cross-checks, calipers win); the
   free trial is 14 days with unverified limits.
 
-## Stretch: voice built with Creao on Cartesia (P2)
-
-Only after M2. Confirm at Creao's booth that a Creao agent building and running our voice
-pipeline counts as "core work" before starting. The pipeline: Cartesia Managed Agents with client
-tools, so tool calls reach the browser over the agent's WebSocket and the browser calls our reducers
-(submit a brief, set a measured dimension, ask for status, steer, hand off). The phone gets its
-short-lived Cartesia token through SpacetimeDB: it asks with a reducer, the host mints the token
-with its key and writes it into a row only that member can read. Proactive announcements ("your
-case is ready") use Sonic text-to-speech, since clients cannot inject speech into an agent call.
-
 ## Droid reviewer (P1, Factory track)
 
 The reviewer is not a chat agent. The app starts it, it can only inspect and report, and its work is
@@ -500,8 +488,7 @@ shown live.
 - **Teammates with their own agent:** `cadswarm setup --client claude|codex|droid --invite <ticket>`
   in a folder, then run their agent as they already do. Their existing agent login is the only one.
 - **The host owner, once:** `cadswarm-host init` asks "local or Maincloud?", detects existing
-  `spacetime`, `claude` and `droid` logins, asks only for what is missing (`FACTORY_API_KEY`, and P2
-  `CARTESIA_API_KEY`), stores them in the OS keychain, publishes the module (to the local node, or
+  `spacetime`, `claude` and `droid` logins, asks only for what is missing (`FACTORY_API_KEY`), stores them in the OS keychain, publishes the module (to the local node, or
   to Maincloud after `spacetime login`), and prints the invite QR. Local mode needs no SpacetimeDB
   account at all.
 - No key is ever stored in the repo, the web app or a phone.
