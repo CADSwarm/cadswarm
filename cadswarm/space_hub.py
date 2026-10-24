@@ -545,6 +545,7 @@ class SpaceHub:
         from .paths import project_layout
         from .storage import FileError
         lay = project_layout(host_dir)
+        os.makedirs(lay["internal"], exist_ok=True)
         db = sqlite3.connect(lay["db"], isolation_level=None)
         db.row_factory = sqlite3.Row
         try:

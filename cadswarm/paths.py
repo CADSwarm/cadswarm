@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCHER = os.path.join(ROOT, "cadswarm_launch.py")
 
 # Keep in step with pyproject.toml's [project].dependencies.
-DEPENDENCIES = ["fastapi>=0.110", "uvicorn>=0.29", "mcp>=2.3"]
+DEPENDENCIES = ["mcp>=2.3"]
 
 
 def app_dir():

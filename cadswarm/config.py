@@ -4,8 +4,7 @@ import os
 import re
 import shutil
 
-DEFAULT_PORT = 8765
-HEARTBEAT_SECONDS = 10
+HEARTBEAT_SECONDS = 15
 STALE_AFTER_SECONDS = 30       # no heartbeat for this long -> stale, work awaits takeover
 ORPHAN_AFTER_SECONDS = 600     # stale this long -> locks freed, tasks reopened
 

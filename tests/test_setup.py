@@ -12,6 +12,14 @@ from cadswarm.invite import InviteError, make_invite, read_invite
 from cadswarm.paths import LAUNCHER
 
 
+@pytest.fixture(autouse=True)
+def no_network_redeem(monkeypatch):
+    """Setup redeems the invite with SpacetimeDB; these tests are about the files it writes."""
+    from cadswarm import agent_setup
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, name, client: {
+        "token": "tok", "participant_id": 4, "fence": 1, "name": name, "role": t["role"], "kind": "agent"})
+
+
 TICKET = {"v": 1, "uri": "http://192.168.1.20:3000", "db": "cadswarm", "token": "ab" * 32,
           "kind": "human", "role": "member", "host_addr": ""}
 
@@ -41,21 +49,21 @@ def test_claude_config_uses_launcher_and_keeps_other_hooks(tmp_path):
         {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "other-tool"}]}]}}))
     py = r"C:\FreeCAD\bin\python.exe"
     for _ in range(2):  # idempotent
-        write_agent_config(str(proj), "claude", "http://h:1", "tok", "carol-claude", "lead", python=py)
+        write_agent_config(str(proj), "claude", {**TICKET, "role": "lead"}, "carol-claude", python=py)
     mcp = json.loads((proj / ".mcp.json").read_text())["mcpServers"]["cadswarm"]
     assert mcp["command"] == py and mcp["args"] == [LAUNCHER, "mcp"]
     hooks = json.loads((proj / ".claude" / "settings.json").read_text())["hooks"]["UserPromptSubmit"]
     commands = [h["command"] for g in hooks for h in g["hooks"]]
     assert commands.count(f'"{py}" "{LAUNCHER}" hook') == 1 and "other-tool" in commands
     cfg = json.loads((proj / ".cadswarm" / "config.json").read_text())
-    assert cfg == {"hub": "http://h:1", "workspace_token": "tok", "name": "carol-claude", "client": "claude",
+    assert cfg == {"uri": TICKET["uri"], "db": "cadswarm", "name": "carol-claude", "client": "claude",
                    "role": "lead"}
 
 
 def test_codex_config_parses_and_trust_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codexhome"))
     proj = tmp_path / "it's dana-codex"  # an apostrophe forces the basic-string TOML path
-    write_agent_config(str(proj), "codex", "http://h:1", "tok", "dana-codex", python=r"C:\FC\bin\python.exe")
+    write_agent_config(str(proj), "codex", TICKET, "dana-codex", python=r"C:\FC\bin\python.exe")
     cfg = tomllib.loads((proj / ".codex" / "config.toml").read_text(encoding="utf-8"))
     assert cfg["mcp_servers"]["cadswarm"]["args"] == [LAUNCHER, "mcp"]
     assert cfg["mcp_servers"]["cadswarm"]["env"]["CADSWARM_PROJECT"] == str(proj)
@@ -76,36 +84,6 @@ def test_launcher_check_reports_deps(tmp_path):
     r = subprocess.run([sys.executable, LAUNCHER, "check"], capture_output=True, text=True, timeout=60,
                        env={**os.environ, "CADSWARM_DEPS": str(tmp_path / "none")})
     assert r.stdout.strip() == "ok"  # the dev venv already has the packages
-
-
-def test_resuming_a_saved_signin_without_fence(tmp_path):
-    """The FreeCAD guide stores only participant id + token: joining with it yields the fence,
-    and acting before that join is refused rather than treated as fence-less."""
-    from fastapi.testclient import TestClient
-    from cadswarm.client import HubClient
-    from cadswarm.hub.app import create_app
-    from cadswarm.hub.core import Hub
-    from test_core import FakeWorker
-
-    hub = Hub(FakeWorker(), str(tmp_path / "hub.sqlite"), "secret")
-    http = TestClient(create_app(hub, str(tmp_path), sweep_seconds=3600))
-    first = http.post("/join", json={"workspace_token": "secret", "name": "carol"}).json()
-
-    class Client(HubClient):  # route the stdlib client's requests through the in-process app
-        def request(self, method, path, body=None, params=None, timeout=None, raw=False):
-            r = http.request(method, path, json=body, params=params, headers=self.headers())
-            if r.status_code >= 400:
-                from cadswarm.client import HubRequestError
-                raise HubRequestError(r.status_code, r.json())
-            return r.json()
-
-    c = Client("http://h", {"participant_id": first["participant_id"], "token": first["token"]})
-    with pytest.raises(Exception) as e:
-        c.get("/model")
-    assert e.value.status == 400 and e.value.code == "missing_fence"
-    ident = c.join("secret", "carol")
-    assert ident["participant_id"] == first["participant_id"] and ident["fence"] == first["fence"] + 1
-    assert "objects" in c.get("/model")
 
 
 def test_local_ips_default_route_first_and_filters(monkeypatch):

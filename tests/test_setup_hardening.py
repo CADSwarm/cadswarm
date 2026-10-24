@@ -15,7 +15,15 @@ PY = r"C:\FreeCAD\bin\python.exe"
 
 
 def setup(proj):
-    return write_agent_config(str(proj), "claude", "http://h:1", "tok", "bob", "member", python=PY)
+    return write_agent_config(str(proj), "claude", TICKET, "bob", python=PY)
+
+
+@pytest.fixture(autouse=True)
+def no_network_redeem(monkeypatch):
+    """Setup redeems the invite with SpacetimeDB; these tests are about the files it writes."""
+    from cadswarm import agent_setup
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, name, client: {
+        "token": "tok", "participant_id": 4, "fence": 1, "name": name, "role": t["role"], "kind": "agent"})
 
 
 # ---- agent_setup: existing config is never silently overwritten

@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 
-from ..config import find_freecad_python, worker_script
+from .config import find_freecad_python, worker_script
 
 log = logging.getLogger("cadswarm.worker")
 
