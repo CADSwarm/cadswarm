@@ -258,6 +258,14 @@ impl Space {
         self.call("rejoin", |cb| self.conn.reducers.rejoin_then(client, cb))
     }
 
+    /// The host's sign of life. Holding a WebSocket is not enough: `online` belongs to the identity,
+    /// so any other connection with it (`cadswarm-host invite`) clears it on disconnect, and a row
+    /// made by `rejoin` starts offline. Without heartbeats the sweep then retires the host.
+    pub fn heartbeat(&self) -> Result<()> {
+        let fence = self.fence();
+        self.call("heartbeat", |cb| self.conn.reducers.heartbeat_then(fence, String::new(), cb))
+    }
+
     pub fn start_op(&self, id: &str) -> Result<()> {
         let (fence, id) = (self.fence(), id.to_string());
         self.call("start_op", |cb| self.conn.reducers.start_op_then(fence, id, cb))
