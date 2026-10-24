@@ -79,13 +79,11 @@ own after a reboot until you do).
 The **CadSwarm Team** panel on the right follows the size of the FreeCAD window (drag its edge to give it
 more or less room) and scrolls when the window is short. It has three parts:
 
-- **AI helpers**: every helper on the team and what it's doing right now (a turning **◐ Working on "…"**,
-  **Ready for instructions**, or why it's away). **＋ New helper** starts another one on this computer: pick
-  the AI (Claude Code, Codex or Droid) and, if you like, a name. Have as many as you want. Right-click one of
-  yours to **Rename** it, let its **Name follow its task**, **Restart** it, see its log or remove it. A helper
-  you haven't named takes its name from the task it's on ("Build a lid for the enclosure" makes it
-  `lid-enclosure`) and changes it when it gets a new task; once you name it, the name stays. People are listed
-  underneath.
+- **AI helpers**: every helper on the team in three columns: its name, the **Task** it's on (or `next: …`
+  when one is waiting for it) and its status (**◐ Working**, **Ready**, or why it's away). **＋ New helper**
+  starts another one on this computer: pick the AI (Claude Code, Codex or Droid) and, if you like, a name
+  (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
+  one of yours to **Rename** it, **Restart** it, see its log or remove it. People are listed underneath.
 - **Chat**: one box for everything.
   - `@name what to do` gives that helper a task (with the parts you have selected) and wakes it; it answers in
     the chat with what it'll do, then what it did. Typing `@` lists the helpers to pick from. Your message

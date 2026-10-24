@@ -598,10 +598,13 @@ class TeamPanel(QtGui.QDockWidget):
         head.addWidget(new)
         lay.addLayout(head)
         self.team = QtGui.QTreeWidget()
-        self.team.setHeaderHidden(True)
-        self.team.setColumnCount(2)
-        self.team.header().setStretchLastSection(True)
-        self.team.header().setSectionResizeMode(0, QtGui.QHeaderView.ResizeToContents)
+        self.team.setHeaderLabels(["Helper", "Task", "Status"])
+        team_head = self.team.header()
+        team_head.setStretchLastSection(False)
+        team_head.setSectionResizeMode(0, QtGui.QHeaderView.Interactive)
+        team_head.setSectionResizeMode(1, QtGui.QHeaderView.Stretch)
+        team_head.setSectionResizeMode(2, QtGui.QHeaderView.Interactive)
+        self.team.installEventFilter(self)  # name and status keep their share of the width as the panel resizes
         self.team.setRootIsDecorated(False)
         self.team.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.team.customContextMenuRequested.connect(self.helper_menu)
@@ -785,6 +788,9 @@ class TeamPanel(QtGui.QDockWidget):
     def eventFilter(self, obj, ev):
         if ev.type() == QtCore.QEvent.Resize and obj is Gui.getMainWindow():
             QtCore.QTimer.singleShot(0, self.follow_window)
+        if obj is getattr(self, "team", None) and ev.type() == QtCore.QEvent.Resize:
+            self.team.setColumnWidth(0, max(90, int(ev.size().width() * 0.34)))
+            self.team.setColumnWidth(2, max(70, int(ev.size().width() * 0.24)))
         if obj is getattr(self, "task_list", None) and ev.type() == QtCore.QEvent.Resize:
             self.task_list.setColumnWidth(1, max(110, int(ev.size().width() * 0.4)))
         return super().eventFilter(obj, ev)
@@ -870,14 +876,11 @@ class TeamPanel(QtGui.QDockWidget):
         for p in s.model["participants"]:
             if p.get("kind") == "human":
                 continue
-            state, text = helper_state(p, local.get(p["name"]))
+            state, task, status = helper_row(p, local.get(p["name"]), s.tasks)
             if pending.get(p["name"]):
-                n = pending[p["name"]]
-                text += f" · {n} message{'s' if n != 1 else ''} not read yet"
+                status += f" · {pending[p['name']]} unread"
             held = tuple(lock for lock in p["locks"] if lock != "Params")
-            if held:
-                text += f" · holds {names(list(held))}"
-            rows.append((p["name"], p["id"], p.get("client"), state, text, p["name"] in local))
+            rows.append((p["name"], p["id"], p.get("client"), state, task, status, held, p["name"] in local))
             if state == "away":
                 tips.append(away_tip(p, local.get(p["name"])))
         people = [p for p in s.model["participants"] if p.get("kind") == "human"]
@@ -892,30 +895,37 @@ class TeamPanel(QtGui.QDockWidget):
         if not self.changed("team", tuple(rows)):
             for i in range(self.team.topLevelItemCount()):  # keep the spinners turning
                 item = self.team.topLevelItem(i)
-                if item.data(1, QtCore.Qt.UserRole) == "working":
-                    self.busy_rows.append((item, 1, item.data(1, QtCore.Qt.UserRole + 1)))
+                if item.data(2, QtCore.Qt.UserRole) == "working":
+                    self.busy_rows.append((item, 2, item.data(2, QtCore.Qt.UserRole + 1)))
             return
         self.team.clear()
         if not rows:
-            empty = QtGui.QTreeWidgetItem(["No AI helpers yet. Click ＋ New helper.", ""])
+            empty = QtGui.QTreeWidgetItem(["No AI helpers yet. Click ＋ New helper.", "", ""])
             empty.setFlags(QtCore.Qt.NoItemFlags)
             empty.setFirstColumnSpanned(True)
             self.team.addTopLevelItem(empty)
-        for name, pid, client, state, text, mine in rows:
-            item = QtGui.QTreeWidgetItem([f"🤖 {name}" + (" ·  yours" if mine else ""), text])
+        for name, pid, client, state, task, status, held, mine in rows:
+            item = QtGui.QTreeWidgetItem([f"🤖 {name}", task or "no task", status])
             item.setData(0, QtCore.Qt.UserRole, name)
-            item.setData(1, QtCore.Qt.UserRole, state)
-            item.setData(1, QtCore.Qt.UserRole + 1, text)
-            who = who_is({"kind": "agent", "client": client}) + (" on this computer" if mine else "")
+            item.setData(2, QtCore.Qt.UserRole, state)
+            item.setData(2, QtCore.Qt.UserRole + 1, status)
+            who = who_is({"kind": "agent", "client": client}) + (" on this computer (yours)" if mine else "")
             item.setToolTip(0, who)
-            item.setToolTip(1, f"{who}: {text}")
+            item.setToolTip(1, task or "Nothing assigned. Type @" + name + " in the chat to give it a task.")
+            item.setToolTip(2, status + (f"\nHolds {names(list(held))}" if held else ""))
             r, g, b = owner_color(pid)
             item.setForeground(0, QtGui.QBrush(QtGui.QColor(int(r * 200), int(g * 200), int(b * 200))))
+            if mine:
+                font = item.font(0)
+                font.setBold(True)
+                item.setFont(0, font)
+            if not task:
+                item.setForeground(1, QtGui.QBrush(QtGui.QColor("#8b949e")))
             colour = {"working": "#d9822b", "ready": "#1a7f37", "away": "#8b949e"}.get(state)
             if colour:
-                item.setForeground(1, QtGui.QBrush(QtGui.QColor(colour)))
+                item.setForeground(2, QtGui.QBrush(QtGui.QColor(colour)))
             if state == "working":
-                self.busy_rows.append((item, 1, text))
+                self.busy_rows.append((item, 2, status))
             self.team.addTopLevelItem(item)
         self.fit_team_height()
 
@@ -923,7 +933,7 @@ class TeamPanel(QtGui.QDockWidget):
         """As tall as its rows (up to about six), so there's no empty box above the chat."""
         rows = self.team.topLevelItemCount()
         row_h = self.team.fontMetrics().height() + 8  # the stylesheet pads each row by 3 px top and bottom
-        self.team.setFixedHeight(min(max(rows, 1), 6) * row_h + 6)
+        self.team.setFixedHeight(min(max(rows, 1), 6) * row_h + self.team.header().sizeHint().height() + 6)
 
     def render_tasks(self, s):
         key = (tuple((t["id"], t["status"], t.get("owner_name"), t.get("assignee"), t["title"], t.get("brief"))
@@ -1162,14 +1172,9 @@ class TeamPanel(QtGui.QDockWidget):
         menu.addAction(f"Give @{name} a task").triggered.connect(lambda: self.mention(name))
         mine = local_helpers(self.session).get(name)
         if mine:
-            from ..runner import name_pinned
             folder = mine[0]
             menu.addSeparator()
             menu.addAction("Rename…").triggered.connect(lambda: self.rename_helper(name, folder))
-            follow = menu.addAction("Name follows its task")
-            follow.setCheckable(True)
-            follow.setChecked(not name_pinned(folder))
-            follow.toggled.connect(lambda on: self.follow_task_name(folder, on))
             menu.addAction("Restart").triggered.connect(lambda: self.restart_helper(folder))
             menu.addAction("Show its log").triggered.connect(lambda: open_log(folder))
             menu.addSeparator()
@@ -1192,11 +1197,7 @@ class TeamPanel(QtGui.QDockWidget):
             return
         hub = helper_hub(folder)
         self.session.run_async(lambda _c: hub.rename_me(new), purpose="rename a helper",
-                               done=lambda _r: renamed(folder, new, pinned=True))
-
-    def follow_task_name(self, folder, on):
-        from ..runner import pin_name
-        pin_name(folder, not on)
+                               done=lambda _r: renamed(folder, new))
 
     def restart_helper(self, folder):
         from ..paths import LAUNCHER, freecad_python
@@ -1379,13 +1380,11 @@ def helper_hub(folder):
     return SpaceHub(cfg, load_json(os.path.join(folder, ".cadswarm", "identity.json")) or {}, timeout=30)
 
 
-def renamed(folder, name, pinned):
-    from ..runner import pin_name
+def renamed(folder, name):
     path = os.path.join(folder, ".cadswarm", "config.json")
     cfg = load_json(path) or {}
     cfg["name"] = name
     save_json(path, cfg)
-    pin_name(folder, pinned)
     say(f"Your helper is now called {name}")
 
 
@@ -1578,7 +1577,7 @@ def helper_state(p, local=None):
     if local.get("state") == "working":
         return "working", f"Working: {local.get('detail') or 'on your messages'}"[:70]
     if local.get("state") == "error" and p.get("status") == "active":
-        return "ready", "Ready, but its last run failed (see the log)"
+        return "ready", "Ready (last run failed, see its log)"
     if p.get("status") != "active":
         if local.get("state") in ("starting", "listening"):
             return "ready", "Starting up…"
@@ -1593,6 +1592,24 @@ def helper_state(p, local=None):
     if recent and doing and doing not in IDLE_WORDS:
         return "working", f"Working: {doing[:48]}"
     return "ready", "Ready for instructions"
+
+
+def helper_row(p, local, tasks):
+    """(state, task, status) for a helper's row: the task it's on (or the next one waiting for it) and a short
+    status word."""
+    state, text = helper_state(p, local)
+    task = (p.get("task") or {}).get("title")
+    if not task:
+        waiting = [t for t in tasks if t["status"] == "open" and (t.get("assignee") or "").lower() == p["name"].lower()]
+        if waiting:
+            task = f"next: {waiting[0]['title']}"
+    if text.startswith("Working on"):
+        status = "Working"
+    elif text.startswith("Working: ") and not task:
+        task, status = text[len("Working: "):], "Working"
+    else:
+        status = {"Ready for instructions": "Ready"}.get(text, text)
+    return state, task or "", status
 
 
 def away_tip(p, local):
@@ -1690,14 +1707,13 @@ def helpers_base():
                                                                  safe_folder(prefs().GetString("ProjectName")))
 
 
-def create_helper(client, name, pinned, team):
+def create_helper(client, name, team):
     """Set up a new AI helper folder signed in to the team as `name` (a plain member) and return the folder.
     Runs off the GUI thread: the first one may download the helper software (about 70 MB)."""
     from .. import hosting
     from ..agent_setup import trust_in_codex, write_agent_config, write_launcher
     from ..invite import read_invite
     from ..paths import freecad_python
-    from ..runner import pin_name
     python = freecad_python()
     if not hosting.deps_ready(python):
         hosting.install_deps(python)
@@ -1711,13 +1727,12 @@ def create_helper(client, name, pinned, team):
     write_launcher(folder, client, project)
     if client == "codex":
         trust_in_codex(folder)
-    pin_name(folder, pinned)
     return folder
 
 
 class NewHelperDialog(QtGui.QDialog):
     """Start one more AI helper on this computer: pick the AI, optionally name it, done. It runs in the
-    background and answers in the chat; without a name it's named after the task it's on."""
+    background and answers in the chat."""
 
     def __init__(self, session):
         super().__init__(Gui.getMainWindow())
@@ -1733,7 +1748,7 @@ class NewHelperDialog(QtGui.QDialog):
                 self.client.addItem(info["label"], key)
         form.addRow("AI", self.client)
         self.name = QtGui.QLineEdit()
-        self.name.setPlaceholderText("Optional. Empty: it's named after its task")
+        self.name.setPlaceholderText("Optional")
         self.name.setMaxLength(40)
         form.addRow("Name", self.name)
         lay.addLayout(form)
@@ -1789,7 +1804,7 @@ class NewHelperDialog(QtGui.QDialog):
         def failed():
             self.ok.setEnabled(True)
             self.note.setText("")
-        self.session.run_async(lambda _c: create_helper(client, name, bool(typed), team), done=started,
+        self.session.run_async(lambda _c: create_helper(client, name, team), done=started,
                                purpose="start an AI helper", failed=failed)
 
 

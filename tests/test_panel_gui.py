@@ -26,6 +26,12 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "teammate's computer" in r["away_tip"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
+    # Default names stay; the Task column says what each helper is on (or what's waiting for it).
+    assert r["helper_header"] == ["Helper", "Task", "Status"]
+    rows = {name.replace("🤖 ", ""): (task, status) for name, task, status in r["helper_rows"]}
+    assert rows["ann-claude"] == ("Base with port cutouts", "Working")
+    assert rows["bob-codex"] == ("next: Lid", "Ready")
+    assert rows["dee-droid"] == ("no task", "away")
     # @ offers every helper plus @team and @all; @b narrows it; picking one fills in "@name ".
     assert r["offered_all"][:3] == ["ann-claude", "bob-codex", "dee-droid"] and {"team", "all"} <= set(r["offered_all"])
     assert r["offered_b"] == ["bob-codex"] and r["filled"] == "@bob-codex "

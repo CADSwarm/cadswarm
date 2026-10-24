@@ -34,7 +34,7 @@ snap = {
                                member(4, "dee-droid", client="droid", status="stale")]},
     "tasks": [{"id": "t_1", "title": "Base with port cutouts for the USB-C and HDMI connectors", "status": "claimed",
                "owner_name": "ann-claude", "assignee": "ann-claude", "brief": "b_1", "detail": ""},
-              {"id": "t_2", "title": "Lid", "status": "open", "owner_name": None, "assignee": None, "brief": "b_1",
+              {"id": "t_2", "title": "Lid", "status": "open", "owner_name": None, "assignee": "bob-codex", "brief": "b_1",
                "detail": ""},
               {"id": "t_3", "title": "Check strength of the stand", "status": "done", "owner_name": "bob-codex",
                "assignee": "bob-codex", "brief": None, "detail": ""}],
@@ -159,6 +159,9 @@ result = {
     "filled": filled,
     "sent": sent,
     "helpers_listed": [p.team.topLevelItem(i).data(0, QtCore.Qt.UserRole) for i in range(p.team.topLevelItemCount())],
+    "helper_rows": [[p.team.topLevelItem(i).text(c).lstrip("◐◓◑◒ ") for c in range(3)]
+                    for i in range(p.team.topLevelItemCount())],
+    "helper_header": [p.team.headerItem().text(c) for c in range(3)],
     "people": p.people.text(),
     "tasks_grouped_under_request": brief.text(0).startswith("🧠") and brief.childCount() == 2,
     "away_tip": p.team_tip.text(),
