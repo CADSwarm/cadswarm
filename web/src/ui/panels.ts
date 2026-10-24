@@ -344,7 +344,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
 
     const counts: Record<Tab, number> = { ask: 0, model: 0, library: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
-      tasks: s.tasks.filter(t => t.status === 'open' || t.status === 'claimed').length };
+      tasks: s.tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });
 
     if (s.notice && s.notice.at !== lastNotice) {
