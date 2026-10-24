@@ -469,7 +469,7 @@ class SetupWizard(QtGui.QDialog):
              self.step_deps, False),
             ("Start your team's server",
              "Setting up your team's database and starting the program that runs the shared model. "
-             "The first time, this can take a minute.",
+             "The first time, this downloads about 50 MB and can take a few minutes.",
              self.step_start_team, False),
             ("Join your team", None, self.step_host_join, True),
         ])
