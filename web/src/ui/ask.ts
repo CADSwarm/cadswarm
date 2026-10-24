@@ -118,8 +118,16 @@ export function mountAsk(el: HTMLElement, store: Store, api: Api | null, picked:
       syncBoard();
     }
     const items = conversation(s);
-    const key = JSON.stringify(items.map(i => [i.id, i.at, i.type === 'request' ? i.state : i.type === 'build'
-      ? [i.brief.status, i.brief.stlHash, s.tasks.filter(t => t.brief === i.brief.id && t.status === 'done').length] : 0]));
+    const key = JSON.stringify(items.map(i => {
+      if (i.type === 'request') return [i.id, i.at, i.state];
+      if (i.type === 'build') {
+        const review = s.reviews.filter(r => r.brief === i.brief.id).sort((a, b) => b.round - a.round)[0];
+        return [i.id, i.at, i.brief.status, i.brief.stlHash,
+          s.tasks.filter(t => t.brief === i.brief.id && t.status === 'done').length,
+          review ? `${review.id}:${review.round}:${review.passed}:${review.findingsJson}` : ''];
+      }
+      return [i.id, i.at, i.type];
+    }));
     if (key === lastThread) return;
     lastThread = key;
     thread.innerHTML = items.length ? items.map(i => {

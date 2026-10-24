@@ -117,7 +117,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
         tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
         pointers: [...store.state.pointers.map(p => ({ ...p, mode: 'idle' })),
           { member: 5, object: 'Standoff1', point: [], mode: 'inspecting', label: 'checking holes', op: '', seq: seq++, atMs: Date.now() }],
-        reviews: [{ id: 'r_mock0001', brief: briefId, round: 1, passed: false,
+        reviews: [{ id: 'r_mock0001', brief: briefId, round: 1, passed: false, atMs: Date.now(),
           findingsJson: JSON.stringify([{ message: 'Standoff1 hole is 2.4 mm; M2.5 screws need 2.7 mm.' }, { message: 'USB-C cutout sits 0.6 mm too low.' }]) }],
         activity: say(5, 'review round 1: 2 findings', 'say'),
       });
@@ -126,7 +126,8 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       store.set({ tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })) });
     } else if (step === n + 3) {
       store.set({
-        reviews: [...store.state.reviews, { id: 'r_mock0002', brief: briefId, round: 2, passed: true, findingsJson: '[]' }],
+        reviews: [...store.state.reviews, { id: 'r_mock0002', brief: briefId, round: 2, passed: true, findingsJson: '[]',
+          atMs: Date.now() }],
         activity: say(5, 'review round 2: passed', 'say'),
       });
     } else if (step === n + 4) {
@@ -162,6 +163,10 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     release: async names => store.set({ locks: store.state.locks.filter(l => !(names.includes(l.object) && l.holder === 1)) }),
     setParam: async (alias, value) => {
       store.set({ params: store.state.params.map(p => p.alias === alias ? { ...p, value, num: parseFloat(value) } : p) });
+    },
+    setBed: async (xMm, yMm, zMm) => {
+      store.set({ workspace: { bedXMm: xMm, bedYMm: yMm, bedZMm: zMm },
+        activity: say(1, `set the printer bed to ${xMm} x ${yMm} x ${zMm} mm`, 'status') });
     },
     movePointer: (object, point, mode, label) => store.set({
       pointers: [...store.state.pointers.filter(p => p.member !== 1), { member: 1, object, point, mode, label, op: '', seq: seq++, atMs: Date.now() }] }),

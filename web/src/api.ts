@@ -46,6 +46,8 @@ export interface Api {
   lock(names: string[]): Promise<void>;
   release(names: string[]): Promise<void>;
   setParam(alias: string, value: string): Promise<void>;
+  /** The printer bed the team builds for, in millimetres. */
+  setBed(xMm: number, yMm: number, zMm: number): Promise<void>;
   movePointer(object: string, point: number[], mode: string, label: string): void;
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
@@ -90,7 +92,7 @@ export const toBrief = (r: Infer<typeof VBriefRow>): Brief => ({
   id: r.id, by: num(r.by), text: r.text, board: r.board, status: r.status, planJson: r.planJson, stlHash: r.stlHash, updatedMs: num(r.updatedMs),
 });
 export const toReview = (r: Infer<typeof VReviewRow>): Review => ({
-  id: r.id, brief: r.brief, round: r.round, passed: r.passed, findingsJson: r.findingsJson,
+  id: r.id, brief: r.brief, round: r.round, passed: r.passed, findingsJson: r.findingsJson, atMs: num(r.atMs),
 });
 export const toArtifact = (r: Infer<typeof VArtifactRow>): Artifact => ({ hash: r.hash, name: r.name, mime: r.mime, size: num(r.size) });
 export const toHandoff = (r: Infer<typeof VHandoffRow>): Handoff => ({
@@ -269,6 +271,7 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       },
       lock: names => quiet(r.lockObjects({ fence: fence(), names })),
       release: names => quiet(r.releaseObjects({ fence: fence(), names, force: false })),
+      setBed: (xMm, yMm, zMm) => quiet(r.setBed({ fence: fence(), xMm, yMm, zMm })),
       setParam: async (alias, value) => {
         // set_param needs the `Params` lock (rules::needed_locks). Hold it only until the host finishes the op.
         let locked = false;

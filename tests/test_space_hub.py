@@ -471,3 +471,52 @@ def test_the_mirror_catches_changes_that_made_no_event_and_retries_failed_fetche
     fake.tables["v_object"][1] = {**plate, "name": "Lid", "volume": 9.0}
     with pytest.raises(HubRequestError):
         hub.mirror_changes(applied)  # the caller keeps `applied`, so the next pass fetches Lid again
+
+
+# ---- printer bed and review rounds
+
+
+def test_the_workspace_reports_the_bed_and_defaults_to_180_mm(world):
+    hub, fake = world
+    assert hub.get("/workspace")["bed"] == [180.0, 180.0, 180.0]
+    fake.tables["v_workspace"] = [{"id": 1, "bed_x_mm": 256.0, "bed_y_mm": 210.0, "bed_z_mm": 300.0}]
+    r = hub.get("/workspace")
+    assert r["bed"] == [256.0, 210.0, 300.0] and r["bed_z_mm"] == 300.0
+
+
+def test_setting_the_bed_calls_the_reducer_and_checks_the_size(world):
+    hub, fake = world
+    hub.post("/bed", {"x_mm": 256, "y_mm": 210, "z_mm": 300})
+    assert fake.calls[-1] == ("set_bed", (2, 256.0, 210.0, 300.0))
+    for body in ({"x_mm": 0, "y_mm": 180, "z_mm": 180}, {"x_mm": 5000, "y_mm": 180, "z_mm": 180},
+                 {"x_mm": 180, "y_mm": 180}):
+        before = len(fake.calls)
+        with pytest.raises(HubRequestError) as e:
+            hub.post("/bed", body)
+        assert e.value.status == 400 and e.value.code == "bad_args"
+        assert len(fake.calls) == before
+
+
+def test_reviews_are_newest_first_and_findings_read_as_sentences(world):
+    hub, fake = world
+    fake.tables["v_review"] = [
+        {"id": "r_1", "brief": "b_1", "round": 1, "passed": False, "at_ms": 1000,
+         "findings_json": json.dumps({"findings": [{"message": "hole too small"}, "lid loose"]})},
+        {"id": "r_2", "brief": "b_1", "round": 2, "passed": True, "at_ms": 2000, "findings_json": "[]"},
+    ]
+    rows = hub.reviews()
+    assert [r["id"] for r in rows] == ["r_2", "r_1"]
+    assert rows[1]["findings"] == ["hole too small", "lid loose"] and rows[1]["at"] == 1.0
+    fake.tables["v_review"][1]["findings_json"] = "{not json"
+    assert hub.reviews()[0]["findings"] == []
+
+
+def test_panel_snapshot_carries_reviews_and_the_printer_bed(world):
+    hub, fake = world
+    fake.tables["v_workspace"] = [{"id": 1, "bed_x_mm": 220.0, "bed_y_mm": 220.0, "bed_z_mm": 250.0}]
+    fake.tables["v_review"] = [{"id": "r_1", "brief": "b_1", "round": 1, "passed": False, "at_ms": 1000,
+                                "findings_json": json.dumps([{"text": "thin wall"}])}]
+    snap = hub.panel_snapshot()
+    assert snap["workspace"]["bed"] == [220.0, 220.0, 250.0]
+    assert snap["reviews"][0]["findings"] == ["thin wall"]
+

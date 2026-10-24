@@ -131,6 +131,8 @@ class Session:
         self.fea_dialogs = []  # open report popups (kept referenced so Qt doesn't drop them)
         self.commands = []     # instructions I sent to helpers, with sent/seen/done
         self.briefs = []       # requests handed to the whole team (the host plans and builds them)
+        self.reviews = []      # the reviewer's rounds, newest first, findings as sentences
+        self.workspace = {"bed": [180.0, 180.0, 180.0], "bed_x_mm": 180.0, "bed_y_mm": 180.0, "bed_z_mm": 180.0}
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
         self.mirrored = {}     # part name -> version the live model showed at join (the mirror loop takes it on)
@@ -462,6 +464,8 @@ class Session:
             return
         self.model, self.tasks = snap["model"], snap["tasks"]
         self.commands, self.briefs, self.messages = snap["commands"], snap["briefs"], snap["messages"]
+        self.reviews = snap.get("reviews") or []
+        self.workspace = snap.get("workspace") or self.workspace
         owners = {o["name"]: o.get("locked_by") for o in self.model["objects"]}
         ids = {p["name"]: p["id"] for p in self.model["participants"]}
         for p in self.model["participants"]:
@@ -730,6 +734,12 @@ class TeamPanel(QtGui.QDockWidget):
         self.params = QtGui.QLabel("")
         self.params.setWordWrap(True)
         tl.addWidget(self.params)
+        tl.addSpacing(4)
+        tl.addWidget(caption("Review and printer"))
+        self.review_box = QtGui.QLabel("")
+        self.review_box.setWordWrap(True)
+        self.review_box.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        tl.addWidget(self.review_box)
         self.team_page = page
         self.tabs.addTab(page, "Team")
 
@@ -795,6 +805,9 @@ class TeamPanel(QtGui.QDockWidget):
                            ("Change a shared size…", "Change a size every part reads from", self.set_param),
                            ("Check for clashes", "Find parts that overlap", run_interference),
                            ("Save as 3D file (STEP)…", "Save the shared model as a STEP file", run_export))),
+                ("Print", (("Printer bed…", "Tell the team what printer you print on", printer_bed),
+                           ("Check it fits the printer…", "Check the parts fit the bed, are closed solids and have "
+                            "printable walls", check_printability))),
                 ("Project", (("Project files…", "Notes, plans and scripts your team saved", show_project_files),
                              ("Open project folder", "Open the folder the team saves into", open_project_folder),
                              ("Save a snapshot…", "Keep this version of the model", save_snapshot),
@@ -1065,6 +1078,31 @@ class TeamPanel(QtGui.QDockWidget):
         if not self.keys.get("suggestions_read"):
             self.keys["suggestions_read"] = True
             self.fetch_suggestions()
+        self.render_review(s)
+
+    def render_review(self, s):
+        """The newest reviewer round and the team's printer bed, in the words a teammate can act on."""
+        ws = s.workspace or {}
+        bed = ws.get("bed") or [ws.get("bed_x_mm"), ws.get("bed_y_mm"), ws.get("bed_z_mm")]
+        try:
+            size = " x ".join(f"{float(v):g}" for v in bed[:3])
+        except (TypeError, ValueError):
+            size = "180 x 180 x 180"
+        lines = [f"<span style='color:#8b949e'>Printer bed</span> {size} mm"]
+        if not s.reviews:
+            lines.append("<span style='color:#8b949e'>No review yet. The reviewer checks the model before it is "
+                         "ready.</span>")
+        else:
+            r = s.reviews[0]
+            passed = bool(r.get("passed"))
+            colour = "#2da44e" if passed else "#d9822b"
+            word = "passed" if passed else "asks for changes"
+            findings = [f for f in (r.get("findings") or []) if f]
+            lines.append(f"<b style='color:{colour}'>Review round {int(r.get('round') or 0)} {word}</b>")
+            lines.extend("· " + html.escape(str(f)) for f in findings[:3])
+            if len(findings) > 3:
+                lines.append(f"<span style='color:#8b949e'>and {len(findings) - 3} more</span>")
+        self.review_box.setText("<br>".join(lines))
 
     def render_team(self, s):
         me = s.ident["name"] if s.ident else "?"
@@ -2736,6 +2774,124 @@ def run_interference():
             if App.getDocument(MIRROR_DOC).getObject(n):
                 Gui.Selection.addSelection(MIRROR_DOC, n)
     QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm: interference", "\n".join(lines))
+
+
+BED_PRESETS = (("Bambu Lab A1 mini", 180.0, 180.0, 180.0),
+               ("Bambu Lab P1S / X1C", 256.0, 256.0, 256.0),
+               ("Prusa MK4", 250.0, 210.0, 220.0),
+               ("Creality Ender 3", 220.0, 220.0, 250.0))
+
+
+class BedDialog(QtGui.QDialog):
+    """The printer the team prints on. The reviewer and the printability check both use its bed size."""
+
+    def __init__(self, bed):
+        super().__init__(Gui.getMainWindow())
+        self.setWindowTitle("CADSwarm: printer bed")
+        fit_to_screen(self, 430, 260)
+        lay = QtGui.QVBoxLayout(self)
+        lay.addWidget(QtGui.QLabel("How much room does your printer have? The team checks parts against this."))
+        row = QtGui.QHBoxLayout()
+        row.addWidget(QtGui.QLabel("Common printer"))
+        self.preset = QtGui.QComboBox()
+        self.preset.addItem("Choose one, or type the sizes below", None)
+        for label, x, y, z in BED_PRESETS:
+            self.preset.addItem(label, (x, y, z))
+        self.preset.currentIndexChanged.connect(self.pick_preset)
+        row.addWidget(self.preset, 1)
+        lay.addLayout(row)
+        grid = QtGui.QGridLayout()
+        self.spins = {}
+        for i, (key, label) in enumerate((("x_mm", "Width (X)"), ("y_mm", "Depth (Y)"),
+                                          ("z_mm", "Height (Z)"))):
+            spin = QtGui.QDoubleSpinBox()
+            spin.setRange(20.0, 2000.0)
+            spin.setDecimals(1)
+            spin.setSingleStep(10.0)
+            spin.setSuffix(" mm")
+            try:
+                spin.setValue(float(bed[i]))
+            except (IndexError, TypeError, ValueError):
+                spin.setValue(180.0)
+            self.spins[key] = spin
+            grid.addWidget(QtGui.QLabel(label), i, 0)
+            grid.addWidget(spin, i, 1)
+        lay.addLayout(grid)
+        lay.addStretch(1)
+        self.buttons = QtGui.QDialogButtonBox(QtGui.QDialogButtonBox.Save | QtGui.QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.save)
+        self.buttons.rejected.connect(self.reject)
+        lay.addWidget(self.buttons)
+
+    def pick_preset(self, index):
+        data = self.preset.itemData(index)
+        if not data:
+            return
+        for key, value in zip(("x_mm", "y_mm", "z_mm"), data):
+            self.spins[key].setValue(float(value))
+
+    def save(self):
+        x, y, z = (round(self.spins[k].value(), 1) for k in ("x_mm", "y_mm", "z_mm"))
+        if not 20.0 <= min(x, y, z) or max(x, y, z) > 2000.0:
+            warn("A printer bed between 20 and 2000 mm on each side, please.")
+            return
+        self.buttons.setEnabled(False)
+
+        def saved(_r):
+            self.accept()
+            hint(f"Printer bed set to {x:g} x {y:g} x {z:g} mm.")
+
+        def failed():
+            self.buttons.setEnabled(True)
+
+        SESSION.act_async("POST", "/bed", {"x_mm": x, "y_mm": y, "z_mm": z}, done=saved, failed=failed,
+                          purpose="set the printer bed")
+
+
+def printer_bed():
+    if not SESSION.ensure_connected("set the printer bed"):
+        return
+    bed = (SESSION.workspace or {}).get("bed") or [180.0, 180.0, 180.0]
+    dlg = BedDialog(bed)
+    (getattr(dlg, "exec", None) or dlg.exec_)()
+
+
+def show_printability(r):
+    objects = (r or {}).get("objects") or []
+    if not objects:
+        hint("There are no solid parts to check yet. Build something first.")
+        return
+    lines = []
+    for o in objects:
+        name = o.get("name") or "part"
+        try:
+            size = " x ".join(f"{float(v):g}" for v in (o.get("size") or [])[:3])
+        except (TypeError, ValueError):
+            size = "unknown size"
+        issues = []
+        if not o.get("fits_bed"):
+            issues.append("too big for the bed")
+        if not o.get("closed_solid"):
+            issues.append("not a closed solid")
+        thin = o.get("thin_wall_suspects") or []
+        if thin:
+            closest = min((float(t.get("distance") or 0) for t in thin if isinstance(t, dict)), default=0.0)
+            issues.append(f"{len(thin)} thin wall{'s' if len(thin) != 1 else ''}"
+                          + (f" (closest {closest:g} mm)" if closest else ""))
+        lines.append(f"{name}: {size} mm" + (" - " + "; ".join(issues) if issues else " - fits"))
+    text = "\n".join(lines)
+    if r.get("ok"):
+        QtGui.QMessageBox.information(Gui.getMainWindow(), "CADSwarm: fits the printer", text)
+    else:
+        QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm: not printable yet", text)
+
+
+def check_printability():
+    if not SESSION.ensure_connected("check it fits the printer"):
+        return
+    selected = SESSION.selected_names()
+    SESSION.act_async("POST", "/printability", {"names": selected} if selected else {},
+                      done=show_printability, purpose="check it fits the printer")
 
 
 def run_export():

@@ -8,6 +8,7 @@ import { freeHelper, helperNow, startInstruction } from './helpers';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
 import { mountSponsors } from './sponsors';
+import { mountPrinter, mountReview } from './review';
 import { esc } from './esc';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
@@ -111,6 +112,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       <h1 class="large-title">Model</h1>
       <h2 class="group-title">Parts</h2><ul class="group" data-parts></ul>
       <h2 class="group-title">Dimensions</h2><div class="group params" data-params></div>
+      <h2 class="group-title">Printer bed</h2><div data-printer></div>
+      <h2 class="group-title">Review</h2><div data-review></div>
       <div data-export></div>
     </section>
     <section class="tab" id="tab-library" data-tab="library" role="tabpanel">
@@ -146,6 +149,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   mountAsk($('#tab-ask'), store, api, picked);
   mountParams($('[data-params]'), store, api);
+  mountPrinter($('[data-printer]'), store, api);
+  mountReview($('[data-review]'), store);
   mountHandoff($('[data-handoff]'), store, api);
   mountLibrary($('[data-library]'), store, api);
   mountSettings($('[data-settings]'), store, api);

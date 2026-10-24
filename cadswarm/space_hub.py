@@ -42,6 +42,26 @@ def _json(text, default):
         return default
 
 
+def _findings(text):
+    """Review findings as plain sentences. Reviewer JSON is free-form, so take whatever shape arrives:
+    a list of strings, a list of objects, or {"findings": [...]} with message/text/detail/summary keys."""
+    v = _json(text, [])
+    if isinstance(v, dict):
+        v = v.get("findings") or []
+    if not isinstance(v, list):
+        return [str(v)] if v else []
+    out = []
+    for f in v:
+        if isinstance(f, str):
+            out.append(f.strip())
+        elif isinstance(f, dict):
+            line = next((f[k] for k in ("message", "text", "detail", "summary", "finding") if f.get(k)), None)
+            out.append(str(line).strip() if line else json.dumps(f))
+        elif f is not None:
+            out.append(str(f))
+    return [f for f in out if f]
+
+
 def _num(v):
     try:
         return float(v)
@@ -75,6 +95,7 @@ class SpaceHub(LibraryRoutes):
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
             ("POST", r"/reviews", self.report_review),
+            ("GET", r"/workspace", self.workspace), ("POST", r"/bed", self.set_bed),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
             # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
             ("GET", r"/health", self.health), ("POST", r"/join", self.join_route), ("POST", r"/brep", self.brep),
@@ -137,7 +158,8 @@ class SpaceHub(LibraryRoutes):
         self._cache = {}
         try:
             return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
-                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"]}
+                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"],
+                    "reviews": self.reviews(), "workspace": self.workspace()}
         finally:
             self._cache = None
 
@@ -710,6 +732,32 @@ class SpaceHub(LibraryRoutes):
         bid = ticket.new_id("b_")
         self._f("submit_brief", bid, body.get("text", ""), body.get("board") or "")
         return {"brief": bid}
+
+    def workspace(self):
+        """The team's printer bed, in millimetres. The reviewer and the printability check both use it."""
+        rows = self._rows("v_workspace")
+        bed = [180.0, 180.0, 180.0] if not rows else [rows[0]["bed_x_mm"], rows[0]["bed_y_mm"], rows[0]["bed_z_mm"]]
+        return {"bed": bed, "bed_x_mm": bed[0], "bed_y_mm": bed[1], "bed_z_mm": bed[2]}
+
+    def set_bed(self, body):
+        try:
+            x, y, z = (float(body[k]) for k in ("x_mm", "y_mm", "z_mm"))
+        except (KeyError, TypeError, ValueError):
+            raise HubRequestError(400, {"error": "Set the bed's width, depth and height in millimetres.",
+                                        "code": "bad_args"})
+        if not 20.0 <= min(x, y, z) or max(x, y, z) > 2000.0:
+            raise HubRequestError(400, {"error": "A printer bed between 20 and 2000 mm on each side, please.",
+                                        "code": "bad_args"})
+        self._f("set_bed", x, y, z)
+        return self.workspace()
+
+    def reviews(self, limit=10):
+        """The Droid reviewer's rounds, newest first, with findings as sentences a person can read."""
+        out = []
+        for r in sorted(self._rows("v_review"), key=lambda r: r["at_ms"], reverse=True)[:int(limit)]:
+            out.append({"id": r["id"], "brief": r["brief"], "round": r["round"], "passed": bool(r["passed"]),
+                        "findings": _findings(r.get("findings_json")), "at": r["at_ms"] / 1000})
+        return out
 
     def accept_handoff(self, body, hid):
         self._f("accept_handoff", hid)

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadBoards, parseBoards } from '../src/ui/brief';
 import { datasheetLinks, parseMm } from '../src/ui/params';
 import { currentBrief, findingLines, latestReview } from '../src/ui/panels';
+import { bedError, reviewFindings, reviewHeadline, shownReview } from '../src/ui/review';
 import { mergeStl, startMockSwarm } from '../src/mock';
 import { Store } from '../src/store';
 import { esc } from '../src/ui/esc';
@@ -52,6 +53,25 @@ describe('panel helpers', () => {
     expect(findingLines('plain words')).toEqual(['plain words']);
     expect(findingLines('')).toEqual([]);
   });
+  it('names the newest review round and caps its findings', () => {
+    expect(reviewHeadline({ round: 2, passed: true })).toBe('Round 2 passed');
+    expect(reviewHeadline({ round: 3, passed: false })).toBe('Round 3 asks for changes');
+    expect(reviewFindings('[{"detail":"thin wall"},{"summary":"hole small"},"lid loose","extra"]', 3))
+      .toEqual(['thin wall', 'hole small', 'lid loose']);
+    expect(reviewFindings('not json')).toEqual(['not json']);
+    const said = shownReview({
+      briefs: [{ id: 'b_1', updatedMs: 1 }, { id: 'b_2', updatedMs: 5 }],
+      reviews: [{ brief: 'b_2', round: 1, atMs: 1 }, { brief: 'b_2', round: 2, atMs: 3 }, { brief: 'b_1', round: 9, atMs: 9 }],
+    } as never);
+    expect(said?.round).toBe(2);
+  });
+  it('keeps the printer bed between 20 and 2000 mm on each side', () => {
+    expect(bedError(256, 256, 256)).toBe('');
+    expect(bedError(20, 2000, 180)).toBe('');
+    expect(bedError(19, 180, 180)).toMatch(/between 20 and 2000/);
+    expect(bedError(180, 2001, 180)).toMatch(/between 20 and 2000/);
+    expect(bedError(Number.NaN, 180, 180)).toMatch(/millimetres/);
+  });
   it('escapes markup from members and tickets', () => {
     expect(esc('<img src=x onerror="a">\'')).toBe('&lt;img src=x onerror=&quot;a&quot;&gt;&#39;');
   });
@@ -81,6 +101,8 @@ describe('mock swarm', () => {
 
     await api.setParam('wall', '3 mm');
     expect(store.state.params.find(p => p.alias === 'wall')?.num).toBe(3);
+    await api.setBed(256, 256, 300);
+    expect(store.state.workspace).toEqual({ bedXMm: 256, bedYMm: 256, bedZMm: 300 });
     const id = api.submitBrief('a lid', 'rpi4');
     expect(store.state.briefs).toMatchObject([{ id, text: 'a lid', board: 'rpi4', status: 'new' }]);
     vi.advanceTimersByTime(1800 * 2);

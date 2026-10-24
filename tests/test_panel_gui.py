@@ -27,6 +27,8 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert r["chat_jump"] == {"followed": True, "jump_shown": True, "kept_place": True, "unseen_text": "↓  3 new",
                               "back_down": True}, r["chat_jump"]
     assert "teammate's computer" in r["away_tip"]
+    assert "Round 2 asks for changes" in r["review"] and "Lid clip is 0.4 mm too short." in r["review"]
+    assert "256 x 256 x 256" in r["review"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).
