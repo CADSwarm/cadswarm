@@ -1,8 +1,11 @@
 # CadSwarm on SpacetimeDB: describe it, the swarm builds it, print it
 
 Date: 2026-10-23 (Cal Hacks 13.0; submission deadline Sun 2026-10-25 9:00 AM PT)
-Status: design for review. Supersedes the earlier `2026-10-23-remote-mesh-design.md` draft, which
-assumed an empty Rust project.
+Status: approved. Plans in `docs/superpowers/plans/2026-10-23-cadswarm-0*.md`; the overview's
+contract and "Contract changes log" win over this document where they differ.
+Team decisions (2026-10-23): SpacetimeDB is the core; the FreeCAD beginner setup from commit
+`fddfa28` stays on top of it; Elastic is core functionality; a Creao-built Cartesia voice pipeline
+is the stretch goal.
 
 ## The problem and who has it
 
@@ -27,6 +30,12 @@ team gets a printable STL. Nobody touches CAD unless they want to.
 - **Real dimensions, not guessed ones.** A board library (ESP32 DevKit, ESP32-S3, Raspberry Pi 4/5,
   Pi Pico, Arduino Uno) seeds the shared `Params` sheet with measured sizes, port positions and hole
   spacing, so agents bind geometry to facts.
+- **Any board, not just the ones we measured.** Elastic indexes board datasheets and every finished
+  design; an Elastic agent returns a board's dimensions with a source link for each number, and
+  lessons from past designs reach the planner before it starts.
+- **No terminal for beginners.** The FreeCAD setup guide starts a team or joins one with a pasted
+  invite code; everything runs from FreeCAD's own Python plus two downloaded programs.
+- **Pick up where someone left off.** A person can hand their work to an AI, now or when they leave.
 - **Pair by scanning a QR.** The phone opens a web page and is in. No app install, no account, no
   API key on any device but the host.
 - **Free and local by default, Maincloud when it matters.** SpacetimeDB runs on the host with no
@@ -42,14 +51,16 @@ team gets a printable STL. Nobody touches CAD unless they want to.
 | Factory | A Droid reviewer started by SpacetimeDB events, restricted to read and report tools, its every step streamed live into the app. |
 | Most Technically Complex / Overall | Multi-agent CAD on one live model, transactional rollback in FreeCAD, a real-time backend, peer-to-peer file mesh. |
 | Best Hardware | A part the swarm designed, printed at the venue, on the judging table. |
+| Elastic | Messy datasheets turned into board specs agents act on: hybrid search with JINA embeddings and the JINA reranker on Elastic Cloud Serverless, an Agent Builder agent, and a Workflow that distils lessons from past designs. |
+| Creao + Cartesia (stretch) | A voice pipeline built with a Creao agent on Cartesia's voice agents: brief the swarm, read measurements aloud, steer and hand off hands-free. Creao's rule: its agent must do core work, confirmed at their booth first. |
 
 ## Scope and priorities
 
 | Priority | What |
 |---|---|
-| **P0 (the demo path)** | SpacetimeDB module replacing the hub's SQLite coordination; Rust host running FreeCAD ops from the queue and publishing previews and STL; Python MCP server and CLI moved to the SpacetimeDB HTTP API; phone web app (pair, brief, live tree, activity, tasks, 3D preview, STL download); board library; swarm on demand for a brief; both deployment modes selectable, with the demo running on Maincloud. Live presence for agents: animated agent pointers, lock tints and edit highlights in the 3D view. |
-| **P1** | Live presence for people: human pointers and selections from phones and laptop browsers. Local-mode reach: the host gateway, iroh tunnel for laptops and agents (pair once with a ticket), quick tunnel for phone browsers. Droid reviewer (fit, interference, printability); printer bed presets and checks. |
-| **P2** | iroh file mesh (full `.FCStd` and STEP between laptops and hosts); FreeCAD workbench moved to SpacetimeDB, showing everyone's pointers inside FreeCAD; Cartesia voice briefs on the phone. |
+| **P0 (the demo path)** | SpacetimeDB module replacing the hub's SQLite coordination; Rust host running FreeCAD ops and project-file ops from the queue and publishing previews and STL; Python MCP server and CLI moved to the SpacetimeDB HTTP API, keeping the file tools; the FreeCAD setup guide starting SpacetimeDB and the host instead of the hub; phone web app (pair, brief, live tree, activity, tasks, 3D preview, STL download); board library; swarm on demand for a brief; both deployment modes selectable, with the demo running on Maincloud. Live presence for agents: animated agent pointers, lock tints and edit highlights in the 3D view. Elastic board knowledge and design memory. |
+| **P1** | Handing off to an AI: an agent picks up exactly where a person left off (now, or automatically when they leave). Live presence for people: human pointers and selections from phones and laptop browsers. Local-mode reach: the host gateway, iroh tunnel for laptops and agents (pair once with a ticket), quick tunnel for phone browsers. Droid reviewer (fit, interference, printability); printer bed presets and checks. |
+| **P2** | iroh file mesh (full `.FCStd` and STEP between laptops and hosts); everyone's pointers drawn inside FreeCAD's panel; the Creao-built Cartesia voice pipeline (stretch, only after M2). |
 
 Not in scope: CAD state across several FreeCAD hosts, roles beyond lead and member, a native mobile
 app, direct geometry editing in the phone UI.
@@ -164,6 +175,7 @@ workspace; the column also lets one database serve many teams later.
 | `brief` | `id`, `by`, `text`, `board: Option<String>`, `status: New \| Planning \| Building \| Reviewing \| Ready \| Failed`, `plan` (JSON), `stl_artifact: Option<String>` |
 | `preview` | `object`, `rev`, `mesh: Vec<u8>` (binary STL, decimated, target ≤ 200 KB) |
 | `cursor` | `member` (one row per member, upserted), `object: Option<String>`, `point: Option<[f32; 3]>` (on the object's surface, model coordinates), `mode: Pointing \| Inspecting \| Editing \| Idle`, `label` (≤ 60 chars, e.g. "extruding lid"), `op: Option<u64>`, `seq: u32`, `at` |
+| `handoff` | `id`, `from` (member), `note`, `trigger: now \| on_leave`, `status: waiting \| open \| accepted \| cancelled`, `taker` (member), `context_json` (snapshot of where the person left off), `created_ms`, `updated_ms` |
 | `review` | `id`, `brief`, `round: u32`, `passed: bool`, `findings` (JSON), `at` |
 | `artifact` | `hash`, `name`, `mime`, `size`, `bytes: Option<Vec<u8>>` (STL ≤ 5 MB inline), `holders: Vec<String>` (P2 iroh endpoint ids) |
 
@@ -284,6 +296,91 @@ the workbench draws everyone's pointers inside FreeCAD as coloured markers.
 at 5 updates a second while actively moving, one person moving for an hour is about 18,000 calls,
 small against the free tier for a weekend. If SpacetimeDB 2.x offers non-persisted event tables,
 cursors use one; otherwise the one-row-per-member upsert above keeps storage flat.
+
+## Handing off to an AI (P1)
+
+A person can hand their work to an AI, which picks up exactly where they left off: their locked
+parts, their in-progress tasks, and the context of what they were doing.
+
+- **Two triggers, from the "Hand your work to an AI" card (phone) or the FreeCAD panel:**
+  - **Now:** "I have to go to judging, finish my lid." The person stays a member; only their work
+    moves.
+  - **When I leave:** an armed handoff that opens automatically if the person goes stale (closed or
+    offline for 30 s). They are then retired like any stale takeover.
+- **The snapshot.** When a handoff opens, the module records in `context_json`: their note, what
+  their pointer was on (object, point, label), the parts they hold, their claimed tasks with details,
+  their last 15 activity lines, their last 10 ops (kind, arguments, outcome) and their last 5
+  messages. A disconnect sets the pointer to `idle` but keeps its object and point.
+- **Who picks it up.** The host spawns a headless Claude Code agent (`handoff-<id>`) with the snapshot
+  in its prompt and the note as the main instruction. Its first call, `accept_handoff`, moves the
+  person's locks and tasks to it in one transaction, starts its pointer on the person's part, and
+  messages the person.
+- **Rules.** Only humans request handoffs; only agents accept them; once only; the requester can
+  cancel until accepted. Agents continue each other's work through the existing stale takeover.
+
+## Setup for beginners: the FreeCAD guide (from commit `fddfa28`)
+
+The guide inside FreeCAD stays the front door for people who never open a terminal. What changes is
+what it starts:
+
+- **Start a team:** pick a project folder (same layout: `model.FCStd`, `files/`, `exports/`,
+  `snapshots/`, `AI helpers/`), then download once into the private app folder the `spacetime` CLI
+  and a prebuilt `cadswarm-host` for this OS (GitHub release assets), start `spacetime start` and
+  `cadswarm-host run` as background processes instead of the FastAPI hub, publish the prebuilt
+  module (`.wasm` from the release, so no Rust toolchain is needed), and show an invite code.
+  Maincloud mode adds one browser sign-in (`spacetime login`).
+- **Invite codes** keep the guide's copy-paste style with a new version prefix: `cadswarm-2:` +
+  base64url of the ticket JSON `{v, uri, db, token, kind, role, host_addr}`. `cadswarm-1:` codes
+  (old hub) get a plain message asking for a new code.
+- **Join:** paste the code; the guide redeems it and writes the agent's folder exactly as today.
+- **File tools stay.** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
+  `delete_file`, `file_history`, `restore_file` and `save_snapshot` become queued op kinds. The host
+  runs them through a small Python helper process that wraps the existing `ProjectFiles` rules
+  (sandboxed to `files/`, versioned history, no silent overwrites), so the guarantees are unchanged
+  and agents on other machines can use them too.
+
+## Elastic: board knowledge and design memory (P0)
+
+**Purpose:** real dimensions for any board, and lessons from past designs, turned into actions.
+Every Elastic call goes through the host, which holds the only Elastic key; agents on other
+machines use queued op kinds (`lookup_board`, `recall_designs`) like FreeCAD queries.
+
+- **Elastic Cloud Serverless**, Elasticsearch project. An inference endpoint for
+  `jina-embeddings-v3` on the Elastic Inference Service (fallback `jina-embeddings-v5-text-small`,
+  since v3 is Preview on Serverless) and the preconfigured `.jina-reranker-v3.5`.
+- **Indices:**
+  - `boards`: chunks of datasheets, product pages and drawings (`board_id`, `title`, `source_url`,
+    `source_type`, `content` as `semantic_text`). Text is extracted before indexing (`pypdf` for
+    PDFs; no built-in PDF extraction is documented for Serverless). Sources are listed in
+    `boards/sources.json`.
+  - `designs`: one document per finished brief: request, board, plan, review findings, fixes,
+    final params, outcome.
+  - `lessons`: recurring problems per board, written by the Workflow below.
+- **Search:** hybrid retrieval (lexical + semantic with `rrf`) re-ranked by `text_similarity_reranker`
+  with the JINA reranker.
+- **Agent Builder agent `cadswarm-board-expert`:** custom tools over the three indices; instructions
+  to return board specs as strict JSON with a `source_url` for every number. The host calls it with
+  `POST {KIBANA_URL}/api/agent_builder/converse`.
+- **Workflow `distil-lessons`** (scheduled every 10 minutes): ES|QL groups review findings by board
+  and problem and writes them into `lessons`.
+- **In the product:**
+  - A brief for a board missing from `boards.json` → the expert's spec seeds Params; each seeded
+    value carries its source, shown in the app as "from datasheet". Measured boards always win.
+  - Before planning → the planner prompt gets the top similar designs and the board's lessons.
+  - A brief reaching `ready` → the host indexes it into `designs`.
+  - The reviewer uses `lookup_board` to check cutouts against the datasheet.
+- **Risks:** datasheet values can be wrong (sources shown, reviewer cross-checks, calipers win); the
+  free trial is 14 days with unverified limits.
+
+## Stretch: voice built with Creao on Cartesia (P2)
+
+Only after M2. Confirm at Creao's booth that a Creao agent building and running our voice
+pipeline counts as "core work" before starting. The pipeline: Cartesia Managed Agents with client
+tools, so tool calls reach the browser over the agent's WebSocket and the browser calls our reducers
+(submit a brief, set a measured dimension, ask for status, steer, hand off). The phone gets its
+short-lived Cartesia token through SpacetimeDB: it asks with a reducer, the host mints the token
+with its key and writes it into a row only that member can read. Proactive announcements ("your
+case is ready") use Sonic text-to-speech, since clients cannot inject speech into an agent call.
 
 ## Droid reviewer (P1, Factory track)
 
