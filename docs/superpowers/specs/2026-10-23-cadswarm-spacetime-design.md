@@ -100,6 +100,49 @@ Why Rust for the host: SpacetimeDB has official live-subscription SDKs for Rust,
 but not Python. The executor must react to queued ops immediately, so it uses the Rust SDK. Agents
 work in request and response, so the Python MCP server is fine on the HTTP API.
 
+## Positioning: a coordination harness, FreeCAD first
+
+CadSwarm is the coordination layer that lets a swarm of agents and people build one CAD model
+safely. FreeCAD is the first engine it drives, not the product. Everything novel (locks enforced by
+rollback, fences, the op queue, tasks, live pointers, handoffs, the review loop, Elastic board
+knowledge) lives in SpacetimeDB, the host and the clients, and none of it knows about FreeCAD. The
+FreeCAD add-on is how beginners install it; people who don't know CAD never see FreeCAD at all.
+
+### The CAD backend interface
+
+FreeCAD sits behind one seam: the worker's JSON-lines protocol on stdin/stdout. Any CAD engine that
+implements it can replace FreeCAD without changing the module, the host's coordination logic or
+any client.
+
+- **Start-up:** the backend prints `{"ready": true, "doc": "<path>"}` once it has loaded or created
+  the document.
+- **Request:** `{"id": n, "op": "<kind>", "args": {...}, "allowed": ["Name", ...] | null}`.
+  `allowed` is the caller's lock set for mutating ops and `null` for queries.
+- **Mutating reply:** `{"id", "ok": true, "result", "created": [...], "modified": [...],
+  "deleted": [...], "recomputed": [...], "broken": [...]}`.
+- **Error reply:** `{"id", "ok": false, "code", "error"}`.
+
+**Guarantees a backend must provide:**
+1. **Atomic ops with rollback.** If an op would modify or delete an object outside `allowed`,
+   or leaves an object broken, nothing changes and the reply is `lock_violation` or
+   `recompute_error`.
+2. **Stable object names** that the coordination layer can lock.
+3. **Dependency recompute,** reported in `recomputed`, so owners are told when someone else's
+   change moved their part.
+4. **A shared `Params` table** that geometry can bind to.
+5. **Durability:** the document is saved before an op is acknowledged.
+6. **The queries the product uses:** `status`, `get_object`, `interference`, `export`, `mesh`
+   (binary STL previews), `printability`, `dependents`.
+
+Op kinds a backend cannot support return `unknown_op`. Agents read `model_status` and adapt.
+
+**Roadmap, not this weekend:**
+- **build123d / CadQuery:** headless Python code-CAD, the easiest second backend.
+- **Onshape:** professional teams, via its REST API.
+
+A minimal build123d backend (`create_primitive` and `boolean` only) is an optional Saturday-night
+proof if everything else is done.
+
 ## Deployment modes
 
 | | Local (default) | Maincloud |
