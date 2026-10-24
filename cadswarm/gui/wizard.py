@@ -863,7 +863,7 @@ class SetupWizard(QtGui.QDialog):
                 stop_runner(self.folder)
             open_agent_terminal(self.client, self.folder)
             self.open_status.setText("Opened ✓. Look for a new window on your screen. Restart the background "
-                                     "helper later with Team tools ▸ Restart my AI helpers.")
+                                     "helper later with the Tools tab ▸ Restart my AI helpers.")
         except Exception as e:
             self.open_status.setText(f"<span style='color:#e5484d'>{e}</span> You can also open a terminal in "
                                      f"<b>{self.folder}</b> and type <code>{CLIENTS[self.client]['exe']}</code>.")

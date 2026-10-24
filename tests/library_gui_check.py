@@ -62,11 +62,12 @@ def no_warnings(_parent, _title, text, *a):
 
 QtGui.QMessageBox.warning = no_warnings  # a modal box would hang the offscreen run
 
-# The Team panel gets a folding Library section; opening the library unfolds it.
+# The Team panel has a Library tab; opening the library switches to it.
 panel.show_panel()
-assert S.panel.library_button.text() == "Library" and S.panel.library.isHidden()
+tabs = S.panel.tabs
+assert tabs.tabText(tabs.indexOf(S.panel.library)) == "Library" and S.panel.library.isHidden()
 library_ui.show_library()
-assert S.panel.library_button.isChecked() and not S.panel.library.isHidden()
+assert tabs.currentWidget() is S.panel.library and not S.panel.library.isHidden()
 
 tab = S.panel.library
 tab.reload()

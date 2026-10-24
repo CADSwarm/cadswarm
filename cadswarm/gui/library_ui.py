@@ -631,7 +631,7 @@ def show_library():
     P.show_panel()
     panel = P.SESSION.panel
     if panel is not None and getattr(panel, "library", None) is not None:
-        panel.library_button.setChecked(True)
+        panel.show_tab(panel.library)
         panel.library.query.setFocus()
 
 

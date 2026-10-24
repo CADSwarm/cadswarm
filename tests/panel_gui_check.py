@@ -66,6 +66,16 @@ p = panel.TeamPanel(s)
 s.panel = p
 s.apply_snapshot(snap)
 s.apply_snapshot(snap)  # an unchanged refresh must not rebuild anything
+# What AI helpers suggested waits on the Team tab, in plain words, with the yes/no right there.
+p.fetching = True  # FakeClient can't be read; the suggestions arrive as if read from the team
+p.show_suggestions({
+    "setting": [panel.setting_suggestion({"id": 7, "setting": "tol_clearance", "label": "Clearance fit", "value": 0.3,
+                                          "current": 0.2, "reason": "PLA prints tight on this printer",
+                                          "by": "ann-claude", "component": None},
+                                         {"kind": "number", "unit": "mm"})],
+    "style": [panel.style_suggestion({"id": 3, "statement": "Lids are held by four M3 heat-set inserts",
+                                      "status": "candidate", "type": "modelling_practice", "source": "learned",
+                                      "evidence": {"n": 4, "people": 2}, "confidence": 0.62})]})
 
 checks = {}
 for w, h in ((340, 640), (520, 900)):
@@ -80,10 +90,11 @@ for w, h in ((340, 640), (520, 900)):
         "scrolls_when_short": scroll.verticalScrollBar().maximum() > 0 if h < 800 else True,
     }
     p.grab().save(str(out / f"panel-{w}x{h}.png"))
-    p.tasks_button.setChecked(True)
-    QtGui.QApplication.processEvents()
-    p.grab().save(str(out / f"panel-{w}x{h}-tasks.png"))
-    p.tasks_button.setChecked(False)
+    for name, page in (("tasks", p.tasks_page), ("tools", p.tools_page)):
+        p.show_tab(page)
+        QtGui.QApplication.processEvents()
+        p.grab().save(str(out / f"panel-{w}x{h}-{name}.png"))
+    p.show_tab(p.team_page)
 
 wide = sorted((w.minimumSizeHint().width(), type(w).__name__, w.objectName(), getattr(w, "text", lambda: "")()[:30],
                type(w.parent()).__name__, w.parent().objectName() if w.parent() else "")
@@ -146,6 +157,9 @@ p.msg.setText("@bob-codex make the lid 20 mm tall")
 p.send()
 p.msg.setText("@team a stand for a 7 mm phone")
 p.send()
+suggestions_shown = p.suggest_box.isVisibleTo(p) and p.suggest_lay.count() == 3  # heading + two cards
+p.answer(p.suggestions["setting"][0], True)
+p.answer(p.suggestions["style"][0], False)
 
 # The chat shows the instruction with its status and the helper's replies.
 chat = p.chat.toPlainText()
@@ -157,7 +171,10 @@ result = {
     "offered_all": offered_all,
     "offered_b": offered_b,
     "filled": filled,
-    "sent": sent,
+    "sent": sent[:3],
+    "answered": sent[3:],
+    "suggestions_shown": suggestions_shown,
+    "suggestions_cleared": not p.suggest_box.isVisibleTo(p),
     "helpers_listed": [p.team.topLevelItem(i).data(0, QtCore.Qt.UserRole) for i in range(p.team.topLevelItemCount())],
     "helper_rows": [[p.team.topLevelItem(i).text(c).lstrip("◐◓◑◒ ") for c in range(3)]
                     for i in range(p.team.topLevelItemCount())],

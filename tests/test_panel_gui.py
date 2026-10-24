@@ -40,3 +40,7 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert task_path == "/tasks" and task["assignee"] == "bob-codex" and task["title"] == "make the lid 20 mm tall"
     assert msg_path == "/messages" and msg["to"] == "bob-codex" and msg["kind"] == "command" and msg["task_id"] == "t_new"
     assert brief_path == "/briefs" and brief["text"] == "a stand for a 7 mm phone"
+    # Suggestions sit on the Team tab with Accept/Dismiss; answering one sends it and takes it off the card.
+    assert r["suggestions_shown"] and r["suggestions_cleared"]
+    assert r["answered"] == [["/settings/suggestions/7", {"accept": True}],
+                             ["/style/resolve", {"rule_id": 3, "decision": "dismiss"}]]

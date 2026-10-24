@@ -24,14 +24,14 @@ static char * icon_xpm[] = {
         overlay.install()
         from cadswarm.gui.structural import register_command
         register_command()
-        toolbar = ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
-                   "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_AddHelper",
-                   "CadSwarm_Invite",
-                   "CadSwarm_Interference", "CadSwarm_Export", "CadSwarm_OptimizePart", "CadSwarm_FeaReports",
-                   "CadSwarm_Pointers"]
-        self.appendToolbar("CadSwarm", toolbar)
-        self.appendMenu("CadSwarm", toolbar + ["CadSwarm_Style", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
-                                               "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
+        # Everything else lives in the team panel's tabs; the toolbar only opens it (and the setup guide).
+        self.appendToolbar("CadSwarm", ["CadSwarm_Connect", "CadSwarm_Panel"])
+        self.appendMenu("CadSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
+                                     "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_Style",
+                                     "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator", "CadSwarm_Interference",
+                                     "CadSwarm_Export", "CadSwarm_OptimizePart", "CadSwarm_FeaReports",
+                                     "CadSwarm_Pointers", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
+                                     "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
 
     def Activated(self):
         from cadswarm.gui import panel
