@@ -1,3 +1,5 @@
+mod boards;
+mod commit;
 mod config;
 mod ticket;
 mod worker;
