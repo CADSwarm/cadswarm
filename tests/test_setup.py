@@ -12,17 +12,21 @@ from cadswarm.invite import InviteError, make_invite, read_invite
 from cadswarm.paths import LAUNCHER
 
 
+TICKET = {"v": 1, "uri": "http://192.168.1.20:3000", "db": "cadswarm", "token": "ab" * 32,
+          "kind": "human", "role": "member", "host_addr": ""}
+
+
 def test_invite_round_trip_survives_chat_app_mangling():
-    code = make_invite("http://192.168.1.20:8765/", "tok_ABC-123", "Phone stand")
+    code = make_invite(TICKET, "Phone stand")
     mangled = f'  "{code[:20]}\n{code[20:]}"  '  # quotes, spaces and a line break from a chat app
-    assert read_invite(mangled) == {"hub": "http://192.168.1.20:8765", "token": "tok_ABC-123",
-                                    "project": "Phone stand"}
+    assert read_invite(mangled) == {**TICKET, "project": "Phone stand"}
 
 
 @pytest.mark.parametrize("text, fragment", [
     ("", "Paste the invite code"),
     ("http://192.168.1.20:8765", "doesn't look like a CadSwarm invite"),
-    ("cadswarm-1:eyJoIjoiaHR0", "cut off"),
+    ("cadswarm-2:eyJ1cmkiOiJodHR0", "cut off"),
+    ("cadswarm-1:eyJoIjoiaHR0", "older CadSwarm"),
 ])
 def test_invite_errors_are_plain_language(text, fragment):
     with pytest.raises(InviteError) as e:

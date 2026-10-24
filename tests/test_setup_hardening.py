@@ -71,8 +71,10 @@ def test_odd_entries_inside_hook_list_are_kept(tmp_path):
 
 # ---- invite: the code is found inside surrounding chat text
 
-CODE = make_invite("http://192.168.1.20:8765", "tok_ABC-123", "Phone stand")
-EXPECT = {"hub": "http://192.168.1.20:8765", "token": "tok_ABC-123", "project": "Phone stand"}
+TICKET = {"v": 1, "uri": "http://192.168.1.20:3000", "db": "cadswarm", "token": "ab" * 32,
+          "kind": "human", "role": "member", "host_addr": ""}
+CODE = make_invite(TICKET, "Phone stand")
+EXPECT = {**TICKET, "project": "Phone stand"}
 
 
 @pytest.mark.parametrize("wrap", [
