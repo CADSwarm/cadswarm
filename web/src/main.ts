@@ -58,7 +58,7 @@ async function boot() {
   if (new URLSearchParams(location.search).has('mock')) {
     const { api } = startMockSwarm(store); // exercises every panel without a server
     apiRef = api;
-    mountPanels(panels, store, api, () => (picked ? [picked] : []));
+    mountPanels(panels, store, api, () => (picked ? [picked] : []), 'Enclosure');
     return;
   }
   const frag = new URLSearchParams(location.hash.slice(1)).get('t');
@@ -100,7 +100,7 @@ async function start(t: Ticket | null) {
     await new Promise<void>(done => mountPair(panels, ticket, async name => { await api.redeem(ticket.token, name); done(); }));
   }
   apiRef = api;
-  mountPanels(panels, store, api, () => (picked ? [picked] : []));
+  mountPanels(panels, store, api, () => (picked ? [picked] : []), target.db);
 }
 
 boot().catch(e => message(`<p class="err">${esc((e as Error).message ?? String(e))}</p>`));
