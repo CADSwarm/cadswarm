@@ -14,7 +14,8 @@ $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 
 # No param block on purpose: it would bind the command's own flags (python -c, cargo --release).
-$envFile, $argv = "", @()
+$envFile = ""
+$argv = New-Object System.Collections.Generic.List[string]
 $i = 0
 while ($i -lt $args.Count) {
     if ($args[$i] -eq "-EnvFile" -and $i + 1 -lt $args.Count) {
@@ -22,7 +23,7 @@ while ($i -lt $args.Count) {
         $i += 2
         continue
     }
-    $argv += $args[$i]
+    $argv.Add([string]$args[$i])
     $i += 1
 }
 
@@ -57,6 +58,8 @@ if ($argv.Count -eq 0) {
     Write-Host "loaded $file"
     exit 0
 }
-$rest = if ($argv.Count -gt 1) { $argv[1..($argv.Count - 1)] } else { @() }
-& $argv[0] @rest
+$exe = $argv[0]
+$rest = @($argv | Select-Object -Skip 1)
+if ($env:CADSWARM_ENV_DEBUG) { Write-Host "env: $file | exe: $exe | args: $($rest -join ' | ')" }
+& $exe $rest
 exit $LASTEXITCODE
