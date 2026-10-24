@@ -65,7 +65,7 @@ powershell -File scripts\with-env.ps1 .venv\Scripts\python.exe -c "import json; 
 & $st sql --server maincloud cadswarm-calhacks-ca8c "SELECT name, kind, status FROM v_member"
 ```
 
-The host shows up as `active`. In FreeCAD, Team tools › Learned design style… opens without an error.
+The host shows up as `active`. In FreeCAD, the Tools tab › Learned design style… opens without an error.
 To try everything first on a throwaway local database:
 `spacetime start`, then `scripts\publish-local.ps1 -Db cadswarm-e2e` and
 `$env:CADSWARM_LIVE = "1"; $env:CADSWARM_DB = "cadswarm-e2e"; python -m pytest tests/test_space_live.py -q`.

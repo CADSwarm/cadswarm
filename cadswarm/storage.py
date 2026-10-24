@@ -175,7 +175,7 @@ class Storage:
                             f"The computer hosting this project is nearly out of disk space ({human(max(free, 0))} free; "
                             f"CadSwarm keeps {human(self.reserve_bytes())} free so Windows keeps working). Nothing was saved. "
                             "Ask a person on the team to free up space: delete things from that drive, or in FreeCAD use "
-                            "Team tools > Storage and free up space. Don't delete files to make room yourself.")
+                            "the CadSwarm panel's Tools tab > Storage and free up space. Don't delete files to make room yourself.")
         limit, _ = self.limit()
         if limit:
             u = self.usage()
@@ -185,7 +185,7 @@ class Storage:
                                 f"(your files {human(u['files'])}, older versions {human(u['old_versions'])}, "
                                 f"snapshots {human(u['snapshots'])}, exports {human(u['exports'])}) and this needs "
                                 f"{human(extra)} more. Nothing was saved. Ask a person on the team to free up space "
-                                "(Team tools > Storage and free up space in FreeCAD) or raise the limit. "
+                                "(the CadSwarm panel's Tools tab > Storage and free up space in FreeCAD) or raise the limit. "
                                 "Don't delete files to make room yourself.")
 
     # ------------------------------------------------------------- pruning

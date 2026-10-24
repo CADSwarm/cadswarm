@@ -96,7 +96,7 @@ def _author(a):
     return _actor(a).get("name") or "someone"
 
 
-def _people_only(a, what, where="Team tools > Storage and free up space"):
+def _people_only(a, what, where="the CadSwarm panel's Tools tab > Storage and free up space"):
     if _actor(a).get("kind") != "human":
         raise HelperError("humans_only", f"Only a person can {what}. Ask someone on the team to do it "
                                          f"(in FreeCAD: {where}).")

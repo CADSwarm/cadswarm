@@ -200,7 +200,7 @@ class ProjectFiles:
         text_ext = os.path.splitext(clean)[1].lower() in TEXT_EXT
         if not text_ext and rec["size"] > MAX_TEXT_BYTES:  # base64 of a big CAD file would swamp an agent's context
             raise FileError(413, "too_big_to_read", f"{clean!r} is {rec['size'] // (1024 * 1024)} MB, too big to send inline. "
-                            "Ask a person to open it from FreeCAD (Team tools > Project files > Save a copy).")
+                            "Ask a person to open it from FreeCAD (the CadSwarm panel's Tools tab > Project files > Save a copy).")
         out = {"path": clean, "version": rec["version"], "size": rec["size"], "author": rec["author"],
                "updated_at": rec["updated_at"]}
         if text_ext:
