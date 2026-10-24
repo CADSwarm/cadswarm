@@ -102,3 +102,8 @@ def find_freecad_python():
 
 def worker_script():
     return os.path.join(os.path.dirname(__file__), "worker", "freecad_worker.py")
+
+
+def helper_script():
+    """The host runs this file with any Python 3.11+ (stdlib only) to answer file and storage ops."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "helper.py")
