@@ -39,6 +39,15 @@ const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param
 export interface PlaceRequest { component?: string; family?: string; size?: string; length?: number; name: string; label?: string }
 export interface PartMeta { name: string; category: string; tags: string[]; description: string; license: string }
 
+/** A file in the team's project folder (the host's files/ directory); `updated_at` is epoch seconds. */
+export interface ProjectFile {
+  path: string; version: number; size: number; author: string; updated_at: number;
+}
+export interface ProjectListing { files: ProjectFile[]; folders: string[] }
+/** One replaced copy kept in history. */
+export interface FileVersion { version: number; size: number; author: string; saved_at: number; reason: string }
+export interface FileHistory { path: string; current: ProjectFile | null; older_versions: FileVersion[] }
+
 export interface Api {
   fence(): number;
   redeem(token: string, name: string): Promise<void>;
@@ -63,6 +72,10 @@ export interface Api {
   resolveSuggestion(id: string, accept: boolean): Promise<void>;
   /** A library part's preview STL (null until FreeCAD has measured it). */
   componentPreview(id: string): Promise<Uint8Array | null>;
+  /** The team's project folder: files and folders under files/ on the host. */
+  listFiles(folder?: string): Promise<ProjectListing | null>;
+  /** Every kept version of one project file (null when the host can't answer). */
+  fileHistory(path: string): Promise<FileHistory | null>;
 }
 
 // ---- Row mapping (pure; u64 → number is safe for ids, seqs and epoch millis) ----
@@ -100,7 +113,8 @@ export const toMessage = (r: Infer<typeof VMessageRow>): Message => ({
   id: r.id, from: num(r.from), to: r.to, kind: r.kind, body: r.body, taskId: r.taskId, createdMs: num(r.createdMs),
 });
 export const toOp = (r: Infer<typeof VOpRow>): Op => ({
-  id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error, argsJson: r.argsJson,
+  id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error,
+  argsJson: r.argsJson, resultJson: r.resultJson,
 });
 
 export const toComponent = (r: Infer<typeof VComponentRow>): Component => ({
@@ -240,17 +254,33 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       });
     }
 
-    /** Queue a host op and wait for it; reports a failure as a notice and resolves false. */
-    async function runOp(kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> {
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves how it ended. */
+    async function runOpOutcome(kind: string, args: Record<string, unknown>, ms = 60000): Promise<{ ok: boolean; resultJson: string }> {
       const opId = newId('o_');
       try {
         await r.submitOp({ fence: fence(), opId, kind, argsJson: JSON.stringify(args), expectedRevsJson: '' });
-      } catch (e) { report(e); return false; }
+      } catch (e) { report(e); return { ok: false, resultJson: '' }; }
       await waitFor(() => ['done', 'failed', 'rejected'].includes(store.state.ops.find(o => o.id === opId)?.status ?? ''), ms);
       const op = store.state.ops.find(o => o.id === opId);
-      if (!op || op.status === 'queued' || op.status === 'running') { report(new Error('The host is still working on it; check back in a moment.')); return false; }
-      if (op.status !== 'done') { report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return false; }
-      return true;
+      if (!op || op.status === 'queued' || op.status === 'running') {
+        report(new Error('The host is still working on it; check back in a moment.')); return { ok: false, resultJson: '' };
+      }
+      if (op.status !== 'done') {
+        report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return { ok: false, resultJson: '' };
+      }
+      return { ok: true, resultJson: op.resultJson };
+    }
+
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves false. */
+    async function runOp(kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> {
+      return (await runOpOutcome(kind, args, ms)).ok;
+    }
+
+    /** A read-only host query whose result carries the answer (list_files, file_history, …). */
+    async function queryOp<T>(kind: string, args: Record<string, unknown>): Promise<T | null> {
+      const { ok, resultJson } = await runOpOutcome(kind, args);
+      if (!ok) return null;
+      try { return JSON.parse(resultJson) as T; } catch { return null; }
     }
 
     const api: Api = {
@@ -310,6 +340,8 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       setSetting: (setting, n, text) => quiet(r.setSetting({ fence: fence(), setting, num: n, text })),
       resetSetting: setting => quiet(r.resetSetting({ fence: fence(), setting })),
       resolveSuggestion: (id, accept) => quiet(r.resolveSuggestion({ fence: fence(), suggestionId: id, accept })),
+      listFiles: folder => queryOp<ProjectListing>('list_files', folder ? { folder } : {}),
+      fileHistory: path => queryOp<FileHistory>('file_history', { path }),
       // Preview meshes are never kept subscribed: subscribe to the one row, read it, unsubscribe.
       componentPreview: id => new Promise<Uint8Array | null>(done => {
         if (!/^c_[a-z0-9_]+$/.test(id)) { done(null); return; }

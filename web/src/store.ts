@@ -14,7 +14,7 @@ export interface Handoff { id: string; from: number; note: string; trigger: stri
 export interface Workspace { bedXMm: number; bedYMm: number; bedZMm: number }
 /** A short message for the person (a refused reducer, a failed download). `at` makes repeats distinct. */
 export interface Notice { text: string; at: number }
-export interface Op { id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string }
+export interface Op { id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string; resultJson: string }
 /** A team message. `to` is "all", "member:<id>" or "@name" (not joined yet); a person's command is stored as kind "steer". */
 export interface Message { id: string; from: number; to: string; kind: string; body: string; taskId: string; createdMs: number }
 /** Who has read (delivered) or handled (consumed) a message. */

@@ -29,7 +29,7 @@ from ..client import HubRequestError, load_json, save_json
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, lighten_ui, overlay, style_ui
+from . import library_ui, lighten_ui, overlay, panes, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -803,6 +803,14 @@ class TeamPanel(QtGui.QDockWidget):
         self.activity_page = page
         self.tabs.addTab(page, "Activity")
 
+        # --------------------------------------------------------- Shared sizes
+        self.sizes_page = panes.SharedSizesTab(session)
+        self.tabs.addTab(self.sizes_page, "Sizes")
+
+        # -------------------------------------------------------- Project files
+        self.files_page = panes.FilesTab(session)
+        self.tabs.addTab(self.files_page, "Files")
+
         # ------------------------------------------------------------- Library
         self.library = library_ui.LibraryTab(session)
         self.tabs.addTab(self.library, "Library")
@@ -911,6 +919,10 @@ class TeamPanel(QtGui.QDockWidget):
         if self.tabs.widget(index) is self.activity_page:
             self.new_activity = 0
             self.tabs.setTabText(index, "Activity")
+        if self.tabs.widget(index) is self.files_page:
+            self.files_page.refresh_if_stale()
+        if self.tabs.widget(index) is self.sizes_page:
+            self.sizes_page.render(self.session)
 
     def show_tab(self, page):
         self.tabs.setCurrentWidget(page)
@@ -1086,6 +1098,8 @@ class TeamPanel(QtGui.QDockWidget):
         self.render_team(s)
         self.render_tasks(s)
         self.render_chat(s)
+        self.sizes_page.render(s)
+        self.files_page.render(s)
         params = s.model.get("params") or {}
         self.params.setText("<small><span style='color:#8b949e'>Shared sizes</span>&nbsp; " + html.escape(" · ".join(
             f"{k.replace('_', ' ')} {v:g} mm" if isinstance(v, (int, float)) else f"{k.replace('_', ' ')} {v}"
@@ -1255,7 +1269,11 @@ class TeamPanel(QtGui.QDockWidget):
             if c:
                 status = (f" <span style='color:{ {'sent': '#9a6700', 'seen': '#d9822b', 'done': '#1a7f37'}[c['state']] }'>"
                           f"{COMMAND_WORDS[c['state']]}</span>")
-            lines.append(chat_line(m["at"], who, colour, to + tag, m["body"], status))
+            if panes.is_refusal(m["body"]):
+                stamp = time.strftime('%H:%M', time.localtime(m["at"]))
+                lines.append(panes.refusal_html(stamp, who, colour, m["body"], to + tag + status))
+            else:
+                lines.append(chat_line(m["at"], who, colour, to + tag, m["body"], status))
         for o in self.outbox:
             lines.append(chat_line(o["at"], "You", "#8b949e", "", o["body"],
                                    " <span style='color:#8b949e'>sending…</span>"))
@@ -1313,6 +1331,12 @@ class TeamPanel(QtGui.QDockWidget):
             self.library.reload()
         if k in ("setting_suggested", "setting_changed"):
             self.fetch_suggestions()
+        if k == "op_failed" and panes.is_refusal(str(ev.get("error") or "")):
+            stamp = time.strftime('%H:%M', time.localtime(ev['ts']))
+            self.note_activity(panes.refusal_html(stamp, html.escape(ev.get("name") or "Someone"),
+                                                 "#a371f7", str(ev.get("error") or ""),
+                                                 op=ev.get("op") or ""))
+            return
         line = describe_event(ev)
         if line:
             self.note_activity(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
@@ -2635,6 +2659,8 @@ def describe_event(ev):
         if ev.get("recomputed"):
             bits.append(f"which updated {names(ev['recomputed'])}")
         return f"{who} {', '.join(bits)}" if bits else None
+    if k == "op_failed":
+        return f"{who}'s {ev.get('op') or 'change'} failed: {ev.get('error') or ev.get('code') or 'unknown'}"
     if k == "joined":
         kind = "person" if ev.get("participant_kind") == "human" else CLIENT_WORDS.get(ev.get("client"), "AI helper")
         return f"{who} ({kind}) joined the team"

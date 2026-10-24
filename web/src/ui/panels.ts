@@ -7,18 +7,24 @@ import { mountParams } from './params';
 import { freeHelper, helperNow, startInstruction } from './helpers';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
+import { mountSizes } from './sizes';
+import { mountFiles } from './files';
 import { esc } from './esc';
+import { parseRefusal, isRefusal } from './refusal';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
-// Five tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
+// Seven tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
 const ICON = {
   ask: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',
   model: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+  sizes: '<path d="M3 8h18M3 16h18"/><path d="M7 5v6M12 13v6M17 5v6M22 13v6"/>',
   library: '<path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="m15.5 5.2 3.9-1 3.1 14.9-3.9 1z"/>',
   tasks: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/>',
+  files: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h5l2 2h8A1.5 1.5 0 0 1 21 8.5v10A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/>',
   team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 20a6.5 6.5 0 0 0-3-5.5"/>',
 };
-const TABS = [['ask', 'Ask'], ['model', 'Model'], ['library', 'Library'], ['tasks', 'Tasks'], ['team', 'Team']] as const;
+const TABS = [['ask', 'Ask'], ['model', 'Model'], ['sizes', 'Sizes'], ['library', 'Library'],
+  ['tasks', 'Tasks'], ['files', 'Files'], ['team', 'Team']] as const;
 type Tab = typeof TABS[number][0];
 export const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 
@@ -82,7 +88,7 @@ export function teamLog(s: Pick<State, 'activity' | 'messages' | 'meId' | 'membe
     : target.startsWith('member:') ? name(Number(target.slice(7))) : target.replace(/^@/, '');
   const events: LogRow[] = s.activity.map(a => ({
     at: a.atMs, member: a.member, who: name(a.member), text: a.summary,
-    tone: a.kind === 'refused' || /refus|blocked by|held by/i.test(a.summary) ? 'refused' : '' }));
+    tone: a.kind === 'refused' || isRefusal(a.summary) ? 'refused' : '' }));
   const steers: LogRow[] = s.messages.filter(m => m.from === s.meId && m.kind === 'steer')
     .map(m => ({ at: m.createdMs, member: m.from, who: name(m.from), text: `→ ${to(m.to)}: ${m.body}`, tone: 'steer' }));
   return [...events, ...steers].sort((a, b) => a.at - b.at).slice(-limit);
@@ -111,11 +117,23 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       <h2 class="group-title">Dimensions</h2><div class="group params" data-params></div>
       <div data-export></div>
     </section>
+    <section class="tab sizes-tab" id="tab-sizes" data-tab="sizes" role="tabpanel">
+      <h1 class="large-title">Shared sizes</h1>
+      <p class="muted sizes-intro">Key dimensions live in one sheet every part reads from.
+        Change one here once; every part that uses it moves for the whole team.</p>
+      <div data-sizes></div>
+    </section>
     <section class="tab" id="tab-library" data-tab="library" role="tabpanel">
       <h1 class="large-title">Library</h1><div data-library></div>
     </section>
     <section class="tab" id="tab-tasks" data-tab="tasks" role="tabpanel">
       <h1 class="large-title">Tasks</h1><div data-tasks></div>
+    </section>
+    <section class="tab files-tab" id="tab-files" data-tab="files" role="tabpanel">
+      <h1 class="large-title">Project files</h1>
+      <p class="muted sizes-intro">Agents save into one project folder you choose. They can't write outside it,
+        and every replaced version stays in its history.</p>
+      <div data-files></div>
     </section>
     <section class="tab team-tab" id="tab-team" data-tab="team" role="tabpanel">
       <div class="panel-bar">
@@ -144,6 +162,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   mountAsk($('#tab-ask'), store, api, picked);
   mountParams($('[data-params]'), store, api);
+  mountSizes($('[data-sizes]'), store, api);
+  const files = mountFiles($('[data-files]'), store, api);
   mountHandoff($('[data-handoff]'), store, api);
   mountLibrary($('[data-library]'), store, api);
   mountSettings($('[data-settings]'), store, api);
@@ -152,6 +172,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     el.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
     el.querySelectorAll<HTMLButtonElement>('.tabbar [role=tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
     try { localStorage.setItem('cadswarm:tab', tab); } catch { /* no storage */ }
+    if (tab === 'files') void files.load();
   }
   $('.tabbar').addEventListener('click', e => {
     const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[role=tab]');
@@ -208,7 +229,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         return;
       }
       if (which === 'task') { select('ask'); el.querySelector<HTMLTextAreaElement>('.field textarea')?.focus(); return; }
-      if (which === 'size') { select('model'); el.querySelector<HTMLInputElement>('.param input')?.focus(); return; }
+      if (which === 'size') { select('sizes'); el.querySelector<HTMLInputElement>('[data-sizes] .param input')?.focus(); return; }
     }
   });
 
@@ -271,12 +292,22 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       </li>`;
     }).join('') || '<li class="log-empty">Nobody has joined this build yet.</li>';
 
-    $('[data-log]').innerHTML = teamLog(s).map(r => `<div class="log-row${r.tone ? ` ${r.tone}` : ''}">
+    $('[data-log]').innerHTML = teamLog(s).map(r => {
+      const refusal = r.tone === 'refused' ? parseRefusal(r.text) : null;
+      if (refusal) return `<div class="log-row refused">
+        <time>${clock(r.at)}</time>
+        <div class="refusal">
+          <span class="refusal-meta">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> · ` : ''}${esc(refusal.title)}</span>
+          <span class="refusal-detail">${esc(refusal.detail)}</span>
+        </div>
+      </div>`;
+      return `<div class="log-row${r.tone ? ` ${r.tone}` : ''}">
         <time>${clock(r.at)}</time>
         <span class="line">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> ` : ''}${esc(r.text)}</span>
-      </div>`).join('') || '<p class="log-empty">Nothing said yet. Ask for something in Ask and it lands here.</p>';
+      </div>`;
+    }).join('') || '<p class="log-empty">Nothing said yet. Ask for something in Ask and it lands here.</p>';
 
-    const counts: Record<Tab, number> = { ask: 0, model: 0, library: 0,
+    const counts: Record<Tab, number> = { ask: 0, model: 0, sizes: 0, library: 0, files: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
       tasks: s.tasks.filter(t => t.status === 'open' || t.status === 'claimed').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });

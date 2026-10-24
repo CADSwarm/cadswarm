@@ -28,6 +28,15 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
                               "back_down": True}, r["chat_jump"]
     assert r["toast"] == "✓  Created task “Lid”"  # confirmations reach people who never open the console
     assert "teammate's computer" in r["away_tip"]
+    # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
+    assert [t.split(" ")[0] for t in r["tabs"][:7]] == ["Team", "Tasks", "Activity", "Sizes", "Files", "Library", "Tools"], r["tabs"]
+    assert r["sizes"] == [["Pcb l", "65 mm"], ["Wall", "3 mm"]], r["sizes"]
+    assert sorted(r["files"]) == ["bom.csv", "notes/plan.md"], r["files"]
+    assert r["history"][0][0] == "2 ✓" and r["history"][0][3] == "current version", r["history"]
+    assert r["history"][1][0] == "1" and r["history"][1][3] == "replaced", r["history"]
+    assert r["refusal_card"] == {"holder": True, "nothing_changed": True}, r["refusal_card"]
+    assert r["refusal_parse"] == ["Refused · held by ann-claude", "Nothing changed. Ask them instead.",
+                                  "ann-claude"], r["refusal_parse"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).

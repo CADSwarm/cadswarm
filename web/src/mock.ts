@@ -93,7 +93,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       locks: [...store.state.locks.filter(l => l.object !== name), { object: name, holder: builder }],
       pointers: [...store.state.pointers.filter(p => p.member !== builder && p.member !== 2),
         { member: builder, object: name, point: [], mode: 'editing', label: `building ${name}`, op: `o_${step}`, seq: seq++, atMs: Date.now() }],
-      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }) }],
+      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }), resultJson: '' }],
       activity: say(builder, `create_primitive ${name}`),
     });
   }
@@ -111,6 +111,10 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     } else if (step <= n) {
       build(step - 1, 1);
       store.set({ briefs: brief('building') });
+      if (step === 2) {
+        // A helper tried to change Base while worker1 still held it: refused, nothing changed.
+        store.set({ activity: say(4, 'Already locked: Base by worker1 (active). Message the holder.', 'refused') });
+      }
     } else if (step === n + 1) {
       store.set({
         briefs: brief('reviewing'),
@@ -149,6 +153,13 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
   const timer = setInterval(tick, 1800);
 
   const notice = (text: string) => store.set({ notice: { text, at: Date.now() } });
+  const nowSec = Math.floor(Date.now() / 1000);
+  const demoFiles = [
+    { path: 'notes/plan.md', version: 2, size: 1840, author: 'planner', updated_at: nowSec - 600 },
+    { path: 'docs/bom.csv', version: 1, size: 640, author: 'worker1', updated_at: nowSec - 2400 },
+    { path: 'parts/base/notes.md', version: 3, size: 920, author: 'worker2', updated_at: nowSec - 120 },
+    { path: 'scripts/make_lid.py', version: 1, size: 2200, author: 'planner', updated_at: nowSec - 7200 },
+  ];
   const api: Api = {
     fence: () => 1,
     redeem: async () => {},
@@ -227,6 +238,15 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
           { setting: g.setting, num: g.num, text: g.text, setBy: 1, updatedMs: Date.now() }] : store.state.settings });
     },
     componentPreview: async id => id.startsWith('c_nema17') ? boxStl(0, 0, 0, 42, 42, 5) : id.startsWith('c_esp32') ? boxStl(0, 0, 0, 70, 32, 18) : null,
+    listFiles: async () => ({ files: demoFiles, folders: ['notes', 'docs', 'parts', 'parts/base', 'scripts'] }),
+    fileHistory: async path => {
+      const file = demoFiles.find(f => f.path === path);
+      if (!file) return null;
+      return { path, current: file, older_versions: Array.from({ length: Math.max(0, file.version - 1) },
+        (_, i) => ({ version: i + 1, size: Math.max(200, file.size - 120 * (file.version - i - 1)),
+          author: i ? 'worker1' : 'planner', saved_at: file.updated_at - 3600 * (file.version - i - 1),
+          reason: i ? 'replaced' : 'first draft' })) };
+    },
   };
   return { stop: () => clearInterval(timer), api };
 }
