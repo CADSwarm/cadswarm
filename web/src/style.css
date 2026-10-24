@@ -41,6 +41,8 @@ a { color: var(--accent); }
 .viewer .fit { position: absolute; left: 16px; bottom: 16px; z-index: 2; margin: 0; width: 44px; height: 44px; padding: 0;
   border-radius: 50%; background: var(--surface); color: var(--text); border: 1px solid var(--line); font: 600 12px/1 var(--font-mono);
   box-shadow: var(--shadow); cursor: pointer; }
+.viewer-error { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 32px;
+  text-align: center; color: var(--muted); font-size: 15px; line-height: 1.5; }
 
 .pointer-tag { transform: translate(10px, -14px); padding: 2px 8px; border-radius: 999px; font: 600 12px/1.6 var(--font);
   color: #fff; background: var(--c); white-space: nowrap; box-shadow: 0 1px 4px rgb(0 0 0 / .25); }

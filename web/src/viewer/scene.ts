@@ -5,6 +5,7 @@ import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { Store, State } from '../store';
 import { memberColor } from '../color';
 import { Pointers } from './pointers';
+import { insetShift } from './inset';
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
@@ -12,7 +13,14 @@ const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 interface Part { mesh: THREE.Mesh; outline: THREE.LineSegments; rev: number; fadeIn: number; flash: number; shake: number }
 
 export function mountViewer(el: HTMLElement, store: Store, onPick: (object: string, point: [number, number, number] | null) => void) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  let renderer: THREE.WebGLRenderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch {
+    // No WebGL (old browser, blocked GPU, private window that withholds it): say so instead of throwing.
+    el.innerHTML = '<p class="viewer-error">This browser can’t show 3D. Install or update it, then reload.</p>';
+    return;
+  }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   el.appendChild(renderer.domElement);
   const labels = new CSS2DRenderer();
@@ -129,6 +137,13 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
 
   store.subscribe(sync);
 
+  // The phone's chat sheet covers the bottom of the screen; frame the model in what is left of it.
+  // Shifting the projection up by ~half the covered height keeps the model centred above the sheet.
+  let inset = 0;
+  addEventListener('cadswarm:inset', e => {
+    inset = Math.max(0, Number((e as CustomEvent<number>).detail) || 0);
+    resize();
+  });
   const ray = new THREE.Raycaster();
   renderer.domElement.addEventListener('pointerup', ev => {
     const r = renderer.domElement.getBoundingClientRect();
@@ -140,7 +155,10 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   function resize() {
     const w = el.clientWidth, h = el.clientHeight;
     renderer.setSize(w, h); labels.setSize(w, h);
-    camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+    camera.aspect = w / Math.max(h, 1);
+    if (inset > 0) camera.setViewOffset(w, h, 0, insetShift(inset), w, h);
+    else camera.clearViewOffset();
+    camera.updateProjectionMatrix();
   }
   new ResizeObserver(resize).observe(el);
   resize();
