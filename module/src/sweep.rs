@@ -75,5 +75,17 @@ pub fn sweep(ctx: &ReducerContext, _row: SweepSchedule) -> Result<(), String> {
             }
         }
     }
+
+    // Parked large op results (see rules::op_result_expired) are dropped after ten minutes.
+    let expired_results: Vec<Artifact> = ctx
+        .db
+        .artifact()
+        .iter()
+        .filter(|a| rules::op_result_expired(&a.name, a.created_ms, now))
+        .collect();
+    for a in expired_results {
+        ctx.db.artifact_blob().hash().delete(&a.hash);
+        ctx.db.artifact().hash().delete(&a.hash);
+    }
     Ok(())
 }
