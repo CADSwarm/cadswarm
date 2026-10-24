@@ -7,11 +7,14 @@ Devpost's field limits (the sections below are sized for the "built with a story
 
 - [ ] Public code link: make the repository public, or add the Devpost judges as collaborators.
   The guide's `releases/latest/download` URLs and the release assets only work unauthenticated on a
-  public repository.
-- [ ] Web link: enable GitHub Pages with source "GitHub Actions" (private repos need a paid plan), or
-  deploy `web/dist` to Vercel/Netlify production and use that URL. The Vercel project linked to this
-  repo deploys pull requests as previews, but they are behind Vercel Authentication, so a preview
-  link will not work for judges.
+  public repository. The account running this session (Ilakkiyan) is a write collaborator on
+  `SachchitBalamurugan/cadswarm`, not an admin, so the owner has to flip it: Settings → General →
+  Danger Zone → Change visibility → Public.
+- [ ] Web link: the landing page (`website/` on `feat/fea-simulation`) now has an **Open the live
+  demo** button. It asks for the demo code and opens `app/?mock`, the panels app built from `web/`
+  and served from the same domain. It goes live when that branch merges to `main` and Vercel
+  redeploys production. Pull-request previews sit behind Vercel Authentication, so they are not
+  usable links for judges.
 - [ ] Video: record the 2:45 demo using the beats below and upload it; paste the URL under "Try it
   out".
 - [ ] Fill in the team list and the three `[TBD]` links.
@@ -169,7 +172,8 @@ Actions · Windows
 
 - **Code:** [TBD — public GitHub repository URL]
 - **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.0
-- **Web app:** [TBD — Pages or Vercel URL] (append `?mock` to try it without a team)
+- **Web app:** [TBD — landing page URL once deployed] — press **Open the live demo** and enter the
+  code `swarm-13`. That opens the panels app on a sample build, no host or account needed.
 - **Video:** [TBD — YouTube/Vimeo URL]
 - **Run it:** install FreeCAD, download the repository ZIP, double-click `Install CadSwarm.cmd`,
   then follow the guide. The host needs an AI CLI (Claude Code, Codex, or Droid) that the user
