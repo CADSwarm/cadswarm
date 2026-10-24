@@ -53,7 +53,7 @@ own after a reboot until you do).
   you have and links to install instructions.
 - Your AI helper must be signed in once on this computer (open `claude`, `codex` or `droid` in a terminal
   and follow its sign-in). After that CadSwarm starts it by itself whenever FreeCAD is open, and wakes it
-  when someone messages it or hands it a task. Its log is under **Team tools ▸ Show my AI helper's log**.
+  when someone messages it or hands it a task. Its log is under **the Tools tab ▸ Show my AI helper's log**.
 - AI helpers always join as ordinary members. The people on the team lead it, and only a person's computer
   hosts it.
 - **Whoever starts a team** makes one extra download, about 50 MB: CadSwarm's team server plus the
@@ -106,7 +106,7 @@ more or less room) and scrolls when the window is short. It has three parts:
 - **Team tools ▾** has editing a part yourself, shared sizes, clash checks, STEP export, project files,
   snapshots, reports and storage.
 
-**Changing a part yourself.** Select the part in the 3D view and choose **Team tools ▸ ✎ Edit a part yourself…**. While the
+**Changing a part yourself.** Select the part in the 3D view and choose **the Tools tab ▸ ✎ Edit a part yourself…**. While the
 editor is open, the part is held by you, so no helper can change it at the same time. Type a new size
 or position, or move it with FreeCAD's own **Edit ▸ Placement** / **Transform** and the editor picks up the
 move. **Save to team** sends the change to everyone; **Done** hands the part back. A part held by a helper
@@ -131,7 +131,7 @@ Phone stand/
   README.txt           explains the above to anyone browsing the folder
 ```
 
-In FreeCAD, **Team tools > Project files...** lists what the team saved (version, who, when) and
+In FreeCAD, **the CadSwarm panel's Tools tab > Project files...** lists what the team saved (version, who, when) and
 lets anyone save a copy. The host also gets **Open project folder**.
 
 ### Saving is safe by design
@@ -178,7 +178,7 @@ Big projects are welcome, but the host's computer is protected and a project can
   checks free space on the drive. It refuses if less than 2 GB would be left (or 10% of the drive, if
   that is smaller) and says so in plain words (`disk_full`).
 - **Project limit: 20 GB by default**, counting files, older versions, snapshots and exports together.
-  The host can change it in **Team tools > Storage and free up space...** (0 means no project limit; the
+  The host can change it in **the CadSwarm panel's Tools tab > Storage and free up space...** (0 means no project limit; the
   disk guard still applies), or with the environment variable `CADSWARM_PROJECT_LIMIT_GB` when starting the
   team's server. History retention (20 versions, 24 hours) is changed in the same place.
 - **Free up space.** The same dialog shows what is using the room and lets a person trim older versions,
@@ -206,7 +206,7 @@ work are untouched, and one long solve never blocks the team. When it finishes, 
 summary and its own points of improvement to the automatic checks (safety factor, stress peaks at supports or
 sharp corners, coarse mesh, no convergence check, resonance, temperature limits, placeholders...) and
 publishes the report. It **pops up in every teammate's FreeCAD**, can be exported as a self-contained
-**HTML** page or as **JSON** data, and is kept in `files/fea/`. **Team tools > Simulation (FEA) reports...**
+**HTML** page or as **JSON** data, and is kept in `files/fea/`. In the CadSwarm panel, **Tools ▸ Simulation reports…**
 lists past reports. If a helper forgets to publish, the hub publishes the automatic checks after 5 minutes.
 
 FEA here is a design aid for linear-elastic behaviour with idealised supports, not a certification.
@@ -231,7 +231,7 @@ AI helpers use the same library: they check it before modelling a screw or a bea
 mating holes with the team's fits (`hole_size`), and can add a part they found online
 (`import_component_from_url`, with its license).
 
-**Precision settings** (Team tools, or the button in *Change the model yourself*) hold the team's
+**Precision settings** (the panel's Tools tab, or the button in *Change the model yourself*) hold the team's
 clearances and fits (general clearance, slip fit, press fit), bolt-hole class (ISO 273 close / normal /
 loose), how screws hold in printed parts (heat-set inserts, tapped, self-tapping), printing values (XY
 compensation, thinnest wall, layer height), mesh precision for STL exports and previews, the smallest clash
@@ -240,7 +240,7 @@ the clash check reports, and the part editor's decimals and arrow step. Fits are
 
 Only people change settings. When a part implies a different value (a press-fit bearing seat, holes so small
 a 0.2 mm mesh would facet them), an AI helper **suggests** it with a reason; the suggestion waits at the top
-of Settings for someone to **Accept** or **Dismiss**.
+of the panel's Team tab (and of Settings) for someone to **Accept** or **Dismiss**.
 
 ### Learned design style
 
@@ -256,8 +256,8 @@ brief. From that it works out rules:
 
 A rule backed by enough consistent, recent evidence from more than one person or day is **active**. Planners,
 workers, handed-off helpers and the reviewer get it in their prompts, and every helper turn shows it as
-"Team design style". Weaker rules, and rules a helper proposes (`teach_style`), wait under **Team tools ›
-Learned design style…** for a person to **Confirm** or **Dismiss**.
+"Team design style". Weaker rules, and rules a helper proposes (`teach_style`), wait at the top of the panel's
+Team tab (and under **Tools ▸ Learned design style…**) for a person to **Make it a rule** or **Dismiss**.
 
 - **Confirmed rules** are always followed and never fade.
 - **Dismissed rules** stay away until their evidence doubles.
@@ -387,7 +387,7 @@ powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --da
 
 `-EnvFile <path>` or `CADSWARM_ENV_FILE` picks a specific file. `.env.example` lists every variable:
 Elastic (`ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` for board knowledge and design memory),
-Factory's reviewer (`FACTORY_API_KEY`), the optional Cartesia voice key, agent API-key fallbacks, and
+Factory's reviewer (`FACTORY_API_KEY`), agent API-key fallbacks, and
 developer overrides. SpacetimeDB publishing uses the CLI's stored login (`spacetime login`), not an
 environment variable.
 

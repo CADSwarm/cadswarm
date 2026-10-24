@@ -427,3 +427,47 @@ def test_a_failed_pointer_move_never_fails_the_op(world):
 
     fake.on_sql = host_finishes
     assert hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})["name"] == "Lid"
+
+
+def test_spare_work_is_a_busy_helpers_queue_and_pickup_returns_the_task_taken(world):
+    hub, fake = world
+    row = fake.tables["v_task"][0]
+    fake.tables["v_task"] = [
+        {**row, "id": "t_now", "status": "claimed", "owner": 2, "assignee": "bob-codex"},
+        {**row, "id": "t_next", "assignee": "bob-codex", "created_ms": 2},
+        {**row, "id": "t_held", "assignee": "bob-codex", "objects": ["Mount"], "created_ms": 3},  # bob holds Mount
+        {**row, "id": "t_mine", "assignee": "alice-claude", "created_ms": 4},
+    ]
+    assert [t["id"] for t in hub.get("/tasks/spare")["tasks"]] == ["t_next"]
+    fake.tables["v_event"].append({"seq": 6, "kind": "task_claimed", "actor": 1, "at_ms": 2000,
+                                   "data_json": json.dumps({"task": "t_next", "name": "alice-claude", "from": "bob-codex"})})
+    t = hub.post("/tasks/pickup", {})
+    assert fake.calls[-1] == ("pick_up_task", (2, ""))
+    assert t["id"] == "t_next" and t["picked_up_from"] == "bob-codex"
+
+
+def test_the_mirror_catches_changes_that_made_no_event_and_retries_failed_fetches(world):
+    hub, fake = world
+    plate = fake.tables["v_object"][0]
+    fetched = []
+
+    def brep(path, body):
+        fetched.append(body["names"])
+        return {"objects": {n: {"brep": "B"} for n in body["names"]}}
+
+    hub.post = brep
+    breps, gone, applied = hub.mirror_changes({})
+    assert fetched == [["Plate"]] and list(breps) == ["Plate"] and gone == [] and set(applied) == {"Plate"}
+    assert hub.mirror_changes(applied) == ({}, [], applied) and len(fetched) == 1  # nothing changed: no fetch
+    # The host re-synced its document: Plate grew (same rev, no event), Lid appeared, Bolt is gone.
+    fake.tables["v_object"] = [{**plate, "bbox": [0, 0, 0, 2, 1, 1]}, {**plate, "name": "Lid"}]
+    breps, gone, applied = hub.mirror_changes({**applied, "Bolt": (1, (), 0.0, "")})
+    assert fetched[-1] == ["Lid", "Plate"] and gone == ["Bolt"] and set(applied) == {"Lid", "Plate"}
+
+    def down(path, body):
+        raise HubRequestError(504, {"error": "busy", "code": "host_timeout"})
+
+    hub.post = down
+    fake.tables["v_object"][1] = {**plate, "name": "Lid", "volume": 9.0}
+    with pytest.raises(HubRequestError):
+        hub.mirror_changes(applied)  # the caller keeps `applied`, so the next pass fetches Lid again

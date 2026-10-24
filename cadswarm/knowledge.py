@@ -12,6 +12,8 @@ import urllib.request
 
 RERANKER = ".jina-reranker-v3.5"
 AGENT_ID = "cadswarm-board-expert"
+# Findings that are about the reviewer, not the design: a design must not learn these as lessons.
+NOT_DESIGN_PROBLEMS = ("the reviewer did not report a verdict", "the reviewer exited without a verdict")
 
 
 class ElasticError(Exception):
@@ -156,14 +158,30 @@ def search_body(query, k=5, filters=None):
     }
 
 
-def design_doc(brief, plan, reviews, params):
-    findings = []
-    for rv in sorted(reviews, key=lambda r: r["round"]):
+def review_findings(reviews):
+    """Every finding across the review rounds, minus the reviewer's own failures.
+
+    A review that was retried (a crashed reviewer, then a rerun) leaves two verdicts for the same
+    round; only the newest one counts, or every finding would be learned twice.
+    """
+    by_round = {}
+    for rv in sorted(reviews or [], key=lambda r: (r.get("round") or 0, r.get("at_ms") or 0)):
         try:
-            findings += json.loads(rv.get("findings_json") or "[]")
-        except ValueError:
+            by_round[rv.get("round") or 0] = json.loads(rv.get("findings_json") or "[]")
+        except (TypeError, ValueError):
             pass
-    problems = [f.get("problem", "") for f in findings if f.get("problem")]
+    findings = [f for round_no in sorted(by_round) for f in by_round[round_no] if isinstance(f, dict)]
+    return [f for f in findings if str(f.get("problem") or "").strip().lower() not in NOT_DESIGN_PROBLEMS]
+
+
+def design_problems(reviews):
+    """The problems a finished design teaches: what was wrong with the model, in the team's own words."""
+    return [str(f["problem"]) for f in review_findings(reviews) if f.get("problem")]
+
+
+def design_doc(brief, plan, reviews, params):
+    findings = review_findings(reviews)
+    problems = [str(f["problem"]) for f in findings if f.get("problem")]
     parts = [p.get("name", "") for p in (plan or {}).get("parts", [])]
     text = (f"Request: {brief['text']}\nBoard: {brief.get('board') or 'unspecified'}\nParts: {', '.join(parts)}\n"
             f"Problems found in review: {'; '.join(problems) or 'none'}\n"

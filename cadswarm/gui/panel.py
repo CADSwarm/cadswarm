@@ -29,13 +29,14 @@ from ..client import HubRequestError, load_json, save_json
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, style_ui
+from . import library_ui, overlay, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
 HEARTBEAT_SECONDS = 10
 REFRESH_SECONDS = 3         # the panel re-reads the team this often (in the background) even with no events
 HELPER_CHECK_SECONDS = 20   # how often to make sure this computer's AI helpers are running
+TOAST_SECONDS = 6           # how long a confirmation ("✓ Created task …") stays in the panel
 FATAL = ("taken_over", "fence_stale", "left", "bad_token", "not_member")
 
 
@@ -85,6 +86,16 @@ def owner_color(owner_id):
 
 def say(msg):
     App.Console.PrintMessage(f"[CadSwarm] {msg}\n")
+    # Most people never open FreeCAD's console: confirm it in the status bar and the panel too (GUI thread only).
+    app = QtGui.QApplication.instance()
+    if app is None or QtCore.QThread.currentThread() != app.thread():
+        return
+    try:
+        Gui.getMainWindow().statusBar().showMessage(f"CadSwarm: {msg}", TOAST_SECONDS * 1000)
+    except Exception:
+        pass
+    if SESSION.panel is not None:
+        SESSION.panel.flash(msg)
 
 
 def warn(msg):
@@ -133,6 +144,7 @@ class Session:
         self.briefs = []       # requests handed to the whole team (the host plans and builds them)
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
+        self.mirrored = {}     # part name -> version the live model showed at join (the mirror loop takes it on)
         self._moved_hint = 0
         # What the panel's banner tells the user: disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
@@ -206,11 +218,15 @@ class Session:
         except Exception:
             self.disconnect()  # don't stay "connected" to a session that failed to load
             raise
-        self.wake = threading.Event()
-        for loop in (self._poll_loop, self._heartbeat_loop):
-            threading.Thread(target=loop, args=(self.stop, self.events, self._bg_client(), self.seq),
-                             daemon=True).start()
+        self.wake, mirror_wake = threading.Event(), threading.Event()
+        threading.Thread(target=self._poll_loop, args=(self.stop, self.events, self._bg_client(), self.seq, mirror_wake),
+                         daemon=True).start()
+        threading.Thread(target=self._heartbeat_loop, args=(self.stop, self.events, self._bg_client(), self.seq),
+                         daemon=True).start()
         threading.Thread(target=self._refresh_loop, args=(self.stop, self.events, self._bg_client(), self.wake),
+                         daemon=True).start()
+        threading.Thread(target=self._mirror_loop,
+                         args=(self.stop, self.events, self._bg_client(), mirror_wake, dict(self.mirrored)),
                          daemon=True).start()
         self.timer.start(250)
         say(f"Joined the team in {cfg['db']} as {self.ident.get('name')}")
@@ -270,7 +286,30 @@ class Session:
     def request_refresh(self):
         self.wake.set()
 
-    def _poll_loop(self, stop, events, c, seq):
+    def _mirror_loop(self, stop, events, c, wake, applied):
+        """Keep the live model equal to the team's. Each pass fetches only the parts that differ from what this
+        window last applied, so a change that made no event (the host re-syncs its document when it restarts) or a
+        fetch that failed (host busy or offline) is caught on a later pass. Op events wake it early."""
+        while True:
+            wake.wait(REFRESH_SECONDS)
+            wake.clear()
+            if stop.is_set():
+                return
+            try:
+                breps, gone, now = c.mirror_changes(applied)
+            except HubRequestError as e:
+                if e.code in FATAL:
+                    return  # the poll and heartbeat loops report it
+                continue
+            if stop.is_set():
+                return
+            if breps:
+                events.put(("brep", breps))
+            if gone:
+                events.put(("deleted", gone))
+            applied = now
+
+    def _poll_loop(self, stop, events, c, seq, mirror_wake):
         offline = False
         while not stop.is_set():
             try:
@@ -292,19 +331,10 @@ class Session:
             if not r["events"]:
                 continue
             seq = r["seq"]
-            changed, deleted = set(), set()
             for ev in r["events"]:
-                if ev["kind"] == "op":
-                    changed |= set(ev["created"] + ev["modified"] + ev["recomputed"])
-                    deleted |= set(ev["deleted"])
                 events.put(("event", ev))
-            if changed:
-                try:
-                    events.put(("brep", c.post("/brep", {"names": sorted(changed)})["objects"]))
-                except HubRequestError as e:
-                    events.put(("offline", str(e)))
-            if deleted:
-                events.put(("deleted", sorted(deleted)))
+            if any(ev["kind"] == "op" for ev in r["events"]):
+                mirror_wake.set()  # the mirror loop fetches whatever changed
             events.put(("refresh", None))
 
     # ------------------------------------------------------- GUI-thread work
@@ -329,6 +359,9 @@ class Session:
                 refresh = True
             elif kind == "snapshot":
                 self.apply_snapshot(data)
+            elif kind == "suggestions":
+                if self.panel:
+                    self.panel.show_suggestions(data)
             elif kind == "done":
                 self.finish_async(*data)
             elif kind == "offline":
@@ -360,7 +393,7 @@ class Session:
         if moved and time.time() - self._moved_hint > 20:
             self._moved_hint = time.time()
             hint(f"{', '.join(moved)} is shared with your team, so the move was undone.\n\n"
-                 "To change a part yourself, select it and choose Team tools \u25b8 Edit a part yourself in the "
+                 "To change a part yourself, select it and choose the Tools tab \u25b8 Edit a part yourself in the "
                  "CadSwarm panel "
                  "(or start the edit first, then move it). Your change is sent to everyone when you click Save.")
 
@@ -420,10 +453,9 @@ class Session:
         doc.recompute()
 
     def full_refresh(self):
-        self.apply_breps(self.client.post("/brep", {})["objects"])
-        mirror = self.mirror()
-        live = {o["name"] for o in self.client.get("/model")["objects"]}
-        self.remove_objects([o.Name for o in mirror.Objects if o.Name not in live])
+        breps, _, self.mirrored = self.client.mirror_changes({})
+        self.apply_breps(breps)
+        self.remove_objects([o.Name for o in self.mirror().Objects if o.Name not in self.mirrored])
         self.refresh_meta()
         self.frame_model()
 
@@ -546,9 +578,10 @@ SESSION = Session()
 # ------------------------------------------------------------------ panel
 
 class TeamPanel(QtGui.QDockWidget):
-    """Your AI helpers and what each one is doing, then one chat box. Type @ and a helper's name to give it a
+    """A header that says where you stand, then tabs: Team (suggestions waiting for you, who's here, the chat
+    and the everyday actions), Tasks, Activity, Library and Tools. Type @ and a helper's name to give it a
     task (it starts at once and answers in the chat), @team to have the whole team plan and build a request,
-    @all to tell every helper something; anything else is chat. Tasks and Activity fold away underneath.
+    @all to tell every helper something; anything else is chat.
 
     Everything sits in a scroll area, so a small screen scrolls instead of cropping. Lists are rebuilt only
     when what they show changed, so a refresh never closes a menu, drops a selection or jumps the chat."""
@@ -565,66 +598,120 @@ class TeamPanel(QtGui.QDockWidget):
         self.outbox = []        # messages sent but not yet back from the team: shown greyed in the chat
         self.new_activity = 0
         self.completed_at = 0.0  # when @-completion last filled in a name (its Enter must not also send)
+        self.suggestions = {"setting": [], "style": []}  # what AI helpers suggested, waiting for a person
+        self.answered = set()   # suggestions answered here, hidden until the team's list catches up
+        self.fetching = False
         w = QtGui.QWidget()
         lay = QtGui.QVBoxLayout(w)
-        lay.setContentsMargins(8, 8, 8, 8)
-        lay.setSpacing(6)
-        # The banner always answers "where do I stand, and what do I do next?"
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+        # The header always answers "where do I stand, and what do I do next?"
         self.banner = QtGui.QFrame()
-        self.banner.setFrameShape(QtGui.QFrame.StyledPanel)
-        brow = QtGui.QHBoxLayout(self.banner)
-        brow.setContentsMargins(8, 6, 8, 6)
+        self.banner.setObjectName("card")
+        bl = QtGui.QVBoxLayout(self.banner)
+        bl.setContentsMargins(12, 10, 12, 10)
+        bl.setSpacing(4)
+        top = QtGui.QHBoxLayout()
+        self.title = QtGui.QLabel()
+        self.title.setObjectName("title")
+        self.title.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        self.status = QtGui.QLabel()
+        top.addWidget(self.title, 1)
+        top.addWidget(self.status)
+        bl.addLayout(top)
         self.banner_text = QtGui.QLabel()
         self.banner_text.setWordWrap(True)
         self.banner_text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
-        self.banner_button = QtGui.QPushButton()
-        self.banner_button.clicked.connect(self.banner_action)
-        self.invite_button = QtGui.QPushButton("Invite")
-        self.invite_button.setToolTip("Copy a new single-use invite code for a teammate")
-        self.invite_button.clicked.connect(invite_teammates)
-        brow.addWidget(self.banner_text, 1)
-        bcol = QtGui.QVBoxLayout()
-        bcol.addWidget(self.banner_button)
-        bcol.addWidget(self.invite_button)
-        brow.addLayout(bcol)
+        bl.addWidget(self.banner_text)
+        brow = QtGui.QHBoxLayout()
+        self.invite_button = action_button("Invite a teammate", "Copy a new single-use invite code for a teammate",
+                                           invite_teammates)
+        self.banner_button = action_button("", "", self.banner_action)
+        brow.addWidget(self.invite_button)
+        brow.addWidget(self.banner_button)
+        bl.addLayout(brow)
         lay.addWidget(self.banner)
+        self.toast = QtGui.QLabel()  # "✓ Created task …": what say() confirms, where people are looking
+        self.toast.setObjectName("toast")
+        self.toast.setWordWrap(True)
+        self.toast.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        self.toast.hide()
+        self.toast_timer = QtCore.QTimer(self)
+        self.toast_timer.setSingleShot(True)
+        self.toast_timer.timeout.connect(self.toast.hide)
+        lay.addWidget(self.toast)
 
-        # ------------------------------------------------------------ helpers
+        self.tabs = QtGui.QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(QtCore.Qt.ElideNone)
+        lay.addWidget(self.tabs, 1)
+
+        # ---------------------------------------------------------------- Team
+        page = QtGui.QWidget()
+        tl = page_layout(page)
+        self.suggest_box = QtGui.QFrame()
+        self.suggest_box.setObjectName("suggest")
+        self.suggest_lay = QtGui.QVBoxLayout(self.suggest_box)
+        self.suggest_lay.setContentsMargins(12, 10, 12, 10)
+        self.suggest_lay.setSpacing(8)
+        self.suggest_box.hide()
+        tl.addWidget(self.suggest_box)
         head = QtGui.QHBoxLayout()
-        head.addWidget(QtGui.QLabel("<b>AI helpers</b>"), 1)
+        head.addWidget(caption("Who's here"), 1)
         new = QtGui.QPushButton("＋ New helper")
-        new.setObjectName("primary")
+        new.setObjectName("quiet")
         new.setToolTip("Start another AI helper on this computer. You can have as many as you like.")
         new.clicked.connect(self.new_helper)
         head.addWidget(new)
-        lay.addLayout(head)
+        tl.addLayout(head)
+        self.people = QtGui.QLabel("")
+        self.people.setWordWrap(True)
+        tl.addWidget(self.people)
         self.team = QtGui.QTreeWidget()
+        self.team.setObjectName("list")
         self.team.setHeaderLabels(["Helper", "Task", "Status"])
+        self.team.setHeaderHidden(True)
         team_head = self.team.header()
         team_head.setStretchLastSection(False)
         team_head.setSectionResizeMode(0, QtGui.QHeaderView.Interactive)
         team_head.setSectionResizeMode(1, QtGui.QHeaderView.Stretch)
         team_head.setSectionResizeMode(2, QtGui.QHeaderView.Interactive)
+        self.team.setItemDelegateForColumn(2, PillDelegate(self.team))
         self.team.installEventFilter(self)  # name and status keep their share of the width as the panel resizes
         self.team.setRootIsDecorated(False)
+        self.team.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.team.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.team.customContextMenuRequested.connect(self.helper_menu)
         self.team.itemDoubleClicked.connect(self.team_double_click)
         self.team.setToolTip("Double-click a helper to give it a task. Right-click your own helpers to rename, "
                              "restart or remove them.")
-        lay.addWidget(self.team)
+        tl.addWidget(self.team)
         self.team_tip = QtGui.QLabel("")
         self.team_tip.setWordWrap(True)
-        lay.addWidget(self.team_tip)
-        self.people = QtGui.QLabel("")
-        self.people.setWordWrap(True)
-        lay.addWidget(self.people)
+        tl.addWidget(self.team_tip)
 
-        # --------------------------------------------------------------- chat
+        tl.addSpacing(4)
+        tl.addWidget(caption("Team chat"))
         self.chat = QtGui.QTextBrowser()
         self.chat.setOpenLinks(False)
         self.chat.setMinimumHeight(220)
-        lay.addWidget(self.chat, 1)
+        tl.addWidget(self.chat, 1)
+        # Scrolled up (reading back, or away for a while)? A button in the corner jumps to the newest message.
+        self.chat_count = 0
+        self.unseen = 0
+        self.chat_rendering = False
+        self.chat_follow = True  # pinned to the newest message (until the person scrolls up)
+        self.jump = QtGui.QPushButton("↓", self.chat)
+        self.jump.setObjectName("jump")
+        self.jump.setToolTip("Jump to the newest message")
+        self.jump.setCursor(QtCore.Qt.PointingHandCursor)
+        self.jump.clicked.connect(self.jump_to_bottom)
+        self.jump.hide()
+        self.chat.installEventFilter(self)  # keeps the button in the bottom-right corner as the chat resizes
+        self.chat.verticalScrollBar().actionTriggered.connect(lambda _a: self.chat_user_scroll())
+        self.chat.verticalScrollBar().valueChanged.connect(lambda _v: self.chat_scrolled())
+        self.chat.verticalScrollBar().rangeChanged.connect(lambda *_: self.chat_grew())
         row = QtGui.QHBoxLayout()
         self.msg = QtGui.QLineEdit()
         self.msg.setPlaceholderText("@helper what to do, or a message for your team")
@@ -635,7 +722,7 @@ class TeamPanel(QtGui.QDockWidget):
         send.setObjectName("primary")
         send.clicked.connect(self.send)
         row.addWidget(send)
-        lay.addLayout(row)
+        tl.addLayout(row)
         self.completer = QtGui.QCompleter(self)
         self.completer.setModel(QtCore.QStringListModel([], self.completer))
         self.completer.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
@@ -647,15 +734,38 @@ class TeamPanel(QtGui.QDockWidget):
             self.completer.activated.connect(self.insert_mention)
         hint_ = QtGui.QLabel("<small style='color:#8b949e'><b>@name</b> gives a helper a task · <b>@team</b> plans "
                              "and builds a whole request · <b>@all</b> tells every helper · no @ is chat between "
-                             "people (helpers don't see it)</small>")
+                             "people</small>")
         hint_.setWordWrap(True)
-        lay.addWidget(hint_)
+        tl.addWidget(hint_)
+        quick = QtGui.QGridLayout()
+        quick.setSpacing(6)
+        for i, (label, tip, fn) in enumerate((
+                ("Add a task", "Give the team (or yourself) something to do", self.new_task),
+                ("Change a shared size", "Change a size every part reads from, like the hole spacing",
+                 self.set_param),
+                ("Check for clashes", "Find parts that overlap", run_interference),
+                ("Save as 3D file", "Save the shared model as a STEP file", run_export))):
+            quick.addWidget(action_button(label, tip, fn), i // 2, i % 2)
+        tl.addLayout(quick)
+        self.params = QtGui.QLabel("")
+        self.params.setWordWrap(True)
+        tl.addWidget(self.params)
+        self.team_page = page
+        self.tabs.addTab(page, "Team")
 
-        # ------------------------------------------------- tasks and activity
-        tasks = QtGui.QWidget()
-        tl = QtGui.QVBoxLayout(tasks)
-        tl.setContentsMargins(0, 0, 0, 0)
+        # --------------------------------------------------------------- Tasks
+        page = QtGui.QWidget()
+        tl = page_layout(page)
+        head = QtGui.QHBoxLayout()
+        head.addWidget(caption("Tasks"), 1)
+        add = QtGui.QPushButton("＋ New task")
+        add.setObjectName("quiet")
+        add.setToolTip("Give the team (or yourself) something to do")
+        add.clicked.connect(self.new_task)
+        head.addWidget(add)
+        tl.addLayout(head)
         self.task_list = QtGui.QTreeWidget()
+        self.task_list.setObjectName("list")
         self.task_list.setHeaderLabels(["Task", "Status"])
         th = self.task_list.header()
         th.setStretchLastSection(False)
@@ -664,65 +774,106 @@ class TeamPanel(QtGui.QDockWidget):
         self.task_list.installEventFilter(self)  # keeps the status column at about 40% when the panel resizes
         self.task_list.itemSelectionChanged.connect(self.task_selected)
         self.task_list.itemDoubleClicked.connect(lambda *_: self.task_details())
-        self.task_list.setMinimumHeight(160)
-        tl.addWidget(self.task_list)
+        self.task_list.setMinimumHeight(220)
+        tl.addWidget(self.task_list, 1)
         grid = QtGui.QGridLayout()
-        self.task_start = QtGui.QPushButton("Start it")
-        self.task_start.setToolTip("Ask the helper it's for (or one you pick) to start it now")
-        self.task_start.clicked.connect(self.task_ask_start)
-        self.task_mine = QtGui.QPushButton("I'll do it")
-        self.task_mine.setToolTip("Take this task yourself and change the parts by hand")
-        self.task_mine.clicked.connect(self.task_take)
-        self.task_done = QtGui.QPushButton("Mark done")
-        self.task_done.clicked.connect(self.task_finish)
-        details = QtGui.QPushButton("Details")
-        details.clicked.connect(self.task_details)
+        grid.setSpacing(6)
+        self.task_start = action_button("Start it", "Ask the helper it's for (or one you pick) to start it now",
+                                        self.task_ask_start)
+        self.task_mine = action_button("I'll do it", "Take this task yourself and change the parts by hand",
+                                       self.task_take)
+        self.task_done = action_button("Mark done", "Say you've finished this task", self.task_finish)
+        details = action_button("Details", "Everything about this task, and its result", self.task_details)
         for i, b in enumerate((self.task_start, self.task_mine, self.task_done, details)):
-            b.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Fixed)
             grid.addWidget(b, i // 2, i % 2)
         tl.addLayout(grid)
         self.task_hint = QtGui.QLabel("")
         self.task_hint.setWordWrap(True)
         tl.addWidget(self.task_hint)
-        self.tasks_button = self.section(lay, "Tasks", tasks)
-        self.activity = QtGui.QTextBrowser()
-        self.activity.setMinimumHeight(160)
-        self.activity_button = self.section(lay, "Activity", self.activity)
-        self.library = library_ui.LibraryTab(session)
-        self.library_button = self.section(lay, "Library", self.library)
+        self.tasks_page = page
+        self.tabs.addTab(page, "Tasks")
 
-        more = QtGui.QToolButton()
-        more.setText("Team tools ▾")
-        more.setPopupMode(QtGui.QToolButton.InstantPopup)
-        menu = QtGui.QMenu(more)
-        for label, fn in (("✎ Edit a part yourself…", edit_part), ("Change a shared size…", self.set_param),
-                          ("Check for clashes", run_interference), ("Export STEP…", run_export),
-                          (None, None),
-                          ("Project files…", show_project_files), ("Open project folder", open_project_folder),
-                          ("Save a snapshot of the model", save_snapshot),
-                          ("Simulation (FEA) reports…", show_fea_reports),
-                          ("Storage and free up space…", show_storage),
-                          ("Components library…", library_ui.show_library),
-                          ("Precision settings…", library_ui.show_settings),
-                          ("Learned design style…", style_ui.show_style),
-                          (None, None),
-                          ("Set up a helper step by step…", add_helper), ("Invite teammates…", invite_teammates),
-                          ("Restart my AI helpers", restart_helpers), ("Show my AI helpers' logs", show_helper_log),
-                          (None, None),
-                          ("Hold the selected parts (only you can change them)", self.lock),
-                          ("Let go of the selected parts", self.release),
-                          ("Force-free the selected parts", self.force_release),
-                          ("Take over a teammate's work", self.take_over),
-                          (None, None), ("Stop hosting the team", stop_hosting)):
-            if label is None:
-                menu.addSeparator()
-            else:
-                menu.addAction(label).triggered.connect(lambda _=False, f=fn: f())
-        more.setMenu(menu)
-        lay.addWidget(more, 0, QtCore.Qt.AlignRight)
-        self.params = QtGui.QLabel("")
-        self.params.setWordWrap(True)
-        lay.addWidget(self.params)
+        # ------------------------------------------------------------ Activity
+        page = QtGui.QWidget()
+        tl = page_layout(page)
+        tl.addWidget(caption("Everything that happens, as it lands"))
+        self.activity = QtGui.QTextBrowser()
+        self.activity.setMinimumHeight(260)
+        tl.addWidget(self.activity, 1)
+        self.activity_page = page
+        self.tabs.addTab(page, "Activity")
+
+        # ------------------------------------------------------------- Library
+        self.library = library_ui.LibraryTab(session)
+        self.tabs.addTab(self.library, "Library")
+
+        # --------------------------------------------------------------- Tools
+        page = QtGui.QWidget()
+        tl = page_layout(page)
+        for title, actions in (
+                ("Build", (("✎ Edit a part yourself…", "Change a part by hand and share the change", edit_part),
+                           ("Change a shared size…", "Change a size every part reads from", self.set_param),
+                           ("Check for clashes", "Find parts that overlap", run_interference),
+                           ("Save as 3D file (STEP)…", "Save the shared model as a STEP file", run_export))),
+                ("Project", (("Project files…", "Notes, plans and scripts your team saved", show_project_files),
+                             ("Open project folder", "Open the folder the team saves into", open_project_folder),
+                             ("Save a snapshot…", "Keep this version of the model", save_snapshot),
+                             ("Simulation reports…", "The strength checks (FEA) your helpers ran",
+                              show_fea_reports),
+                             ("Storage and free up space…", "What uses the project's room", show_storage))),
+                ("Team rules", (("Precision settings…", "Clearances, fits and precision for the whole team",
+                                 library_ui.show_settings),
+                                ("Learned design style…", "The design rules CadSwarm learned from your team",
+                                 style_ui.show_style))),
+                ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex or Droid",
+                                 add_helper),
+                                ("Invite a teammate…", "Copy a single-use invite code", invite_teammates),
+                                ("Restart my AI helpers", "Restart the helpers that run on this computer",
+                                 restart_helpers),
+                                ("Show my AI helpers' logs", "What your helpers wrote while working",
+                                 show_helper_log))),
+                ("Parts", (("Hold the selected parts", "Only you can change them until you let go", self.lock),
+                           ("Let go of the selected parts", "Anyone can change them again", self.release),
+                           ("Force-free the selected parts", "Free parts someone else holds", self.force_release),
+                           ("Take over a teammate's work", "Take a teammate's held parts and tasks",
+                            self.take_over)))):
+            tl.addWidget(caption(title))
+            group = QtGui.QFrame()
+            group.setObjectName("card")
+            gl = QtGui.QVBoxLayout(group)
+            gl.setContentsMargins(4, 4, 4, 4)
+            gl.setSpacing(0)
+            for label, tip, fn in actions:
+                b = action_button(label, tip, fn)
+                b.setObjectName("tool")
+                gl.addWidget(b)
+            tl.addWidget(group)
+            tl.addSpacing(6)
+        tl.addWidget(caption("3D view"))
+        arrows = QtGui.QHBoxLayout()
+        self.pointers = QtGui.QCheckBox("Show helpers' arrows")
+        self.pointers.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
+        self.pointers.setToolTip("An arrow in each helper's colour sits on the part it is working on")
+        self.pointers.setChecked(overlay.pointers_enabled())
+        self.pointers.toggled.connect(overlay.set_pointers)
+        arrows.addWidget(self.pointers, 1)
+        preview = QtGui.QPushButton("Preview")
+        preview.setObjectName("quiet")
+        preview.setToolTip("Open a demo model with moving arrows, to see what they look like")
+        preview.clicked.connect(overlay.preview)
+        arrows.addWidget(preview)
+        tl.addLayout(arrows)
+        tl.addSpacing(6)
+        stop = action_button("Stop hosting the team", "Stop the team server on this computer (only if you started "
+                             "the team)", stop_hosting)
+        stop.setObjectName("danger")
+        tl.addWidget(stop)
+        tl.addStretch(1)
+        self.tools_page = page
+        self.tabs.addTab(page, "Tools")
+        self.tabs.currentChanged.connect(self.tab_changed)
+        self.tab_changed(0)
+
         w.setObjectName("cadswarmPanel")
         w.setStyleSheet(PANEL_STYLE)
         # A small screen scrolls instead of squashing or cropping anything.
@@ -736,6 +887,9 @@ class TeamPanel(QtGui.QDockWidget):
         self.spin_timer = QtCore.QTimer(self)
         self.spin_timer.timeout.connect(self.spin)
         self.spin_timer.start(350)
+        self.suggest_timer = QtCore.QTimer(self)
+        self.suggest_timer.timeout.connect(self.fetch_suggestions)
+        self.suggest_timer.start(SUGGEST_SECONDS * 1000)
         # Follow the FreeCAD window: keep the share of its width people last dragged the panel to.
         self.share = PANEL_SHARE
         self.window_width = 0
@@ -746,29 +900,21 @@ class TeamPanel(QtGui.QDockWidget):
         self.task_selected()
         self.show_state(session)
 
-    def section(self, lay, title, body):
-        """A heading that folds `body` open and closed (closed to start with)."""
-        button = QtGui.QToolButton()
-        button.setText(title)
-        button.setCheckable(True)
-        button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-        button.setArrowType(QtCore.Qt.RightArrow)
-        button.setObjectName("section")
-        body.setVisible(False)
+    def tab_changed(self, index):
+        """Size the tabs to the one showing: a hidden tab neither widens the panel nor leaves its height behind."""
+        for i in range(self.tabs.count()):
+            policy = QtGui.QSizePolicy.Preferred if i == index else QtGui.QSizePolicy.Ignored
+            self.tabs.widget(i).setSizePolicy(policy, policy)
+        self.tabs.updateGeometry()
+        if self.tabs.widget(index) is self.activity_page:
+            self.new_activity = 0
+            self.tabs.setTabText(index, "Activity")
 
-        def toggle(on):
-            body.setVisible(on)
-            button.setArrowType(QtCore.Qt.DownArrow if on else QtCore.Qt.RightArrow)
-            if on and body is self.activity:
-                self.new_activity = 0
-                self.activity_button.setText("Activity")
-        button.toggled.connect(toggle)
-        lay.addWidget(button)
-        lay.addWidget(body)
-        return button
+    def show_tab(self, page):
+        self.tabs.setCurrentWidget(page)
 
     def show_tasks(self):
-        self.tasks_button.setChecked(True)
+        self.show_tab(self.tasks_page)
 
     # ------------------------------------------------------------------ window size
 
@@ -796,29 +942,97 @@ class TeamPanel(QtGui.QDockWidget):
             QtCore.QTimer.singleShot(0, self.follow_window)
         if obj is getattr(self, "team", None) and ev.type() == QtCore.QEvent.Resize:
             self.team.setColumnWidth(0, max(90, int(ev.size().width() * 0.34)))
-            self.team.setColumnWidth(2, max(70, int(ev.size().width() * 0.24)))
+            self.team.setColumnWidth(2, max(70, self.team.sizeHintForColumn(2)))
         if obj is getattr(self, "task_list", None) and ev.type() == QtCore.QEvent.Resize:
             self.task_list.setColumnWidth(1, max(110, int(ev.size().width() * 0.4)))
+        if obj is getattr(self, "chat", None) and ev.type() == QtCore.QEvent.Resize:
+            self.place_jump()
         return super().eventFilter(obj, ev)
+
+    def flash(self, text):
+        """Confirm something the person did in the panel itself, for a few seconds."""
+        self.toast.setText(f"✓  {text}")
+        self.toast.show()
+        self.toast_timer.start(TOAST_SECONDS * 1000)
+
+    # --------------------------------------------------------------- jump to the newest message
+
+    def chat_at_bottom(self):
+        bar = self.chat.verticalScrollBar()
+        return bar.value() >= bar.maximum() - 4
+
+    def place_jump(self):
+        bar = self.chat.verticalScrollBar()
+        right = self.chat.width() - (bar.width() if bar.isVisible() else 0) - 12
+        self.jump.move(right - self.jump.width(), self.chat.height() - self.jump.height() - 12)
+
+    def chat_user_scroll(self):
+        """The person scrolled (wheel, drag, keys): stop following until they're back at the bottom. Only this
+        decides it, because Qt also moves the scroll position itself when the chat is resized or redrawn."""
+        self.chat_follow = False
+        QtCore.QTimer.singleShot(0, self.chat_user_scrolled)  # the action is applied after this signal
+
+    def chat_user_scrolled(self):
+        self.chat_follow = self.chat_at_bottom()
+        self.update_jump()
+
+    def chat_scrolled(self):
+        if self.chat_rendering:  # mid-redraw the chat is briefly empty, which would look like "at the bottom"
+            return
+        if self.chat_follow and not self.chat_at_bottom():  # Qt moved it (a resize): back to the newest
+            bar = self.chat.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        self.update_jump()
+
+    def chat_grew(self):
+        """Qt lays a long chat out a bit at a time, so the bottom keeps moving: stay pinned to it."""
+        if self.chat_follow and not self.chat_rendering:
+            bar = self.chat.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        self.update_jump()
+
+    def update_jump(self):
+        """Show the button only while scrolled up, with how many messages came in meanwhile."""
+        if self.chat_rendering:
+            return
+        if self.chat_follow or self.chat_at_bottom():
+            self.unseen = 0
+            self.jump.hide()
+            return
+        self.jump.setText(f"↓  {self.unseen} new" if self.unseen else "↓")
+        self.jump.adjustSize()
+        self.jump.resize(max(self.jump.width(), self.jump.height()), self.jump.height())
+        self.place_jump()
+        self.jump.show()
+        self.jump.raise_()
+
+    def jump_to_bottom(self):
+        self.chat_follow = True
+        bar = self.chat.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self.update_jump()
 
     # ------------------------------------------------------------------ state
 
     BANNERS = {
-        # state: (background, text color, headline, button)
-        "disconnected": ("#fff4d6", "#5c4400", "You haven't joined a team session yet.",
-                         "Get started…"),
-        "offline": ("#fde2e1", "#7a1712", "Lost contact with your team. Retrying automatically…", "Retry now"),
-        "ended": ("#fde2e1", "#7a1712", "You're no longer in the team session.", "Join again…"),
-        "connected": ("#e3f6e8", "#14532d", "", "Leave"),
+        # state: (status colour, status word, headline, button)
+        "disconnected": ("#d29922", "Not joined", "You haven't joined a team session yet.", "Get started…"),
+        "offline": ("#f85149", "Reconnecting", "Lost contact with your team. Retrying automatically…",
+                    "Retry now"),
+        "ended": ("#f85149", "Signed out", "You're no longer in the team session.", "Join again…"),
+        "connected": ("#3fb950", "Connected", "", "Leave"),
     }
 
     def show_state(self, s):
-        bg, fg, headline, button = self.BANNERS[s.state]
+        colour, word, headline, button = self.BANNERS[s.state]
+        project = prefs().GetString("ProjectName")
+        self.title.setText("Team" + (f" · {html.escape(project)}" if project else ""))
+        self.status.setText(f"<span style='color:{colour}'>●&nbsp;{word}</span>")
         if s.state == "connected":
             me = s.ident["name"] if s.ident else "you"
             parts = [o for o in s.model.get("objects", []) if o.get("bbox")]
-            headline = (f"<b>You're in the team session as {html.escape(me)}.</b> "
-                        f"{len(parts)} part{'s' if len(parts) != 1 else ''} in the model so far.")
+            headline = (f"You're <b>{html.escape(me)}</b> · {len(parts)} part{'s' if len(parts) != 1 else ''} "
+                        "in the model")
         detail = ""
         if s.state == "disconnected":
             left = s.state_detail == "You left the team session."
@@ -835,11 +1049,16 @@ class TeamPanel(QtGui.QDockWidget):
                       + (f"<br><i>{s.state_detail}</i>".replace("\n", " ") if s.state_detail else ""))
         elif s.state in ("offline", "ended"):
             detail = s.state_detail.replace("\n", "<br>")
-        self.banner_text.setText(f"<b>{headline}</b>" + (f"<br>{detail}" if detail else "")
-                                 if s.state != "connected" else headline)
-        self.banner.setStyleSheet(f"QFrame {{ background: {bg}; border-radius: 6px; }} "
-                                  f"QLabel {{ color: {fg}; background: transparent; }}")
+        self.banner_text.setText(f"<b>{headline}</b>" + (f"<br><span style='color:#8b949e'>{detail}</span>"
+                                                          if detail else "")
+                                 if s.state != "connected" else f"<span style='color:#8b949e'>{headline}</span>")
         self.banner_button.setText(button)
+        # Not in a team: joining is the one thing to do, so its button stands out.
+        primary = "" if s.state == "connected" else "primary"
+        if self.banner_button.objectName() != primary:
+            self.banner_button.setObjectName(primary)
+            self.banner_button.style().unpolish(self.banner_button)
+            self.banner_button.style().polish(self.banner_button)
         self.invite_button.setVisible(s.state == "connected")
 
     def banner_action(self):
@@ -866,9 +1085,12 @@ class TeamPanel(QtGui.QDockWidget):
         self.render_tasks(s)
         self.render_chat(s)
         params = s.model.get("params") or {}
-        self.params.setText("<small><b>Shared sizes:</b> " + html.escape(", ".join(
-            f"{k.replace('_', ' ')} = {v:g} mm" if isinstance(v, (int, float)) else f"{k.replace('_', ' ')} = {v}"
+        self.params.setText("<small><span style='color:#8b949e'>Shared sizes</span>&nbsp; " + html.escape(" · ".join(
+            f"{k.replace('_', ' ')} {v:g} mm" if isinstance(v, (int, float)) else f"{k.replace('_', ' ')} {v}"
             for k, v in params.items()) or "none yet") + "</small>")
+        if not self.keys.get("suggestions_read"):
+            self.keys["suggestions_read"] = True
+            self.fetch_suggestions()
 
     def render_team(self, s):
         me = s.ident["name"] if s.ident else "?"
@@ -890,9 +1112,11 @@ class TeamPanel(QtGui.QDockWidget):
             if state == "away":
                 tips.append(away_tip(p, local.get(p["name"])))
         people = [p for p in s.model["participants"] if p.get("kind") == "human"]
-        self.people.setText("<small style='color:#8b949e'>People: " + ", ".join(
-            html.escape(p["name"]) + (" (you)" if p["name"] == me else "")
-            + ("" if p.get("status") == "active" else " (away)") for p in people) + "</small>")
+        self.people.setText("<br>".join(
+            f"<span style='color:{dot_colour(p['id'])}; font-size:13pt'>●</span>&nbsp;{html.escape(p['name'])}"
+            + (" (you)" if p["name"] == me else "")
+            + f" <span style='color:#8b949e'>· {'watching' if p.get('status') == 'active' else 'away'}</span>"
+            for p in people))
         self.team_tip.setText("<small>" + "<br>".join(tips) + "</small>" if tips else "")
         self.team_tip.setVisible(bool(tips))
         choices = [r[0] for r in rows] + ["team", "all"]
@@ -911,7 +1135,8 @@ class TeamPanel(QtGui.QDockWidget):
             empty.setFirstColumnSpanned(True)
             self.team.addTopLevelItem(empty)
         for name, pid, client, state, task, status, held, mine in rows:
-            item = QtGui.QTreeWidgetItem([f"🤖 {name}", task or "no task", status])
+            item = QtGui.QTreeWidgetItem([name, task or "no task", status])
+            item.setIcon(0, dot_icon(owner_color(pid)))
             item.setData(0, QtCore.Qt.UserRole, name)
             item.setData(2, QtCore.Qt.UserRole, state)
             item.setData(2, QtCore.Qt.UserRole + 1, status)
@@ -919,34 +1144,33 @@ class TeamPanel(QtGui.QDockWidget):
             item.setToolTip(0, who)
             item.setToolTip(1, task or "Nothing assigned. Type @" + name + " in the chat to give it a task.")
             item.setToolTip(2, status + (f"\nHolds {names(list(held))}" if held else ""))
-            r, g, b = owner_color(pid)
-            item.setForeground(0, QtGui.QBrush(QtGui.QColor(int(r * 200), int(g * 200), int(b * 200))))
             if mine:
                 font = item.font(0)
                 font.setBold(True)
                 item.setFont(0, font)
             if not task:
                 item.setForeground(1, QtGui.QBrush(QtGui.QColor("#8b949e")))
-            colour = {"working": "#d9822b", "ready": "#1a7f37", "away": "#8b949e"}.get(state)
+            colour = {"working": "#d9822b", "ready": "#2da44e", "away": "#8b949e"}.get(state)
             if colour:
                 item.setForeground(2, QtGui.QBrush(QtGui.QColor(colour)))
             if state == "working":
                 self.busy_rows.append((item, 2, status))
             self.team.addTopLevelItem(item)
+        self.team.setColumnWidth(2, max(70, self.team.sizeHintForColumn(2)))  # the whole status pill shows
         self.fit_team_height()
 
     def fit_team_height(self):
         """As tall as its rows (up to about six), so there's no empty box above the chat."""
         rows = self.team.topLevelItemCount()
-        row_h = self.team.fontMetrics().height() + 8  # the stylesheet pads each row by 3 px top and bottom
-        self.team.setFixedHeight(min(max(rows, 1), 6) * row_h + self.team.header().sizeHint().height() + 6)
+        row_h = max(self.team.sizeHintForRow(0), self.team.fontMetrics().height() + 10)
+        self.team.setFixedHeight(min(max(rows, 1), 6) * row_h + 2 * self.team.frameWidth() + 4)
 
     def render_tasks(self, s):
         key = (tuple((t["id"], t["status"], t.get("owner_name"), t.get("assignee"), t["title"], t.get("brief"))
                      for t in s.tasks),
                tuple((b["id"], b["status"], b["done"], b["tasks"]) for b in s.briefs))
         open_ = sum(1 for t in s.tasks if t["status"] != "done")
-        self.tasks_button.setText(f"Tasks ({open_} open)" if open_ else "Tasks")
+        self.tabs.setTabText(self.tabs.indexOf(self.tasks_page), f"Tasks · {open_}" if open_ else "Tasks")
         if not self.changed("tasks", key):
             for item, word in getattr(self, "task_busy", []):
                 self.busy_rows.append((item, 1, word))
@@ -1009,7 +1233,10 @@ class TeamPanel(QtGui.QDockWidget):
         if not self.changed("chat", key):
             return
         bar = self.chat.verticalScrollBar()
-        at_bottom = bar.value() >= bar.maximum() - 4
+        at_bottom, was = self.chat_follow, bar.value()
+        if not at_bottom:
+            self.unseen += max(0, len(shown) - self.chat_count)
+        self.chat_count = len(shown)
         lines = []
         for m in shown:
             mine = m["from"] == me
@@ -1033,9 +1260,14 @@ class TeamPanel(QtGui.QDockWidget):
         if not lines:
             lines.append("<p style='color:#8b949e'>No messages yet. Type <b>@</b> and pick a helper to give it "
                          "something to build. It answers here as it works.</p>")
-        self.chat.setHtml("".join(lines))
-        if at_bottom or len(lines) <= 1:
-            bar.setValue(bar.maximum())
+        self.chat_rendering = True
+        try:
+            self.chat.setHtml("".join(lines))
+            # setHtml scrolls to the top: follow the newest message, or stay where the person was reading.
+            bar.setValue(bar.maximum() if at_bottom or len(lines) <= 1 else was)
+        finally:
+            self.chat_rendering = False
+        self.update_jump()
 
     def spin(self):
         if not self.busy_rows:
@@ -1051,9 +1283,9 @@ class TeamPanel(QtGui.QDockWidget):
 
     def note_activity(self, line):
         self.activity.append(line)
-        if not self.activity.isVisible():
+        if self.tabs.currentWidget() is not self.activity_page:
             self.new_activity += 1
-            self.activity_button.setText(f"Activity ({self.new_activity} new)")
+            self.tabs.setTabText(self.tabs.indexOf(self.activity_page), f"Activity · {self.new_activity}")
 
     def on_event(self, ev):
         """Team events go to Activity (the chat itself is redrawn from the team's messages). Messages between
@@ -1077,9 +1309,80 @@ class TeamPanel(QtGui.QDockWidget):
             return
         if k == "library" and self.library.loaded:
             self.library.reload()
+        if k in ("setting_suggested", "setting_changed"):
+            self.fetch_suggestions()
         line = describe_event(ev)
         if line:
             self.note_activity(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
+
+    # ---------------------------------------------------------- suggestions for you
+
+    def fetch_suggestions(self):
+        """Re-read what AI helpers suggested, off the GUI thread; it comes back through the event queue."""
+        s = self.session
+        if not s.connected or self.fetching:
+            return
+        self.fetching = True
+        client, events = s.client, s.events
+        threading.Thread(target=lambda: events.put(("suggestions", read_suggestions(client))), daemon=True).start()
+
+    def show_suggestions(self, found):
+        """One card per suggestion, in plain words, with the yes/no right there."""
+        self.fetching = False
+        for source, rows in found.items():
+            if rows is not None:  # a source that couldn't be read keeps what it showed
+                self.suggestions[source] = rows
+        rows = [r for r in self.suggestions["setting"] + self.suggestions["style"] if r["key"] not in self.answered]
+        if not self.changed("suggestions", tuple((r["key"], r["text"]) for r in rows)):
+            return
+        while self.suggest_lay.count():
+            w = self.suggest_lay.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        self.suggest_box.setVisible(bool(rows))
+        if not rows:
+            return
+        self.suggest_lay.addWidget(caption(f"Waiting for you · {len(rows)}", colour="#d9822b"))
+        for r in rows[:SUGGESTIONS_SHOWN]:
+            self.suggest_lay.addWidget(self.suggestion_row(r))
+        if len(rows) > SUGGESTIONS_SHOWN:
+            more = QtGui.QLabel(f"<small style='color:#8b949e'>{len(rows) - SUGGESTIONS_SHOWN} more in Tools ▸ "
+                                "Precision settings and Learned design style</small>")
+            more.setWordWrap(True)
+            self.suggest_lay.addWidget(more)
+
+    def suggestion_row(self, r):
+        row = QtGui.QWidget()
+        rl = QtGui.QVBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(4)
+        text = QtGui.QLabel(r["text"])
+        text.setWordWrap(True)
+        text.setTextFormat(QtCore.Qt.RichText)
+        text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        rl.addWidget(text)
+        buttons = QtGui.QHBoxLayout()
+        no = action_button("Dismiss", "Say no; the helper is told", lambda: self.answer(r, False))
+        yes = action_button(r["yes"], "Say yes; it applies to the whole team", lambda: self.answer(r, True))
+        yes.setObjectName("primary")
+        buttons.addWidget(no)
+        buttons.addWidget(yes)
+        rl.addLayout(buttons)
+        return row
+
+    def answer(self, r, accept):
+        """Accept or dismiss a suggestion; it leaves the card at once and the team's list catches up."""
+        self.answered.add(r["key"])
+        self.show_suggestions({})
+        if r["kind"] == "setting":
+            path, body = f"/settings/suggestions/{r['id']}", {"accept": accept}
+        else:
+            path, body = "/style/resolve", {"rule_id": r["id"], "decision": "confirm" if accept else "dismiss"}
+        self.session.act_async("POST", path, body, purpose="answer a suggestion",
+                               done=lambda _r: (say(("Accepted: " if accept else "Dismissed: ") + r["plain"]),
+                                                self.fetch_suggestions()),
+                               failed=lambda: (self.answered.discard(r["key"]), self.keys.pop("suggestions", None),
+                                               self.show_suggestions({})))
 
     # --------------------------------------------------------------- the chat box
 
@@ -1332,7 +1635,7 @@ class TeamPanel(QtGui.QDockWidget):
                 for n in t["objects"]:
                     if App.getDocument(MIRROR_DOC).getObject(n):
                         Gui.Selection.addSelection(MIRROR_DOC, n)
-            hint(f"“{t['title']}” is yours. Select a part and use Team tools ▸ Edit a part yourself to change "
+            hint(f"“{t['title']}” is yours. Select a part and use the Tools tab ▸ Edit a part yourself to change "
                  "it; click Mark done when you're finished.")
 
     def task_finish(self):
@@ -1415,20 +1718,188 @@ PANEL_MIN_WIDTH = 300
 PANEL_WIDTH = 520
 PANEL_SHARE = 0.3   # of the FreeCAD window's width, until someone drags the panel wider or narrower
 PANEL_STYLE = """
-#cadswarmPanel { font-size: 10.5pt; }
-#cadswarmPanel QPushButton, #cadswarmPanel QToolButton { min-height: 26px; padding: 3px 10px; }
-#cadswarmPanel QPushButton#primary { background: #d9822b; color: white; font-weight: bold; border-radius: 4px;
-    padding: 4px 14px; }
-#cadswarmPanel QPushButton#primary:disabled { background: #e8b98a; }
-#cadswarmPanel QToolButton#section { border: none; font-weight: bold; min-height: 24px; padding: 2px 0; }
-#cadswarmPanel QTabBar::tab { min-height: 26px; padding: 3px 14px; }
-#cadswarmPanel QTreeWidget::item { padding: 3px 2px; }
-#cadswarmPanel QComboBox, #cadswarmPanel QLineEdit { min-height: 26px; }
+#cadswarmPanel { font-size: 10pt; }
+#cadswarmPanel QPushButton { min-width: 0px; padding: 6px 12px; border: 1px solid palette(mid); border-radius: 6px;
+    background: palette(button); }
+#cadswarmPanel QPushButton:hover { border-color: #d9822b; }
+#cadswarmPanel QPushButton:pressed { background: palette(midlight); }
+#cadswarmPanel QPushButton:disabled { color: #8b949e; border-color: palette(midlight); }
+#cadswarmPanel QPushButton#primary { background: #d9822b; border-color: #d9822b; color: white; font-weight: bold; }
+#cadswarmPanel QPushButton#primary:hover { background: #e8913a; border-color: #e8913a; }
+#cadswarmPanel QPushButton#primary:disabled { background: #e8b98a; border-color: #e8b98a; }
+#cadswarmPanel QPushButton#quiet, #cadswarmPanel QPushButton#danger { border: none; background: transparent;
+    color: #d9822b; font-weight: bold; padding: 3px 4px; }
+#cadswarmPanel QPushButton#danger { color: #cf222e; font-weight: normal; text-align: left; }
+#cadswarmPanel QPushButton#quiet:hover, #cadswarmPanel QPushButton#danger:hover { text-decoration: underline; }
+#cadswarmPanel QPushButton#jump { background: #d9822b; border: none; border-radius: 14px; color: white;
+    font-weight: bold; padding: 4px 10px; min-height: 20px; }
+#cadswarmPanel QPushButton#jump:hover { background: #e8913a; }
+#cadswarmPanel QPushButton#tool { text-align: left; padding: 4px 10px; border: none; background: transparent; }
+#cadswarmPanel QPushButton#tool:hover { background: palette(window); color: #d9822b; }
+#cadswarmPanel QToolButton { padding: 6px 10px; }
+#cadswarmPanel QFrame#card { background: palette(base); border: 1px solid palette(mid); border-radius: 10px; }
+#cadswarmPanel QFrame#suggest { background: palette(base); border: 1px solid #d9822b; border-radius: 10px; }
+#cadswarmPanel QLabel#title { font-size: 12pt; font-weight: bold; }
+#cadswarmPanel QTabWidget::pane { border: none; border-top: 1px solid palette(mid); }
+#cadswarmPanel QTabBar::tab { background: transparent; border: none; border-bottom: 2px solid transparent;
+    padding: 6px 9px; margin-right: 2px; min-height: 20px; }
+#cadswarmPanel QTabBar::tab:!selected { color: #8b949e; }
+#cadswarmPanel QTabBar::tab:selected { border-bottom: 2px solid #d9822b; font-weight: bold; }
+#cadswarmPanel QTabBar QToolButton { padding: 0; background: palette(window); }
+#cadswarmPanel QTreeWidget, #cadswarmPanel QTextBrowser { border: 1px solid palette(mid); border-radius: 8px;
+    background: palette(base); }
+#cadswarmPanel QTextBrowser { padding: 4px; }
+#cadswarmPanel QTreeWidget::item { padding: 4px 2px; }
+#cadswarmPanel QHeaderView { background: transparent; border: none; }
+#cadswarmPanel QHeaderView::section { background: transparent; color: #8b949e; font-weight: bold; border: none;
+    border-bottom: 1px solid palette(mid); padding: 5px 8px; }
+#cadswarmPanel QLabel#toast { background: palette(base); color: palette(text); border: 1px solid #1a7f37;
+    border-left: 4px solid #1a7f37; border-radius: 6px; padding: 6px 10px; }
+#cadswarmPanel QLineEdit { min-height: 28px; border: 1px solid palette(mid); border-radius: 6px; padding: 0 8px;
+    background: palette(base); }
+#cadswarmPanel QLineEdit:focus { border-color: #d9822b; }
+#cadswarmPanel QComboBox { min-height: 26px; }
 #cadswarmPanel QPlainTextEdit { border: 1px solid #d9822b; border-radius: 4px; }
 #cadswarmPanel QGroupBox { font-weight: bold; margin-top: 14px; padding-top: 6px; }
 #cadswarmPanel QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 8px;
     padding: 0 4px; }
 """
+SUGGEST_SECONDS = 20     # how often the panel re-reads what AI helpers suggested
+SUGGESTIONS_SHOWN = 4    # cards on the Team tab; any more wait in Tools
+
+
+def page_layout(page):
+    lay = QtGui.QVBoxLayout(page)
+    lay.setContentsMargins(0, 10, 0, 0)
+    lay.setSpacing(6)
+    return lay
+
+
+def caption(text, colour="#8b949e"):
+    """A small spaced-out heading in capitals, like WHO'S HERE."""
+    label = QtGui.QLabel(text.upper())
+    font = label.font()
+    if font.pointSizeF() > 0:
+        font.setPointSizeF(max(7.0, font.pointSizeF() * 0.85))
+    font.setBold(True)
+    font.setLetterSpacing(QtGui.QFont.AbsoluteSpacing, 1.0)
+    label.setFont(font)
+    label.setStyleSheet(f"color: {colour};")
+    label.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+    return label
+
+
+class ShrinkButton(QtGui.QPushButton):
+    """A button that may get narrower than its words. FreeCAD's theme makes Qt pin every styled button to its
+    full width, which would push the panel wider than its dock."""
+
+    def minimumSizeHint(self):
+        return QtCore.QSize(24, super().minimumSizeHint().height())
+
+
+def action_button(label, tip, fn):
+    """A button that never makes the panel wider than its dock (on a very narrow panel its words clip)."""
+    b = ShrinkButton(label)
+    b.setToolTip(tip)
+    b.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
+    b.clicked.connect(lambda _=False: fn())
+    return b
+
+
+def dot_colour(owner_id):
+    return "#%02x%02x%02x" % tuple(int(c * 255) for c in owner_color(owner_id))
+
+
+def dot_icon(rgb, size=10):
+    """A round dot in someone's colour, drawn at double size so it stays crisp on high-DPI screens."""
+    pix = QtGui.QPixmap(size * 2, size * 2)
+    pix.fill(QtCore.Qt.transparent)
+    painter = QtGui.QPainter(pix)
+    painter.setRenderHint(QtGui.QPainter.Antialiasing)
+    painter.setPen(QtCore.Qt.NoPen)
+    painter.setBrush(QtGui.QColor(*(int(c * 255) for c in rgb)))
+    painter.drawEllipse(QtCore.QRectF(size * 0.4, size * 0.4, size * 1.2, size * 1.2))
+    painter.end()
+    return QtGui.QIcon(pix)
+
+
+class PillDelegate(QtGui.QStyledItemDelegate):
+    """Draws a status cell as a small rounded pill in the status colour (the cell's text stays the same)."""
+
+    def paint(self, painter, option, index):
+        opt = QtGui.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget else QtGui.QApplication.style()
+        style.drawControl(QtGui.QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        if not text:
+            return
+        brush = index.data(QtCore.Qt.ForegroundRole)
+        colour = brush.color() if isinstance(brush, QtGui.QBrush) else opt.palette.color(QtGui.QPalette.Text)
+        fm = opt.fontMetrics
+        room = opt.rect.adjusted(2, 3, -4, -3)
+        text = fm.elidedText(text, QtCore.Qt.ElideRight, max(0, room.width() - 18))
+        width = fm.horizontalAdvance(text) + 18
+        pill = QtCore.QRectF(room.right() - width + 1, room.top(), width, room.height()).adjusted(0.5, 0.5, -0.5, -0.5)
+        fill, edge = QtGui.QColor(colour), QtGui.QColor(colour)
+        fill.setAlpha(28)
+        edge.setAlpha(120)
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtGui.QPen(edge, 1))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2)
+        painter.setPen(colour)
+        painter.setFont(opt.font)
+        painter.drawText(pill, QtCore.Qt.AlignCenter, text)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        spinner = option.fontMetrics.horizontalAdvance("◐ ")  # a busy row's text gains a turning spinner
+        return QtCore.QSize(size.width() + 18 + spinner, size.height() + 6)
+
+
+def read_suggestions(client):
+    """What AI helpers suggested that waits for a person: team-setting changes and learned style rules.
+    Runs off the GUI thread; a source that can't be read comes back None, so the panel keeps what it showed."""
+    found = {"setting": None, "style": None}
+    try:
+        data = client.get("/settings")
+        specs = {s["key"]: s for s in data.get("settings") or []}
+        found["setting"] = [setting_suggestion(g, specs.get(g["setting"], {})) for g in data.get("suggestions") or []]
+    except Exception:  # an older team server, or offline for a moment
+        pass
+    try:
+        rules = client.post("/style/rules", {}).get("rules") or []
+        found["style"] = [style_suggestion(r) for r in rules if r.get("status") == "candidate"]
+    except Exception:
+        pass
+    return found
+
+
+def setting_suggestion(g, spec):
+    """A helper's suggested change to a team setting, in words anyone can say yes or no to."""
+    from ..library.present import setting_value_text
+    new = setting_value_text(spec, g["value"])
+    now = setting_value_text(spec, g["current"]) if g.get("current") is not None else ""
+    why = html.escape(g.get("reason") or "")
+    if g.get("component") and g.get("component_name"):
+        why += f" (for {html.escape(str(g['component_name']))})"
+    return {"key": f"setting:{g['id']}", "id": g["id"], "kind": "setting", "yes": "Accept",
+            "plain": f"{g['label']} → {new}",
+            "text": f"<b>{html.escape(g.get('by') or 'An AI helper')}</b> suggests changing "
+                    f"<b>{html.escape(g['label'])}</b>" + (f" from {html.escape(now)}" if now else "")
+                    + f" to <b>{html.escape(new)}</b>"
+                    + (f"<br><small style='color:#8b949e'>{why}</small>" if why else "")}
+
+
+def style_suggestion(r):
+    """A design rule CadSwarm learned (or a helper proposed) that waits for a person to confirm."""
+    return {"key": f"style:{r['id']}", "id": r["id"], "kind": "style", "yes": "Make it a rule",
+            "plain": r["statement"],
+            "text": f"Make this a rule every helper follows?<br><b>{html.escape(r['statement'])}</b>"
+                    f"<br><small style='color:#8b949e'>{html.escape(style_ui.evidence_text(r))}</small>"}
 
 
 def takes_instructions(p):
@@ -1547,7 +2018,7 @@ class NewTaskDialog(QtGui.QDialog):
             self.note.setText("<small>The team server plans it into parts, starts AI helpers and builds it. "
                               "Progress shows in Tasks.</small>")
         elif kind == "me":
-            self.note.setText("<small>The task is marked as yours. Edit the parts with Team tools ▸ Edit a part "
+            self.note.setText("<small>The task is marked as yours. Edit the parts with the Tools tab ▸ Edit a part "
                               "yourself, then click Mark done.</small>")
         else:
             self.note.setText("")
@@ -1641,7 +2112,7 @@ def away_tip(p, local):
     if state == "gone":
         return f"<b>{n}</b> is no longer on the team. Start a new one with ＋ New helper."
     if state == "stopped" and (local or {}).get("off"):
-        return (f"<b>{n}</b> is set to run in a terminal. Open it there, or use Team tools ▸ Restart my AI "
+        return (f"<b>{n}</b> is set to run in a terminal. Open it there, or use the Tools tab ▸ Restart my AI "
                 "helpers to run it in the background again.")
     return f"<b>{n}</b> is starting on this computer. It answers in the Chat in a moment."
 
@@ -2170,7 +2641,7 @@ def describe_event(ev):
     if k == "stale":
         held = names(ev.get("locks") or [])
         return f"{who} went quiet" + (f" while working on {held}" if held else "") + \
-            ". A teammate can take over their work (Team tools ▸ Take over)"
+            ". A teammate can take over their work (the Tools tab ▸ Take over)"
     if k == "renamed":
         return f"{ev.get('from')} is now called {ev.get('name')}"
     if k == "resumed":
@@ -2198,7 +2669,7 @@ def describe_event(ev):
         return f"{who} started {what.get(ev.get('analysis'), 'a simulation')} of {names(ev.get('target') or [])}…"
     if k == "fea_report":
         return f"{who} published a simulation report: {ev.get('title')}. {ev.get('headline')} " \
-               "(Team tools ▸ Simulation reports)"
+               "(the Tools tab ▸ Simulation reports)"
     if k == "fea_progress":
         return f"{who}'s simulation: {ev.get('text')}"
     if k == "fea_failed":
@@ -2376,7 +2847,7 @@ def open_project_folder():
     folder = hosted_project_folder()
     if not folder:
         hint("The project folder is on the computer of the teammate who started the team. "
-             "Use Team tools ▸ Project files to see and copy what's in it.")
+             "Use the Tools tab ▸ Project files to see and copy what's in it.")
         return
     from .wizard import open_folder
     open_folder(folder)

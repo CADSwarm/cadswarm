@@ -47,6 +47,7 @@ import LockObjectsReducer from "./lock_objects_reducer";
 import LogActivityReducer from "./log_activity_reducer";
 import MarkDeliveredReducer from "./mark_delivered_reducer";
 import MovePointerReducer from "./move_pointer_reducer";
+import PickUpTaskReducer from "./pick_up_task_reducer";
 import PutArtifactReducer from "./put_artifact_reducer";
 import PutComponentPreviewReducer from "./put_component_preview_reducer";
 import PutPreviewReducer from "./put_preview_reducer";
@@ -282,6 +283,7 @@ const reducersSchema = __reducers(
   __reducerSchema("log_activity", LogActivityReducer),
   __reducerSchema("mark_delivered", MarkDeliveredReducer),
   __reducerSchema("move_pointer", MovePointerReducer),
+  __reducerSchema("pick_up_task", PickUpTaskReducer),
   __reducerSchema("put_artifact", PutArtifactReducer),
   __reducerSchema("put_component_preview", PutComponentPreviewReducer),
   __reducerSchema("put_preview", PutPreviewReducer),

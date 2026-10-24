@@ -25,7 +25,7 @@ function buildBubble(s: State, b: Extract<ThreadItem, { type: 'build' }>['brief'
   return `<div class="bubble build${b.status === 'failed' ? ' failed' : ''}">
       <p class="bubble-text">${esc(b.text)}</p>
       <ol class="steps" aria-label="Build progress">
-        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''}>${STEP_LABEL[st]}</li>`).join('')}
+        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}" title="${st}" aria-label="${st}"${i === at ? ' aria-current="step"' : ''}>${STEP_LABEL[st]}</li>`).join('')}
       </ol>
       <p class="meta">${b.status === 'failed' ? '<span class="err">Stopped — see Team ▸ Activity</span>'
         : tasks.length ? `${done} of ${tasks.length} parts done` : 'The team is planning it'}${review ? ` · review ${review.passed ? 'passed' : 'asks for changes'}` : ''}</p>

@@ -14,7 +14,7 @@ $st = "$env:LOCALAPPDATA\SpacetimeDB\spacetime.exe"
 & $st login                  # opens a browser; use the account that owns the database
 & $st login show             # your identity
 # The owner, to compare with:
-(Invoke-RestMethod https://maincloud.spacetimedb.com/v1/database/cadswarm-calhacks-ca8c).owner_identity
+(Invoke-RestMethod https://maincloud.spacetimedb.com/v1/database/cadswarm-calhacks-0180).owner_identity
 ```
 
 If the two identities differ, the owner has to publish (or you create a new database under your own
@@ -28,7 +28,7 @@ cd cadswarm
 rustup target add wasm32-unknown-unknown    # once
 cargo build --release --target wasm32-unknown-unknown --manifest-path module\Cargo.toml
 & $st publish --server maincloud --yes=all --delete-data=never `
-    --bin-path module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm  cadswarm-calhacks-ca8c
+    --bin-path module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm  cadswarm-calhacks-0180
 ```
 
 Always pass `--server`: the CLI's default may be Maincloud or local depending on the machine
@@ -50,7 +50,7 @@ of it, with the keys from `..\cadswarm.env`):
 
 ```powershell
 powershell -File scripts\demo-down.ps1
-powershell -File scripts\demo-up.ps1 -Db cadswarm-calhacks-ca8c
+powershell -File scripts\demo-up.ps1 -Db cadswarm-calhacks-0180
 ```
 
 New Elastic indices and agents (idempotent; safe to run again):
@@ -62,10 +62,10 @@ powershell -File scripts\with-env.ps1 .venv\Scripts\python.exe -c "import json; 
 ## 5. Check it
 
 ```powershell
-& $st sql --server maincloud cadswarm-calhacks-ca8c "SELECT name, kind, status FROM v_member"
+& $st sql --server maincloud cadswarm-calhacks-0180 "SELECT name, kind, status FROM v_member"
 ```
 
-The host shows up as `active`. In FreeCAD, Team tools › Learned design style… opens without an error.
+The host shows up as `active`. In FreeCAD, the Tools tab › Learned design style… opens without an error.
 To try everything first on a throwaway local database:
 `spacetime start`, then `scripts\publish-local.ps1 -Db cadswarm-e2e` and
 `$env:CADSWARM_LIVE = "1"; $env:CADSWARM_DB = "cadswarm-e2e"; python -m pytest tests/test_space_live.py -q`.

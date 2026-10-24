@@ -257,7 +257,7 @@ message. They do not take down the hub.
 
 ### 7.4 Storage dialog
 
-**Team tools > Storage and free up space...** shows a separate `lattice_cache` line alongside files, old
+**the CadSwarm panel's Tools tab > Storage and free up space...** shows a separate `lattice_cache` line alongside files, old
 versions, snapshots and exports, so lattice jobs do not hide inside the project total. The disk guard applies
 before a job starts and before a result is packaged; a refusal is `no_room`. The existing file/export guard still
 reports `disk_full`.

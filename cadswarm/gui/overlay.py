@@ -737,7 +737,7 @@ class _Watcher:
         self.overlay = None
         self._key = None
         self._timer = None
-        self.enabled = True
+        self.enabled = _saved_enabled()
         self._warned = False
 
     def start(self):
@@ -791,8 +791,8 @@ class _Watcher:
             finally:
                 self.overlay = None
 
-    def toggle(self):
-        self.enabled = not self.enabled
+    def set_enabled(self, on):
+        self.enabled = bool(on)
         if self.enabled:
             self._key = None
             self.check()
@@ -813,15 +813,87 @@ def install():
     return _WATCHER
 
 
+PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"  # keep in step with panel.PARAMS_PATH
+
+
+def _saved_enabled():
+    try:
+        import FreeCAD as App
+        return App.ParamGet(PARAMS_PATH).GetBool("ShowAgentArrows", True)
+    except Exception:  # noqa: BLE001 - tests run without FreeCAD
+        return True
+
+
+def pointers_enabled():
+    return _WATCHER.enabled if _WATCHER is not None else _saved_enabled()
+
+
+def set_pointers(on):
+    """Show or hide the helpers' arrows, remember it for next time, and say so: with no helper at work
+    there is nothing to draw, so without a message the switch looks like it did nothing."""
+    on = bool(on)
+    try:
+        import FreeCAD as App
+        App.ParamGet(PARAMS_PATH).SetBool("ShowAgentArrows", on)
+    except Exception:  # noqa: BLE001
+        pass
+    if _WATCHER is not None:
+        _WATCHER.set_enabled(on)
+    _sync_controls(on)
+    _announce(on)
+
+
+def _sync_controls(on):
+    """Keep the menu's check mark and the panel's checkbox in step, whichever one was clicked."""
+    try:
+        import FreeCADGui as Gui
+        for action in Gui.Command.get("CadSwarm_Pointers").getAction():
+            action.blockSignals(True)
+            action.setChecked(on)
+            action.blockSignals(False)
+    except Exception:  # noqa: BLE001 - older FreeCAD, or the command isn't registered (tests)
+        pass
+    try:
+        from . import panel
+        box = getattr(panel.SESSION.panel, "pointers", None)
+        if box is not None and box.isChecked() != on:
+            box.blockSignals(True)
+            box.setChecked(on)
+            box.blockSignals(False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _announce(on):
+    try:
+        from . import panel
+        joined = panel.SESSION.connected
+    except Exception:  # noqa: BLE001
+        joined = False
+    if not on:
+        text = "Agent arrows hidden."
+    elif joined:
+        text = "Agent arrows on: an arrow in each helper's colour sits on the part it is working on."
+    else:
+        text = "Agent arrows on. They appear once you join a team and a helper starts working."
+    try:
+        import FreeCAD as App
+        import FreeCADGui as Gui
+        Gui.getMainWindow().statusBar().showMessage(text, 8000)
+        App.Console.PrintMessage(f"[CadSwarm] {text}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _toggle_command():
     class Toggle:
         def GetResources(self):
-            return {"MenuText": "Agent arrows", "ToolTip": "Show or hide the team's pointers in the 3D view",
-                    "Pixmap": ""}
+            return {"MenuText": "Agent arrows",
+                    "ToolTip": "Show or hide an arrow on the part each AI helper is working on, in the 3D view",
+                    "Pixmap": "", "Checkable": pointers_enabled()}
 
-        def Activated(self):
-            if _WATCHER is not None:
-                _WATCHER.toggle()
+        def Activated(self, checked=None):
+            set_pointers(not pointers_enabled() if checked is None else bool(checked))
 
         def IsActive(self):
             return True
