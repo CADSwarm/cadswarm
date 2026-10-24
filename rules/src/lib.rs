@@ -18,9 +18,19 @@ pub const QUERIES: &[&str] = &[
     "get_object", "interference", "export", "dependents", "printability",
     "lookup_board", "recall_designs",
     "list_files", "read_file", "file_history",
+    "brep", "storage_status",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
-pub const FILE_WRITES: &[&str] = &["save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot"];
+pub const FILE_WRITES: &[&str] = &["save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage"];
+
+/// Large op results are parked as artifacts named `op-result:<op_id>` and dropped after this long.
+pub const OP_RESULT_TTL_MS: u64 = 600_000;
+pub const OP_RESULT_PREFIX: &str = "op-result:";
+
+/// True once an `op-result:` artifact is strictly older than the TTL; other artifacts never expire.
+pub fn op_result_expired(name: &str, created_ms: u64, now: u64) -> bool {
+    name.starts_with(OP_RESULT_PREFIX) && now.saturating_sub(created_ms) > OP_RESULT_TTL_MS
+}
 
 pub fn is_mutating(kind: &str) -> bool { MUTATING.contains(&kind) }
 pub fn is_query(kind: &str) -> bool { QUERIES.contains(&kind) }
@@ -403,5 +413,28 @@ mod tests {
         assert_eq!(hash_token(" abc\n"), a);
         assert!(valid_kind("reviewer") && !valid_kind("admin"));
         assert!(valid_role("lead") && !valid_role("owner"));
+    }
+
+    #[test]
+    fn brep_and_storage_status_are_queries_and_prune_storage_is_a_write() {
+        assert!(is_query("brep") && is_query("storage_status"));
+        assert!(!is_write("brep") && !is_write("storage_status"));
+        assert!(is_file_write("prune_storage") && is_write("prune_storage") && !is_mutating("prune_storage"));
+        assert!(check_op("brep", &json!({}), &[], |_| None, |_| true, 1).is_ok());
+        assert!(check_op("prune_storage", &json!({}), &[], |_| None, |_| true, 1).is_ok());
+    }
+
+    #[test]
+    fn op_result_blobs_expire_after_ten_minutes_and_nothing_else_does() {
+        let now = 10_000_000;
+        let ten = OP_RESULT_TTL_MS;
+        assert_eq!(ten, 600_000);
+        assert!(!op_result_expired("op-result:o_1", now - ten, now), "exactly 10 min is not yet expired");
+        assert!(op_result_expired("op-result:o_1", now - ten - 1, now));
+        assert!(!op_result_expired("op-result:o_1", now, now));
+        assert!(!op_result_expired("op-result:o_1", now + 5, now), "future created_ms never expires");
+        assert!(!op_result_expired("model-1.stl", 0, now));
+        assert!(!op_result_expired("Op-Result:o_1", 0, now), "prefix is case sensitive");
+        assert!(!op_result_expired("", 0, now));
     }
 }
