@@ -28,7 +28,8 @@ static char * icon_xpm[] = {
         self.appendToolbar("CadSwarm", ["CadSwarm_Connect", "CadSwarm_Panel"])
         self.appendMenu("CadSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
                                      "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_Style",
-                                     "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator", "CadSwarm_Interference",
+                                     "CadSwarm_Constrain", "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator",
+                                     "CadSwarm_Interference",
                                      "CadSwarm_Export", "CadSwarm_OptimizePart", "CadSwarm_FeaReports",
                                      "CadSwarm_Pointers", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
                                      "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
