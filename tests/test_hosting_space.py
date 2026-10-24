@@ -204,6 +204,7 @@ def test_start_team_maincloud_starts_only_the_host(tmp_path, monkeypatch):
         return 111
 
     monkeypatch.setattr(hosting, "find_tool", lambda name, env: name)
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
     monkeypatch.setattr(hosting, "publish", lambda db, mode: published.append((db, mode)))
     monkeypatch.setattr(hosting, "_spawn", spawn)
     monkeypatch.setattr(hosting.subprocess, "run", lambda argv, **kw: (runs.append(argv), ok(argv))[1])
@@ -229,6 +230,7 @@ def test_start_team_local_starts_spacetime_only_when_nothing_listens(tmp_path, m
     data = tmp_path / "proj"
     spawns = []
     monkeypatch.setattr(hosting, "find_tool", lambda name, env: name)
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
     monkeypatch.setattr(hosting, "publish", lambda db, mode: None)
     monkeypatch.setattr(hosting, "port_open", lambda port, host="127.0.0.1", timeout=0.5: False)
     monkeypatch.setattr(hosting, "_wait_port", lambda *a, **k: True)
