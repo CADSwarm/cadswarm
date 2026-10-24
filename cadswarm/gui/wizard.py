@@ -9,7 +9,7 @@
 
 The team's database lives on SpacetimeDB (Maincloud by default, or this computer in the
 Advanced local mode); `cadswarm-host` is the program that runs the shared model. Everything
-the guide does is in plain words: "team", "invite code", "AI helper" — never hub, token or MCP.
+the guide does is in plain words: "team", "invite code", "AI helper". Never hub, token or MCP.
 Slow work runs off the GUI thread behind a checklist; every failure says what to do and offers
 Try again.
 """
@@ -266,8 +266,10 @@ class SetupWizard(QtGui.QDialog):
 
     def __init__(self, reason=None, start=None):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm — get started")
-        self.setMinimumSize(640, 520)
+        self.setWindowTitle("CadSwarm: get started")
+        # Fits a laptop screen; each page scrolls when it's taller than the window.
+        self.setMinimumSize(420, 360)
+        panel.fit_to_screen(self, 720, 640)
         self.setStyleSheet(STYLE)
         self.reason = reason
         self.p = panel.prefs()
@@ -325,8 +327,13 @@ class SetupWizard(QtGui.QDialog):
                 self.stack.removeWidget(old)
                 old.deleteLater()
             page = getattr(self, f"page_{name}")()
-            self.pages[name] = page
-            self.stack.addWidget(page)
+            holder = QtGui.QScrollArea()
+            holder.setWidgetResizable(True)
+            holder.setFrameShape(QtGui.QFrame.NoFrame)
+            holder.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            holder.setWidget(page)
+            self.pages[name] = holder
+            self.stack.addWidget(holder)
         self.stack.setCurrentWidget(self.pages[name])
         self.back.setVisible(bool(self.history) and name not in ("host_work", "agent_work", "reconnect", "launch"))
         enter = getattr(self, f"enter_{name}", None)
@@ -356,9 +363,6 @@ class SetupWizard(QtGui.QDialog):
         if lead:
             lay.addWidget(label(lead, "lead"))
         return w, lay
-
-    def my_role(self):
-        return "lead" if (panel.SESSION.ident or {}).get("role") == "lead" else "member"
 
     # --------------------------------------------------------------- welcome
 
@@ -447,7 +451,7 @@ class SetupWizard(QtGui.QDialog):
 
     def update_where(self):
         folder, how = self.planned_folder()
-        note = {"existing": "A CadSwarm project is already here — you'll continue it (nothing is overwritten).",
+        note = {"existing": "A CadSwarm project is already here. You'll continue it (nothing is overwritten).",
                 "new": "A new folder will be created for it.",
                 "inside": "That folder already has other things in it, so the project gets its own "
                           "subfolder there. Nothing in it is touched."}[how]
@@ -534,7 +538,7 @@ class SetupWizard(QtGui.QDialog):
 
     def page_invite(self):
         w, lay = self.page("Your team is ready! 🎉",
-                           "Send this invite code to a teammate — by email, Discord, text, anything. "
+                           "Send this invite code to a teammate by email, Discord, text, anything. "
                            "They paste it into CadSwarm to join.")
         box = QtGui.QPlainTextEdit()
         box.setObjectName("code")
@@ -570,7 +574,7 @@ class SetupWizard(QtGui.QDialog):
         row.addWidget(fresh)
         row.addStretch(1)
         lay.addLayout(row)
-        lay.addWidget(label("This code works once. Make a new one for each teammate — they last a day, so "
+        lay.addWidget(label("This code works once. Make a new one for each teammate. They last a day, so "
                             "there's no rush. You can also make one any time from the team panel (“Invite”).",
                             "hint"))
         folder = self.p.GetString("HostDataDir")
@@ -595,7 +599,7 @@ class SetupWizard(QtGui.QDialog):
 
     def enter_invite(self):
         self.buttons("Next: connect my AI helper ›", lambda: self.show_page("agent"),
-                     "Skip — I'll just watch", self.finish)
+                     "Skip, I'll just watch", self.finish)
 
     # ------------------------------------------------------------------ join
 
@@ -701,7 +705,7 @@ class SetupWizard(QtGui.QDialog):
         none_card = QtGui.QFrame()
         none_card.setObjectName("card")
         nrow = QtGui.QHBoxLayout(none_card)
-        none_rb = QtGui.QRadioButton("No AI helper — I'll just watch and chat")
+        none_rb = QtGui.QRadioButton("No AI helper: I'll just watch and chat")
         group.addButton(none_rb)
         none_rb.toggled.connect(lambda on: on and self.pick_client(None))
         nrow.addWidget(none_rb)
@@ -710,7 +714,7 @@ class SetupWizard(QtGui.QDialog):
 
         self.missing_note = label("", "hint")
         lay.addWidget(self.missing_note)
-        refresh = QtGui.QPushButton("I installed it — check again")
+        refresh = QtGui.QPushButton("I installed it, check again")
         refresh.clicked.connect(lambda: self.show_page("agent", remember=False))
         lay.addWidget(refresh, 0, QtCore.Qt.AlignLeft)
 
@@ -723,7 +727,7 @@ class SetupWizard(QtGui.QDialog):
         fr.addWidget(self.folder_label, 1)
         fr.addWidget(change)
         lay.addWidget(self.folder_row)
-        self.trust_box = QtGui.QCheckBox("Let Codex use CadSwarm in this folder (recommended — Codex ignores "
+        self.trust_box = QtGui.QCheckBox("Let Codex use CadSwarm in this folder (recommended: Codex ignores "
                                          "folders it hasn't been told to trust)")
         self.trust_box.setChecked(True)
         lay.addWidget(self.trust_box)
@@ -735,7 +739,7 @@ class SetupWizard(QtGui.QDialog):
         self.pick_client(self.client)
 
     def default_folder(self):
-        # The helper's own workspace (it holds its sign-in), next to — never inside — the shared files/.
+        # The helper's own workspace (it holds its sign-in), next to the shared files/, never inside them.
         base = panel.host_dir_for(self.db) if self.db else ""
         base = base or os.path.join(projects_dir(), safe_folder(self.project))
         return os.path.join(base, "AI helpers", f"{slug(self.name)}-{self.client}")
@@ -800,51 +804,66 @@ class SetupWizard(QtGui.QDialog):
         if not panel.SESSION.connected:
             raise RuntimeError("Join your team first (CadSwarm ▸ Get started), then add the AI helper.")
         self.agent_name = f"{slug(self.name)}-{self.client}"
-        written = write_agent_config(self.folder, self.client, self.agent_invite(self.my_role()), self.agent_name,
+        # An AI helper is always a plain member: the person who started the team leads and hosts it.
+        written = write_agent_config(self.folder, self.client, self.agent_invite("member"), self.agent_name,
                                      python=self.python)
-        written.append(write_launcher(self.folder, self.client, self.project, self.my_role()))
+        written.append(write_launcher(self.folder, self.client, self.project))
         for f in written:
             log(f"wrote {f}")
         self.p.SetString("AgentClient", self.client)
-        self.p.SetString("AgentFolder", self.folder)
+        panel.remember_helper_folder(self.folder)
 
     # ---------------------------------------------------------------- launch
 
     def page_launch(self):
         label_ = CLIENTS[self.client]["label"]
-        w, lay = self.page(f"Start {label_}", "A few quick steps and your helper is on the team.")
-        lay.addWidget(label("<b>1.</b> Open your helper in its workspace folder:"))
-        open_btn = QtGui.QPushButton(f"Open {label_}")
-        open_btn.setObjectName("primary")
+        w, lay = self.page(f"Starting {label_}",
+                           "Your helper runs in the background. There's no window to keep open and nothing to type "
+                           "or paste: talk to it in the CadSwarm panel's Chat and it answers there.")
         self.open_status = label("", "hint")
-        open_btn.clicked.connect(self.open_helper)
-        lay.addWidget(open_btn, 0, QtCore.Qt.AlignLeft)
         lay.addWidget(self.open_status)
-        trust = ("Claude Code will ask whether you trust this folder and may ask to approve the “cadswarm” "
-                 "tools — say <b>Yes</b>." if self.client == "claude"
-                 else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
-        lay.addWidget(label(f"<b>2.</b> A window opens. {trust} If it asks you to sign in, follow its steps."))
+        if self.client == "claude":
+            lay.addWidget(label("If Claude Code has never been signed in on this computer, open it once in a "
+                                "terminal (type <code>claude</code>) and sign in. After that it starts by itself.",
+                                "hint"))
         if self.client == "codex":
-            lay.addWidget(label("<b>3.</b> Type <code>/hooks</code> and trust the <b>CadSwarm</b> hook. Codex skips "
-                                "hooks you haven't approved, so without this it won't see its team's updates. "
-                                "Do it again after updating CadSwarm."))
-        lay.addWidget(label("Your helper gets its first instructions automatically and starts working with the "
-                            "team — nothing to paste. Next time, open it again from the team panel "
-                            "(“Add AI helper”) and it carries on where it left off.", "hint"))
+            lay.addWidget(label("If Codex has never been signed in on this computer, open it once in a terminal "
+                                "(type <code>codex</code>) and sign in. After that it starts by itself.", "hint"))
         lay.addSpacing(6)
         self.helper_status = label("⏳ Waiting for your AI helper to join the team…")
         lay.addWidget(self.helper_status)
+        watch = QtGui.QPushButton("Open it in a terminal instead")
+        watch.setToolTip("Only if you'd like to watch it work or type to it directly")
+        watch.clicked.connect(self.open_helper)
+        lay.addWidget(watch, 0, QtCore.Qt.AlignLeft)
         lay.addStretch(1)
         return w
 
     def enter_launch(self):
         self.buttons("Finish", self.finish)
         self.poll.start(2000)
+        self.start_helper()
+
+    def start_helper(self):
+        from ..paths import LAUNCHER
+        from ..runner import set_background, start_runner
+        try:
+            set_background(self.folder, True)
+            start_runner(self.folder, self.python, LAUNCHER, self.project)
+            self.open_status.setText("Started in the background ✓")
+        except Exception as e:
+            self.open_status.setText(f"<span style='color:#e5484d'>Couldn't start it: {e}</span> Try "
+                                     "“Open it in a terminal instead”.")
 
     def open_helper(self):
+        from ..runner import runner_alive, set_background, stop_runner
         try:
+            set_background(self.folder, False)  # one copy at a time: the terminal one takes over
+            if runner_alive(self.folder):
+                stop_runner(self.folder)
             open_agent_terminal(self.client, self.folder)
-            self.open_status.setText("Opened ✓ — look for a new window on your screen.")
+            self.open_status.setText("Opened ✓. Look for a new window on your screen. Restart the background "
+                                     "helper later with Team tools ▸ Restart my AI helpers.")
         except Exception as e:
             self.open_status.setText(f"<span style='color:#e5484d'>{e}</span> You can also open a terminal in "
                                      f"<b>{self.folder}</b> and type <code>{CLIENTS[self.client]['exe']}</code>.")
@@ -860,9 +879,9 @@ class SetupWizard(QtGui.QDialog):
             self.poll.stop()
             self.helper_status.setObjectName("ok")
             self.helper_status.setStyleSheet("color: #30a46c; font-weight: 600;")
-            self.helper_status.setText(f"✓ Your AI helper “{self.agent_name}” is on the team. Start it and paste "
-                                       "the message above; then watch the model build in the CadSwarm Live view.")
-            self.primary.setText("Done — show me the model")
+            self.helper_status.setText(f"✓ Your AI helper “{self.agent_name}” is on the team. Tell it what to "
+                                       "build in the panel's Chat and watch the parts appear in CadSwarm Live.")
+            self.primary.setText("Done, show me the model")
 
     # ------------------------------------------------------------- reconnect
 
@@ -926,7 +945,7 @@ class SetupWizard(QtGui.QDialog):
         self.accept()
         panel.show_panel()
         if panel.SESSION.connected:
-            panel.SESSION.refresh_meta()
+            panel.SESSION.request_refresh()
 
 
 def run_wizard(reason=None, start=None):

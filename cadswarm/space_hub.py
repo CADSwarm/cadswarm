@@ -57,8 +57,11 @@ class SpaceHub(LibraryRoutes):
         self.hub = cfg.get("uri", "")
         self.space = space or SpaceClient(cfg["uri"], cfg["db"], self.identity.get("token"), timeout)
         self._seq = 0
+        self._cache = None  # view rows shared by one snapshot(); None = always read fresh
         self.routes = [
             ("POST", r"/heartbeat", self.heartbeat), ("POST", r"/leave", self.leave),
+            ("POST", r"/me/name", self.rename_route),
+            ("POST", r"/pointer", self.pointer_route),
             ("GET", r"/model", self.model), ("GET", r"/objects/(?P<name>[^/]+)", self.get_object),
             ("POST", r"/ops", self.ops), ("POST", r"/locks", self.lock), ("POST", r"/locks/release", self.release),
             ("POST", r"/interference", self.interference), ("POST", r"/printability", self.printability),
@@ -117,10 +120,25 @@ class SpaceHub(LibraryRoutes):
         self._call(reducer, self.fence, *args)
 
     def _rows(self, view, where=""):
+        if self._cache is not None and (view, where) in self._cache:
+            return self._cache[(view, where)]
         try:
-            return self.space.sql(f"SELECT * FROM {view}" + (f" WHERE {where}" if where else ""))
+            rows = self.space.sql(f"SELECT * FROM {view}" + (f" WHERE {where}" if where else ""))
         except SpaceError as e:
             raise _err(e)
+        if self._cache is not None:
+            self._cache[(view, where)] = rows
+        return rows
+
+    def panel_snapshot(self, chat_limit=80):
+        """Everything the FreeCAD panel shows, reading each view once (one refresh used to be ~15 round trips
+        to the database, which froze FreeCAD on a slow network)."""
+        self._cache = {}
+        try:
+            return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
+                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"]}
+        finally:
+            self._cache = None
 
     def request(self, method, path, body=None, params=None, timeout=None, raw=False):
         if raw and path.startswith("/artifacts/"):
@@ -176,6 +194,15 @@ class SpaceHub(LibraryRoutes):
         self._f("heartbeat", body.get("doing") or "")
         return {"seq": self.latest_seq(), "unread": len(self._unconsumed()), "locks": self._my_locks()}
 
+    def rename_me(self, name):
+        """Rename this member (not fenced, see the module's rename_me). Open tasks for the old name follow."""
+        self._call("rename_me", name)
+        self.identity["name"] = name
+        return {"name": name}
+
+    def rename_route(self, body):
+        return self.rename_me(body.get("name", ""))
+
     def leave(self, body):
         locks = self._my_locks()
         self._f("leave")
@@ -186,6 +213,28 @@ class SpaceHub(LibraryRoutes):
             self._f("log_activity", kind, (summary or "")[:300], [t for t in (targets or []) if t])
         except HubRequestError:
             pass  # presence is best-effort; never block a tool on it
+
+    def move_pointer(self, obj, point=None, mode="pointing", label=""):
+        """Point at `obj` (at `point` [x, y, z] when given). Best-effort, like log_activity."""
+        try:
+            self._f("move_pointer", obj or "", [float(c) for c in (point or [])][:3], mode, (label or "")[:60])
+        except (HubRequestError, TypeError, ValueError):
+            pass
+
+    def pointer_route(self, body):
+        point, mode = body.get("point") or [], body.get("mode") or "pointing"
+        if point and len(point) != 3:
+            raise HubRequestError(400, {"error": "point must be [x, y, z]", "code": "bad_args"})
+        if not point and body.get("object"):  # no spot given: the part's own anchor vertex
+            point = (self.run_op("get_object", {"name": body["object"]}) or {}).get("anchor") or []
+        self._f("move_pointer", body.get("object") or "", [float(c) for c in point], mode, (body.get("label") or "")[:60])
+        return {"object": body.get("object") or "", "point": point, "mode": mode}
+
+    def _point_after(self, kind, r):
+        """After an op, rest this member's pointer on the vertex the worker picked for it."""
+        target = r.get("pointer") if isinstance(r, dict) else None
+        if isinstance(target, dict) and target.get("object") and len(target.get("point") or []) == 3:
+            self.move_pointer(target["object"], target["point"], "pointing", kind.replace("_", " "))
 
     # ------------------------------------------------------------------ lookups
 
@@ -249,7 +298,9 @@ class SpaceHub(LibraryRoutes):
         while time.time() < deadline:
             rows = self._rows("v_op", f"id = '{op_id}'")
             if rows and rows[0]["status"] == "done":
-                return self._result(rows[0]["result_json"])
+                r = self._result(rows[0]["result_json"])
+                self._point_after(kind, r)
+                return r
             if rows and rows[0]["status"] in ("failed", "rejected"):
                 code = rows[0]["error_code"] or "op_error"
                 raise HubRequestError(409 if rows[0]["status"] == "rejected" else 422,
@@ -319,6 +370,8 @@ class SpaceHub(LibraryRoutes):
 
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})
+        if info.get("anchor"):
+            self.move_pointer(name, info["anchor"], "inspecting", f"looking at {name}")
         info["locked_by"] = next((self._names().get(l["holder"]) for l in self._rows("v_lock") if l["object"] == name), None)
         return info
 
@@ -452,8 +505,11 @@ class SpaceHub(LibraryRoutes):
         me = self.me_id
         consumed = {r["message_id"] for r in self._rows("v_receipt") if r["member"] == me and r["state"] == "consumed"}
         rank = {"steer": 0, "handoff": 1, "chat": 3}  # people's chat is background, read last
+        # People's chat (a message with no @helper in FreeCAD) is between people: AI helpers never see it.
+        helper = next((m["kind"] for m in self._rows("v_member") if m["id"] == me), "agent") != "human"
         mine = [m for m in self._rows("v_message")
-                if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed]
+                if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed
+                and not (helper and m["kind"] == "chat")]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
 
     def inbox(self, limit=10):
@@ -521,16 +577,16 @@ class SpaceHub(LibraryRoutes):
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm — shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
-                 "Shared dimensions live in the Params sheet — reference them with expressions "
+                 "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
                  "human 'steer' messages come first.",
                  "Team:"]
         for p in self.participants():
             tag = " (you)" if p["id"] == me["id"] else ""
             lines.append(f"- {p['name']}{tag} [{p['kind']}/{p['client'] or '?'}, {p['status']}] "
-                         f"locks={p['locks'] or '[]'}" + (f" — {p['doing']}" if p["doing"] else ""))
+                         f"locks={p['locks'] or '[]'}" + (f": {p['doing']}" if p["doing"] else ""))
         open_tasks = [t for t in self.tasks() if t["status"] in ("open", "claimed", "awaiting_takeover", "blocked")]
         if open_tasks:
             lines.append("Tasks:")
@@ -552,9 +608,9 @@ class SpaceHub(LibraryRoutes):
         lines += self._style_context()
         unread = self._unconsumed()
         if unread:
-            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
-                         "COMMAND = a person's instruction for you: do it first. chat = people talking: "
-                         "background only, act on it only if it asks you something:")
+            lines.append(f"Unread messages ({len(unread)}): read with get_inbox, then ack_messages. "
+                         "COMMAND = a person's instruction for you: do it first. Anything else is a request "
+                         "from another helper:")
             for m in unread[:5]:
                 tag = {"steer": "COMMAND", "chat": "chat"}.get(m["kind"], m["kind"])
                 lines.append(f"- [{tag}] {names.get(m['from'], '?')}: {m['body'][:200]}")

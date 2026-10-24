@@ -1,13 +1,14 @@
 """Connecting an AI helper (Claude Code, Codex or Factory Droid) in a project folder to a team.
 
 Shared by `cadswarm setup` and the FreeCAD setup wizard, so stdlib only. Agent
-configs launch `cadswarm_launch.py` by absolute path with an explicit Python —
-FreeCAD's bundled one for hobbyists — so nothing has to be on PATH or pip-installed
+configs launch `cadswarm_launch.py` by absolute path with an explicit Python
+(FreeCAD's bundled one for hobbyists), so nothing has to be on PATH or pip-installed
 into the agent's environment.
 """
 import glob
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,7 +31,7 @@ AGENT_DOC = """{begin}
 ## CadSwarm: you are part of a team building one shared FreeCAD model
 
 Your teammates' agents (Claude Code, Codex, Droid) are editing the same live model right now.
-All CAD work goes through the `cadswarm` MCP tools — never edit .FCStd files directly.
+All CAD work goes through the `cadswarm` MCP tools: never edit .FCStd files directly.
 Your human may be new to CAD: explain what you build in plain words and keep dimensions in mm.
 
 - Start every task with `model_status` and `list_tasks`; `claim_task` before working.
@@ -38,10 +39,12 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 - Shared dimensions go in the `Params` sheet (`set_param`); bind geometry with expressions
   like `Params.hole_pitch` so a change propagates to every part that depends on it.
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
-- Read `get_inbox` often, `ack_messages` what you handled. A person's COMMAND (kind `steer`, sent from
-  FreeCAD's "Tell a helper" tab) comes first: do it, say what you did, then ack it. `chat` is people
-  talking; only act on it if it asks you. When you run out of work, keep calling `wait_for_changes`
-  so new commands and tasks reach you.
+- Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
+  from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
+  you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you
+  run out of work, keep calling `wait_for_changes` so new messages and tasks reach you. (If FreeCAD started you in the background, stop instead: you're woken when needed.)
+- Work with the other AI helpers: `list_helpers` shows who is free; `delegate_task` hands one of them a
+  task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it.
 - Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
   subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
   `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and
@@ -70,12 +73,10 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 RESUME_PROMPT = ("We're continuing our team's CAD project \"{project}\". Check model_status, your inbox and the "
                  "tasks, then carry on with your part. Tell me in plain words what you're doing.")
 
-FIRST_PROMPT = {
-    "lead": "You're leading our team's CAD project \"{project}\". Ask me what we're building, then plan the "
-            "parts, put the shared sizes in Params, create one task per part for the team, and start on yours.",
-    "member": "I just joined our team's CAD project \"{project}\". Check the team's tasks, claim one that "
-              "nobody has started, and build it. Tell me in plain words what you're doing.",
-}
+# AI helpers are always plain members: the people lead the team, and only a person hosts it.
+FIRST_PROMPT = ("I just joined our team's CAD project \"{project}\". Say hello in the team chat (send_message to "
+                "\"all\"), check the team's tasks, claim one that nobody has started, and build it. Tell me in "
+                "plain words what you're doing.")
 
 
 def upsert_block(path, block, begin=BEGIN, end=END):
@@ -289,6 +290,11 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False):
     return written
 
 
+def _node_version(path):
+    """(22, 1, 0) for ~/.nvm/versions/node/v22.1.0/bin/<exe>: newest Node first, not "v9" before "v22"."""
+    return tuple(int(n) for n in re.findall(r"\d+", os.path.basename(os.path.dirname(os.path.dirname(path)))))
+
+
 def find_agent_cli(client):
     """Absolute path of the AI helper's command, or None. Looks beyond PATH because apps
     started from the Start menu don't always see what a terminal sees."""
@@ -306,7 +312,8 @@ def find_agent_cli(client):
     else:
         # Apps started from Finder/the dock or a desktop launcher get a minimal PATH.
         candidates = [os.path.join(home, ".local", "bin", exe)]
-        candidates += sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin", exe)), reverse=True)
+        candidates += sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin", exe)),
+                             key=_node_version, reverse=True)
         candidates += [os.path.join(home, ".claude", "local", exe),
                        os.path.join(home, ".npm-global", "bin", exe),
                        os.path.join(home, ".volta", "bin", exe),
@@ -314,19 +321,31 @@ def find_agent_cli(client):
                        os.path.join("/opt/homebrew/bin", exe),
                        os.path.join("/usr/local/bin", exe),
                        os.path.join("/usr/bin", exe)]
+    candidates += vscode_claude(home) if client == "claude" else []
     return next((c for c in candidates
                  if os.path.isfile(c) and (os.name == "nt" or os.access(c, os.X_OK))), None)
+
+
+def vscode_claude(home):
+    """Claude Code bundled with its VS Code extension, newest version first (some people only have that one).
+    Same lookup as the host's agents.rs."""
+    def version(path):
+        name = os.path.basename(path)[len("anthropic.claude-code-"):]
+        return [int(x) if x.isdigit() else 0 for x in re.split(r"[.-]", name)]
+    exts = glob.glob(os.path.join(home, ".vscode", "extensions", "anthropic.claude-code-*"))
+    exe = "claude.exe" if os.name == "nt" else "claude"
+    return [os.path.join(d, "resources", "native-binary", exe) for d in sorted(exts, key=version, reverse=True)]
 
 
 def _sh_quote(text):
     return "'" + text.replace("'", "'\"'\"'") + "'"
 
 
-def write_launcher(project, client, project_name, role):
+def write_launcher(project, client, project_name, role="member"):
     """The start script for this helper: starts the agent CLI with its first message, so nobody has to paste it;
     later starts send a short "carry on" message instead."""
     exe = find_agent_cli(client) or CLIENTS[client]["exe"]
-    first = FIRST_PROMPT[role].format(project=project_name)
+    first = FIRST_PROMPT.format(project=project_name)
     resume = RESUME_PROMPT.format(project=project_name)
     sd = state_dir(project)
     if os.name == "nt":

@@ -26,6 +26,7 @@ import Part
 from PySide import QtCore, QtGui
 
 from ..client import HubRequestError, load_json, save_json
+from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
 from . import library_ui, style_ui
@@ -33,6 +34,9 @@ from . import library_ui, style_ui
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
 HEARTBEAT_SECONDS = 10
+REFRESH_SECONDS = 3         # the panel re-reads the team this often (in the background) even with no events
+HELPER_CHECK_SECONDS = 20   # how often to make sure this computer's AI helpers are running
+FATAL = ("taken_over", "fence_stale", "left", "bad_token", "not_member")
 
 
 def prefs():
@@ -119,6 +123,9 @@ class Session:
         self.seq = 0
         self.model = {"objects": [], "participants": [], "params": {}}
         self.tasks = []
+        self.messages = []     # the team chat as this person sees it (people and AI helpers)
+        self.wake = threading.Event()  # set to refresh the panel now instead of at the next tick
+        self._helpers_checked = 0
         self.panel = None
         self.timer = None
         self.fea_dialogs = []  # open report popups (kept referenced so Qt doesn't drop them)
@@ -199,9 +206,12 @@ class Session:
         except Exception:
             self.disconnect()  # don't stay "connected" to a session that failed to load
             raise
+        self.wake = threading.Event()
         for loop in (self._poll_loop, self._heartbeat_loop):
             threading.Thread(target=loop, args=(self.stop, self.events, self._bg_client(), self.seq),
                              daemon=True).start()
+        threading.Thread(target=self._refresh_loop, args=(self.stop, self.events, self._bg_client(), self.wake),
+                         daemon=True).start()
         self.timer.start(250)
         say(f"Joined the team in {cfg['db']} as {self.ident.get('name')}")
 
@@ -236,9 +246,29 @@ class Session:
             try:
                 c.post("/heartbeat", {"doing": "watching in FreeCAD"})
             except HubRequestError as e:
-                if e.code in ("taken_over", "fence_stale", "left", "bad_token", "not_member"):
+                if e.code in FATAL:
                     events.put(("fatal", friendly_error(e)))
                     return
+
+    def _refresh_loop(self, stop, events, c, wake):
+        """Re-read everything the panel shows, off the GUI thread: on every team event, after each action,
+        and every few seconds anyway (a helper reading or finishing a message doesn't make an event)."""
+        while not stop.is_set():
+            try:
+                snap = c.panel_snapshot()
+            except HubRequestError as e:
+                if e.code in FATAL:
+                    return  # the poll and heartbeat loops report it
+                snap = None
+            if stop.is_set():
+                return
+            if snap is not None:
+                events.put(("snapshot", snap))
+            wake.wait(REFRESH_SECONDS)
+            wake.clear()
+
+    def request_refresh(self):
+        self.wake.set()
 
     def _poll_loop(self, stop, events, c, seq):
         offline = False
@@ -246,7 +276,7 @@ class Session:
             try:
                 r = c.get("/events", since=seq, wait=20)
             except HubRequestError as e:
-                if e.code in ("taken_over", "fence_stale", "left", "bad_token", "not_member"):
+                if e.code in FATAL:
                     events.put(("fatal", friendly_error(e)))
                     return
                 if not offline:
@@ -297,6 +327,10 @@ class Session:
                     open_fea_report(data["folder"])
             elif kind == "refresh":
                 refresh = True
+            elif kind == "snapshot":
+                self.apply_snapshot(data)
+            elif kind == "done":
+                self.finish_async(*data)
             elif kind == "offline":
                 self.set_state("offline", data)
             elif kind == "online":
@@ -306,7 +340,7 @@ class Session:
                 warn(data)
                 self.disconnect(reason=data)
         if refresh:
-            self.refresh_meta()
+            self.request_refresh()
         self.guard_local_moves()
 
     def guard_local_moves(self):
@@ -326,7 +360,8 @@ class Session:
         if moved and time.time() - self._moved_hint > 20:
             self._moved_hint = time.time()
             hint(f"{', '.join(moved)} is shared with your team, so the move was undone.\n\n"
-                 "To change a part yourself, select it and click \u270e Edit a part\u2026 in the CadSwarm panel "
+                 "To change a part yourself, select it and choose Team tools \u25b8 Edit a part yourself in the "
+                 "CadSwarm panel "
                  "(or start the edit first, then move it). Your change is sent to everyone when you click Save.")
 
     def mirror(self):
@@ -386,11 +421,6 @@ class Session:
 
     def full_refresh(self):
         self.apply_breps(self.client.post("/brep", {})["objects"])
-        if self.panel:
-            try:
-                self.panel.load_history(self.client.get("/messages", limit=50)["messages"], self.ident["name"])
-            except HubRequestError:
-                pass
         mirror = self.mirror()
         live = {o["name"] for o in self.client.get("/model")["objects"]}
         self.remove_objects([o.Name for o in mirror.Objects if o.Name not in live])
@@ -398,47 +428,94 @@ class Session:
         self.frame_model()
 
     def refresh_meta(self):
+        """Read everything now, on this thread. Only for joining; everything else uses request_refresh()."""
         if not self.client:
             return
         try:
-            self.model = self.client.get("/model")
-            self.tasks = self.client.get("/tasks")["tasks"]
-            self.commands = self.client.get("/commands").get("commands", [])
-            try:
-                self.briefs = self.client.get("/briefs").get("briefs", [])
-            except HubRequestError:
-                self.briefs = []  # an older team server without requests
-            owners = {o["name"]: o.get("locked_by") for o in self.model["objects"]}
-            ids = {p["name"]: p["id"] for p in self.model["participants"]}
-            for p in self.model["participants"]:
-                owner_color(p["id"])  # reserve colors in join order
-            doc = self.mirror()
-            for o in doc.Objects:  # recolor on lock moves (takeover, release) without new geometry
-                owner = owners.get(o.Name)
-                if getattr(o, "ViewObject", None):
-                    set_if_changed(o.ViewObject, "ShapeColor", owner_color(ids.get(owner)))
-                editing = " \u00b7 you're editing" if o.Name in self.editing else ""
-                set_if_changed(o, "Label", f"{o.Label.split(' [')[0]} [{owner or 'unlocked'}{editing}]")
+            self.apply_snapshot(self.client.panel_snapshot())
         except HubRequestError as e:
             warn(f"refresh failed: {e}")
+
+    def apply_snapshot(self, snap):
+        if not self.client:
             return
+        self.model, self.tasks = snap["model"], snap["tasks"]
+        self.commands, self.briefs, self.messages = snap["commands"], snap["briefs"], snap["messages"]
+        owners = {o["name"]: o.get("locked_by") for o in self.model["objects"]}
+        ids = {p["name"]: p["id"] for p in self.model["participants"]}
+        for p in self.model["participants"]:
+            owner_color(p["id"])  # reserve colors in join order
+        doc = self.mirror()
+        for o in doc.Objects:  # recolor on lock moves (takeover, release) without new geometry
+            owner = owners.get(o.Name)
+            if getattr(o, "ViewObject", None):
+                set_if_changed(o.ViewObject, "ShapeColor", owner_color(ids.get(owner)))
+            editing = " \u00b7 you're editing" if o.Name in self.editing else ""
+            set_if_changed(o, "Label", f"{o.Label.split(' [')[0]} [{owner or 'unlocked'}{editing}]")
+        if time.time() - self._helpers_checked > HELPER_CHECK_SECONDS:
+            self._helpers_checked = time.time()
+            start_local_helpers(self)
         if self.panel:
             self.panel.render(self)
 
     # --------------------------------------------------------------- actions
 
     def act(self, method, path, body=None, done=None, purpose="do that"):
+        """Do one thing now and return its result, for steps that need it next. Prefer act_async."""
         if not self.ensure_connected(purpose):
             return None
+        QtGui.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
             r = self.client.request(method, path, body if method != "GET" else None)
-            if done:
-                say(done if isinstance(done, str) else done(r))
-            self.refresh_meta()
-            return r
         except HubRequestError as e:
+            QtGui.QApplication.restoreOverrideCursor()
             QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm", friendly_error(e, self.client.hub if self.client else ""))
             return None
+        QtGui.QApplication.restoreOverrideCursor()
+        if done:
+            say(done if isinstance(done, str) else done(r))
+        self.request_refresh()
+        return r
+
+    def act_async(self, method, path, body=None, done=None, purpose="do that", failed=None):
+        """Send one request without freezing FreeCAD. `done` (text, or a function of the result) runs on the GUI
+        thread once it's back; `failed` runs after an error has been shown."""
+        def finish(r):
+            if callable(done):
+                done(r)
+            elif done:
+                say(done)
+        self.run_async(lambda c: c.request(method, path, body if method != "GET" else None), finish, purpose,
+                       failed)
+
+    def run_async(self, work, done=None, purpose="do that", failed=None):
+        """Run `work(client)` on a background thread; the outcome comes back through the event queue."""
+        if not self.ensure_connected(purpose):
+            if failed:
+                failed()
+            return
+        client, events = self.client, self.events
+
+        def go():
+            try:
+                events.put(("done", (done, failed, work(client), None)))
+            except HubRequestError as e:
+                events.put(("done", (done, failed, None, friendly_error(e, client.hub))))
+            except Exception as e:  # never lose a click silently
+                events.put(("done", (done, failed, None, str(e))))
+        threading.Thread(target=go, daemon=True).start()
+
+    def finish_async(self, done, failed, result, error):
+        if error:
+            QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm", error)
+            if failed:
+                failed()
+        elif done:
+            try:
+                done(result)
+            except Exception as e:
+                warn(f"after that step: {e}")
+        self.request_refresh()
 
     def selected_names(self):
         names = []
@@ -469,9 +546,12 @@ SESSION = Session()
 # ------------------------------------------------------------------ panel
 
 class TeamPanel(QtGui.QDockWidget):
-    """The team at a glance, then four tabs that keep different kinds of talk apart:
-    Tasks (what needs doing), Tell a helper (instructions an AI helper must follow), Team chat
-    (people talking) and Activity (what happened, written by CadSwarm)."""
+    """Your AI helpers and what each one is doing, then one chat box. Type @ and a helper's name to give it a
+    task (it starts at once and answers in the chat), @team to have the whole team plan and build a request,
+    @all to tell every helper something; anything else is chat. Tasks and Activity fold away underneath.
+
+    Everything sits in a scroll area, so a small screen scrolls instead of cropping. Lists are rebuilt only
+    when what they show changed, so a refresh never closes a menu, drops a selection or jumps the chat."""
 
     SPINNER = "◐◓◑◒"
 
@@ -479,17 +559,24 @@ class TeamPanel(QtGui.QDockWidget):
         super().__init__("CadSwarm Team")
         self.session = session
         self.setObjectName("CadSwarmTeam")
-        self.unread = {}
         self.spin_i = 0
         self.busy_rows = []     # (item, column, text) redrawn with a turning spinner
+        self.keys = {}          # what each list last showed: skip rebuilding it when nothing changed
+        self.outbox = []        # messages sent but not yet back from the team: shown greyed in the chat
+        self.new_activity = 0
+        self.completed_at = 0.0  # when @-completion last filled in a name (its Enter must not also send)
         w = QtGui.QWidget()
         lay = QtGui.QVBoxLayout(w)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
         # The banner always answers "where do I stand, and what do I do next?"
         self.banner = QtGui.QFrame()
         self.banner.setFrameShape(QtGui.QFrame.StyledPanel)
         brow = QtGui.QHBoxLayout(self.banner)
+        brow.setContentsMargins(8, 6, 8, 6)
         self.banner_text = QtGui.QLabel()
         self.banner_text.setWordWrap(True)
+        self.banner_text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         self.banner_button = QtGui.QPushButton()
         self.banner_button.clicked.connect(self.banner_action)
         self.invite_button = QtGui.QPushButton("Invite")
@@ -501,57 +588,117 @@ class TeamPanel(QtGui.QDockWidget):
         bcol.addWidget(self.invite_button)
         brow.addLayout(bcol)
         lay.addWidget(self.banner)
-        self.status = QtGui.QLabel("")
-        self.status.setWordWrap(True)
-        lay.addWidget(self.status)
 
-        lay.addWidget(QtGui.QLabel("<b>Who's here</b>"))
+        # ------------------------------------------------------------ helpers
+        head = QtGui.QHBoxLayout()
+        head.addWidget(QtGui.QLabel("<b>AI helpers</b>"), 1)
+        new = QtGui.QPushButton("＋ New helper")
+        new.setObjectName("primary")
+        new.setToolTip("Start another AI helper on this computer. You can have as many as you like.")
+        new.clicked.connect(self.new_helper)
+        head.addWidget(new)
+        lay.addLayout(head)
         self.team = QtGui.QTreeWidget()
-        self.team.setHeaderLabels(["Name", "Right now"])
-        self.team.setColumnWidth(0, 200)
-        self.team.setRootIsDecorated(True)
+        self.team.setHeaderLabels(["Helper", "Task", "Status"])
+        team_head = self.team.header()
+        team_head.setStretchLastSection(False)
+        team_head.setSectionResizeMode(0, QtGui.QHeaderView.Interactive)
+        team_head.setSectionResizeMode(1, QtGui.QHeaderView.Stretch)
+        team_head.setSectionResizeMode(2, QtGui.QHeaderView.Interactive)
+        self.team.installEventFilter(self)  # name and status keep their share of the width as the panel resizes
+        self.team.setRootIsDecorated(False)
+        self.team.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.team.customContextMenuRequested.connect(self.helper_menu)
         self.team.itemDoubleClicked.connect(self.team_double_click)
-        self.team.setMinimumHeight(130)  # at least three teammates visible
-        lay.addWidget(self.team, 2)
+        self.team.setToolTip("Double-click a helper to give it a task. Right-click your own helpers to rename, "
+                             "restart or remove them.")
+        lay.addWidget(self.team)
+        self.team_tip = QtGui.QLabel("")
+        self.team_tip.setWordWrap(True)
+        lay.addWidget(self.team_tip)
+        self.people = QtGui.QLabel("")
+        self.people.setWordWrap(True)
+        lay.addWidget(self.people)
 
-        self.tabs = QtGui.QTabWidget()
-        self.tabs.currentChanged.connect(self.tab_opened)
-        self.tabs.addTab(self.build_tasks_tab(), "Tasks")
-        self.tabs.addTab(self.build_command_tab(), "Tell a helper")
-        self.tabs.addTab(self.build_chat_tab(), "Team chat")
-        self.tabs.addTab(self.build_activity_tab(), "Activity")
-        # Appended last: bump() and setCurrentIndex() elsewhere use the first four indexes.
-        self.library = library_ui.LibraryTab(session)
-        self.tabs.addTab(self.library, "Library")
-        self.tab_names = ["Tasks", "Tell a helper", "Team chat", "Activity", "Library"]
-        lay.addWidget(self.tabs, 5)
+        # --------------------------------------------------------------- chat
+        self.chat = QtGui.QTextBrowser()
+        self.chat.setOpenLinks(False)
+        self.chat.setMinimumHeight(220)
+        lay.addWidget(self.chat, 1)
+        row = QtGui.QHBoxLayout()
+        self.msg = QtGui.QLineEdit()
+        self.msg.setPlaceholderText("@helper what to do, or a message for your team")
+        self.msg.returnPressed.connect(self.send)
+        self.msg.textEdited.connect(self.maybe_complete)
+        row.addWidget(self.msg, 1)
+        send = QtGui.QPushButton("Send")
+        send.setObjectName("primary")
+        send.clicked.connect(self.send)
+        row.addWidget(send)
+        lay.addLayout(row)
+        self.completer = QtGui.QCompleter(self)
+        self.completer.setModel(QtCore.QStringListModel([], self.completer))
+        self.completer.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
+        self.completer.setCompletionMode(QtGui.QCompleter.PopupCompletion)
+        self.completer.setWidget(self.msg)
+        try:
+            self.completer.activated[str].connect(self.insert_mention)
+        except (KeyError, TypeError, IndexError):
+            self.completer.activated.connect(self.insert_mention)
+        hint_ = QtGui.QLabel("<small style='color:#8b949e'><b>@name</b> gives a helper a task · <b>@team</b> plans "
+                             "and builds a whole request · <b>@all</b> tells every helper · no @ is chat between "
+                             "people (helpers don't see it)</small>")
+        hint_.setWordWrap(True)
+        lay.addWidget(hint_)
 
-        edit = QtGui.QGroupBox("Change the model yourself")
-        grid = QtGui.QGridLayout(edit)
-        buttons = [("✎ Edit a part…", edit_part, "Change a part's size or position yourself; your change is shared "
-                                                  "with everyone when you click Save"),
-                   ("Change a shared size…", self.set_param, "e.g. make every hole 5 mm: every part that uses it updates"),
-                   ("Check for clashes", run_interference, "Find parts that overlap each other"),
-                   ("Save as 3D file…", run_export, "Save a STEP file for printing or other CAD programs"),
-                   ("Add a part from the library…", library_ui.show_library,
-                    "Screws, bearings, inserts and your team's own parts: place one, or upload a STEP file"),
-                   ("Precision settings…", library_ui.show_settings,
-                    "The team's clearances, fits, bolt-hole sizes and mesh precision, and what AI helpers suggest")]
-        for i, (label, fn, tip) in enumerate(buttons):
-            b = QtGui.QPushButton(label)
-            b.setToolTip(tip)
-            b.clicked.connect(fn)
+        # ------------------------------------------------- tasks and activity
+        tasks = QtGui.QWidget()
+        tl = QtGui.QVBoxLayout(tasks)
+        tl.setContentsMargins(0, 0, 0, 0)
+        self.task_list = QtGui.QTreeWidget()
+        self.task_list.setHeaderLabels(["Task", "Status"])
+        th = self.task_list.header()
+        th.setStretchLastSection(False)
+        th.setSectionResizeMode(0, QtGui.QHeaderView.Stretch)
+        th.setSectionResizeMode(1, QtGui.QHeaderView.Interactive)
+        self.task_list.installEventFilter(self)  # keeps the status column at about 40% when the panel resizes
+        self.task_list.itemSelectionChanged.connect(self.task_selected)
+        self.task_list.itemDoubleClicked.connect(lambda *_: self.task_details())
+        self.task_list.setMinimumHeight(160)
+        tl.addWidget(self.task_list)
+        grid = QtGui.QGridLayout()
+        self.task_start = QtGui.QPushButton("Start it")
+        self.task_start.setToolTip("Ask the helper it's for (or one you pick) to start it now")
+        self.task_start.clicked.connect(self.task_ask_start)
+        self.task_mine = QtGui.QPushButton("I'll do it")
+        self.task_mine.setToolTip("Take this task yourself and change the parts by hand")
+        self.task_mine.clicked.connect(self.task_take)
+        self.task_done = QtGui.QPushButton("Mark done")
+        self.task_done.clicked.connect(self.task_finish)
+        details = QtGui.QPushButton("Details")
+        details.clicked.connect(self.task_details)
+        for i, b in enumerate((self.task_start, self.task_mine, self.task_done, details)):
+            b.setSizePolicy(QtGui.QSizePolicy.Expanding, QtGui.QSizePolicy.Fixed)
             grid.addWidget(b, i // 2, i % 2)
-        self.params = QtGui.QLabel("")
-        self.params.setWordWrap(True)
-        grid.addWidget(self.params, (len(buttons) + 1) // 2, 0, 1, 2)
-        lay.addWidget(edit)
+        tl.addLayout(grid)
+        self.task_hint = QtGui.QLabel("")
+        self.task_hint.setWordWrap(True)
+        tl.addWidget(self.task_hint)
+        self.tasks_button = self.section(lay, "Tasks", tasks)
+        self.activity = QtGui.QTextBrowser()
+        self.activity.setMinimumHeight(160)
+        self.activity_button = self.section(lay, "Activity", self.activity)
+        self.library = library_ui.LibraryTab(session)
+        self.library_button = self.section(lay, "Library", self.library)
 
         more = QtGui.QToolButton()
         more.setText("Team tools ▾")
         more.setPopupMode(QtGui.QToolButton.InstantPopup)
         menu = QtGui.QMenu(more)
-        for label, fn in (("Project files…", show_project_files), ("Open project folder", open_project_folder),
+        for label, fn in (("✎ Edit a part yourself…", edit_part), ("Change a shared size…", self.set_param),
+                          ("Check for clashes", run_interference), ("Export STEP…", run_export),
+                          (None, None),
+                          ("Project files…", show_project_files), ("Open project folder", open_project_folder),
                           ("Save a snapshot of the model", save_snapshot),
                           ("Simulation (FEA) reports…", show_fea_reports),
                           ("Storage and free up space…", show_storage),
@@ -559,7 +706,8 @@ class TeamPanel(QtGui.QDockWidget):
                           ("Precision settings…", library_ui.show_settings),
                           ("Learned design style…", style_ui.show_style),
                           (None, None),
-                          ("Add an AI helper…", add_helper), ("Invite teammates…", invite_teammates),
+                          ("Set up a helper step by step…", add_helper), ("Invite teammates…", invite_teammates),
+                          ("Restart my AI helpers", restart_helpers), ("Show my AI helpers' logs", show_helper_log),
                           (None, None),
                           ("Hold the selected parts (only you can change them)", self.lock),
                           ("Let go of the selected parts", self.release),
@@ -572,135 +720,86 @@ class TeamPanel(QtGui.QDockWidget):
                 menu.addAction(label).triggered.connect(lambda _=False, f=fn: f())
         more.setMenu(menu)
         lay.addWidget(more, 0, QtCore.Qt.AlignRight)
+        self.params = QtGui.QLabel("")
+        self.params.setWordWrap(True)
+        lay.addWidget(self.params)
         w.setObjectName("cadswarmPanel")
         w.setStyleSheet(PANEL_STYLE)
+        # A small screen scrolls instead of squashing or cropping anything.
+        scroll = QtGui.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtGui.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(w)
         self.setMinimumWidth(PANEL_MIN_WIDTH)
-        self.setWidget(w)
+        self.setWidget(scroll)
         self.spin_timer = QtCore.QTimer(self)
         self.spin_timer.timeout.connect(self.spin)
         self.spin_timer.start(350)
+        # Follow the FreeCAD window: keep the share of its width people last dragged the panel to.
+        self.share = PANEL_SHARE
+        self.window_width = 0
+        try:
+            Gui.getMainWindow().installEventFilter(self)
+        except Exception:
+            pass
+        self.task_selected()
         self.show_state(session)
 
-    # ------------------------------------------------------------- tab builders
+    def section(self, lay, title, body):
+        """A heading that folds `body` open and closed (closed to start with)."""
+        button = QtGui.QToolButton()
+        button.setText(title)
+        button.setCheckable(True)
+        button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        button.setArrowType(QtCore.Qt.RightArrow)
+        button.setObjectName("section")
+        body.setVisible(False)
 
-    def build_tasks_tab(self):
-        w = QtGui.QWidget()
-        lay = QtGui.QVBoxLayout(w)
-        new = QtGui.QPushButton("＋  New task…")
-        new.setToolTip("Describe what needs doing and pick who does it — an AI helper, or you")
-        new.setStyleSheet("QPushButton { font-weight: bold; padding: 6px; }")
-        new.clicked.connect(self.new_task)
-        lay.addWidget(new)
-        self.task_list = QtGui.QTreeWidget()
-        self.task_list.setHeaderLabels(["Task", "Status", "Who"])
-        self.task_list.setColumnWidth(0, 240)
-        self.task_list.setColumnWidth(1, 130)
-        self.task_list.itemSelectionChanged.connect(self.task_selected)
-        self.task_list.itemDoubleClicked.connect(lambda *_: self.task_details())
-        lay.addWidget(self.task_list, 1)
-        row = QtGui.QHBoxLayout()
-        self.task_start = QtGui.QPushButton("Ask to start")
-        self.task_start.setToolTip("Send the assigned helper an instruction to start this task now")
-        self.task_start.clicked.connect(self.task_ask_start)
-        self.task_mine = QtGui.QPushButton("I'll do it")
-        self.task_mine.setToolTip("Take this task yourself and change the parts by hand")
-        self.task_mine.clicked.connect(self.task_take)
-        self.task_done = QtGui.QPushButton("Mark done")
-        self.task_done.clicked.connect(self.task_finish)
-        details = QtGui.QPushButton("Details")
-        details.clicked.connect(self.task_details)
-        for b in (self.task_start, self.task_mine, self.task_done, details):
-            row.addWidget(b)
-        lay.addLayout(row)
-        self.task_selected()
-        return w
+        def toggle(on):
+            body.setVisible(on)
+            button.setArrowType(QtCore.Qt.DownArrow if on else QtCore.Qt.RightArrow)
+            if on and body is self.activity:
+                self.new_activity = 0
+                self.activity_button.setText("Activity")
+        button.toggled.connect(toggle)
+        lay.addWidget(button)
+        lay.addWidget(body)
+        return button
 
-    def build_command_tab(self):
-        w = QtGui.QWidget()
-        w.setObjectName("commandTab")
-        lay = QtGui.QVBoxLayout(w)
-        intro = QtGui.QLabel("<b style='color:#d9822b'>Tell the AI helpers what to do.</b> Pick a helper and it does "
-                             "your instruction before anything else, then tells you when it's done. Pick "
-                             "<b>The whole team</b> to have it planned into tasks and built for you. To talk with "
-                             "people, use Team chat.")
-        intro.setWordWrap(True)
-        lay.addWidget(intro)
-        row = QtGui.QHBoxLayout()
-        row.addWidget(QtGui.QLabel("Helper:"))
-        self.cmd_to = QtGui.QComboBox()
-        self.cmd_to.setSizeAdjustPolicy(QtGui.QComboBox.AdjustToContents)
-        row.addWidget(self.cmd_to, 1)
-        lay.addLayout(row)
-        quick = QtGui.QHBoxLayout()
-        quick.setSpacing(4)
-        for label, text in QUICK_COMMANDS:
-            b = QtGui.QToolButton()
-            b.setText(label)
-            b.setToolTip(text.replace("{parts}", "the selected parts"))
-            b.clicked.connect(lambda _=False, t=text: self.fill_command(t))
-            quick.addWidget(b)
-        quick.addStretch(1)
-        lay.addLayout(quick)
-        self.cmd_text = QtGui.QPlainTextEdit()
-        self.cmd_text.setPlaceholderText("e.g. Make the lid 20 mm tall and check it still clears the posts")
-        self.cmd_text.setMaximumHeight(85)
-        self.cmd_text.setStyleSheet("QPlainTextEdit { border: 1px solid #d9822b; border-radius: 4px; }")
-        lay.addWidget(self.cmd_text)
-        send_row = QtGui.QHBoxLayout()
-        self.cmd_hint = QtGui.QLabel("<small style='color:#8b949e'>Ctrl+Enter to send</small>")
-        send_row.addWidget(self.cmd_hint, 1)
-        send = QtGui.QPushButton("Send instruction ▸")
-        send.setStyleSheet("QPushButton { background: #d9822b; color: white; font-weight: bold; padding: 5px 12px; }")
-        send.clicked.connect(self.send_command)
-        send_row.addWidget(send)
-        lay.addLayout(send_row)
-        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+Return"), self.cmd_text, activated=self.send_command)
-        lay.addWidget(QtGui.QLabel("<b>Your instructions</b>"))
-        self.cmd_list = QtGui.QTreeWidget()
-        self.cmd_list.setHeaderLabels(["Instruction", "To", "Status"])
-        self.cmd_list.setColumnWidth(0, 230)
-        self.cmd_list.setColumnWidth(1, 110)
-        self.cmd_list.setRootIsDecorated(False)
-        self.cmd_list.setMinimumHeight(110)  # at least three instructions visible
-        lay.addWidget(self.cmd_list, 1)
-        self.cmd_wait = QtGui.QLabel("")
-        self.cmd_wait.setWordWrap(True)
-        lay.addWidget(self.cmd_wait)
-        return w
+    def show_tasks(self):
+        self.tasks_button.setChecked(True)
 
-    def build_chat_tab(self):
-        w = QtGui.QWidget()
-        lay = QtGui.QVBoxLayout(w)
-        intro = QtGui.QLabel("<b style='color:#3e9be9'>Talk with your teammates.</b> AI helpers can read this, but "
-                             "they don't take it as instructions.")
-        intro.setWordWrap(True)
-        lay.addWidget(intro)
-        self.chat = QtGui.QTextEdit()
-        self.chat.setReadOnly(True)
-        lay.addWidget(self.chat, 1)
-        row = QtGui.QHBoxLayout()
-        self.to = QtGui.QComboBox()
-        self.to.setSizeAdjustPolicy(QtGui.QComboBox.AdjustToContents)  # show whole names, not "te:"
-        self.to.setMinimumContentsLength(8)
-        self.to.addItem("Everyone", "all")
-        self.msg = QtGui.QLineEdit()
-        self.msg.setPlaceholderText("Message your team…")
-        self.msg.returnPressed.connect(self.send)
-        send = QtGui.QPushButton("Send")
-        send.clicked.connect(self.send)
-        row.addWidget(self.to)
-        row.addWidget(self.msg, 1)
-        row.addWidget(send)
-        lay.addLayout(row)
-        return w
+    # ------------------------------------------------------------------ window size
 
-    def build_activity_tab(self):
-        w = QtGui.QWidget()
-        lay = QtGui.QVBoxLayout(w)
-        self.activity = QtGui.QTextEdit()
-        self.activity.setReadOnly(True)
-        lay.addWidget(self.activity, 1)
-        return w
+    def follow_window(self):
+        mw = Gui.getMainWindow()
+        if self.isFloating() or not self.isVisible() or mw.width() <= 0:
+            return
+        self.window_width = mw.width()
+        width = int(min(max(mw.width() * self.share, PANEL_MIN_WIDTH), mw.width() * 0.6))
+        if abs(width - self.width()) > 2:
+            try:
+                mw.resizeDocks([self], [width], QtCore.Qt.Horizontal)
+            except (AttributeError, TypeError):
+                pass
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        mw = Gui.getMainWindow()
+        # The window didn't change size, so a person dragged the panel's edge: remember their choice.
+        if not self.isFloating() and mw.width() > 0 and mw.width() == self.window_width:
+            self.share = min(max(self.width() / mw.width(), 0.15), 0.6)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QtCore.QEvent.Resize and obj is Gui.getMainWindow():
+            QtCore.QTimer.singleShot(0, self.follow_window)
+        if obj is getattr(self, "team", None) and ev.type() == QtCore.QEvent.Resize:
+            self.team.setColumnWidth(0, max(90, int(ev.size().width() * 0.34)))
+            self.team.setColumnWidth(2, max(70, int(ev.size().width() * 0.24)))
+        if obj is getattr(self, "task_list", None) and ev.type() == QtCore.QEvent.Resize:
+            self.task_list.setColumnWidth(1, max(110, int(ev.size().width() * 0.4)))
+        return super().eventFilter(obj, ev)
 
     # ------------------------------------------------------------------ state
 
@@ -717,11 +816,9 @@ class TeamPanel(QtGui.QDockWidget):
         bg, fg, headline, button = self.BANNERS[s.state]
         if s.state == "connected":
             me = s.ident["name"] if s.ident else "you"
-            others = [p for p in s.model.get("participants", []) if p.get("name") != me and p.get("status") == "active"]
-            working = [p for p in others if helper_state(p)[0] == "working"]
-            headline = (f"<b>You're in the team session as {me}.</b> "
-                        f"{len(others)} teammate{'s' if len(others) != 1 else ''} online"
-                        + (f", {len(working)} helper{'s' if len(working) != 1 else ''} working." if working else "."))
+            parts = [o for o in s.model.get("objects", []) if o.get("bbox")]
+            headline = (f"<b>You're in the team session as {html.escape(me)}.</b> "
+                        f"{len(parts)} part{'s' if len(parts) != 1 else ''} in the model so far.")
         detail = ""
         if s.state == "disconnected":
             left = s.state_detail == "You left the team session."
@@ -744,11 +841,6 @@ class TeamPanel(QtGui.QDockWidget):
                                   f"QLabel {{ color: {fg}; background: transparent; }}")
         self.banner_button.setText(button)
         self.invite_button.setVisible(s.state == "connected")
-        connected = s.state in ("connected", "offline")
-        self.msg.setPlaceholderText("Message your team — press Enter to send" if connected else
-                                    "Type a message — you'll be asked to join your team first")
-        if not connected:
-            self.status.setText("")
 
     def banner_action(self):
         s = self.session
@@ -756,143 +848,194 @@ class TeamPanel(QtGui.QDockWidget):
             if confirm("Leave the team session? Your locks will be released so others can edit those parts."):
                 s.disconnect()
         elif s.state == "offline":
-            s.refresh_meta()
+            s.request_refresh()
         else:
             connect_dialog()
 
-    def set_status(self, text):
-        self.status.setText(text)
+    def changed(self, name, key):
+        """True (and remembers `key`) when list `name` must be rebuilt."""
+        if self.keys.get(name) == key:
+            return False
+        self.keys[name] = key
+        return True
 
     def render(self, s):
-        me = s.ident["name"] if s.ident else "?"
         self.show_state(s)
-        parts = [o for o in s.model["objects"] if o.get("bbox")]
-        self.set_status(f"<small>{len(parts)} part{'s' if len(parts) != 1 else ''} in the shared model so far."
-                        + ("" if parts else " Nothing built yet — click <b>＋ New task</b> to give a helper "
-                                            "something to build.") + "</small>")
         self.busy_rows = []
-        pending = {}
-        for c in s.commands:
-            if c["state"] == "sent":
-                for name, st in c["by_helper"].items():
-                    if st == "sent":
-                        pending[name] = pending.get(name, 0) + 1
-        expanded = {self.team.topLevelItem(i).data(0, QtCore.Qt.UserRole)
-                    for i in range(self.team.topLevelItemCount()) if self.team.topLevelItem(i).isExpanded()}
-        self.team.clear()
-        chat_to, cmd_to = self.to.currentData(), self.cmd_to.currentData()
-        self.to.clear()
-        self.to.addItem("Everyone", "all")
-        self.cmd_to.clear()
-        helpers = [p for p in s.model["participants"] if p.get("kind") != "human" and p["name"] != me]
-        for p in s.model["participants"]:
-            state, text = helper_state(p)
-            name = f"{p['name']}{' (you)' if p['name'] == me else ''}"
-            item = QtGui.QTreeWidgetItem([name, text])
-            item.setData(0, QtCore.Qt.UserRole, p["name"])
-            item.setToolTip(0, who_is(p))
-            item.setToolTip(1, f"{who_is(p)} — {text}")
-            r, g, b = owner_color(p["id"])
-            item.setForeground(0, QtGui.QBrush(QtGui.QColor(int(r * 200), int(g * 200), int(b * 200))))
-            item.setText(0, ("🤖 " if p.get("kind") != "human" else "🧑 ") + name)
-            colour = {"working": "#d9822b", "ready": "#1a7f37", "away": "#8b949e"}.get(state)
-            if colour:
-                item.setForeground(1, QtGui.QBrush(QtGui.QColor(colour)))
-            if state == "working":
-                self.busy_rows.append((item, 1, text))
-            if pending.get(p["name"]):
-                n = pending[p["name"]]
-                item.setText(1, f"{text} · {n} instruction{'s' if n != 1 else ''} not read yet")
-            held = [lock for lock in p["locks"] if lock != "Params"]
-            for lock in held:
-                QtGui.QTreeWidgetItem(item, [f"🔒 {lock}", "only they can change it"])
-            self.team.addTopLevelItem(item)
-            item.setExpanded(p["name"] in expanded)
-            if held and not item.isExpanded():
-                item.setText(1, item.text(1) + f" · holds {len(held)} part{'s' if len(held) != 1 else ''}")
-            if p["name"] != me and p.get("kind") == "human":
-                self.to.addItem(p["name"], p["name"])
-        for p in helpers:
-            state, text = helper_state(p)
-            self.cmd_to.addItem(f"{p['name']} — {text}", p["name"])
-        if len(helpers) > 1:
-            self.cmd_to.addItem("All helpers", "all")
-        # Always there, even before anyone opens a helper: the team server plans it and starts helpers itself.
-        self.cmd_to.addItem("🧠 The whole team — plan it and build it (starts AI helpers for you)", TEAM_REQUEST)
-        for combo, want in ((self.to, chat_to), (self.cmd_to, cmd_to)):
-            idx = combo.findData(want)
-            combo.setCurrentIndex(max(idx, 0))
+        self.render_team(s)
         self.render_tasks(s)
-        self.render_commands(s)
+        self.render_chat(s)
         params = s.model.get("params") or {}
-        self.params.setText("<small><b>Shared sizes:</b> " + (", ".join(
+        self.params.setText("<small><b>Shared sizes:</b> " + html.escape(", ".join(
             f"{k.replace('_', ' ')} = {v:g} mm" if isinstance(v, (int, float)) else f"{k.replace('_', ' ')} = {v}"
             for k, v in params.items()) or "none yet") + "</small>")
 
+    def render_team(self, s):
+        me = s.ident["name"] if s.ident else "?"
+        local = local_helper_status(s)
+        pending = {}
+        for c in s.commands:
+            for name, st in c["by_helper"].items():
+                if st == "sent":
+                    pending[name] = pending.get(name, 0) + 1
+        rows, tips = [], []
+        for p in s.model["participants"]:
+            if p.get("kind") == "human":
+                continue
+            state, task, status = helper_row(p, local.get(p["name"]), s.tasks)
+            if pending.get(p["name"]):
+                status += f" · {pending[p['name']]} unread"
+            held = tuple(lock for lock in p["locks"] if lock != "Params")
+            rows.append((p["name"], p["id"], p.get("client"), state, task, status, held, p["name"] in local))
+            if state == "away":
+                tips.append(away_tip(p, local.get(p["name"])))
+        people = [p for p in s.model["participants"] if p.get("kind") == "human"]
+        self.people.setText("<small style='color:#8b949e'>People: " + ", ".join(
+            html.escape(p["name"]) + (" (you)" if p["name"] == me else "")
+            + ("" if p.get("status") == "active" else " (away)") for p in people) + "</small>")
+        self.team_tip.setText("<small>" + "<br>".join(tips) + "</small>" if tips else "")
+        self.team_tip.setVisible(bool(tips))
+        choices = [r[0] for r in rows] + ["team", "all"]
+        if self.completer.model().stringList() != choices:  # resetting it would close an open list
+            self.completer.model().setStringList(choices)
+        if not self.changed("team", tuple(rows)):
+            for i in range(self.team.topLevelItemCount()):  # keep the spinners turning
+                item = self.team.topLevelItem(i)
+                if item.data(2, QtCore.Qt.UserRole) == "working":
+                    self.busy_rows.append((item, 2, item.data(2, QtCore.Qt.UserRole + 1)))
+            return
+        self.team.clear()
+        if not rows:
+            empty = QtGui.QTreeWidgetItem(["No AI helpers yet. Click ＋ New helper.", "", ""])
+            empty.setFlags(QtCore.Qt.NoItemFlags)
+            empty.setFirstColumnSpanned(True)
+            self.team.addTopLevelItem(empty)
+        for name, pid, client, state, task, status, held, mine in rows:
+            item = QtGui.QTreeWidgetItem([f"🤖 {name}", task or "no task", status])
+            item.setData(0, QtCore.Qt.UserRole, name)
+            item.setData(2, QtCore.Qt.UserRole, state)
+            item.setData(2, QtCore.Qt.UserRole + 1, status)
+            who = who_is({"kind": "agent", "client": client}) + (" on this computer (yours)" if mine else "")
+            item.setToolTip(0, who)
+            item.setToolTip(1, task or "Nothing assigned. Type @" + name + " in the chat to give it a task.")
+            item.setToolTip(2, status + (f"\nHolds {names(list(held))}" if held else ""))
+            r, g, b = owner_color(pid)
+            item.setForeground(0, QtGui.QBrush(QtGui.QColor(int(r * 200), int(g * 200), int(b * 200))))
+            if mine:
+                font = item.font(0)
+                font.setBold(True)
+                item.setFont(0, font)
+            if not task:
+                item.setForeground(1, QtGui.QBrush(QtGui.QColor("#8b949e")))
+            colour = {"working": "#d9822b", "ready": "#1a7f37", "away": "#8b949e"}.get(state)
+            if colour:
+                item.setForeground(2, QtGui.QBrush(QtGui.QColor(colour)))
+            if state == "working":
+                self.busy_rows.append((item, 2, status))
+            self.team.addTopLevelItem(item)
+        self.fit_team_height()
+
+    def fit_team_height(self):
+        """As tall as its rows (up to about six), so there's no empty box above the chat."""
+        rows = self.team.topLevelItemCount()
+        row_h = self.team.fontMetrics().height() + 8  # the stylesheet pads each row by 3 px top and bottom
+        self.team.setFixedHeight(min(max(rows, 1), 6) * row_h + self.team.header().sizeHint().height() + 6)
+
     def render_tasks(self, s):
+        key = (tuple((t["id"], t["status"], t.get("owner_name"), t.get("assignee"), t["title"], t.get("brief"))
+                     for t in s.tasks),
+               tuple((b["id"], b["status"], b["done"], b["tasks"]) for b in s.briefs))
+        open_ = sum(1 for t in s.tasks if t["status"] != "done")
+        self.tasks_button.setText(f"Tasks ({open_} open)" if open_ else "Tasks")
+        if not self.changed("tasks", key):
+            for item, word in getattr(self, "task_busy", []):
+                self.busy_rows.append((item, 1, word))
+            return
         keep = self.selected_task_id()
+        self.task_list.blockSignals(True)
         self.task_list.clear()
-        if not s.tasks:
-            empty = QtGui.QTreeWidgetItem(["No tasks yet. Click ＋ New task to give your helpers something "
-                                           "to build, or to plan work for yourself.", "", ""])
+        self.task_busy = []
+        groups = {}
+        for b in s.briefs:
+            word = BRIEF_WORDS.get(b["status"], b["status"])
+            if b["status"] in ("building", "reviewing") and b["tasks"]:
+                word += f" ({b['done']}/{b['tasks']} parts)"
+            item = QtGui.QTreeWidgetItem([f"🧠 {b['text']}", word])
+            item.setToolTip(0, f"{b['text']}\n(asked by {b['by']})")
+            item.setForeground(1, QtGui.QBrush(QtGui.QColor(
+                {"ready": "#1a7f37", "failed": "#cf222e"}.get(b["status"], "#d9822b"))))
+            item.setData(0, QtCore.Qt.UserRole, None)
+            self.task_list.addTopLevelItem(item)
+            item.setExpanded(b["status"] != "ready")
+            groups[b["id"]] = item
+        if not s.tasks and not s.briefs:
+            empty = QtGui.QTreeWidgetItem(["No tasks yet. Type @ and a helper's name in the chat to give it one.",
+                                           ""])
             empty.setFlags(QtCore.Qt.NoItemFlags)
             empty.setFirstColumnSpanned(True)
             self.task_list.addTopLevelItem(empty)
         for t in sorted(s.tasks, key=lambda t: TASK_ORDER.get(t["status"], 9)):
             who = t.get("owner_name") or t.get("assignee") or "anyone"
             word = TASK_WORDS.get(t["status"], t["status"])
-            item = QtGui.QTreeWidgetItem([t["title"], word, who])
+            parent = groups.get(t.get("brief"))
+            item = QtGui.QTreeWidgetItem([t["title"], f"{word} · {who}"])
             item.setData(0, QtCore.Qt.UserRole, t["id"])
             item.setToolTip(0, (t.get("detail") or t["title"])[:600])
+            item.setToolTip(1, f"{word}, {who}")
             colour = {"claimed": "#d9822b", "done": "#1a7f37", "blocked": "#cf222e",
                       "awaiting_takeover": "#9a6700"}.get(t["status"])
             if colour:
                 item.setForeground(1, QtGui.QBrush(QtGui.QColor(colour)))
+            if parent is not None:
+                parent.addChild(item)
+            else:
+                self.task_list.addTopLevelItem(item)
             if t["status"] == "claimed":
                 self.busy_rows.append((item, 1, word))
-            self.task_list.addTopLevelItem(item)
+                self.task_busy.append((item, word))
             if t["id"] == keep:
                 item.setSelected(True)
+        self.task_list.blockSignals(False)
         self.task_selected()
 
-    def render_commands(self, s):
-        self.cmd_list.clear()
-        for b in s.briefs:
-            word = BRIEF_WORDS.get(b["status"], b["status"])
-            if b["status"] in ("building", "reviewing") and b["tasks"]:
-                word += f" ({b['done']}/{b['tasks']} parts done)"
-            item = QtGui.QTreeWidgetItem([b["text"], "whole team", word])
-            item.setToolTip(0, f"{b['text']}\n(asked by {b['by']})")
-            item.setForeground(2, QtGui.QBrush(QtGui.QColor(
-                {"ready": "#1a7f37", "failed": "#cf222e"}.get(b["status"], "#d9822b"))))
-            self.cmd_list.addTopLevelItem(item)
-        waiting = []
-        team = {p["name"]: p for p in s.model.get("participants", [])}
-        for c in s.commands:
-            word = COMMAND_WORDS[c["state"]]
-            if c["to"] == "all helpers" and c["state"] != "done":
-                done = sum(1 for v in c["by_helper"].values() if v == "done")
-                word += f" ({done}/{len(c['by_helper'])} done)"
-            task = next((t for t in s.tasks if t["id"] == c.get("task_id")), None)
-            shown = f"▶ Start “{task['title']}”" if task and c["body"].startswith("Please start task") else c["body"]
-            item = QtGui.QTreeWidgetItem([shown, c["to"], word])
-            item.setToolTip(0, c["body"])
-            item.setToolTip(2, "\n".join(f"{n}: {COMMAND_WORDS[v]}" for n, v in c["by_helper"].items()))
-            item.setForeground(2, QtGui.QBrush(QtGui.QColor(
-                {"sent": "#9a6700", "seen": "#d9822b", "done": "#1a7f37"}[c["state"]])))
-            self.cmd_list.addTopLevelItem(item)
-            age = time.time() - c["at"]
-            if c["state"] == "sent" and age > 45:
-                waiting += [n for n, v in c["by_helper"].items() if v == "sent" and n not in waiting]
-        tips = []
-        for n in waiting:
-            p = team.get(n)
-            if p and p.get("status") != "active":
-                tips.append(f"<b>{n}</b> is away, so it can't read your instructions until its window is open again.")
-            else:
-                tips.append(f"<b>{n}</b> hasn't read your instruction yet. It reads new instructions when it finishes "
-                            f"a step. If it has stopped, type <i>continue</i> in its Claude Code / Codex window.")
-        self.cmd_wait.setText("<small>" + "<br>".join(tips) + "</small>" if tips else "")
+    def render_chat(self, s):
+        me = s.ident["name"] if s.ident else None
+        states = {c["id"]: c for c in s.commands}
+        shown = [m for m in s.messages if m["kind"] not in ("notice", "help", "result")]
+        sent = {m["body"] for m in shown if m["from"] == me}
+        self.outbox = [o for o in self.outbox if o["body"] not in sent and time.time() - o["at"] < 60]
+        key = (tuple((m["id"], states[m["id"]]["state"] if m["id"] in states else "") for m in shown),
+               tuple(o["body"] for o in self.outbox))
+        if not self.changed("chat", key):
+            return
+        bar = self.chat.verticalScrollBar()
+        at_bottom = bar.value() >= bar.maximum() - 4
+        lines = []
+        for m in shown:
+            mine = m["from"] == me
+            sender = s.participant(m["from"])
+            helper = sender is not None and sender.get("kind") != "human"
+            colour = "#1a7f37" if mine else "#a371f7" if helper else "#3e9be9"
+            who = "You" if mine else html.escape(m["from"] or "?")
+            to = ""
+            if m["to"] not in ("all", None, me) and not (mine and f"@{m['to']}".lower() in m["body"].lower()):
+                to = f" <span style='color:#8b949e'>to {html.escape(m['to'])}</span>"
+            tag = " <span style='color:#8b949e'>(AI helper)</span>" if helper and not mine else ""
+            status = ""
+            c = states.get(m["id"])
+            if c:
+                status = (f" <span style='color:{ {'sent': '#9a6700', 'seen': '#d9822b', 'done': '#1a7f37'}[c['state']] }'>"
+                          f"{COMMAND_WORDS[c['state']]}</span>")
+            lines.append(chat_line(m["at"], who, colour, to + tag, m["body"], status))
+        for o in self.outbox:
+            lines.append(chat_line(o["at"], "You", "#8b949e", "", o["body"],
+                                   " <span style='color:#8b949e'>sending…</span>"))
+        if not lines:
+            lines.append("<p style='color:#8b949e'>No messages yet. Type <b>@</b> and pick a helper to give it "
+                         "something to build. It answers here as it works.</p>")
+        self.chat.setHtml("".join(lines))
+        if at_bottom or len(lines) <= 1:
+            bar.setValue(bar.maximum())
 
     def spin(self):
         if not self.busy_rows:
@@ -906,107 +1049,188 @@ class TeamPanel(QtGui.QDockWidget):
             except RuntimeError:  # the row was rebuilt while we spun
                 pass
 
-    def tab_opened(self, index):
-        self.unread[index] = 0
-        self.tabs.setTabText(index, self.tab_names[index] if hasattr(self, "tab_names") else self.tabs.tabText(index))
-
-    def bump(self, index):
-        if self.tabs.currentIndex() == index:
-            return
-        self.unread[index] = self.unread.get(index, 0) + 1
-        self.tabs.setTabText(index, f"{self.tab_names[index]} ({self.unread[index]})")
+    def note_activity(self, line):
+        self.activity.append(line)
+        if not self.activity.isVisible():
+            self.new_activity += 1
+            self.activity_button.setText(f"Activity ({self.new_activity} new)")
 
     def on_event(self, ev):
+        """Team events go to Activity (the chat itself is redrawn from the team's messages). Messages between
+        AI helpers show there too, so people can see them working together."""
         k = ev["kind"]
         me = self.session.ident["name"] if self.session.ident else None
         stamp = f"<span style='color:#8b949e'>{time.strftime('%H:%M', time.localtime(ev['ts']))}</span>"
         if k == "message":
+            sender = self.session.participant(ev["name"])
+            target = self.session.participant(ev.get("to"))
+            if ev["name"] == me or ev.get("to") == me:
+                return  # it's in the chat
             body = html.escape(ev["body"])
             if ev.get("message_kind") == "steer":
-                if ev["name"] != me:  # someone else's instruction to a helper: worth knowing, not chat
-                    self.activity.append(f"{stamp} <b style='color:#d9822b'>{html.escape(ev['name'])}</b> told "
-                                         f"<b>{html.escape(ev['to'])}</b>: {body}")
-                    self.bump(3)
-                return
-            sender = self.session.participant(ev["name"])
-            helper = sender is not None and sender.get("kind") != "human"
-            to = "" if ev["to"] == "all" else f" <span style='color:#8b949e'>to {html.escape(ev['to'])}</span>"
-            colour = "#a371f7" if helper else "#3e9be9"
-            tag = " <span style='color:#8b949e'>(AI helper)</span>" if helper else ""
-            self.chat.append(f"{stamp} <b style='color:{colour}'>{html.escape(ev['name'])}</b>{tag}{to}: {body}")
-            if ev["name"] != me:
-                self.bump(2)
+                self.note_activity(f"{stamp} <b style='color:#d9822b'>{html.escape(ev['name'])}</b> asked "
+                                   f"<b>{html.escape(ev['to'])}</b>: {body}")
+            elif sender and sender.get("kind") != "human" and (ev.get("to") == "all" or
+                                                                (target and target.get("kind") != "human")):
+                self.note_activity(f"{stamp} 🤝 <b style='color:#a371f7'>{html.escape(ev['name'])}</b> → "
+                                   f"<b>{html.escape(ev['to'])}</b>: {body}")
             return
         if k == "library" and self.library.loaded:
             self.library.reload()
         line = describe_event(ev)
         if line:
-            self.activity.append(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
-            self.bump(3)
+            self.note_activity(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
 
-    def load_history(self, messages, me):
-        self.chat.clear()
-        for m in messages:
-            if m["kind"] in ("steer", "notice", "help", "result"):
-                continue
-            sender = self.session.participant(m["from"])
-            helper = sender is not None and sender.get("kind") != "human"
-            stamp = f"<span style='color:#8b949e'>{time.strftime('%H:%M', time.localtime(m['at']))}</span>"
-            to = "" if m["to"] == "all" else f" <span style='color:#8b949e'>to {html.escape(m['to'] or '')}</span>"
-            colour = "#a371f7" if helper else "#3e9be9"
-            self.chat.append(f"{stamp} <b style='color:{colour}'>{html.escape(m['from'] or '?')}</b>{to}: "
-                             f"{html.escape(m['body'])}")
+    # --------------------------------------------------------------- the chat box
 
-    # ---------------------------------------------------------------- actions
+    def maybe_complete(self, _text=""):
+        prefix = mention_prefix(self.msg.text()[:self.msg.cursorPosition()])
+        if prefix is None:
+            self.completer.popup().hide()
+            return
+        self.completer.setCompletionPrefix(prefix)
+        if self.completer.completionCount() == 0:
+            self.completer.popup().hide()
+            return
+        width = max(200, self.completer.popup().sizeHintForColumn(0) + 30)
+        self.completer.complete(QtCore.QRect(0, 0, min(width, self.msg.width()), self.msg.height()))
+
+    def insert_mention(self, name):
+        text, pos = self.msg.text(), self.msg.cursorPosition()
+        before = re.sub(r"@[A-Za-z0-9_-]*$", "@" + name + " ", text[:pos])
+        self.msg.setText(before + text[pos:])
+        self.msg.setCursorPosition(len(before))
+        self.completed_at = time.time()
 
     def send(self):
+        if self.completer.popup().isVisible() or time.time() - self.completed_at < 0.3:
+            return  # that Enter picked a name from the list
         text = self.msg.text().strip()
         if not text:
             return
         # Not joined yet: keep what they typed, walk them through joining, then send it.
         if not self.session.ensure_connected("send your message"):
             return
-        if self.session.act("POST", "/messages", {"to": self.to.currentData() or "all", "body": text, "kind": "chat"},
-                            purpose="send your message") is not None:
-            self.msg.clear()
+        helpers, special, unknown = parse_mentions(text, [p["name"] for p in self.session.model["participants"]
+                                                          if p.get("kind") != "human"])
+        if unknown and not helpers and not special:
+            people = {p["name"].lower() for p in self.session.model["participants"] if p.get("kind") == "human"}
+            if unknown[0].lower() not in people:
+                hint(f"There's no AI helper called @{unknown[0]}. Type @ to pick one from the list.")
+                return
+        self.msg.clear()
+        what = strip_mentions(text) or text
+        if "team" in special:
+            self.session.act_async("POST", "/briefs", {"text": what}, purpose="hand the request to the team",
+                                   done=lambda r: (self.show_tasks(), say(
+                                       "Handed the request to the team: it plans it into tasks and starts AI helpers")))
+            self.outbox.append({"body": text, "at": time.time()})
+        elif helpers:
+            for h in helpers:
+                self.give_task(h, text, what)
+        elif "all" in special:
+            self.post(text, "command", "all")
+        else:
+            self.post(text, "chat", "all")
+        self.render_chat(self.session)
 
-    def fill_command(self, text):
-        parts = names(self.session.selected_names()) or "the parts you're working on"
-        self.cmd_text.setPlainText(text.replace("{parts}", parts))
-        self.cmd_text.setFocus()
+    def post(self, text, kind, to):
+        self.outbox.append({"body": text, "at": time.time()})
+        self.session.act_async("POST", "/messages", {"to": to, "body": text, "kind": kind},
+                               purpose="send your message", failed=lambda: self.drop_outbox(text))
 
-    def send_command(self):
-        text = self.cmd_text.toPlainText().strip()
-        if not text:
-            hint("Type what the helper should do first, e.g. “Make the lid 20 mm tall”.")
-            return
-        if not self.session.ensure_connected("give a helper an instruction"):
-            return
-        to = self.cmd_to.currentData()
-        if to == TEAM_REQUEST:
-            if self.session.act("POST", "/briefs", {"text": text}, purpose="hand the request to the team") is not None:
-                self.cmd_text.clear()
-                say("Handed the request to the team: the team server plans it into tasks and starts AI helpers")
-                self.session.refresh_meta()
-            return
-        if not to:
-            hint("No AI helper has joined yet. Add one with Team tools ▸ Add an AI helper.")
-            return
-        if self.session.act("POST", "/messages", {"to": to, "body": text, "kind": "command"},
-                            purpose="give a helper an instruction") is not None:
-            self.cmd_text.clear()
-            say(f"Sent an instruction to {to}")
+    def give_task(self, helper, text, what):
+        """@helper ...: a task for that helper, and a message that wakes it to start on it."""
+        objects = self.session.selected_names()
+        title = what.splitlines()[0][:90]
+        self.outbox.append({"body": text, "at": time.time()})
+
+        def work(c):
+            t = c.post("/tasks", {"title": title, "detail": what, "objects": objects, "assignee": helper})
+            c.post("/messages", {"to": helper, "body": text, "kind": "command", "task_id": t["id"]})
+            return t
+        self.session.run_async(work, purpose="give a helper a task", failed=lambda: self.drop_outbox(text))
+
+    def drop_outbox(self, text):
+        self.outbox = [o for o in self.outbox if o["body"] != text]
+        if not self.msg.text().strip():
+            self.msg.setText(text)  # give the words back so nothing typed is lost
+        self.render_chat(self.session)
+
+    def mention(self, name):
+        """Put @name at the start of the chat box, ready to type what it should do."""
+        text = re.sub(r"^(@[A-Za-z0-9_-]+\s+)+", "", self.msg.text())
+        self.msg.setText(f"@{name} {text}")
+        self.msg.setFocus()
+        self.msg.setCursorPosition(len(self.msg.text()))
+
+    # ------------------------------------------------------------------- helpers
 
     def team_double_click(self, item, _col):
-        while item.parent() is not None:
-            item = item.parent()
-        p = self.session.participant(item.data(0, QtCore.Qt.UserRole))
-        if p and p.get("kind") != "human":
-            idx = self.cmd_to.findData(p["name"])
-            if idx >= 0:
-                self.cmd_to.setCurrentIndex(idx)
-            self.tabs.setCurrentIndex(1)
-            self.cmd_text.setFocus()
+        name = item.data(0, QtCore.Qt.UserRole)
+        if name:
+            self.mention(name)
+
+    def helper_menu(self, pos):
+        item = self.team.itemAt(pos)
+        name = item.data(0, QtCore.Qt.UserRole) if item else None
+        if not name:
+            return
+        menu = QtGui.QMenu(self)
+        menu.addAction(f"Give @{name} a task").triggered.connect(lambda: self.mention(name))
+        mine = local_helpers(self.session).get(name)
+        if mine:
+            folder = mine[0]
+            menu.addSeparator()
+            menu.addAction("Rename…").triggered.connect(lambda: self.rename_helper(name, folder))
+            menu.addAction("Restart").triggered.connect(lambda: self.restart_helper(folder))
+            menu.addAction("Show its log").triggered.connect(lambda: open_log(folder))
+            menu.addSeparator()
+            menu.addAction("Remove from the team…").triggered.connect(lambda: self.remove_helper(name, folder))
+        else:
+            menu.addAction("(runs on a teammate's computer)").setEnabled(False)
+        (getattr(menu, "exec", None) or menu.exec_)(self.team.viewport().mapToGlobal(pos))
+
+    def new_helper(self):
+        if not self.session.ensure_connected("start an AI helper"):
+            return
+        dlg = NewHelperDialog(self.session)
+        (getattr(dlg, "exec", None) or dlg.exec_)()
+
+    def rename_helper(self, name, folder):
+        new, ok = QtGui.QInputDialog.getText(self, "Rename helper", "New name (letters, numbers, - and _):",
+                                             QtGui.QLineEdit.Normal, name)
+        new = re.sub(r"[^A-Za-z0-9_-]+", "-", (new or "").strip()).strip("-_")[:40]
+        if not ok or not new or new == name:
+            return
+        hub = helper_hub(folder)
+        self.session.run_async(lambda _c: hub.rename_me(new), purpose="rename a helper",
+                               done=lambda _r: renamed(folder, new))
+
+    def restart_helper(self, folder):
+        from ..paths import LAUNCHER, freecad_python
+        from ..runner import runner_alive, set_background, start_runner, stop_runner
+        set_background(folder, True)
+        if runner_alive(folder):
+            stop_runner(folder)
+            QtCore.QTimer.singleShot(3500, lambda: start_runner(folder, freecad_python(), LAUNCHER,
+                                                                prefs().GetString("ProjectName")))
+        else:
+            start_runner(folder, freecad_python(), LAUNCHER, prefs().GetString("ProjectName"))
+
+    def remove_helper(self, name, folder):
+        if not confirm(f"Remove {name} from the team? It stops, and its locks are released. Its folder stays on "
+                       "this computer."):
+            return
+        from ..runner import set_background, stop_runner
+        set_background(folder, False)
+        stop_runner(folder)
+        hub = helper_hub(folder)
+
+        def work(_c):
+            hub.join(client=hub.cfg.get("client"))  # take the seat back from a running agent, then leave
+            return hub.post("/leave")
+        self.session.run_async(work, purpose="remove a helper", done=lambda _r: forget_helper_folder(folder))
 
     def selected_or_hint(self, verb):
         if not self.session.ensure_connected(f"{verb} parts"):
@@ -1020,33 +1244,34 @@ class TeamPanel(QtGui.QDockWidget):
     def lock(self):
         names_ = self.selected_or_hint("lock")
         if names_:
-            self.session.act("POST", "/locks", {"names": names_}, f"Locked {names_}", purpose="lock parts")
+            self.session.act_async("POST", "/locks", {"names": names_}, done=f"Locked {names_}", purpose="lock parts")
 
     def release(self):
         names_ = self.selected_or_hint("release")
         if names_:
-            self.session.act("POST", "/locks/release", {"names": names_}, f"Released {names_}", purpose="release parts")
+            self.session.act_async("POST", "/locks/release", {"names": names_}, done=f"Released {names_}",
+                                   purpose="release parts")
 
     def force_release(self):
         names_ = self.selected_or_hint("force-release")
         if names_ and confirm(f"Force-release {names_}? Their owners are told; any agent may then edit them."):
-            self.session.act("POST", "/locks/release", {"names": names_, "force": True}, f"Force-released {names_}",
-                             purpose="release parts")
+            self.session.act_async("POST", "/locks/release", {"names": names_, "force": True},
+                                   done=f"Force-released {names_}", purpose="release parts")
 
     def take_over(self):
         if not self.session.ensure_connected("take over a teammate's work"):
             return
-        item = self.team.currentItem()
-        while item is not None and item.parent() is not None:
-            item = item.parent()
-        if item is None:
-            hint("Click a teammate in the Who's here list first, then choose Take over again.")
+        others = [p["name"] for p in self.session.model["participants"]
+                  if p["name"] != (self.session.ident or {}).get("name")]
+        if not others:
+            hint("There's nobody else on the team yet.")
             return
-        name = item.data(0, QtCore.Qt.UserRole)
-        if confirm(f"Take over {name}'s locks and tasks?"):
-            self.session.act("POST", "/takeover", {"target": name, "force": True},
-                             lambda r: f"Took over {r['from']}: locks {r['locks']}, tasks {r['tasks']}",
-                             purpose="take over a teammate's work")
+        name, ok = QtGui.QInputDialog.getItem(self, "Take over", "Whose locks and tasks do you take over?",
+                                              others, 0, False)
+        if ok and confirm(f"Take over {name}'s locks and tasks?"):
+            self.session.act_async("POST", "/takeover", {"target": name, "force": True},
+                                   done=lambda r: say(f"Took over {r['from']}: locks {r['locks']}, tasks {r['tasks']}"),
+                                   purpose="take over a teammate's work")
 
     # tasks
     def selected_task_id(self):
@@ -1063,6 +1288,15 @@ class TeamPanel(QtGui.QDockWidget):
         self.task_start.setEnabled(bool(t and t["status"] in ("open", "awaiting_takeover", "blocked")))
         self.task_mine.setEnabled(bool(t and t["status"] in ("open", "awaiting_takeover")))
         self.task_done.setEnabled(bool(t and t["status"] == "claimed" and t.get("owner_name") == me))
+        if not t:
+            text = "Click a task to start it, take it yourself or see its details."
+        elif t["status"] == "claimed" and t.get("owner_name") != me:
+            text = f"{t.get('owner_name')} is working on it."
+        elif t["status"] == "done":
+            text = "This task is done. Double-click it to see the result."
+        else:
+            text = ""
+        self.task_hint.setText(f"<small style='color:#8b949e'>{text}</small>" if text else "")
 
     def new_task(self):
         if not self.session.ensure_connected("create a task"):
@@ -1079,16 +1313,15 @@ class TeamPanel(QtGui.QDockWidget):
         if not p or p.get("kind") == "human":
             helpers = [x["name"] for x in self.session.model["participants"] if x.get("kind") != "human"]
             if not helpers:
-                hint("No AI helper has joined yet. Add one with Team tools ▸ Add an AI helper.")
+                hint("No AI helper has joined yet. Click ＋ New helper.")
                 return
             helper, ok = QtGui.QInputDialog.getItem(self, "Ask a helper to start", "Which helper should do it?",
                                                     helpers, 0, False)
             if not ok:
                 return
-        self.session.act("POST", "/messages", {"to": helper, "kind": "command", "task_id": t["id"],
-                                                "body": start_instruction(t)},
-                         f"Asked {helper} to start “{t['title']}”", purpose="start a task")
-        self.tabs.setCurrentIndex(1)
+        self.session.act_async("POST", "/messages", {"to": helper, "kind": "command", "task_id": t["id"],
+                                                     "body": start_instruction(t)},
+                               done=f"Asked {helper} to start “{t['title']}”", purpose="start a task")
 
     def task_take(self):
         t = self.selected_task()
@@ -1099,8 +1332,8 @@ class TeamPanel(QtGui.QDockWidget):
                 for n in t["objects"]:
                     if App.getDocument(MIRROR_DOC).getObject(n):
                         Gui.Selection.addSelection(MIRROR_DOC, n)
-            hint(f"“{t['title']}” is yours. Select a part and click ✎ Edit a part… to change it; click "
-                 "Mark done when you're finished.")
+            hint(f"“{t['title']}” is yours. Select a part and use Team tools ▸ Edit a part yourself to change "
+                 "it; click Mark done when you're finished.")
 
     def task_finish(self):
         t = self.selected_task()
@@ -1108,8 +1341,8 @@ class TeamPanel(QtGui.QDockWidget):
             return
         summary, ok = QtGui.QInputDialog.getText(self, "Mark done", "What did you do? (one line, optional)")
         if ok:
-            self.session.act("POST", f"/tasks/{t['id']}/result", {"status": "done", "summary": summary or "Done"},
-                             f"Marked “{t['title']}” done", purpose="finish a task")
+            self.session.act_async("POST", f"/tasks/{t['id']}/result", {"status": "done", "summary": summary or "Done"},
+                                   done=f"Marked “{t['title']}” done", purpose="finish a task")
 
     def task_details(self):
         t = self.selected_task()
@@ -1138,40 +1371,68 @@ class TeamPanel(QtGui.QDockWidget):
         if not ok or "=" not in text:
             return
         alias, value = (x.strip() for x in text.split("=", 1))
-        if self.session.act("POST", "/locks", {"names": ["Params"]}) is None:
-            return
-        self.session.act("POST", "/ops", {"op": "set_param", "args": {"alias": alias, "value": value}},
-                         lambda r: f"Params.{alias} = {value}; recomputed {r['recomputed']}")
-        self.session.act("POST", "/locks/release", {"names": ["Params"]})
+
+        def work(c):
+            c.post("/locks", {"names": ["Params"]})
+            try:
+                return c.post("/ops", {"op": "set_param", "args": {"alias": alias, "value": value}})
+            finally:
+                c.post("/locks/release", {"names": ["Params"]})
+        self.session.run_async(work, done=lambda r: say(f"Params.{alias} = {value}; recomputed {r['recomputed']}"),
+                               purpose="change a shared size")
+
+
+def helper_hub(folder):
+    """The team as this computer's helper in `folder` (its own sign-in), for renaming or removing it."""
+    cfg = load_json(os.path.join(folder, ".cadswarm", "config.json")) or {}
+    return SpaceHub(cfg, load_json(os.path.join(folder, ".cadswarm", "identity.json")) or {}, timeout=30)
+
+
+def renamed(folder, name):
+    path = os.path.join(folder, ".cadswarm", "config.json")
+    cfg = load_json(path) or {}
+    cfg["name"] = name
+    save_json(path, cfg)
+    say(f"Your helper is now called {name}")
+
+
+def open_log(folder):
+    from .wizard import open_folder
+    log = os.path.join(folder, ".cadswarm", "helper.log")
+    open_folder(log if os.path.exists(log) else folder)
+
+
+def chat_line(at, who, colour, after_name, body, status):
+    stamp = time.strftime('%H:%M', time.localtime(at))
+    text = html.escape(body).replace("\n", "<br>")
+    return (f"<p style='margin:0 0 8px 0'><span style='color:#8b949e'>{stamp}</span> "
+            f"<b style='color:{colour}'>{who}</b>{after_name}{status}<br>{text}</p>")
 
 
 CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper", "droid": "Droid helper"}
-QUICK_COMMANDS = [
-    ("Clashes", "Check the model for clashes and fix any in parts you own; ask the owner about the rest."),
-    ("Strength", "Run a strength check (FEA) on {parts}. Ask me for the material and loads first."),
-    ("Status?", "Tell me in two lines what you're working on and what's next."),
-    ("Pause", "Stop after your current step and wait for my next instruction."),
-    ("Let go", "Release {parts} so I can edit them by hand."),
-]
-# Big enough to read at a glance next to the 3D view: larger text, taller buttons and rows.
-PANEL_MIN_WIDTH = 480
-PANEL_WIDTH = 580
+# Readable next to the 3D view, but narrow enough for a laptop screen: the panel scrolls when it's short.
+PANEL_MIN_WIDTH = 300
+PANEL_WIDTH = 520
+PANEL_SHARE = 0.3   # of the FreeCAD window's width, until someone drags the panel wider or narrower
 PANEL_STYLE = """
-#cadswarmPanel { font-size: 11pt; }
-#cadswarmPanel QLabel { font-size: 11pt; }
-#cadswarmPanel QPushButton, #cadswarmPanel QToolButton { font-size: 11pt; min-height: 30px; padding: 4px 12px; }
-#cadswarmPanel QTabBar::tab { font-size: 11pt; min-height: 30px; padding: 4px 14px; }
-#cadswarmPanel QTreeWidget, #cadswarmPanel QTextEdit, #cadswarmPanel QPlainTextEdit, #cadswarmPanel QLineEdit,
-#cadswarmPanel QComboBox { font-size: 11pt; }
-#cadswarmPanel QTreeWidget::item { padding: 4px 2px; }
-#cadswarmPanel QComboBox, #cadswarmPanel QLineEdit { min-height: 28px; }
-#cadswarmPanel QGroupBox { font-size: 11pt; font-weight: bold; padding-top: 14px; }
+#cadswarmPanel { font-size: 10.5pt; }
+#cadswarmPanel QPushButton, #cadswarmPanel QToolButton { min-height: 26px; padding: 3px 10px; }
+#cadswarmPanel QPushButton#primary { background: #d9822b; color: white; font-weight: bold; border-radius: 4px;
+    padding: 4px 14px; }
+#cadswarmPanel QPushButton#primary:disabled { background: #e8b98a; }
+#cadswarmPanel QToolButton#section { border: none; font-weight: bold; min-height: 24px; padding: 2px 0; }
+#cadswarmPanel QTabBar::tab { min-height: 26px; padding: 3px 14px; }
+#cadswarmPanel QTreeWidget::item { padding: 3px 2px; }
+#cadswarmPanel QComboBox, #cadswarmPanel QLineEdit { min-height: 26px; }
+#cadswarmPanel QPlainTextEdit { border: 1px solid #d9822b; border-radius: 4px; }
+#cadswarmPanel QGroupBox { font-weight: bold; margin-top: 14px; padding-top: 6px; }
+#cadswarmPanel QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 8px;
+    padding: 0 4px; }
 """
-TEAM_REQUEST = "__team_request__"
 BRIEF_WORDS = {"new": "⏳ waiting for the team server", "planning": "🧠 planning the parts",
                "building": "🔨 building", "reviewing": "🔍 checking the result", "ready": "✓ done",
                "failed": "✗ stopped (see Activity)"}
-COMMAND_WORDS = {"sent": "⏳ not read yet", "seen": "👀 read — working on it", "done": "✓ done"}
+COMMAND_WORDS = {"sent": "⏳ not read yet", "seen": "👀 read, working on it", "done": "✓ done"}
 TASK_ORDER = {"claimed": 0, "open": 1, "awaiting_takeover": 2, "blocked": 3, "done": 4}
 TASK_KINDS = [
     ("Build a new part", "Describe the part: what it is, rough size, what it attaches to.\n"
@@ -1200,8 +1461,8 @@ class NewTaskDialog(QtGui.QDialog):
     def __init__(self, session):
         super().__init__(Gui.getMainWindow())
         self.session = session
-        self.setWindowTitle("CadSwarm — new task")
-        self.resize(520, 480)
+        self.setWindowTitle("CadSwarm: new task")
+        fit_to_screen(self, 520, 480)
         lay = QtGui.QVBoxLayout(self)
         form = QtGui.QFormLayout()
         self.kind = QtGui.QComboBox()
@@ -1229,18 +1490,18 @@ class NewTaskDialog(QtGui.QDialog):
         self.who = QtGui.QComboBox()
         me = session.ident["name"] if session.ident else None
         helpers = [p for p in session.model.get("participants", []) if p.get("kind") != "human"]
-        ready = sorted(helpers, key=lambda p: {"ready": 0, "working": 1, "away": 2}[helper_state(p)[0]])
+        local = local_helper_status(session)
+        ready = sorted(helpers, key=lambda p: {"ready": 0, "working": 1, "away": 2}.get(
+            helper_state(p, local.get(p["name"]))[0], 3))
         for p in ready:
-            self.who.addItem(f"🤖 {p['name']} — {helper_state(p)[1]}", ("helper", p["name"]))
+            self.who.addItem(f"🤖 {p['name']} ({helper_state(p, local.get(p['name']))[1]})", ("helper", p["name"]))
         if len(helpers) > 1:
             self.who.addItem("🤖 Whichever helper is free first", ("any", None))
-        self.who.addItem("🧑 Me — I'll do it by hand", ("me", me))
-        for p in session.model.get("participants", []):
-            if p.get("kind") == "human" and p["name"] != me:
-                self.who.addItem(f"🧑 {p['name']}", ("person", p["name"]))
+        self.who.addItem("🧠 The whole team: plan it into parts and build it", ("team", None))
+        self.who.addItem("🧑 Me: I'll do it by hand", ("me", me))  # teammates pick their own tasks
         self.who.currentIndexChanged.connect(self.who_changed)
         form.addRow("Who should do it?", self.who)
-        self.start = QtGui.QCheckBox("Start right away (sends the helper an instruction to begin)")
+        self.start = QtGui.QCheckBox("Start right away (messages the helper to begin)")
         self.start.setChecked(True)
         form.addRow("", self.start)
         lay.addLayout(form)
@@ -1269,14 +1530,18 @@ class NewTaskDialog(QtGui.QDialog):
         kind, name = self.who.currentData() or ("me", None)
         helper = kind in ("helper", "any")
         self.start.setVisible(helper)
-        self.ok.setText("Create and start" if helper and self.start.isChecked() else "Create task")
+        self.ok.setText("Hand it to the team" if kind == "team" else
+                        "Create and start" if helper and self.start.isChecked() else "Create task")
         p = self.session.participant(name) if name else None
-        if kind == "helper" and p and helper_state(p)[0] == "away":
-            self.note.setText(f"<small style='color:#9a6700'>{name} is away right now; it will see the task when "
-                              "its window is open again.</small>")
+        local = local_helper_status(self.session)
+        if kind == "helper" and p and helper_state(p, local.get(name))[0] == "away":
+            self.note.setText(f"<small style='color:#9a6700'>{away_tip(p, local.get(name))}</small>")
+        elif kind == "team":
+            self.note.setText("<small>The team server plans it into parts, starts AI helpers and builds it. "
+                              "Progress shows in Tasks.</small>")
         elif kind == "me":
-            self.note.setText("<small>The task is marked as yours. Edit the parts with ✎ Edit a part…, then click "
-                              "Mark done.</small>")
+            self.note.setText("<small>The task is marked as yours. Edit the parts with Team tools ▸ Edit a part "
+                              "yourself, then click Mark done.</small>")
         else:
             self.note.setText("")
 
@@ -1286,6 +1551,11 @@ class NewTaskDialog(QtGui.QDialog):
             hint("Describe what needs doing first.")
             return
         kind, name = self.who.currentData() or ("me", None)
+        if kind == "team":
+            self.session.act_async("POST", "/briefs", {"text": text}, purpose="hand the request to the team",
+                                   done="Handed the request to the team: it plans it into tasks and starts AI helpers")
+            self.accept()
+            return
         title = text.splitlines()[0][:90]
         if TASK_KINDS[self.kind.currentIndex()][0] != "Something else" and len(title) < 60 \
                 and not title.lower().startswith(("check", "build", "make", "change", "find", "will")):
@@ -1293,7 +1563,7 @@ class NewTaskDialog(QtGui.QDialog):
         objects = [self.parts.item(i).data(QtCore.Qt.UserRole) for i in range(self.parts.count())
                    if self.parts.item(i).checkState() == QtCore.Qt.Checked]
         t = self.session.act("POST", "/tasks", {"title": title, "detail": text, "objects": objects,
-                                               "assignee": name if kind in ("helper", "person") else None},
+                                               "assignee": name if kind == "helper" else None},
                              purpose="create a task")
         if t is None:
             return
@@ -1303,15 +1573,23 @@ class NewTaskDialog(QtGui.QDialog):
             self.session.act("POST", "/messages", {"to": name or "all", "kind": "command", "task_id": t["id"],
                                                    "body": start_instruction(t)}, purpose="start the task")
             if self.session.panel:
-                self.session.panel.tabs.setCurrentIndex(0)
+                self.session.panel.show_tasks()
         say(f"Created task “{title}”")
         self.accept()
 
 
-def helper_state(p):
-    """('working' | 'ready' | 'away' | 'here', words) for one participant."""
+def helper_state(p, local=None):
+    """('working' | 'ready' | 'away' | 'here', words) for one participant. `local` is the runner status of a
+    helper that runs on this computer (see runner.py), which knows more than the team does."""
+    local = local or {}
+    if local.get("state") == "working":
+        return "working", f"Working: {local.get('detail') or 'on your messages'}"[:70]
+    if local.get("state") == "error" and p.get("status") == "active":
+        return "ready", "Ready (last run failed, see its log)"
     if p.get("status") != "active":
-        return "away", "away — may be stuck" if p.get("status") == "stale" else STATUS_WORDS.get(p["status"], p["status"])
+        if local.get("state") in ("starting", "listening"):
+            return "ready", "Starting up…"
+        return "away", STATUS_WORDS.get(p["status"], p["status"])
     if p.get("kind") == "human":
         return "here", "here"
     task = p.get("task")
@@ -1320,8 +1598,241 @@ def helper_state(p):
     if task:
         return "working", f"Working on “{task['title'][:48]}”"
     if recent and doing and doing not in IDLE_WORDS:
-        return "working", f"Working — {doing[:48]}"
+        return "working", f"Working: {doing[:48]}"
     return "ready", "Ready for instructions"
+
+
+def helper_row(p, local, tasks):
+    """(state, task, status) for a helper's row: the task it's on (or the next one waiting for it) and a short
+    status word."""
+    state, text = helper_state(p, local)
+    task = (p.get("task") or {}).get("title")
+    if not task:
+        waiting = [t for t in tasks if t["status"] == "open" and (t.get("assignee") or "").lower() == p["name"].lower()]
+        if waiting:
+            task = f"next: {waiting[0]['title']}"
+    if text.startswith("Working on"):
+        status = "Working"
+    elif text.startswith("Working: ") and not task:
+        task, status = text[len("Working: "):], "Working"
+    else:
+        status = {"Ready for instructions": "Ready"}.get(text, text)
+    return state, task or "", status
+
+
+def away_tip(p, local):
+    """Why an AI helper is away, and what (if anything) to do about it."""
+    n = html.escape(p["name"])
+    state = (local or {}).get("state")
+    if local is None:
+        return (f"<b>{n}</b> runs on a teammate's computer. It answers once that computer has FreeCAD and "
+                "CadSwarm open; your messages wait for it.")
+    if state == "missing":
+        return f"<b>{n}</b> can't start: {html.escape(local.get('detail') or 'its AI helper is not installed')}."
+    if state == "paused":
+        return f"<b>{n}</b> is {html.escape(local.get('detail') or 'paused')}. It carries on within the hour."
+    if state == "gone":
+        return f"<b>{n}</b> is no longer on the team. Start a new one with ＋ New helper."
+    if state == "stopped" and (local or {}).get("off"):
+        return (f"<b>{n}</b> is set to run in a terminal. Open it there, or use Team tools ▸ Restart my AI "
+                "helpers to run it in the background again.")
+    return f"<b>{n}</b> is starting on this computer. It answers in the Chat in a moment."
+
+
+def local_helper_folders():
+    """Folders of the AI helpers set up on this computer (the guide adds each one it connects)."""
+    p = prefs()
+    folders = [f for f in p.GetString("AgentFolders").split("\n") if f]
+    one = p.GetString("AgentFolder")
+    if one and one not in folders:
+        folders.append(one)
+    return [f for f in folders if os.path.isfile(os.path.join(f, ".cadswarm", "config.json"))]
+
+
+def remember_helper_folder(folder):
+    folders = [f for f in prefs().GetString("AgentFolders").split("\n") if f and f != folder]
+    prefs().SetString("AgentFolders", "\n".join(folders + [folder]))
+    prefs().SetString("AgentFolder", folder)
+
+
+def local_helpers(session):
+    """{name: (folder, config)} for this computer's AI helpers on the team `session` is in."""
+    out = {}
+    db = (session.client.cfg.get("db") if session.client else None) or prefs().GetString("Db")
+    for folder in local_helper_folders():
+        cfg = load_json(os.path.join(folder, ".cadswarm", "config.json")) or {}
+        if cfg.get("db") == db and cfg.get("name"):
+            out[cfg["name"]] = (folder, cfg)
+    return out
+
+
+def local_helper_status(session):
+    from ..runner import background_on, runner_status
+    return {name: dict(runner_status(folder), off=not background_on(folder))
+            for name, (folder, _cfg) in local_helpers(session).items()}
+
+
+def start_local_helpers(session, restart=False):
+    """Keep this computer's AI helpers running in the background: no terminal to open, nothing to paste.
+    A helper whose CLI isn't installed is left alone (the panel says so)."""
+    from ..agent_setup import find_agent_cli
+    from ..paths import LAUNCHER, freecad_python
+    from ..runner import background_on, runner_alive, set_background, start_runner, stop_runner
+    started = []
+    for name, (folder, cfg) in local_helpers(session).items():
+        if not find_agent_cli(cfg.get("client") or "claude"):
+            continue
+        if restart:
+            set_background(folder, True)
+        elif not background_on(folder):
+            continue  # someone runs it in a terminal
+        try:
+            if restart and runner_alive(folder):
+                stop_runner(folder)
+                time.sleep(3.5)  # it checks for the stop file between polls
+            if start_runner(folder, freecad_python(), LAUNCHER, prefs().GetString("ProjectName")):
+                started.append(name)
+        except Exception as e:
+            warn(f"couldn't start {name}: {e}")
+    if started:
+        say(f"Started {', '.join(started)} in the background")
+    return started
+
+
+def forget_helper_folder(folder):
+    folders = [f for f in prefs().GetString("AgentFolders").split("\n") if f and f != folder]
+    prefs().SetString("AgentFolders", "\n".join(folders))
+    if prefs().GetString("AgentFolder") == folder:
+        prefs().SetString("AgentFolder", folders[-1] if folders else "")
+    say(f"Removed the helper in {folder} from the team")
+
+
+def helpers_base():
+    """Where this computer keeps its AI helpers' folders: next to (never inside) the shared files/."""
+    from ..paths import projects_dir
+    from .wizard import safe_folder
+    return host_dir_for(prefs().GetString("Db")) or os.path.join(projects_dir(),
+                                                                 safe_folder(prefs().GetString("ProjectName")))
+
+
+def create_helper(client, name, team):
+    """Set up a new AI helper folder signed in to the team as `name` (a plain member) and return the folder.
+    Runs off the GUI thread: the first one may download the helper software (about 70 MB)."""
+    from .. import hosting
+    from ..agent_setup import trust_in_codex, write_agent_config, write_launcher
+    from ..invite import read_invite
+    from ..paths import freecad_python
+    python = freecad_python()
+    if not hosting.deps_ready(python):
+        hosting.install_deps(python)
+    base = os.path.join(helpers_base(), "AI helpers", name)
+    folder, n = base, 2
+    while os.path.exists(folder):
+        folder, n = f"{base}-{n}", n + 1
+    project = prefs().GetString("ProjectName")
+    invite = read_invite(team.create_invite("agent", "member", 86400, project))
+    write_agent_config(folder, client, invite, name, python=python)
+    write_launcher(folder, client, project)
+    if client == "codex":
+        trust_in_codex(folder)
+    return folder
+
+
+class NewHelperDialog(QtGui.QDialog):
+    """Start one more AI helper on this computer: pick the AI, optionally name it, done. It runs in the
+    background and answers in the chat."""
+
+    def __init__(self, session):
+        super().__init__(Gui.getMainWindow())
+        from ..agent_setup import CLIENTS, find_agent_cli
+        self.session = session
+        self.setWindowTitle("CadSwarm: new AI helper")
+        fit_to_screen(self, 460, 260)
+        lay = QtGui.QVBoxLayout(self)
+        form = QtGui.QFormLayout()
+        self.client = QtGui.QComboBox()
+        for key, info in CLIENTS.items():
+            if find_agent_cli(key):
+                self.client.addItem(info["label"], key)
+        form.addRow("AI", self.client)
+        self.name = QtGui.QLineEdit()
+        self.name.setPlaceholderText("Optional")
+        self.name.setMaxLength(40)
+        form.addRow("Name", self.name)
+        lay.addLayout(form)
+        self.note = QtGui.QLabel("")
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+        lay.addStretch(1)
+        row = QtGui.QHBoxLayout()
+        row.addStretch(1)
+        cancel = QtGui.QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        self.ok = QtGui.QPushButton("Start helper")
+        self.ok.setDefault(True)
+        self.ok.clicked.connect(self.create)
+        row.addWidget(cancel)
+        row.addWidget(self.ok)
+        lay.addLayout(row)
+        if not self.client.count():
+            links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values())
+            self.note.setText(f"No AI helper is installed on this computer yet. Install {links}, sign in to it "
+                              "once, then try again.")
+            self.note.setOpenExternalLinks(True)
+            self.ok.setEnabled(False)
+
+    def create(self):
+        client = self.client.currentData()
+        typed = re.sub(r"[^A-Za-z0-9_-]+", "-", self.name.text().strip()).strip("-_")[:40]
+        taken = {p["name"].lower() for p in self.session.model.get("participants", [])}
+        if typed and typed.lower() in taken:
+            self.note.setText(f"<span style='color:#cf222e'>Someone on the team is already called {typed}.</span>")
+            return
+        name = typed
+        if not name:
+            me = re.sub(r"[^a-z0-9]+", "-", ((self.session.ident or {}).get("name") or "me").lower()).strip("-")
+            name, n = f"{me}-{client}"[:36], 2
+            while name.lower() in taken:
+                name, n = f"{me}-{client}-{n}"[:40], n + 1
+        self.ok.setEnabled(False)
+        self.note.setText("Setting it up… The first helper on a computer downloads its software (about 70 MB), "
+                          "which can take a minute or two.")
+        team = self.session.client
+
+        def started(folder):
+            from ..paths import LAUNCHER, freecad_python
+            from ..runner import start_runner
+            remember_helper_folder(folder)
+            start_runner(folder, freecad_python(), LAUNCHER, prefs().GetString("ProjectName"))
+            say(f"Started {name} in the background")
+            if self.session.panel:
+                self.session.panel.mention(name)
+            self.accept()
+
+        def failed():
+            self.ok.setEnabled(True)
+            self.note.setText("")
+        self.session.run_async(lambda _c: create_helper(client, name, team), done=started,
+                               purpose="start an AI helper", failed=failed)
+
+
+def restart_helpers():
+    if not SESSION.ensure_connected("restart your AI helpers"):
+        return
+    started = start_local_helpers(SESSION, restart=True)
+    hint(f"Restarted {', '.join(started)}." if started else
+         "No AI helper is set up on this computer yet. Click ＋ New helper in the CadSwarm panel.")
+
+
+def show_helper_log():
+    helpers = local_helpers(SESSION)
+    if not helpers:
+        hint("No AI helper is set up on this computer yet. Click ＋ New helper in the CadSwarm panel.")
+        return
+    from .wizard import open_folder
+    for _name, (folder, _cfg) in helpers.items():
+        log = os.path.join(folder, ".cadswarm", "helper.log")
+        open_folder(log if os.path.exists(log) else folder)
 
 
 IDLE_WORDS = {"idle", "starting", "watching in FreeCAD", "listening for instructions"}
@@ -1360,7 +1871,7 @@ class EditPartDialog(QtGui.QDialog):
                 spin.setValue(number(self.info["properties"].get(prop)))
                 if prop in bound:
                     spin.setEnabled(False)
-                    spin.setToolTip(f"Set by the shared size {bound[prop]} — change it with Change a shared size…")
+                    spin.setToolTip(f"Set by the shared size {bound[prop]}. Change it with Change a shared size…")
                     form.addRow(f"{prop} (uses {bound[prop]})", spin)
                 else:
                     form.addRow(prop, spin)
@@ -1534,7 +2045,7 @@ class EditPartDialog(QtGui.QDialog):
                 self.session.client.post("/locks/release", {"names": [self.name]})
             except HubRequestError:
                 pass
-        self.session.refresh_meta()
+        self.session.request_refresh()
         super().closeEvent(ev)
 
 
@@ -1611,7 +2122,7 @@ def edit_part():
     dlg.show()
 
 
-STATUS_WORDS = {"active": "here", "stale": "away — may be stuck", "left": "left"}
+STATUS_WORDS = {"active": "here", "stale": "away", "left": "left"}
 TASK_WORDS = {"open": "not started", "claimed": "in progress", "awaiting_takeover": "needs someone",
               "done": "done ✓", "blocked": "stuck"}
 
@@ -1652,7 +2163,9 @@ def describe_event(ev):
     if k == "stale":
         held = names(ev.get("locks") or [])
         return f"{who} went quiet" + (f" while working on {held}" if held else "") + \
-            " — a teammate can take over their work (Team tools ▸ Take over)"
+            ". A teammate can take over their work (Team tools ▸ Take over)"
+    if k == "renamed":
+        return f"{ev.get('from')} is now called {ev.get('name')}"
     if k == "resumed":
         return f"{who} is back"
     if k == "taken_over":
@@ -1677,7 +2190,7 @@ def describe_event(ev):
         what = {"static": "a strength check", "modal": "a vibration check", "thermal": "a heat check"}
         return f"{who} started {what.get(ev.get('analysis'), 'a simulation')} of {names(ev.get('target') or [])}…"
     if k == "fea_report":
-        return f"{who} published a simulation report: {ev.get('title')} — {ev.get('headline')} " \
+        return f"{who} published a simulation report: {ev.get('title')}. {ev.get('headline')} " \
                "(Team tools ▸ Simulation reports)"
     if k == "fea_progress":
         return f"{who}'s simulation: {ev.get('text')}"
@@ -1708,19 +2221,37 @@ def confirm(text):
                                       QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes
 
 
+def screen_size(widget=None):
+    """The usable part of the screen FreeCAD is on (without the taskbar)."""
+    try:
+        screen = (widget or Gui.getMainWindow()).screen()
+    except AttributeError:
+        screen = QtGui.QApplication.primaryScreen()
+    return screen.availableGeometry().size()
+
+
+def fit_to_screen(widget, width, height):
+    """Open `widget` at width x height, or smaller where the screen is smaller (its contents scroll)."""
+    avail = screen_size()
+    widget.resize(min(width, int(avail.width() * 0.9)), min(height, int(avail.height() * 0.85)))
+
+
 def show_panel():
     if SESSION.panel is None:
         SESSION.panel = TeamPanel(SESSION)
         mw = Gui.getMainWindow()
         mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, SESSION.panel)
-        try:  # open wide enough to read; people can still drag it narrower down to the minimum
-            mw.resizeDocks([SESSION.panel], [PANEL_WIDTH], QtCore.Qt.Horizontal)
+        try:  # about a third of the window: readable, and the 3D view keeps most of the room
+            width = max(PANEL_MIN_WIDTH, min(PANEL_WIDTH, int(mw.width() * PANEL_SHARE)))
+            SESSION.panel.share = width / max(mw.width(), 1)
+            mw.resizeDocks([SESSION.panel], [width], QtCore.Qt.Horizontal)
+            SESSION.panel.window_width = mw.width()
         except (AttributeError, TypeError):
             pass
     SESSION.panel.show()
     tidy_task_view()
     if SESSION.connected:
-        SESSION.refresh_meta()
+        SESSION.request_refresh()
 
 
 def tidy_task_view():
@@ -1757,7 +2288,7 @@ def run_interference():
         for n in (c["a"], c["b"]):
             if App.getDocument(MIRROR_DOC).getObject(n):
                 Gui.Selection.addSelection(MIRROR_DOC, n)
-    QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm — interference", "\n".join(lines))
+    QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm: interference", "\n".join(lines))
 
 
 def run_export():
@@ -1858,8 +2389,8 @@ class ProjectFilesDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm — project files")
-        self.resize(640, 460)
+        self.setWindowTitle("CadSwarm: project files")
+        fit_to_screen(self, 640, 460)
         lay = QtGui.QVBoxLayout(self)
         where = hosted_project_folder()
         lay.addWidget(QtGui.QLabel(
@@ -1953,8 +2484,8 @@ class StorageDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm — storage")
-        self.resize(560, 520)
+        self.setWindowTitle("CadSwarm: storage")
+        fit_to_screen(self, 560, 520)
         self.is_host = hosted_project_folder() is not None
         lay = QtGui.QVBoxLayout(self)
         self.summary = QtGui.QLabel()
@@ -2121,15 +2652,15 @@ class FeaReportDialog(QtGui.QDialog):
             except HubRequestError:
                 pass
         r = self.report
-        self.setWindowTitle(f"CadSwarm — simulation report: {r['title']}")
-        self.resize(780, 720)
+        self.setWindowTitle(f"CadSwarm: simulation report: {r['title']}")
+        fit_to_screen(self, 780, 720)
         lay = QtGui.QVBoxLayout(self)
         color, word = VERDICT_WORDS.get(r["verdict"], VERDICT_WORDS["check"])
         head = QtGui.QLabel(f"<b style='font-size:13pt'>{html.escape(r['title'])}</b><br>"
                             f"<span style='color:#8b949e'>{html.escape(r['analysis_name'])} by {html.escape(r['by'])}"
                             f"</span><br><span style='background:{color};color:white;font-weight:bold'>&nbsp;{word}&nbsp;"
                             f"</span>&nbsp; {html.escape(r['headline'])}"
-                            + ("<br><span style='color:#9a6700'><b>Uses placeholder values</b> — see the yellow box"
+                            + ("<br><span style='color:#9a6700'><b>Uses placeholder values</b>: see the yellow box"
                                "</span>" if r["inputs"]["placeholders"] else ""))
         head.setTextFormat(QtCore.Qt.RichText)
         lay.addWidget(head)
@@ -2207,8 +2738,8 @@ class FeaReportsDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm — simulation reports")
-        self.resize(720, 400)
+        self.setWindowTitle("CadSwarm: simulation reports")
+        fit_to_screen(self, 720, 400)
         lay = QtGui.QVBoxLayout(self)
         lay.addWidget(QtGui.QLabel("Simulations (FEA) your team's AI helpers ran. Double-click one to open it."))
         self.tree = QtGui.QTreeWidget()
@@ -2240,7 +2771,7 @@ class FeaReportsDialog(QtGui.QDialog):
             item.setData(0, QtCore.Qt.UserRole, r["folder"])
             self.tree.addTopLevelItem(item)
         if not reports:
-            QtGui.QTreeWidgetItem(self.tree, ["", "(no simulations yet — ask an AI helper \"will this hold 5 kg?\")"])
+            QtGui.QTreeWidgetItem(self.tree, ["", "(no simulations yet. Ask an AI helper \"will this hold 5 kg?\")"])
 
     def open(self, item):
         folder = item.data(0, QtCore.Qt.UserRole) if item else None
@@ -2290,7 +2821,8 @@ def register_commands():
     Gui.addCommand("CadSwarm_Style", Cmd("Learned design style…", "The design rules CadSwarm learned from how your "
                                                                  "team works; confirm, dismiss or teach one",
                                          style_ui.show_style))
-    Gui.addCommand("CadSwarm_TellHelper", Cmd("Tell a helper…", "Give an AI helper an instruction", lambda: (
-        show_panel(), SESSION.panel.tabs.setCurrentIndex(1), SESSION.panel.cmd_text.setFocus())))
+    Gui.addCommand("CadSwarm_TellHelper", Cmd("Chat with helpers", "Tell an AI helper what to do; it answers in the "
+                                                                   "Chat", lambda: (
+        show_panel(), SESSION.panel.msg.setText("@"), SESSION.panel.msg.setFocus(), SESSION.panel.maybe_complete())))
     Gui.addCommand("CadSwarm_Disconnect", Cmd("Leave team", "Leave the session (releases your locks)",
                                               lambda: SESSION.disconnect() if SESSION.connected else None, False))

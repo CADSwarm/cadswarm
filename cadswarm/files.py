@@ -9,7 +9,7 @@ the agents:
   folder even through symlinks or junctions.
 * No silent overwrites. Saving onto an existing file is refused unless the caller asks for
   `if_exists="new_name"` (a free name like `notes-2.md`) or `if_exists="replace"` with the
-  `expected_version` they last read — the same optimistic check model objects use.
+  `expected_version` they last read, the same optimistic check model objects use.
 * Old versions are kept. Before a file is replaced, moved away or deleted, its current bytes are
   copied into `.cadswarm-team/history/`, including edits someone made outside CadSwarm
   (detected by hash), and any old version can be restored as a new version. History is trimmed

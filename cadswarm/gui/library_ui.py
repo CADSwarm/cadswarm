@@ -468,10 +468,13 @@ class RecommendDialog(QtGui.QDialog):
         panel = P.SESSION.panel
         if panel is None:
             return
-        panel.tabs.setCurrentIndex(1)
-        panel.fill_command(f"Find the best part in our components library for: {self.need}. Use "
-                           "recommend_components, tell me which one you chose and why, size the holes in the mating "
-                           "part with hole_size, place it, and suggest any team setting it needs.")
+        # "@" then the instruction, cursor after the "@": picking a helper from the list completes it.
+        panel.msg.setText(f"@Find the best part in our components library for: {self.need}. Use "
+                          "recommend_components, tell me which one you chose and why, size the holes in the mating "
+                          "part with hole_size, place it, and suggest any team setting it needs.")
+        panel.msg.setFocus()
+        panel.msg.setCursorPosition(1)
+        panel.maybe_complete()
         self.accept()
 
 
@@ -628,7 +631,7 @@ def show_library():
     P.show_panel()
     panel = P.SESSION.panel
     if panel is not None and getattr(panel, "library", None) is not None:
-        panel.tabs.setCurrentWidget(panel.library)
+        panel.library_button.setChecked(True)
         panel.library.query.setFocus()
 
 

@@ -133,7 +133,7 @@ def freecad_import_dirs(python):
 
 
 def find_freecad_python():
-    """FreeCAD's Python — the worker must run in it to `import FreeCAD`."""
+    """FreeCAD's Python: the worker must run in it to `import FreeCAD`."""
     explicit = os.environ.get("CADSWARM_FREECAD_PYTHON")
     if explicit:
         return explicit

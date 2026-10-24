@@ -4,7 +4,7 @@ Prints the team-context block (read from SpacetimeDB through SpaceHub) (who hold
 changed since this agent's last prompt, unread messages) to stdout, which both
 CLIs add to the model's context. Contract borrowed from Amoeba's prompt hooks:
 
-* FAIL OPEN. Any error, timeout or missing setup prints nothing and exits 0 —
+* FAIL OPEN. Any error, timeout or missing setup prints nothing and exits 0:
   coordination context must never block a prompt.
 * Bounded: one request with a ~1.8s budget, output capped well under Codex's
   ~2,500-token hook limit.
@@ -23,9 +23,9 @@ FEA_WORDS = re.compile(r"\b(fea|fem|finite[- ]element|stress(es|ed)?|strain|defl
                        r"safety factor|simulat\w*|natural freq\w*|vibrat\w*|resonan\w*|modal|eigen\w*|"
                        r"thermal|heat\w*|temperatures?|how hot|overheat\w*)\b", re.I)
 FEA_HINT = ("\n## This looks like an FEA (simulation) request\n"
-            "Before simulating, ask in ONE message: which analysis — linear static (stress, deflection, safety "
+            "Before simulating, ask in ONE message: which analysis, linear static (stress, deflection, safety "
             "factor; recommend it unless they ask about vibration or heat), modal (natural frequencies) or thermal "
-            "(steady-state temperatures) — plus the material, the faces held still and the loads/temperatures. "
+            "(steady-state temperatures), plus the material, the faces held still and the loads/temperatures. "
             "Offer clearly marked placeholders if they don't know. Then list_faces, run_fea, fea_status, explain, "
             "and always publish_fea_report with a summary and 2-5 points of improvement.")
 

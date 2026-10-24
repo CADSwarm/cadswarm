@@ -2,7 +2,7 @@
 
 Runs inside FreeCAD's bundled Python (NOT the hub's venv) and owns the single
 live shared document. The hub talks to it over JSON lines on stdin/stdout,
-one request at a time, so every mutation of the model is serialized — FreeCAD
+one request at a time, so every mutation of the model is serialized: FreeCAD
 is not thread-safe, and this is the one place the document is ever touched.
 
 Every mutating op runs inside a FreeCAD transaction. After the op and a
@@ -128,7 +128,7 @@ def save():
                 except OSError:
                     pass
                 raise OpError("save_failed", f"Could not write {os.path.basename(DOC_PATH)} ({e}); another "
-                              "program probably has it open. Your change was rolled back — try again.")
+                              "program probably has it open. Your change was rolled back. Try again.")
             time.sleep(SAVE_BACKOFF * (attempt + 1))
 
 
@@ -286,7 +286,7 @@ def op_create_primitive(a):
 
 
 def op_create_extrusion(a):
-    """Closed XY polygon (+ optional round holes) extruded along Z — a static Part::Feature."""
+    """Closed XY polygon (+ optional round holes) extruded along Z: a static Part::Feature."""
     pts = a.get("points") or []
     if len(pts) < 3:
         raise OpError("bad_args", "points needs at least 3 [x, y] pairs")
@@ -678,6 +678,14 @@ def mutate(op, args, allowed):
         doc.abortTransaction()
         doc.recompute()
         raise
+    if isinstance(result, dict):
+        # Where the agent's pointer rests after the op: a real vertex of the part it made or changed.
+        for n in created + modified:
+            o = doc.getObject(n)
+            point = anchor_of(getattr(o, "Shape", None)) if o is not None and n != PARAMS else None
+            if point:
+                result.setdefault("pointer", {"object": n, "point": point})
+                break
     return {"result": result, "created": created, "modified": modified,
             "deleted": deleted, "recomputed": recomputed,
             "broken": [o.Name for o in doc.Objects if is_broken(o)]}
@@ -707,6 +715,23 @@ def param_users(alias):
                   if any(needle in expr for _, expr in (o.ExpressionEngine or [])))
 
 
+def pick_anchor(points):
+    """The vertex a pointer should sit on: on the top face, the corner nearest a default isometric
+    camera (largest x + y). None when there are no vertices."""
+    if not points:
+        return None
+    top = max(p[2] for p in points)
+    tol = 1e-3 * max(1.0, max(abs(c) for p in points for c in p))
+    best = max((p for p in points if p[2] >= top - tol), key=lambda p: (round(p[0] + p[1], 6), p[0]))
+    return [round(float(c), 3) for c in best]
+
+
+def anchor_of(shape):
+    if shape is None or shape.isNull():
+        return None
+    return pick_anchor([(v.X, v.Y, v.Z) for v in shape.Vertexes[:5000]])
+
+
 def obj_summary(o):
     info = {"name": o.Name, "label": o.Label, "type": o.TypeId,
             "visible": bool(getattr(o, "Visibility", True)),
@@ -722,6 +747,9 @@ def obj_summary(o):
         bb = shape.BoundBox
         info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
         info["volume"] = round(shape.Volume, 3) if shape.Solids else 0.0
+        anchor = anchor_of(shape)
+        if anchor:
+            info["anchor"] = anchor
     return info
 
 
