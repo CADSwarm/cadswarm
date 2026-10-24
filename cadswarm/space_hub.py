@@ -7,10 +7,12 @@ member-only views, and ops are queued with `submit_op` and awaited until the hos
 
 Stdlib only.
 """
+import base64
 import json
 import os
 import re
 import time
+from urllib.parse import parse_qs, urlsplit
 
 from . import ticket
 from .client import HubRequestError, load_json, state_dir
@@ -64,6 +66,16 @@ class SpaceHub:
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief),
             ("POST", r"/reviews", self.report_review),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
+            # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
+            ("GET", r"/health", self.health), ("POST", r"/join", self.join_route), ("POST", r"/brep", self.brep),
+            ("GET", r"/project", self.project), ("GET", r"/project/files", self.list_files),
+            ("POST", r"/project/files/read", self.read_file), ("POST", r"/project/files/save", self.save_file),
+            ("POST", r"/project/files/folder", self.make_folder), ("POST", r"/project/files/move", self.move_file),
+            ("POST", r"/project/files/delete", self.delete_file), ("POST", r"/project/files/history", self.file_history),
+            ("POST", r"/project/files/restore", self.restore_file), ("GET", r"/project/storage", self.storage_status),
+            ("POST", r"/project/storage/prune", self.prune_storage),
+            ("POST", r"/project/storage/settings", self.storage_settings),
+            ("POST", r"/project/snapshot", self.snapshot),
         ]
 
     # ---------------------------------------------------------------- plumbing
@@ -95,6 +107,11 @@ class SpaceHub:
     def request(self, method, path, body=None, params=None, timeout=None, raw=False):
         if raw and path.startswith("/artifacts/"):
             return self.artifact_bytes(path.rsplit("/", 1)[1])
+        if raw and path.startswith("/project/files/download"):
+            q = {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
+            q.update(params or {})
+            r = self.run_op("read_file", {"path": q.get("path"), "raw": True})
+            return base64.b64decode(r["base64"])
         for m, pattern, fn in self.routes:
             match = re.fullmatch(pattern, path)
             if m == method and match:
@@ -195,7 +212,7 @@ class SpaceHub:
         while time.time() < deadline:
             rows = self._rows("v_op", f"id = '{op_id}'")
             if rows and rows[0]["status"] == "done":
-                return _json(rows[0]["result_json"], {})
+                return self._result(rows[0]["result_json"])
             if rows and rows[0]["status"] in ("failed", "rejected"):
                 code = rows[0]["error_code"] or "op_error"
                 raise HubRequestError(409 if rows[0]["status"] == "rejected" else 422,
@@ -204,6 +221,18 @@ class SpaceHub:
             delay = min(delay * 1.5, 1.0)
         raise HubRequestError(504, {"error": f"The host did not run op {op_id} within {OP_WAIT_SECONDS}s; "
                                              "is cadswarm-host running?", "code": "host_timeout"})
+
+    def _result(self, result_json):
+        """An op result over 32 KB is spilled by the host as {"blob": sha256}: read that one blob."""
+        r = _json(result_json, {})
+        if isinstance(r, dict) and set(r) == {"blob"}:
+            sha = str(r["blob"])
+            rows = self._rows("v_artifact_blob", f"hash = '{sha}'") if re.fullmatch(r"[0-9a-f]{64}", sha) else []
+            if not rows or not rows[0]["bytes"]:
+                raise HubRequestError(410, {"error": "That result expired; run it again", "code": "expired"})
+            b = rows[0]["bytes"]
+            r = json.loads(bytes.fromhex(b) if isinstance(b, str) else bytes(b))
+        return r
 
     def ops(self, body):
         return self.run_op(body.get("op"), body.get("args"), body.get("expected_revs"))
@@ -441,6 +470,91 @@ class SpaceHub:
         self._f("report_review", rid, body["brief_id"], int(body.get("round", 1)), bool(body["passed"]),
                 json.dumps(body.get("findings", [])))
         return {"review": rid}
+
+    # ----------------------------------------------- health, brep, project files
+
+    def health(self):
+        hosts = [m for m in self._rows("v_member") if m["kind"] == "host" and m["status"] == "active"]
+        return {"ok": bool(hosts), "seq": self.latest_seq(), "freecad": None, "script_sandbox": None}
+
+    def join_route(self, body):
+        return self.join(None, body.get("name"), body.get("kind", "agent"), body.get("client"), body.get("role"))
+
+    def brep(self, body):
+        r = self.run_op("brep", {"names": body.get("names")})
+        names = self._names()
+        holder = {l["object"]: names.get(l["holder"]) for l in self._rows("v_lock")}
+        objects = r.get("objects") or {}
+        for n, o in objects.items():
+            if isinstance(o, dict):
+                o["locked_by"] = holder.get(n)
+        return {"objects": objects}
+
+    def project(self):
+        return {"root": "", "folders": {"files": "files", "exports": "exports", "snapshots": "snapshots"},
+                "host": True}
+
+    # Op args follow the contract (plan 00, op kinds): list_files {folder}, move_file {from_path, to_path}.
+
+    def list_files(self, prefix="", folder=""):
+        folder = folder or prefix
+        return self.run_op("list_files", {"folder": folder} if folder else {})
+
+    def read_file(self, body):
+        return self.run_op("read_file", {"path": body.get("path")})
+
+    def save_file(self, body):
+        return self.run_op("save_file", {k: body.get(k) for k in ("path", "text", "base64", "if_exists", "expected_version")
+                                         if body.get(k) is not None})
+
+    def make_folder(self, body):
+        return self.run_op("make_folder", {"path": body.get("path")})
+
+    def move_file(self, body):
+        return self.run_op("move_file", {"from_path": body.get("from_path", body.get("from")),
+                                         "to_path": body.get("to_path", body.get("to"))})
+
+    def delete_file(self, body):
+        return self.run_op("delete_file", {"path": body.get("path")})
+
+    def file_history(self, body):
+        return self.run_op("file_history", {"path": body.get("path")})
+
+    def restore_file(self, body):
+        return self.run_op("restore_file", {k: body.get(k) for k in ("path", "version", "expected_version")
+                                            if body.get(k) is not None})
+
+    def storage_status(self):
+        return self.run_op("storage_status", {})
+
+    def prune_storage(self, body):
+        return self.run_op("prune_storage", dict(body or {}))
+
+    def snapshot(self, body):
+        return self.run_op("snapshot", {"label": body.get("label", "")})
+
+    def storage_settings(self, body):
+        """Only the computer hosting the team changes its storage limits: it writes them directly."""
+        host_dir = self.cfg.get("host_dir")
+        if not host_dir:
+            raise HubRequestError(403, {"error": "Only the computer hosting the team can change its storage limits.",
+                                        "code": "host_only"})
+        import sqlite3
+
+        from .files import ProjectFiles
+        from .paths import project_layout
+        from .storage import FileError
+        lay = project_layout(host_dir)
+        db = sqlite3.connect(lay["db"], isolation_level=None)
+        db.row_factory = sqlite3.Row
+        try:
+            files = ProjectFiles(lay, db)
+            files.storage.update(body or {})
+            return files.storage.status()
+        except FileError as e:
+            raise HubRequestError(e.status, {"error": str(e), "code": e.code, **e.data})
+        finally:
+            db.close()
 
 
 def project_hub(project_dir):

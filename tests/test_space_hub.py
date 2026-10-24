@@ -175,3 +175,85 @@ def test_an_unknown_path_is_a_404(world):
     with pytest.raises(HubRequestError) as e:
         hub.get("/nope")
     assert e.value.status == 404
+
+
+# ---- Step 6: the routes the beginner UX and the file tools use
+
+
+def finish_ops_with(fake, result):
+    def host(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"], o["result_json"] = "done", json.dumps(result)
+    fake.on_sql = host
+
+
+def test_file_routes_become_helper_ops_with_the_contract_args(world):
+    hub, fake = world
+    finish_ops_with(fake, {"path": "notes.md", "version": 1})
+    assert hub.post("/project/files/save", {"path": "notes.md", "text": "hi"})["version"] == 1
+    reducer, args = fake.calls[-1]
+    assert reducer == "submit_op" and args[2] == "save_file" and json.loads(args[3]) == {"path": "notes.md", "text": "hi"}
+    hub.post("/project/files/move", {"from": "a.md", "to": "b.md"})
+    assert fake.calls[-1][1][2] == "move_file"
+    assert json.loads(fake.calls[-1][1][3]) == {"from_path": "a.md", "to_path": "b.md"}
+    hub.get("/project/files", prefix="notes")
+    assert fake.calls[-1][1][2] == "list_files" and json.loads(fake.calls[-1][1][3]) == {"folder": "notes"}
+    for path, body, kind in [("/project/files/read", {"path": "a"}, "read_file"),
+                             ("/project/files/folder", {"path": "p"}, "make_folder"),
+                             ("/project/files/delete", {"path": "a"}, "delete_file"),
+                             ("/project/files/history", {"path": "a"}, "file_history"),
+                             ("/project/files/restore", {"path": "a", "version": 1}, "restore_file"),
+                             ("/project/snapshot", {"label": "x"}, "snapshot"),
+                             ("/project/storage/prune", {"keep_versions": 2}, "prune_storage")]:
+        hub.post(path, body)
+        assert fake.calls[-1][1][2] == kind and json.loads(fake.calls[-1][1][3]) == body
+    hub.get("/project/storage")
+    assert fake.calls[-1][1][2] == "storage_status"
+
+
+def test_large_results_are_read_from_the_blob_view(world):
+    hub, fake = world
+    big = {"objects": {"Plate": {"brep": "x" * 50}}}
+    fake.tables["v_artifact_blob"] = [{"hash": "ab" * 32, "ws": 1, "bytes": json.dumps(big).encode().hex()}]
+    finish_ops_with(fake, {"blob": "ab" * 32})
+    assert hub.post("/brep", {"names": ["Plate"]}) == {"objects": {"Plate": {"brep": "x" * 50, "locked_by": "alice-claude"}}}
+    assert fake.calls[-1][1][2] == "brep"
+
+
+def test_a_spilled_result_that_expired_says_so(world):
+    hub, fake = world
+    finish_ops_with(fake, {"blob": "cd" * 32})
+    with pytest.raises(HubRequestError) as e:
+        hub.get("/project/files")
+    assert e.value.code == "expired"
+
+
+def test_raw_download_decodes_base64(world):
+    hub, fake = world
+    finish_ops_with(fake, {"path": "a.bin", "base64": "AAE="})
+    assert hub.request("GET", "/project/files/download?path=a.bin", raw=True) == b"\x00\x01"
+    assert json.loads(fake.calls[-1][1][3]) == {"path": "a.bin", "raw": True}
+
+
+def test_export_downloads_read_one_blob_by_hash(world):
+    hub, fake = world
+    finish_ops_with(fake, {"hash": "ef" * 32, "name": "model-3.stl", "size": 2, "objects": ["Plate"]})
+    r = hub.post("/export", {"format": "stl", "names": ["Plate"]})
+    assert r["url"] == "/artifacts/" + "ef" * 32 and r["file"] == "model-3.stl"
+    fake.tables["v_artifact_blob"] = [{"hash": "ef" * 32, "ws": 1, "bytes": "0102"}]
+    assert hub.request("GET", r["url"], raw=True) == b"\x01\x02"
+
+
+def test_health_is_ok_while_a_host_member_is_active(world):
+    hub, fake = world
+    assert hub.get("/health")["ok"] is False
+    fake.tables["v_member"].append(member(9, "host", kind="host"))
+    assert hub.get("/health")["ok"] is True
+
+
+def test_storage_settings_are_host_only(world):
+    hub, _ = world
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/project/storage/settings", {"limit_gb": 5})
+    assert e.value.code == "host_only"
