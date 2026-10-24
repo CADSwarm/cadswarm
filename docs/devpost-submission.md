@@ -20,7 +20,7 @@ Devpost's field limits (the sections below are sized for the "built with a story
   Record its brief-to-ready time here: [TBD — from T5].
 - [ ] Printed part (plan 06 T7d): photograph it for the Best Hardware write-up.
 - [ ] Fill in the team roles and the video link.
-- [x] Release: `v0.1.2` (2026-10-24 11:24 UTC) has all five host binaries, `cadswarm_module.wasm` and
+- [x] Release: `v0.1.3` (2026-10-24 18:11 UTC, release run 40119240047, `main` `95664cc`) has all five host binaries, `cadswarm_module.wasm` and
   `SHA256SUMS.txt`; on 2026-10-24 every downloaded asset matched its checksum (`sha256sum -c`). The
   earlier `v0.1.0` check also ran the released Windows host through the FreeCAD 1.1.4 worker: a human
   join, lock, box (1440 mm3), printability, STL export and `model.FCStd` save.
@@ -197,7 +197,7 @@ Actions · Windows
 ## Try it out
 
 - **Code:** https://github.com/SachchitBalamurugan/cadswarm
-- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.2
+- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.3
 - **Web app:** [TBD — blocked, see "Web link" above] — press **Open the live demo** and enter the
   code `swarm-13`. That opens the panels app on a sample build, no host or account needed.
 - **Video:** [TBD — YouTube/Vimeo URL]
