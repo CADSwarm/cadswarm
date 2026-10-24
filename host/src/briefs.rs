@@ -32,8 +32,12 @@ pub struct BriefState {
     pub exporting: bool,
     pub reviewer_enabled: bool,
     pub reviewer_alive: bool,
+    /// The newest verdict from the subscription, with its round and whether it passed.
     pub review: Option<(u32, bool)>,
     pub reviewed_round: u32,
+    /// The brief is `reviewing` but this host holds no reviewer run for it: it restarted mid-review,
+    /// or a round from a previous run already left a verdict. Either way the review must be asked again.
+    pub review_orphaned: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -65,6 +69,17 @@ pub fn next_action(s: &BriefState) -> Action {
         }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
+        // No reviewer of ours is running this round: a host restarted, or the only verdict is from a
+        // previous run. Judge that verdict if it is final, otherwise run the round again. (Building
+        // first would spawn a worker with nothing to claim.)
+        "reviewing" if s.review_orphaned => match s.review {
+            Some((_, true)) => Action::Export,
+            Some((round, false)) if round >= MAX_REVIEW_ROUNDS => {
+                Action::Fail(format!("review failed {round} times; a person needs to steer"))
+            }
+            _ if s.reviewer_enabled => Action::Review,
+            _ => Action::Export,
+        },
         "reviewing" => match s.review {
             Some((_, true)) => Action::Export,
             Some((round, false)) if round >= MAX_REVIEW_ROUNDS => {
@@ -321,6 +336,7 @@ impl Orchestrator {
             reviewer_alive: rt.reviewer.as_mut().map(|a| a.alive()).unwrap_or(false),
             review,
             reviewed_round: rt.reviewed_round,
+            review_orphaned: rt.review_round == 0 && rt.reviewer.is_none(),
         };
 
         // A reviewer that exits without a verdict would leave the brief in `reviewing` forever.
@@ -333,14 +349,7 @@ impl Orchestrator {
             return Ok(());
         }
 
-        // A host that restarted mid-review has no reviewer and no round of its own: review again.
-        let restarted_review = b.status == "reviewing" && rt.review_round == 0 && rt.reviewer.is_none()
-            && review.is_none() && !state.exporting;
-        let action = match next_action(&state) {
-            Action::Wait if restarted_review && self.reviewer_enabled => Action::Review,
-            Action::Wait if restarted_review => Action::Export,
-            other => other,
-        };
+        let action = next_action(&state);
         match action {
             Action::Wait => {}
             Action::Seed => {
@@ -479,6 +488,26 @@ mod tests {
         assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 1, ..st("reviewing") }), Action::Build(1));
         assert!(matches!(next_action(&BriefState { review: Some((3, false)), ..st("reviewing") }), Action::Fail(_)));
         assert_eq!(next_action(&BriefState { reviewer_alive: true, ..st("reviewing") }), Action::Wait);
+    }
+
+    #[test]
+    fn a_review_without_a_run_of_ours_is_asked_again_instead_of_building() {
+        // The host restarted mid-review: no run of ours, no verdict yet.
+        assert_eq!(next_action(&BriefState { review_orphaned: true, reviewer_enabled: true, ..st("reviewing") }),
+                   Action::Review);
+        // A failed round from a previous host asks for the next round, it does not spawn a worker.
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
+            ..st("reviewing") }), Action::Review);
+        // A passed round from a previous host still goes straight to export.
+        assert_eq!(next_action(&BriefState { review: Some((2, true)), review_orphaned: true, reviewer_enabled: true,
+            ..st("reviewing") }), Action::Export);
+        // A restart does not hand back a review budget that was already spent.
+        assert!(matches!(next_action(&BriefState { review: Some((3, false)), review_orphaned: true,
+            reviewer_enabled: true, ..st("reviewing") }), Action::Fail(_)));
+        // No reviewer set up: export rather than wait forever.
+        assert_eq!(next_action(&BriefState { review_orphaned: true, ..st("reviewing") }), Action::Export);
+        // A run this host started is not orphaned, so a failed round still goes back to building.
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 1, ..st("reviewing") }), Action::Build(1));
     }
 
     #[test]
