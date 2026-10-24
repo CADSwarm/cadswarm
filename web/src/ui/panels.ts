@@ -1,7 +1,7 @@
 import type { Brief, Member, Review, State, Store } from '../store';
 import type { Api } from '../api';
 import { memberColor } from '../color';
-import { mountAsk } from './ask';
+import { mountChat } from './chat-pane';
 import { mountHandoff } from './handoff';
 import { mountParams } from './params';
 import { freeHelper, helperNow, startInstruction } from './helpers';
@@ -12,13 +12,12 @@ import { esc } from './esc';
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 // Five tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
 const ICON = {
-  ask: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',
-  model: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+  chat: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',  model: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
   library: '<path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="m15.5 5.2 3.9-1 3.1 14.9-3.9 1z"/>',
   tasks: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/>',
   team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 20a6.5 6.5 0 0 0-3-5.5"/>',
 };
-const TABS = [['ask', 'Ask'], ['model', 'Model'], ['library', 'Library'], ['tasks', 'Tasks'], ['team', 'Team']] as const;
+const TABS = [['chat', 'Chat'], ['model', 'Model'], ['library', 'Library'], ['tasks', 'Tasks'], ['team', 'Team']] as const;
 type Tab = typeof TABS[number][0];
 export const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 
@@ -49,8 +48,12 @@ export function focusPart(name: string) { dispatchEvent(new CustomEvent('cadswar
 function loadTab(): Tab {
   const q = new URLSearchParams(location.search).get('tab');
   if (TABS.some(([id]) => id === q)) return q as Tab;
-  try { const t = localStorage.getItem('cadswarm:tab'); if (TABS.some(([id]) => id === t)) return t as Tab; } catch { /* no storage */ }
-  return 'ask';
+  try {
+    const t = localStorage.getItem('cadswarm:tab');
+    const old = t === 'ask' ? 'chat' : t; // the Ask tab became Chat
+    if (TABS.some(([id]) => id === old)) return old as Tab;
+  } catch { /* no storage */ }
+  return 'chat';
 }
 
 const TASK_GROUPS: [string, string[]][] = [['In progress', ['claimed', 'awaiting_takeover']], ['To do', ['open', 'blocked']], ['Done', ['done']]];
@@ -104,7 +107,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       ${TABS.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}" aria-controls="tab-${id}">
         <svg viewBox="0 0 24 24" aria-hidden="true">${ICON[id]}</svg><span>${label}</span><span class="badge" data-count="${id}"></span></button>`).join('')}
     </nav>
-    <section class="tab ask-tab" id="tab-ask" data-tab="ask" role="tabpanel"></section>
+    <section class="tab chat-tab" id="tab-chat" data-tab="chat" role="tabpanel"></section>
     <section class="tab" id="tab-model" data-tab="model" role="tabpanel">
       <h1 class="large-title">Model</h1>
       <h2 class="group-title">Parts</h2><ul class="group" data-parts></ul>
@@ -142,7 +145,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     <div class="toast" role="status" aria-live="polite" hidden></div>`;
 
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
-  mountAsk($('#tab-ask'), store, api, picked);
+  mountChat($('#tab-chat'), store, api, picked);
   mountParams($('[data-params]'), store, api);
   mountHandoff($('[data-handoff]'), store, api);
   mountLibrary($('[data-library]'), store, api);
@@ -181,9 +184,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       const task = store.state.tasks.find(x => x.id === start.dataset.start);
       const helper = freeHelper(store.state);
       if (!task) return;
-      if (!helper) { notice('No AI helper is online. Send it to “The team” in Ask instead.'); return; }
+      if (!helper) { notice('No AI helper is online. Send it to “The team” in Chat instead.'); return; }
       api.sendCommand(helper.name, startInstruction(task), task.id);
-      select('ask'); // the request shows up in the conversation
+      select('chat'); // the request shows up in the conversation
       return;
     }
     const part = t.closest<HTMLElement>('[data-focus]');
@@ -204,10 +207,10 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       if (which === 'clash') {
         if (!api) { notice('Not connected to a team yet.'); return; }
         api.sendCommand('all', 'Check the model for clashes and fix any in parts you own; ask the owner about the rest.');
-        select('ask');
+        select('chat');
         return;
       }
-      if (which === 'task') { select('ask'); el.querySelector<HTMLTextAreaElement>('.field textarea')?.focus(); return; }
+      if (which === 'task') { select('chat'); el.querySelector<HTMLTextAreaElement>('[data-text]')?.focus(); return; }
       if (which === 'size') { select('model'); el.querySelector<HTMLInputElement>('.param input')?.focus(); return; }
     }
   });
@@ -276,7 +279,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <span class="line">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> ` : ''}${esc(r.text)}</span>
       </div>`).join('') || '<p class="log-empty">Nothing said yet. Ask for something in Ask and it lands here.</p>';
 
-    const counts: Record<Tab, number> = { ask: 0, model: 0, library: 0,
+    const counts: Record<Tab, number> = { chat: 0, model: 0, library: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
       tasks: s.tasks.filter(t => t.status === 'open' || t.status === 'claimed').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });
