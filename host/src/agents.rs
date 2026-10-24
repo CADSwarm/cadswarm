@@ -109,7 +109,7 @@ impl Agent {
         // (FreeCAD's own Python) finds the package; both keep a checkout in the cwd from being imported.
         let setup = Command::new(&cfg.cadswarm_python)
             .env("PYTHONSAFEPATH", "1")
-            .args(["-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
+            .args(["-m", "cadswarm.cli", "setup", "--ephemeral", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;
