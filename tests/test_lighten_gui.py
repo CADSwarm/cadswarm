@@ -28,6 +28,6 @@ def test_a_person_lightens_a_part_from_the_dialog(tmp_path):
     profile.mkdir()
     env["FREECAD_USER_HOME"] = env["FREECAD_USER_DATA"] = str(profile)
     proc = subprocess.run([python, str(ROOT / "tests" / "lighten_gui_check.py"), str(tmp_path)], env=env,
-                          capture_output=True, text=True, timeout=900)
+                          capture_output=True, encoding="utf-8", errors="replace", timeout=900)
     assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-3000:]
     assert json.loads((tmp_path / "lighten-gui-verified.json").read_text())["ok"]
