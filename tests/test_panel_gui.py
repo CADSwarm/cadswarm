@@ -29,6 +29,10 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "teammate's computer" in r["away_tip"]
     assert "Round 2 asks for changes" in r["review"] and "Lid clip is 0.4 mm too short." in r["review"]
     assert "256 x 256 x 256" in r["review"]
+    # The Sponsors tab is a first-class tab, built only from the snapshot this refresh already read.
+    assert "Sponsors" in r["sponsors_tab"]
+    assert "SpacetimeDB" in r["sponsors"] and "Factory.ai" in r["sponsors"] and "Elastic" in r["sponsors"]
+    assert "team-db" in r["sponsors"] and "checked " in r["sponsors"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).

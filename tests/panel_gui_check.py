@@ -215,6 +215,8 @@ result = {
     "tasks_grouped_under_request": brief.text(0).startswith("🧠") and brief.childCount() == 2,
     "away_tip": p.team_tip.text(),
     "review": p.review_box.text(),
+    "sponsors_tab": [p.tabs.tabText(i) for i in range(p.tabs.count())],
+    "sponsors": p.sponsors_box.text(),
     "chat_jump": {"followed": followed, "jump_shown": jump_shown, "kept_place": kept_place,
                   "unseen_text": unseen_text, "back_down": back_down},
 }
