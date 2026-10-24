@@ -314,7 +314,8 @@ class Runner:
     def wake(self, work, first):
         client = self.cfg.get("client") or "claude"
         exe = find_agent_cli(client)
-        if not agent_ready(client):
+        # Creao has no CLI (exe is None) and needs only its key; every other helper needs the CLI just found.
+        if not (agent_ready(client) if client == "creao" else exe):
             detail = ("Creao AI needs CREAO_API_KEY on this computer" if client == "creao"
                       else f"{client} isn't installed on this computer")
             self.write_status("missing", detail)
