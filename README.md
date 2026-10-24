@@ -277,6 +277,10 @@ through the MCP tools instead.
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
   `get_inbox`, `ack_messages`, `take_over`
 
+Optional, when an Elastic project is configured on the host: board datasheets, design memory and
+reviewer lessons are available to the same agents, and an Agent Builder expert can supply a board
+spec the local library lacks. See [ELASTIC.md](ELASTIC.md).
+
 ## Rules the team enforces
 
 1. An op may only change objects you hold. Pre-reserve a name with `lock_objects` before creating it.

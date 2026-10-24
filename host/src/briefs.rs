@@ -4,8 +4,9 @@ use crate::agents::Agent;
 use crate::boards::{load_boards, seed_params, Board};
 use crate::config::HostConfig;
 use crate::space::Space;
+use crate::worker::WorkerDriver;
 use anyhow::Context;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::Command;
@@ -111,6 +112,76 @@ fn op_id() -> String {
     format!("o_{}", &crate::ticket::new_token()[..12])
 }
 
+/// A plan JSON with the seeded board's datasheet links put back, when it has none of its own.
+/// The planner overwrites `plan_json` when it saves; the app still needs `sources` (plan 05).
+fn with_sources(plan_json: &str, sources: &Value) -> Option<String> {
+    if !sources.as_object().is_some_and(|o| !o.is_empty()) {
+        return None;
+    }
+    let mut plan: Value = serde_json::from_str(plan_json).ok()?;
+    let obj = plan.as_object_mut()?;
+    if obj.get("sources").and_then(Value::as_object).is_some_and(|o| !o.is_empty()) {
+        return None;
+    }
+    obj.insert("sources".into(), sources.clone());
+    Some(plan.to_string())
+}
+
+/// Ask the helper's Elastic expert for a board the local library does not vouch for (plan 05).
+fn looked_up_board(
+    boards: &mut BTreeMap<String, Board>,
+    b: &crate::space::BriefRow,
+    helper: Option<&mut WorkerDriver>,
+) -> Option<Board> {
+    if b.board.is_empty() {
+        return None;
+    }
+    let reply = match helper?.call("board_spec", &json!({"board": b.board, "question": b.text}), None) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[host] board_spec for {}: {e}", b.board);
+            return None;
+        }
+    };
+    let mut board = match serde_json::from_value::<Board>(reply["result"].clone()) {
+        Ok(bd) => bd,
+        Err(e) => {
+            eprintln!("[host] board_spec for {} was unusable: {e}", b.board);
+            return None;
+        }
+    };
+    // The helper validated this spec (source URLs and plausible dimensions), so trust it for the
+    // rest of the session instead of asking again for the next brief on this board.
+    board.verified = true;
+    eprintln!("[host] board_spec for {}: {} ({} x {} mm)", b.board, board.label, board.pcb[0], board.pcb[1]);
+    boards.insert(b.board.clone(), board.clone());
+    Some(board)
+}
+
+/// Put the board's datasheet links back into a plan the planner saved without them.
+fn keep_sources(boards: &BTreeMap<String, Board>, space: &Space, b: &crate::space::BriefRow) -> anyhow::Result<()> {
+    let Some(sources) = boards.get(&b.board).and_then(Board::datasheet_sources) else { return Ok(()) };
+    if let Some(merged) = with_sources(&space.brief_plan(&b.id), sources) {
+        space.set_brief(&b.id, "", &merged)?;
+    }
+    Ok(())
+}
+
+/// Index a finished brief so planners can recall it and the scheduled Workflow can learn lessons.
+/// Best effort: a missing Elastic project must not fail the build.
+fn index_design(space: &Space, helper: &mut WorkerDriver, b: &crate::space::BriefRow) {
+    let plan = serde_json::from_str::<Value>(&space.brief_plan(&b.id)).unwrap_or_default();
+    let args = json!({
+        "brief": {"id": b.id, "text": b.text, "board": b.board, "status": "ready"},
+        "plan": plan,
+        "reviews": space.reviews_json(&b.id),
+        "params": space.params_map(),
+    });
+    if let Err(e) = helper.call("index_design", &args, None) {
+        eprintln!("[host] index_design for brief {}: {e}", b.id);
+    }
+}
+
 impl Orchestrator {
     pub fn new(cfg: HostConfig) -> Self {
         let candidates = board_library_candidates(&cfg);
@@ -137,7 +208,7 @@ impl Orchestrator {
         Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), reviewer_enabled }
     }
 
-    pub fn tick(&mut self, space: &Space) {
+    pub fn tick(&mut self, space: &Space, mut helper: Option<&mut WorkerDriver>) {
         // A person handed work to an agent: one agent per open handoff, until it accepts and finishes.
         // An agent that dies before accepting leaves the handoff open; dropping it here makes the
         // next tick spawn a fresh one.
@@ -163,13 +234,13 @@ impl Orchestrator {
             if b.status == "ready" || b.status == "failed" {
                 continue;
             }
-            if let Err(e) = self.step(space, &b) {
+            if let Err(e) = self.step(space, &b, helper.as_deref_mut()) {
                 eprintln!("[host] brief {}: {e:#}", b.id);
             }
         }
     }
 
-    fn step(&mut self, space: &Space, b: &crate::space::BriefRow) -> anyhow::Result<()> {
+    fn step(&mut self, space: &Space, b: &crate::space::BriefRow, mut helper: Option<&mut WorkerDriver>) -> anyhow::Result<()> {
         let tasks = space.tasks_for(&b.id);
         let review = space.latest_review(&b.id).map(|r| (r.round, r.passed));
         let rt = self.runs.entry(b.id.clone()).or_default();
@@ -191,6 +262,9 @@ impl Orchestrator {
                             .unwrap_or("")
                             .to_string();
                         space.set_brief_stl(&b.id, &hash)?;
+                        if let Some(h) = helper.as_deref_mut() {
+                            index_design(space, h, b);
+                        }
                         rt.export_op = None;
                     }
                     "failed" | "rejected" => {
@@ -227,7 +301,12 @@ impl Orchestrator {
         match next_action(&state) {
             Action::Wait => {}
             Action::Seed => {
-                let params = self.boards.get(&b.board).map(seed_params).unwrap_or_default();
+                let local = self.boards.get(&b.board).cloned();
+                let board = match local {
+                    Some(bd) if bd.verified => Some(bd),
+                    other => looked_up_board(&mut self.boards, b, helper.as_deref_mut()).or(other),
+                };
+                let params = board.as_ref().map(seed_params).unwrap_or_default();
                 if !params.is_empty() {
                     space.lock_objects(vec!["Params".into()])?;
                     for (alias, value) in &params {
@@ -237,20 +316,41 @@ impl Orchestrator {
                     }
                     rt.seeding = true;
                 }
-                space.set_brief(&b.id, "planning", "")?;
+                // The app shows "from datasheet" links from the plan JSON.
+                let plan = board
+                    .as_ref()
+                    .and_then(Board::datasheet_sources)
+                    .map(|s| json!({"sources": s}).to_string())
+                    .unwrap_or_default();
+                space.set_brief(&b.id, "planning", &plan)?;
             }
             Action::Plan => {
                 let params = self.boards.get(&b.board).map(seed_params).unwrap_or_default();
                 let label = self.boards.get(&b.board).map(|x| x.label.clone()).unwrap_or_else(|| {
                     if b.board.is_empty() { "none given".into() } else { b.board.clone() }
                 });
+                let memory = match helper.as_deref_mut() {
+                    Some(h) => match h.call("recall_designs", &json!({"query": b.text, "board": b.board}), None) {
+                        Ok(r) => r["result"].to_string(),
+                        Err(e) => {
+                            eprintln!("[host] recall_designs for brief {}: {e}", b.id);
+                            "{}".into()
+                        }
+                    },
+                    None => "{}".into(),
+                };
+                let prompt = format!(
+                    "{}\n\nWhat earlier CadSwarm designs taught us (designs and lessons, JSON): {memory}\n\
+                     Apply the lessons in your plan.",
+                    crate::agents::planner_prompt(&b.id, &b.text, &label, &params)
+                );
                 let ticket = crate::mint_invite(space, &self.cfg, "agent", "lead")?;
                 let name = format!("planner-{}", &b.id[2..]);
                 eprintln!("[host] brief {}: starting {name}", b.id);
-                rt.planner =
-                    Some(Agent::spawn(&self.cfg, &name, &ticket, &crate::agents::planner_prompt(&b.id, &b.text, &label, &params))?);
+                rt.planner = Some(Agent::spawn(&self.cfg, &name, &ticket, &prompt)?);
             }
             Action::Build(n) => {
+                keep_sources(&self.boards, space, b)?;
                 for _ in 0..n {
                     rt.spawned += 1;
                     let ticket = crate::mint_invite(space, &self.cfg, "agent", "member")?;
@@ -281,6 +381,7 @@ impl Orchestrator {
                 space.set_brief(&b.id, "reviewing", "")?;
             }
             Action::Export => {
+                keep_sources(&self.boards, space, b)?;
                 let objects: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
                 let id = op_id();
                 space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
@@ -331,5 +432,20 @@ mod tests {
         assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 1, ..st("reviewing") }), Action::Build(1));
         assert!(matches!(next_action(&BriefState { review: Some((3, false)), ..st("reviewing") }), Action::Fail(_)));
         assert_eq!(next_action(&BriefState { reviewer_alive: true, ..st("reviewing") }), Action::Wait);
+    }
+
+    #[test]
+    fn a_planners_plan_keeps_the_seeded_datasheet_links() {
+        let sources = json!({"pcb": "https://x/b.pdf", "holes": "https://x/b.pdf"});
+        let plan = r#"{"parts":[{"name":"Base"}]}"#;
+        let merged: serde_json::Value = serde_json::from_str(&with_sources(plan, &sources).unwrap()).unwrap();
+        assert_eq!(merged["parts"][0]["name"], "Base");
+        assert_eq!(merged["sources"]["holes"], "https://x/b.pdf");
+        // Already sourced: no rewrite. No sources or no plan: nothing to merge.
+        assert!(with_sources(&merged.to_string(), &sources).is_none());
+        assert!(with_sources(plan, &json!({})).is_none());
+        assert!(with_sources(plan, &json!(null)).is_none());
+        assert!(with_sources("", &sources).is_none());
+        assert!(with_sources("[1,2]", &sources).is_none());
     }
 }

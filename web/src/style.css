@@ -98,6 +98,10 @@ button.mini { min-height: 32px; margin: 0; padding: 4px 10px; font-size: 13px; b
 .param .unit { color: var(--muted); font-size: 13px; }
 .param.bad input { border-color: var(--err); }
 .param.saving input { border-color: var(--accent); }
+.param .alias .src { text-transform: none; font-weight: 400; font-size: 12px; white-space: nowrap; }
+.src { color: var(--accent); text-decoration: none; }
+.src:hover { text-decoration: underline; }
+.sources { margin: 4px 0 0; }
 
 /* ---- Lists ---- */
 .list { list-style: none; margin: 0; padding: 0; }

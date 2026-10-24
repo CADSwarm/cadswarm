@@ -1,0 +1,5 @@
+{"id": "cadswarm.board_docs", "type": "esql",
+ "description": "Search dev board datasheets and product pages. Returns the most relevant passages with their source URL.",
+ "configuration": {
+   "query": "FROM cadswarm-boards METADATA _score | WHERE MATCH(content, ?question) | SORT _score DESC | KEEP board_id, title, source_url, text, _score | LIMIT 6",
+   "params": {"question": {"type": "string", "description": "What to look up, e.g. 'Raspberry Pi Pico mounting hole positions'"}}}}

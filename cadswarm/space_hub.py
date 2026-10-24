@@ -76,6 +76,8 @@ class SpaceHub:
             ("POST", r"/project/storage/prune", self.prune_storage),
             ("POST", r"/project/storage/settings", self.storage_settings),
             ("POST", r"/project/snapshot", self.snapshot),
+            # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
+            ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
         ]
 
     # ---------------------------------------------------------------- plumbing
@@ -535,6 +537,12 @@ class SpaceHub:
 
     def storage_status(self):
         return self.run_op("storage_status", {})
+
+    def lookup_board(self, body):
+        return self.run_op("lookup_board", {"question": body.get("question") or "", "board": body.get("board") or ""})
+
+    def recall_designs(self, body):
+        return self.run_op("recall_designs", {"query": body.get("query") or "", "board": body.get("board") or ""})
 
     def prune_storage(self, body):
         return self.run_op("prune_storage", dict(body or {}))

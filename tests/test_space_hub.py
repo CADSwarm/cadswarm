@@ -224,6 +224,17 @@ def test_file_routes_become_helper_ops_with_the_contract_args(world):
     assert fake.calls[-1][1][2] == "storage_status"
 
 
+def test_knowledge_routes_become_helper_ops(world):
+    hub, fake = world
+    finish_ops_with(fake, {"answers": []})
+    hub.post("/knowledge/board", {"question": "pico mounting holes", "board": "raspberry-pi-pico"})
+    assert fake.calls[-1][1][2] == "lookup_board"
+    assert json.loads(fake.calls[-1][1][3]) == {"question": "pico mounting holes", "board": "raspberry-pi-pico"}
+    hub.post("/knowledge/designs", {"query": "pico case"})
+    assert fake.calls[-1][1][2] == "recall_designs"
+    assert json.loads(fake.calls[-1][1][3]) == {"query": "pico case", "board": ""}
+
+
 def test_large_results_are_read_from_the_blob_view(world):
     hub, fake = world
     big = {"objects": {"Plate": {"brep": "x" * 50}}}

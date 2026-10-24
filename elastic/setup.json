@@ -1,0 +1,20 @@
+{
+  "inference": [
+    {"path": "_inference/text_embedding/cadswarm-jina",
+     "body": {"service": "elastic", "service_settings": {"model_id": "jina-embeddings-v5-text-small"}}}
+  ],
+  "indices": {
+    "cadswarm-boards": {"mappings": {"properties": {
+      "board_id": {"type": "keyword"}, "title": {"type": "text"}, "source_url": {"type": "keyword"},
+      "source_type": {"type": "keyword"}, "text": {"type": "text"},
+      "content": {"type": "semantic_text", "inference_id": "cadswarm-jina"}}}},
+    "cadswarm-designs": {"mappings": {"properties": {
+      "brief_id": {"type": "keyword"}, "board_id": {"type": "keyword"}, "request": {"type": "text"},
+      "outcome": {"type": "keyword"}, "findings": {"type": "text"}, "problems": {"type": "keyword"},
+      "params": {"type": "flattened"}, "finished_at": {"type": "date"}, "text": {"type": "text"},
+      "content": {"type": "semantic_text", "inference_id": "cadswarm-jina"}}}},
+    "cadswarm-lessons": {"mappings": {"properties": {
+      "board_id": {"type": "keyword"}, "problem": {"type": "keyword"}, "count": {"type": "integer"},
+      "lesson": {"type": "text"}, "updated_at": {"type": "date"}}}}
+  }
+}

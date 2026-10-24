@@ -66,6 +66,7 @@ const QUERIES: &[&str] = &[
     "SELECT * FROM v_review",
     "SELECT * FROM v_member",
     "SELECT * FROM v_handoff",
+    "SELECT * FROM v_param",
 ];
 
 impl Space {
@@ -310,5 +311,26 @@ impl Space {
             .find(|m| m.id == id)
             .map(|m| (m.name, m.kind))
             .unwrap_or_else(|| ("?".into(), "agent".into()))
+    }
+
+    /// The planner's plan JSON (which may also carry the seeded board's datasheet sources).
+    pub fn brief_plan(&self, id: &str) -> String {
+        self.conn.db.v_brief().iter().find(|b| b.id == id).map(|b| b.plan_json).unwrap_or_default()
+    }
+
+    /// Every review round of a brief, oldest first, as JSON for the design index (plan 05).
+    pub fn reviews_json(&self, brief: &str) -> serde_json::Value {
+        let mut rows: Vec<_> = self.conn.db.v_review().iter().filter(|r| r.brief == brief).collect();
+        rows.sort_by_key(|r| r.round);
+        serde_json::Value::Array(
+            rows.into_iter()
+                .map(|r| serde_json::json!({"round": r.round, "passed": r.passed, "findings_json": r.findings_json}))
+                .collect(),
+        )
+    }
+
+    /// The shared Params as `{alias: number}`, for the design index.
+    pub fn params_map(&self) -> serde_json::Value {
+        serde_json::Value::Object(self.conn.db.v_param().iter().map(|p| (p.alias, serde_json::json!(p.num))).collect())
     }
 }

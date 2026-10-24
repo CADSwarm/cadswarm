@@ -27,6 +27,7 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    Never try to edit someone else's part — message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
    (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
+   For a dev board's real dimensions (hole spacing, port positions, PCB size) call lookup_board, never guess.
 4. Build parametric primitives/booleans, or use run_part_script to compute complex shapes (set `shape`; the
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
@@ -324,6 +325,21 @@ def storage_status() -> dict:
     free disk space and the history-retention settings. Read-only: only a person can free up space (Team tools >
     Storage and free up space in FreeCAD), so ask one if you are running out."""
     return call("GET", "/project/storage")
+
+
+@mcp.tool()
+def lookup_board(question: str, board: str | None = None) -> dict:
+    """Look up a dev board's real dimensions in its datasheet (hole spacing, port positions, PCB size).
+    Answers come with source links; prefer them to guessing. `board` narrows to one board id, e.g.
+    raspberry-pi-pico."""
+    return call("POST", "/knowledge/board", {"question": question, "board": board}, doing=f"looking up {board or question}")
+
+
+@mcp.tool()
+def recall_designs(query: str, board: str | None = None) -> dict:
+    """Similar past CadSwarm designs and the lessons learned from their reviews, so you avoid repeating
+    a problem (e.g. a lid that clipped the USB plug)."""
+    return call("POST", "/knowledge/designs", {"query": query, "board": board}, doing="recalling past designs")
 
 
 # ------------------------------------------------------------- tasks & chat

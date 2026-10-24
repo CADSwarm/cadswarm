@@ -1,0 +1,99 @@
+# Elastic: board knowledge, design memory and lessons
+
+Optional. Without an Elastic project CadSwarm builds from the local board library and skips
+memory; with one, agents can look up board dimensions from datasheets, remember finished
+designs, and learn from reviewer findings.
+
+Everything runs on the host machine inside the helper process. The API key stays in that
+process's environment and is never written to the repo, the database, or an agent's context.
+
+## What it holds
+
+| Index | Written by | Read by |
+| --- | --- | --- |
+| `cadswarm-boards` | `python -m cadswarm.ingest boards/sources.json` | `cadswarm.board_docs` tool, `lookup_board` helper op |
+| `cadswarm-designs` | `index_design` when a brief reaches `ready` | `cadswarm.design_memory` tool, `recall_designs` helper op |
+| `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes) | `cadswarm.board_lessons` tool, `lessons` helper op |
+
+`cadswarm-boards` and `cadswarm-designs` use `semantic_text` with the JINA embedding endpoint,
+so Elasticsearch chunks and embeds the text itself; queries are hybrid (BM25 + semantic) and
+reranked by `.jina-reranker-v3.5`.
+
+## Configure
+
+Add these to the shared `cadswarm.env` next to the checkout (see `.env.example`):
+
+```dotenv
+ELASTIC_URL=https://<project-id>.es.<region>.<provider>.elastic.cloud
+KIBANA_URL=https://<project-id>.kb.<region>.<provider>.elastic.cloud
+ELASTIC_API_KEY=<base64 api key>
+```
+
+`KIBANA_URL` is the same project host with `es` replaced by `kb`; Agent Builder and Workflows
+live there. The key needs read/write on these indices plus `manageAgents` for the Board expert.
+
+Then, from this checkout:
+
+```powershell
+pip install pypdf                       # only for PDF datasheets
+powershell -File ..\cadswarm-guide\scripts\with-env.ps1 .venv\Scripts\python.exe -m cadswarm.ingest boards\sources.json
+```
+
+`elastic/setup.json` creates the inference endpoint and the three indices (idempotent).
+`ingest` skips a source whose text extracts to nothing (scanned or vector-only PDFs) instead of
+indexing a blank document.
+
+## Agent Builder
+
+`elastic/agent.json` and `elastic/tools/*.json` define the Board expert:
+
+- `cadswarm.board_docs(question)` - ES|QL over `cadswarm-boards`, with the query text as the
+  semantic match.
+- `cadswarm.board_lessons(board_id)` - the distilled lessons for a board.
+- `cadswarm.design_memory(query)` - similar finished designs.
+
+`Elastic.install_agent()` (called from `cadswarm.knowledge`) upserts the three tools and the
+agent. Its instructions make it answer with only a JSON board spec whose every number comes from
+a retrieved passage, with source URLs, and to say "not found" rather than guess. The host asks it
+through `board_spec` only for a board the local library does not have; the reply is parsed and
+validated (`validate_spec`: plausible dimensions, holes inside the PCB, sources present) before
+the host trusts it for the rest of the session.
+
+`converse` uses a 180 s timeout: Agent Builder runs a model and its tools, unlike a plain API call.
+
+## Lessons Workflow
+
+`elastic/workflows/distil-lessons.yaml` turns reviewer findings into per-board lessons:
+
+```
+cadswarm-designs.problems -> count per board -> cadswarm-lessons (one doc per board+problem)
+```
+
+Create or update it (this is also what the Kibana UI's Workflows > Create does), then run it:
+
+```powershell
+# POST /api/workflows {"workflows":[{"yaml":"<file>"}]} then
+# POST /api/workflows/workflow/distil-lessons/run {"inputs":{}}
+```
+
+A run takes about a second. `GET /api/workflows/executions/<id>` shows step-by-step status and
+the failure reason if a step errors; `DELETE /api/workflows/workflow/<id>` removes a workflow. The
+scheduled trigger fires every 10 minutes, so lessons stay current without anyone pressing run.
+
+## Validated live (2026-10-24)
+
+Serverless Elasticsearch/Kibana 9.6.0, project region us-east-1:
+
+- `cadswarm-jina` embeds 1024-dim vectors; `.jina-reranker-v3.5` scores pairs.
+- 6 board documents indexed (Pico 46k chars, Pi 4 brief, ESP32-S3, Uno, XIAO); the Pi 4
+  mechanical drawing extracts no text and is skipped.
+- Hybrid + rerank search returns the right board chunks for Pico holes, ESP32-S3 dimensions, and
+  Uno mounting holes with a `board_id` filter.
+- The three tools and `cadswarm-board-expert` install cleanly; the first converse answered in 65 s.
+- `distil-lessons` ran end to end and wrote two lessons from a synthetic finished design (removed
+  afterwards), with `updated_at` coming from ES|QL `NOW()`.
+
+Known limit: the Agent Builder agent's default model is Anthropic Claude on the trial tier, which
+has a per-model trial quota. When it is exhausted, converse returns 429 until the quota refills
+(the message states how long). The rest of the pipeline (search, ingest, tools, Workflow) does not
+use that model.
