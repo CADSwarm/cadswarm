@@ -134,7 +134,9 @@ def run(vertices, faces, case, material, recipe, out_dir, *, name="lattice", pro
     closed, oriented = mesh.check()
     if not (closed and oriented):
         raise ValueError("The lattice mesh is not closed; try a different voxel size.")
-    preview = mc.contour(F[::2, ::2, ::2], tuple(np.asarray(bg.grid.origin) + h_b / 2), h_b * 2)
+    # F[::2] samples sit at origin + (2i + 0.5) h_b, i.e. half a coarse voxel before the coarse sample
+    # centre; contour treats `origin` as a corner, so shift back by h_b / 2 (not forward).
+    preview = mc.contour(F[::2, ::2, ::2], tuple(np.asarray(bg.grid.origin) - h_b / 2), h_b * 2)
     mc.write_stl(mesh, os.path.join(out_dir, "result.stl"))
     mc.write_3mf(mesh, os.path.join(out_dir, "result.3mf"), name)
     mc.write_stl(preview, os.path.join(out_dir, "preview.stl"))
