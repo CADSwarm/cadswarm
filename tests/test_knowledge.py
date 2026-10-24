@@ -100,6 +100,30 @@ def test_a_design_doc_summarises_the_brief_and_its_reviews():
     assert "clips usb plug" in d["content"] and "Base" in d["content"] and d["params"]["gap"] == 0.5
 
 
+def test_a_no_verdict_finding_is_about_the_reviewer_not_the_design():
+    # The round the reviewer crashed in says nothing about the model; it must not become a lesson.
+    d = design_doc({"id": "b_1", "text": "case", "board": "raspberry-pi-pico", "status": "ready"},
+                   {"parts": [{"name": "Base"}]},
+                   [{"round": 1, "passed": False,
+                     "findings_json": '[{"object":"","problem":"the reviewer did not report a verdict"}]'},
+                    {"round": 2, "passed": False,
+                     "findings_json": '[{"object":"Base","problem":"the wall is 1.1 mm"}]'}],
+                   {})
+    assert d["problems"] == ["the wall is 1.1 mm"]
+    assert "did not report a verdict" not in d["content"]
+
+
+def test_a_retried_review_replaces_its_earlier_attempt():
+    d = design_doc({"id": "b_1", "text": "case", "board": "raspberry-pi-pico", "status": "ready"},
+                   {"parts": [{"name": "Base"}]},
+                   [{"round": 3, "passed": False, "at_ms": 10,
+                     "findings_json": '[{"object":"Base","problem":"the old wording of the clash"}]'},
+                    {"round": 3, "passed": False, "at_ms": 20,
+                     "findings_json": '[{"object":"Base","problem":"the new wording of the clash"}]'}],
+                   {})
+    assert d["problems"] == ["the new wording of the clash"]
+
+
 def good():
     return {"label": "Pico", "pcb": [51, 21, 1], "holes": [[2, 4.8], [49, 4.8]], "hole_d": 2.1,
             "clear_top": 4, "clear_bottom": 2,

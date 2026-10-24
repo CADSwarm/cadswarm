@@ -33,6 +33,7 @@ pub mod message_type;
 pub mod move_pointer_reducer;
 pub mod op_type;
 pub mod param_type;
+pub mod pick_up_task_reducer;
 pub mod pointer_type;
 pub mod preview_type;
 pub mod project_setting_type;
@@ -119,6 +120,7 @@ pub use message_type::Message;
 pub use move_pointer_reducer::move_pointer;
 pub use op_type::Op;
 pub use param_type::Param;
+pub use pick_up_task_reducer::pick_up_task;
 pub use pointer_type::Pointer;
 pub use preview_type::Preview;
 pub use project_setting_type::ProjectSetting;
@@ -259,6 +261,10 @@ pub enum Reducer {
         point: Vec<f32>,
         mode: String,
         label: String,
+    },
+    PickUpTask {
+        fence: u32,
+        task_id: String,
     },
     PutArtifact {
         fence: u32,
@@ -422,6 +428,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::LogActivity { .. } => "log_activity",
             Reducer::MarkDelivered { .. } => "mark_delivered",
             Reducer::MovePointer { .. } => "move_pointer",
+            Reducer::PickUpTask { .. } => "pick_up_task",
             Reducer::PutArtifact { .. } => "put_artifact",
             Reducer::PutComponentPreview { .. } => "put_component_preview",
             Reducer::PutPreview { .. } => "put_preview",
@@ -580,6 +587,12 @@ impl __sdk::Reducer for Reducer {
                 mode: mode.clone(),
                 label: label.clone(),
             }),
+            Reducer::PickUpTask { fence, task_id } => {
+                __sats::bsatn::to_vec(&pick_up_task_reducer::PickUpTaskArgs {
+                    fence: fence.clone(),
+                    task_id: task_id.clone(),
+                })
+            }
             Reducer::PutArtifact {
                 fence,
                 hash,

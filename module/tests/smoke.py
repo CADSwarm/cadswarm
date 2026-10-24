@@ -166,6 +166,26 @@ def main():
     bob.call("mark_delivered", bob.fence, ["m_smoke0000001"])
     bob.call("ack_messages", bob.fence, ["m_smoke0000001"])
 
+    # Rebalancing: bob is busy with one task and has two queued; free alice picks them up and bob is told.
+    for tid in ("t_smoke_busy", "t_smoke_q1", "t_smoke_q2"):
+        alice.call("create_task", alice.fence, tid, tid, "", [], "bob-codex", "")
+    bob.call("claim_task", bob.fence, "t_smoke_busy", 0)
+    alice.call("create_task", alice.fence, "t_smoke_carol", "carol's", "", [], "carol", "")
+    carol.call("pick_up_task", carol.fence, "", expect_error="not_allowed")
+    bob.call("pick_up_task", bob.fence, "", expect_error="busy")
+    alice.call("pick_up_task", alice.fence, "t_smoke_busy", expect_error="not_claimable")
+    alice.call("pick_up_task", alice.fence, "")
+    t = [x for x in alice.sql("SELECT * FROM v_task") if x["id"] == "t_smoke_q1"][0]
+    assert (t["status"], t["owner"], t["assignee"]) == ("claimed", alice.me()["id"], "alice-claude"), t
+    assert any(m["task_id"] == "t_smoke_q1" and m["kind"] == "notice" for m in bob.sql("SELECT * FROM v_message"))
+    alice.call("pick_up_task", alice.fence, "", expect_error="busy")
+    alice.call("report_task", alice.fence, "t_smoke_q1", "done", "q1 built", [])
+    alice.call("pick_up_task", alice.fence, "t_smoke_carol", expect_error="not_spare")  # carol isn't busy
+    alice.call("pick_up_task", alice.fence, "")
+    t = [x for x in alice.sql("SELECT * FROM v_task") if x["id"] == "t_smoke_q2"][0]
+    assert t["status"] == "claimed" and t["assignee"] == "alice-claude", t
+    alice.call("report_task", alice.fence, "t_smoke_q2", "done", "q2 built", [])
+
     # A newer process with the same identity supersedes the old fence.
     old = alice.fence
     alice.call("rejoin", "smoke")

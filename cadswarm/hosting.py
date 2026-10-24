@@ -386,8 +386,30 @@ def write_project_readme(root):
             f.write(PROJECT_README)
 
 
-def publish(db, mode="maincloud"):
-    """Create or update the team's database with this build's module. Raises RuntimeError in plain words."""
+def _publish_as(uri, db, token, wasm):
+    """Update `db` over HTTP as the identity `token` (the database owner)."""
+    req = urllib.request.Request(f"{uri.rstrip('/')}/v1/database/{db}", data=open(wasm, "rb").read(), method="PUT",
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/wasm"})
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            r.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("Couldn't update your team's database on SpacetimeDB: "
+                           + e.read().decode("utf-8", "replace")[:300])
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Couldn't reach SpacetimeDB at {uri}: {e.reason}")
+
+
+def publish(db, mode="maincloud", data_dir=None):
+    """Create or update the team's database with this build's module. Raises RuntimeError in plain words.
+
+    A folder that already hosts this database re-publishes as its own host identity (host.json): only the
+    database's owner may update it, and the CLI's sign-in can differ (a new `spacetime login`, or a team the
+    host created with a server-issued identity)."""
+    cfg = host_config(data_dir) if data_dir else {}
+    wasm = module_wasm()
+    if cfg.get("db") == db and cfg.get("token") and wasm:
+        return _publish_as(cfg.get("uri") or (LOCAL_URI if mode == "local" else MAINCLOUD_URI), db, cfg["token"], wasm)
     st = spacetime_bin()
     if not st:
         raise RuntimeError("CadSwarm needs the SpacetimeDB program to run your team's database, and this "
@@ -469,7 +491,7 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
                                            lay, "spacetime.log", env)
             _wait_port(LOCAL_PORT, 30, info["spacetime_pid"], data_dir)
         log(f"Creating your team's database “{db}” ({mode})")
-        publish(db, mode)
+        publish(db, mode, data_dir)
         if not host_config(data_dir):
             log("Setting up the team server (one time)")
             argv = [host, "--data", data_dir, "init", "--mode", mode, "--db", db, "--python", python,

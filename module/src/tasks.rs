@@ -55,9 +55,71 @@ pub fn claim_task(ctx: &ReducerContext, fence: u32, task_id: String, expected_re
     let m = me(ctx, fence)?;
     let t = task_by_id(ctx, m.ws, &task_id)?;
     rules::check_claim(&task_id, &t.status, t.rev, &name_of(ctx, t.owner), expected_rev)?;
-    let rev = t.rev + 1;
-    ctx.db.task().id().update(Task { status: "claimed".into(), owner: m.id, rev, updated_ms: now_ms(ctx), ..t });
-    emit(ctx, m.ws, "task_claimed", m.id, json!({"task": task_id, "name": m.name}));
+    take_task(ctx, &m, t);
+    Ok(())
+}
+
+/// Claim `t` for `m`. If it was queued for another helper, it becomes `m`'s and that helper is told to skip it.
+fn take_task(ctx: &ReducerContext, m: &Member, t: Task) {
+    let from = if t.assignee.is_empty() || t.assignee.eq_ignore_ascii_case(&m.name) { String::new() } else { t.assignee.clone() };
+    if !from.is_empty() {
+        let to = rules::address(&from, live_by_name(ctx, m.ws, &from).map(|x| x.id));
+        system_message(
+            ctx,
+            m.ws,
+            &to,
+            format!("{} was free and took task {} off your queue: {}. Skip it; they'll report it when done.", m.name, t.id, t.title),
+            "notice",
+            &t.id,
+        );
+    }
+    let (task_id, rev) = (t.id.clone(), t.rev + 1);
+    let assignee = if from.is_empty() { t.assignee.clone() } else { m.name.clone() };
+    ctx.db.task().id().update(Task { status: "claimed".into(), owner: m.id, assignee, rev, updated_ms: now_ms(ctx), ..t });
+    emit(ctx, m.ws, "task_claimed", m.id, json!({"task": task_id, "name": m.name, "from": from}));
+}
+
+fn owns_claimed(ctx: &ReducerContext, ws: u64, member: u64) -> bool {
+    ctx.db.task().ws().filter(&ws).any(|t| t.owner == member && t.status == "claimed")
+}
+
+/// Rebalancing: a free agent takes a task queued for a helper that is busy with another one (or has gone
+/// stale), and that helper is told. An empty `task_id` picks for you: the oldest task of the longest queue.
+#[reducer]
+pub fn pick_up_task(ctx: &ReducerContext, fence: u32, task_id: String) -> Result<(), String> {
+    let m = me(ctx, fence)?;
+    require_kind(&m, "agent")?;
+    let caller_busy = owns_claimed(ctx, m.ws, m.id);
+    let check = |t: &Task| {
+        let assignee_busy = live_by_name(ctx, m.ws, &t.assignee)
+            .is_some_and(|a| a.status == "stale" || owns_claimed(ctx, m.ws, a.id));
+        let held_by = t.objects.iter().find_map(|o| holder(ctx, m.ws, o).filter(|h| h.id != m.id).map(|h| h.name));
+        rules::check_pickup(&t.id, &rules::Pickup {
+            status: &t.status,
+            assignee: &t.assignee,
+            caller: &m.name,
+            caller_busy,
+            assignee_busy,
+            held_by: held_by.as_deref(),
+        })
+    };
+    let t = if task_id.is_empty() {
+        if caller_busy {
+            return Err(rules::BUSY.into());
+        }
+        let spare: Vec<Task> = ctx.db.task().ws().filter(&m.ws).filter(|t| t.status == "open" && check(t).is_ok()).collect();
+        let queue = |name: &str| spare.iter().filter(|t| t.assignee.eq_ignore_ascii_case(name)).count();
+        spare
+            .iter()
+            .min_by_key(|t| (std::cmp::Reverse(queue(&t.assignee)), t.created_ms))
+            .cloned()
+            .ok_or_else(|| "no_spare_work: no busy helper has work waiting".to_string())?
+    } else {
+        let t = task_by_id(ctx, m.ws, &task_id)?;
+        check(&t)?;
+        t
+    };
+    take_task(ctx, &m, t);
     Ok(())
 }
 

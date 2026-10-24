@@ -290,9 +290,9 @@ def rules(job, result):
                 out.append(_pt("warning", f"Safety factor {sf:.2f} is thin. Most designs aim for at least 1.5–2 "
                                "(more for impacts, fatigue or people's safety)."))
             elif sf > 3:
-                lighten = ("Lighten part (lighten_part, or Team tools > Lighten part...) can fill its inside with a "
-                           "lattice that is thicker where this analysis shows stress, then check it keeps its "
-                           "stiffness, reusing this load case.")
+                lighten = ("Lighten part (lighten_part, or the panel's Tools tab > Lighten part...) can fill its "
+                           "inside with a lattice that is thicker where this analysis shows stress, then check it "
+                           "keeps its stiffness, reusing this load case.")
                 if sf > 10:
                     out.append(_pt("info", f"Safety factor {sf:.1f} is very high: the part is probably heavier than "
                                    f"it needs to be. Thinner walls or pockets could save material. {lighten}"))

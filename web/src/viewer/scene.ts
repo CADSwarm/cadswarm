@@ -20,18 +20,26 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   el.appendChild(labels.domElement);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20000);
   camera.position.set(120, -160, 140);
   camera.up.set(0, 0, 1);
   const controls = new OrbitControls(camera, renderer.domElement);
+  controls.addEventListener('start', () => { goal = null; });
   controls.enableDamping = !reduced();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(80, -60, 160);
   scene.add(sun);
-  const grid = new THREE.GridHelper(200, 20, 0x888888, 0xcccccc);
-  grid.rotation.x = Math.PI / 2;
-  scene.add(grid);
+  // A floor that reaches the horizon: 10 mm cells near the model, 100 mm cells out to 4 m, fading with distance.
+  function floor(size: number, cells: number, opacity: number) {
+    const g = new THREE.GridHelper(size, cells, 0x8e8e93, 0x8e8e93);
+    g.rotation.x = Math.PI / 2;
+    for (const m of [g.material].flat()) Object.assign(m, { transparent: true, opacity, depthWrite: false });
+    scene.add(g);
+    return g;
+  }
+  const grids = [floor(1000, 100, 0.18), floor(4000, 40, 0.32)];
+  scene.fog = new THREE.Fog(dark() ? 0x000000 : 0xf2f2f7, 600, 2600);
 
   const loader = new STLLoader();
   const parts = new Map<string, Part>();
@@ -87,13 +95,37 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   }
   const shaken = new Set<string>();
 
+  // Camera moves glide (or jump, with reduced motion) to `goal`: framing everything, or one part.
+  let goal: { target: THREE.Vector3; position: THREE.Vector3 } | null = null;
+  function aim(box: THREE.Box3) {
+    if (box.isEmpty()) return;
+    const c = box.getCenter(new THREE.Vector3()), size = Math.max(box.getSize(new THREE.Vector3()).length(), 20);
+    goal = { target: c, position: c.clone().add(new THREE.Vector3(0.7, -0.9, 0.8).multiplyScalar(size * 1.2)) };
+    if (reduced()) { controls.target.copy(goal.target); camera.position.copy(goal.position); goal = null; }
+  }
   function frame() {
     const box = new THREE.Box3();
     for (const p of parts.values()) box.expandByObject(p.mesh);
-    const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3()).length();
-    controls.target.copy(c);
-    camera.position.copy(c.clone().add(new THREE.Vector3(0.7, -0.9, 0.8).multiplyScalar(size * 1.2)));
+    if (!box.isEmpty()) {  // centre the floor under the model, on its lowest face
+      const c = box.getCenter(new THREE.Vector3());
+      for (const g of grids) g.position.set(Math.round(c.x / 100) * 100, Math.round(c.y / 100) * 100, box.min.z);
+    }
+    aim(box);
   }
+  function focus(name: string) {
+    const p = parts.get(name);
+    if (!p) return;
+    aim(new THREE.Box3().setFromObject(p.mesh));
+    if (!reduced()) p.flash = 1; // show which one it is
+  }
+  addEventListener('cadswarm:focus', e => focus((e as CustomEvent<string>).detail));
+  const fit = document.createElement('button');
+  fit.type = 'button';
+  fit.className = 'fit';
+  fit.textContent = 'Fit';
+  fit.title = 'Show the whole model';
+  fit.addEventListener('click', frame);
+  el.appendChild(fit);
 
   store.subscribe(sync);
 
@@ -135,7 +167,15 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
       p.mesh.position.x = p.shake ? Math.sin(now / 25) * 1.2 * p.shake : 0;
     }
     pointers.update(dt, name => parts.get(name)?.mesh ?? null);
+    if (goal) { // ease toward the requested view; any drag by the person cancels it
+      const k = Math.min(1, dt * 4);
+      controls.target.lerp(goal.target, k);
+      camera.position.lerp(goal.position, k);
+      if (camera.position.distanceTo(goal.position) < 0.5) goal = null;
+    }
     controls.update();
+    const fog = scene.fog as THREE.Fog, d = camera.position.distanceTo(controls.target);
+    fog.near = d * 1.5; fog.far = d * 6;  // the floor fades out softly wherever you zoom
     renderer.render(scene, camera);
     labels.render(scene, camera);
   });

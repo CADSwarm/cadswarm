@@ -58,7 +58,7 @@ Each cell's density, stiffness and strength against wall thickness are in
 | Jobs on the team server | `cadswarm/lattice_jobs.py` (helper ops `lattice_*`) |
 | Hub routes | `cadswarm/space_hub.py` (`/lattice/...`) |
 | Agent tools | `cadswarm/mcp_server.py`: `lighten_part`, `lattice_status`, `lattice_apply`, `lattice_cancel`, `lattice_cells`, `lattice_estimate` |
-| People | `cadswarm/gui/lighten_ui.py`: **Lighten part…** (Team tools, the CadSwarm toolbar, the CADSwarm Optimization workbench) |
+| People | `cadswarm/gui/lighten_ui.py`: **Lighten part…** (the panel's Tools tab, the CadSwarm menu, the CADSwarm Optimization workbench) |
 | Placing the result | worker op `insert_mesh` (a `Mesh::Feature`) |
 | Tests | `tests/test_lattice.py`, `tests/test_lattice_freecad.py`, `tests/test_lighten_gui.py`, plus helper/hub tests |
 

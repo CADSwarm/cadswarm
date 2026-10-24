@@ -32,7 +32,11 @@ AGENT_DOC = """{begin}
 
 Your teammates' agents (Claude Code, Codex, Droid) are editing the same live model right now.
 All CAD work goes through the `cadswarm` MCP tools: never edit .FCStd files directly.
-Your human may be new to CAD: explain what you build in plain words and keep dimensions in mm.
+Your human may be new to CAD: keep dimensions in mm and use plain words.
+
+**Be brief.** People watch the model change live, so don't narrate: no running commentary, no restating tool
+calls or their results, no plans-before-acting. Reply in one or two short sentences; when you finish, say what
+changed in at most three lines. A person's COMMAND from FreeCAD or the web app gets a one-line answer.
 
 - Start every task with `model_status` and `list_tasks`; `claim_task` before working.
 - `lock_objects` before changing anything; what you create is yours. Ask owners, don't override them.
@@ -44,7 +48,8 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
   you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you
   run out of work, keep calling `wait_for_changes` so new messages and tasks reach you. (If FreeCAD started you in the background, stop instead: you're woken when needed.)
 - Work with the other AI helpers: `list_helpers` shows who is free; `delegate_task` hands one of them a
-  task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it.
+  task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it. Free while
+  a busy helper has tasks queued? `pick_up_task` takes one off its hands (it's told to skip it).
 - Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
   subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
   `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and
@@ -71,12 +76,12 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 """
 
 RESUME_PROMPT = ("We're continuing our team's CAD project \"{project}\". Check model_status, your inbox and the "
-                 "tasks, then carry on with your part. Tell me in plain words what you're doing.")
+                 "tasks, then carry on with your part. Keep your replies short.")
 
 # AI helpers are always plain members: the people lead the team, and only a person hosts it.
 FIRST_PROMPT = ("I just joined our team's CAD project \"{project}\". Say hello in the team chat (send_message to "
-                "\"all\"), check the team's tasks, claim one that nobody has started, and build it. Tell me in "
-                "plain words what you're doing.")
+                "\"all\"), claim a task nobody has started, and build it. Keep your replies short: a line when you "
+                "start, up to three when you finish.")
 
 
 def upsert_block(path, block, begin=BEGIN, end=END):
@@ -263,7 +268,7 @@ def identity_matches(project, invite):
         and cfg.get("db") == invite.get("db") and cfg.get("uri", "").rstrip("/") == invite.get("uri", "").rstrip("/")
 
 
-def write_agent_config(project, client, invite, name, python=None, fresh=False):
+def write_agent_config(project, client, invite, name, python=None, fresh=False, ephemeral=False):
     """Everything an AI helper in `project` needs to join the team. Returns the files written.
     `invite` is a decoded ticket (see invite.read_invite). The invite is redeemed only when this
     folder has no identity yet (invites work once), and only after the agent CLI's own config
@@ -286,7 +291,7 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False):
         save_json(ident_path, redeem(invite, name, client))
     save_json(os.path.join(state_dir(project), "config.json"), {
         "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
-        "role": invite.get("role") or "member"})
+        "role": invite.get("role") or "member", **({"ephemeral": True} if ephemeral else {})})
     return written
 
 

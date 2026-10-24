@@ -4,7 +4,7 @@
 
 1. Select one solid part. In a team, select it in the live model; on your own, any document works (choose
    the **CADSwarm Optimization** workbench, or the CadSwarm toolbar).
-2. **Team tools › Lighten part…** (or the **Lighten part…** button).
+2. **Lighten part…** in the CadSwarm panel's **Tools** tab (or the CadSwarm menu).
 3. **Part**: the material and how it's made. Powder or resin printing ticks two opposite openings so loose
    material can drain.
 4. **Held and loaded**: type faces (`xmin`, `Face6`) or select them in the 3D view and click

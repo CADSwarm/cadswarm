@@ -107,12 +107,25 @@ impl Agent {
         std::fs::create_dir_all(&dir)?;
         // PYTHONSAFEPATH, not -I: -I would also drop PYTHONPATH, which is how a guide-hosted team
         // (FreeCAD's own Python) finds the package; both keep a checkout in the cwd from being imported.
-        let setup = Command::new(&cfg.cadswarm_python)
-            .env("PYTHONSAFEPATH", "1")
-            .args(["-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
-            .arg(&dir)
-            .output()
-            .context("running cadswarm setup")?;
+        let run_setup = |ephemeral: bool| {
+            let mut args = vec!["-m", "cadswarm.cli", "setup"];
+            if ephemeral {
+                args.push("--ephemeral");
+            }
+            args.extend(["--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"]);
+            Command::new(&cfg.cadswarm_python)
+                .env("PYTHONSAFEPATH", "1")
+                .args(&args)
+                .arg(&dir)
+                .output()
+                .context("running cadswarm setup")
+        };
+        let mut setup = run_setup(true)?;
+        // A CadSwarm package older than --ephemeral rejects the flag before redeeming the invite, so the
+        // ticket is still unused: join without it (the agent then stays listed after its job).
+        if !setup.status.success() && String::from_utf8_lossy(&setup.stderr).contains("unrecognized arguments: --ephemeral") {
+            setup = run_setup(false)?;
+        }
         if !setup.status.success() {
             bail!(
                 "cadswarm setup for {name} failed: {}{}",

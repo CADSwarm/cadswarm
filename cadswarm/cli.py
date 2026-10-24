@@ -29,7 +29,7 @@ def cmd_setup(a):
     project = os.path.abspath(a.dir)
     try:
         t = read_invite(a.invite)
-        written = write_agent_config(project, a.client, t, a.name, sys.executable, a.fresh)
+        written = write_agent_config(project, a.client, t, a.name, sys.executable, a.fresh, ephemeral=a.ephemeral)
     except (InviteError, ValueError) as e:
         raise SystemExit(f"cadswarm: {e}")
     except Exception as e:  # SpaceError from redeeming: used, expired or unreachable
@@ -103,6 +103,8 @@ def main(argv=None):
     s.add_argument("--name", required=True)
     s.add_argument("--dir", default=".")
     s.add_argument("--fresh", action="store_true", help="forget the stored identity and join as a new member")
+    s.add_argument("--ephemeral", action="store_true",
+                   help="a one-job agent (the host's planners and workers): it leaves the team when its session ends")
     s.set_defaults(fn=cmd_setup)
     b = sub.add_parser("brief", help="submit a brief")
     b.add_argument("--dir", default=".")

@@ -32,6 +32,8 @@ import time
 import uuid
 from collections import Counter, defaultdict
 
+from .knowledge import design_problems
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS style_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, actor_id INTEGER, actor_name TEXT,
@@ -53,7 +55,7 @@ CREATES = {"create_primitive", "create_extrusion", "boolean", "run_part_script",
            "insert_standard_part"}
 EDITS = {"set_property", "set_props", "set_expression", "set_placement", "delete"}
 # What the reviewer records when it never reported: about the reviewer, not about the design.
-NOT_DESIGN_PROBLEMS = ("the reviewer did not report a verdict", "the reviewer exited without a verdict")
+# Shared with design memory so a design never learns them as a lesson (see cadswarm.knowledge).
 
 DISTIL_EVERY = 25          # new events between automatic re-distils
 ACTIVE_CONFIDENCE = 0.7
@@ -231,14 +233,7 @@ class StyleMemory:
     def observe_brief(self, a):
         """A finished brief: {brief{id,text,board}, plan{parts}, reviews[{round,passed,findings_json}], params}."""
         brief = a.get("brief") or {}
-        findings = []
-        for rv in sorted(a.get("reviews") or [], key=lambda r: r.get("round", 0)):
-            try:
-                findings += json.loads(rv.get("findings_json") or "[]")
-            except (ValueError, TypeError):
-                pass
-        problems = [str(f.get("problem")) for f in findings if isinstance(f, dict) and f.get("problem")]
-        problems = [p for p in problems if p.strip().lower() not in NOT_DESIGN_PROBLEMS]
+        problems = design_problems(a.get("reviews") or [])
         parts = [p.get("name", "") for p in (a.get("plan") or {}).get("parts", []) if isinstance(p, dict)]
         self._add("brief_done", {"name": "host", "kind": "host"},
                   {"text": brief.get("text", ""), "parts": parts, "problems": problems,

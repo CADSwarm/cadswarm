@@ -12,7 +12,7 @@ import sys
 from collections.abc import Mapping
 
 from .client import HubRequestError, load_json, state_dir
-from .paths import LAUNCHER
+from .paths import LAUNCHER, droid_exe
 from .space_hub import project_hub
 
 MCP_SERVER = "cadswarm"
@@ -64,13 +64,45 @@ def activity_for(event):
     if name is not None and hasattr(event, "input"):
         raw = event.input if isinstance(event.input, Mapping) else {}
         targets = raw.get("names") or ([raw["name"]] if isinstance(raw.get("name"), str) else [])
-        return "tool_call", f"{str(name).split('___')[-1]} {json.dumps(dict(raw))[:200]}", list(targets or [])
+        # Droid hands tool input as a frozen mapping; default=str keeps a nested one from crashing the feed.
+        return "tool_call", f"{str(name).split('___')[-1]} {json.dumps(dict(raw), default=str)[:200]}", list(targets or [])
     if hasattr(event, "tool_name") and hasattr(event, "is_error"):
-        return "tool_result", f"{str(event.tool_name).split('___')[-1]} {'failed' if event.is_error else 'ok'}", []
+        word = "failed" if event.is_error else "ok"
+        # A failure is only useful on the activity feed if it says why (a refused tool, a bad size).
+        detail = f" ({str(event.content)[:200]})" if event.is_error and event.content else ""
+        return "tool_result", f"{str(event.tool_name).split('___')[-1]} {word}{detail}", []
     text = getattr(event, "text", None)
     if text:
         return "say", text[:300], []
     return None
+
+
+def allow_review_tools(request):
+    """Approve the cadswarm MCP tools and refuse everything else.
+
+    Droid asks permission before an MCP tool call, and an unanswered request is reported as
+    "Tool execution cancelled by user": a headless reviewer that ignores it does nothing at all.
+    Approving only tools on the cadswarm server keeps the reviewer unable to touch the disk or
+    run commands, which is the point of the allowlist in the first place.
+    """
+    from droid_sdk import McpToolAction, ToolConfirmationOutcome
+
+    wanted = (ToolConfirmationOutcome.PROCEED_ALWAYS_SERVER, ToolConfirmationOutcome.PROCEED_ALWAYS_TOOLS,
+              ToolConfirmationOutcome.PROCEED_ALWAYS, ToolConfirmationOutcome.PROCEED_ONCE)
+
+    def cadswarm(action):
+        if not isinstance(action, McpToolAction):
+            return False
+        named = " ".join(str(getattr(action, f, "") or "") for f in ("server_name", "tool_name", "actual_tool_name"))
+        return MCP_SERVER in named
+
+    if not request.actions or not all(cadswarm(a) for a in request.actions):
+        return request.respond(ToolConfirmationOutcome.CANCEL)
+    offered = {o.value for o in request.options}
+    for choice in wanted:
+        if choice in offered:
+            return request.respond(choice)
+    return request.respond(ToolConfirmationOutcome.CANCEL)
 
 
 async def _review_tool_ids(session):
@@ -100,8 +132,8 @@ def _adopt_fence(hub, project):
 
 
 async def review(project, brief_id, round_no):
-    from droid_sdk import (AssistantMessage, Autonomy, Session, SessionConfig, StdioMcpServerConfig,
-                           ToolCall, ToolResult)
+    from droid_sdk import (AssistantMessage, Autonomy, InteractionHandlers, Runtime, Session, SessionConfig,
+                           StdioMcpServerConfig, ToolCall, ToolResult)
 
     hub, _cfg = project_hub(project)
     if hub is None:
@@ -114,7 +146,11 @@ async def review(project, brief_id, round_no):
     ws = hub.space.sql("SELECT * FROM v_workspace")[0]
     bed = [ws["bed_x_mm"], ws["bed_y_mm"], ws["bed_z_mm"]]
     config = SessionConfig(
-        autonomy=Autonomy.LOW,
+        # HIGH, not LOW: Droid 0.249 wraps an MCP call in its Script tool, and the SDK 0.5.0 can
+        # not parse that confirmation, so at LOW every tool call came back "cancelled by user".
+        # What the reviewer may touch is still the restrict_tools list below, and the module
+        # refuses lock/submit_op from a `reviewer` member whatever Droid asks for.
+        autonomy=Autonomy.HIGH,
         # The launcher, like every agent config: it finds the package and the private deps folder
         # whether or not the child inherits this process's PYTHONPATH.
         mcp_servers=[StdioMcpServerConfig(name=MCP_SERVER, command=sys.executable,
@@ -123,7 +159,10 @@ async def review(project, brief_id, round_no):
         restrict_tools=REVIEW_TOOLS,
     )
     hub.log_activity("say", f"reviewing brief {brief_id}, round {round_no}", [])
-    async with Session(cwd=project, config=config) as session:
+    # The SDK starts Droid itself (no shell), so hand it the real binary rather than PATH's shim.
+    interactions = InteractionHandlers(on_permission=allow_review_tools)
+    async with Session(cwd=project, config=config, interactions=interactions,
+                       runtime=Runtime(executable=droid_exe())) as session:
         await _review_tool_ids(session)
         prompt = review_prompt(brief, brief.get("board") or "unspecified", bed, round_no, team_style(hub, brief))
         async with session.stream(prompt) as stream:
