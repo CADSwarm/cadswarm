@@ -5,7 +5,8 @@ part in the shared FreeCAD model, with a thin `Lattice` tab and MCP tools for th
 
 **Status: proposed, 2026-10-24. No implementation code has been written.** The documents exist so the feature
 can be reviewed, scoped and implemented without rediscovering the design. Commands, tools and tabs described
-here do not exist yet.
+here do not exist yet. A throwaway headless test of the geometry kernel is recorded in
+[the PicoGK spike](spike-2026-10-24.md); it produced an STL outside the product and changed no CadSwarm code.
 
 **Provenance:** the capability is a clean-room reimplementation of the core workflow observed in
 [IMPLICIT](https://implicit.build/), using PicoGK 2.3.0 and the LEAP 71 libraries (Apache-2.0). No IMPLICIT
@@ -22,6 +23,7 @@ code, assets or strings are used. See the evidence dossier for the boundary and 
 | [Implementation plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) | implementers, project lead | Phased tasks 0–9, repository layout, acceptance criteria, benchmarks, risks, backlog |
 | [Agent guide](agent-guide.md) | AI helpers (Claude Code, Codex) | How to use the tools, choose parameters, read warnings, recover from errors, and stay safe |
 | [Operator guide](operator-guide.md) | host, support, rollout | Install, configure, run the tab, job states, storage, troubleshooting, limits, security |
+| [PicoGK spike, 2026-10-24](spike-2026-10-24.md) | implementers | What a throwaway headless test of the kernel proved (speed, mesh size, process shape) and what it did not |
 
 The contract is the source of truth for names, fields, limits and error codes. If a guide disagrees with it, the
 contract wins and the guide is wrong.
