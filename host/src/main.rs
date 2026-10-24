@@ -166,6 +166,8 @@ fn run(cfg: &HostConfig) -> Result<()> {
     // When the sweep retires this host (its laptop slept past the orphan window), every reducer
     // call fails with `left:` until it rejoins; retry at most every 10s.
     let mut last_revive: Option<std::time::Instant> = None;
+    // Heartbeat like every other member, well inside the module's 30s stale window.
+    let mut last_beat: Option<std::time::Instant> = None;
     loop {
         if space.retired() {
             if last_revive.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
@@ -177,6 +179,12 @@ fn run(cfg: &HostConfig) -> Result<()> {
             }
             std::thread::sleep(Duration::from_millis(100));
             continue;
+        }
+        if last_beat.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
+            last_beat = Some(std::time::Instant::now());
+            if let Err(e) = space.heartbeat() {
+                eprintln!("[host] heartbeat failed: {e:#}");
+            }
         }
         if let Some(op) = space.queued_ops().into_iter().find(|o| !tried.contains(&o.id)) {
             tried.insert(op.id.clone());
