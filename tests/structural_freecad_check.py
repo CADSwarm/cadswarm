@@ -9,6 +9,8 @@ import Part
 import Mesh
 import numpy as np
 
+# `import FreeCAD` puts installed workbench copies (Mod/CadSwarm) on sys.path; test this checkout.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from cadswarm.structural.demo import request
 from cadswarm.structural.freecad import discretize, reconstruct
 from cadswarm.structural.job import run

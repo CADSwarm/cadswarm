@@ -35,18 +35,14 @@ def test_real_freecad_roundtrips_and_holes(tmp_path, solver):
     assert evidence["optimized_volume_mm3"] < evidence["original_volume_mm3"]
 
 
-def test_acceptance_uses_existing_hub_guards(tmp_path):
+def test_accepted_operation_runs_in_the_worker(tmp_path):
     python, env = runtime()
-    from cadswarm.hub.core import Hub, HubError
-    from cadswarm.hub.worker_client import WorkerClient
+    from cadswarm.worker_client import WorkerClient, WorkerError
     from cadswarm.structural.collaboration import accepted_operation
     worker = WorkerClient(str(tmp_path / "model.FCStd"), python=python)
-    hub = Hub(worker, str(tmp_path / "hub.sqlite"), "test")
     try:
-        alice = hub.join("test", "alice", kind="human")["participant_id"]
-        bob = hub.join("test", "bob", kind="human")["participant_id"]
-        hub.op(bob, "create_primitive", {"kind": "box", "name": "Source", "props": {"Length": 12, "Width": 4, "Height": 4}})
-        snapshot = hub.brep(["Source"])["Source"]["brep"]
+        worker.call("create_primitive", {"kind": "box", "name": "Source", "props": {"Length": 12, "Width": 4, "Height": 4}}, allowed=["Source"])
+        snapshot = worker.call("brep", {"names": ["Source"]})["result"]["objects"]["Source"]["brep"]
         # Reuse actual engine output; no network mutation occurs during numerical search.
         request = {"brep": snapshot, "pitch_mm": 1, "solver": "scipy",
                    "material": {"name": "Test", "young_mpa": 70000, "poisson": .3, "yield_mpa": 240, "density_kg_mm3": 2.7e-6},
@@ -60,26 +56,21 @@ def test_acceptance_uses_existing_hub_guards(tmp_path):
         assert proc.returncode == 0, proc.stdout + proc.stderr
         report = json.loads((out / "report.json").read_text())
         candidate = (out / "optimized.brep").read_text()
-        assert {o["name"] for o in hub.model()["objects"]} == {"Params", "Source"}
+        assert {o["name"] for o in worker.call("status")["result"]["objects"]} == {"Params", "Source"}
         op = accepted_operation("Source", 1, snapshot, candidate, "Optimized", report)
-        hub.acquire(bob, ["Optimized"])
-        with pytest.raises(HubError) as reserved:
-            hub.op(alice, **op)
-        assert reserved.value.code == "locked"
-        hub.release(bob, ["Optimized"])
-        response = hub.op(alice, **op)
+        assert op["op"] == "run_part_script" and op["expected_revs"] == {"Source": 1, "Optimized": 0}
+        # Lock ownership and stale revisions are refused by the SpacetimeDB module before an op reaches the worker (rules::check_op / rules::check_expected_revs, tested in rules/).
+        response = worker.call(op["op"], op["args"], allowed=["Optimized"])
         assert response["created"] == ["Optimized"] and response["modified"] == []
         assert response["result"]["result"]["structural_report"]["status"] == "improved"
-        assert hub.holder("Source") == bob and hub.holder("Optimized") == alice
-        assert hub.brep(["Source"])["Source"]["brep"] == snapshot
-        with pytest.raises(HubError):
-            hub.op(alice, **op)  # never overwrite an accepted result
-        hub.op(bob, "set_props", {"name": "Source", "props": {"Length": 16}})
+        assert worker.call("brep", {"names": ["Source"]})["result"]["objects"]["Source"]["brep"] == snapshot
+        with pytest.raises(WorkerError):
+            worker.call(op["op"], op["args"], allowed=["Optimized"])  # never overwrite an accepted result
+        worker.call("set_props", {"name": "Source", "props": {"Length": 16}}, allowed=["Source"])
         stale = accepted_operation("Source", 1, snapshot, candidate, "Another", report)
-        with pytest.raises(HubError) as changed:
-            hub.op(alice, **stale)
-        assert changed.value.code == "stale_rev"
-        assert "Another" not in {o["name"] for o in hub.model()["objects"]}
+        with pytest.raises(WorkerError):
+            worker.call(stale["op"], stale["args"], allowed=["Another"])
+        assert "Another" not in {o["name"] for o in worker.call("status")["result"]["objects"]}
     finally:
         worker.stop()
 
