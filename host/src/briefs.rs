@@ -64,25 +64,28 @@ pub fn next_action(s: &BriefState) -> Action {
         "planning" if s.seeding || s.planner_alive => Action::Wait,
         "planning" if s.open + s.active + s.done == 0 => Action::Plan,
         "planning" => Action::Build(s.open.min(MAX_WORKERS)),
-        "building" if s.open + s.active == 0 && s.done > 0 => {
+        "building" if s.open + s.active == 0 => {
             if s.exporting {
                 Action::Wait
-            } else if s.reviewer_enabled {
-                Action::Review
+            } else if s.blocked > 0 {
+                // A blocked part is missing from the model, so this brief is not ready. A person
+                // can cancel the blocked task to build the rest.
+                Action::Fail("a task is blocked; a person needs to steer".into())
+            } else if s.done > 0 {
+                if s.reviewer_enabled {
+                    Action::Review
+                } else {
+                    Action::Export
+                }
+            } else if s.cancelled > 0 {
+                Action::Fail("every task was stopped; a person needs to steer".into())
+            } else if s.planned {
+                // The plan is written but its rows are gone: the last task was removed.
+                Action::Fail("every task was removed; a person needs to steer".into())
             } else {
-                Action::Export
+                // The subscription may still be delivering the first task rows.
+                Action::Wait
             }
-        }
-        // Nothing is running and nothing was built: every task was stopped, blocked or removed.
-        // A brief must not sit in `building` forever waiting for work that will never arrive.
-        "building" if s.open + s.active == 0 && s.cancelled > 0 => {
-            Action::Fail("every task was stopped; a person needs to steer".into())
-        }
-        "building" if s.open + s.active == 0 && s.blocked > 0 => {
-            Action::Fail("every task is blocked; a person needs to steer".into())
-        }
-        "building" if s.planned && s.open + s.active + s.done + s.cancelled + s.blocked == 0 => {
-            Action::Fail("every task was removed; a person needs to steer".into())
         }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
@@ -544,8 +547,8 @@ mod tests {
         assert_eq!(next_action(&st("building")), Action::Wait);
         // A cancelled task does not hide finished work: the build still reviews and exports.
         assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
-        // A blocked task does not hide a finished part either.
-        assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Export);
+        // A blocked part does: the model would be missing it, so a person must steer.
+        assert!(matches!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Fail(_)));
     }
 
     #[test]
