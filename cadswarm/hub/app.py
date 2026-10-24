@@ -174,7 +174,10 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
         return hub.prune_storage(p["id"], body)
 
     @app.post("/project/storage/settings")
-    def storage_settings(body: dict = Body(...), p=Depends(me)):
+    def storage_settings(request: Request, body: dict = Body(...), p=Depends(me)):
+        # The host's own FreeCAD talks to its hub over loopback; teammates come in over the network.
+        if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+            raise HubError(403, "host_only", "Only the computer hosting the team can change its storage limits.")
         return hub.set_storage_settings(p["id"], body)
 
     @app.post("/project/snapshot")

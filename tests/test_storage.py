@@ -357,7 +357,12 @@ def test_storage_routes_and_permissions(tmp_path):
     assert http.post("/project/storage/settings", json={"project_limit_gb": 1}, headers=agent).status_code == 403
     ok = http.post("/project/storage/prune", json={"keep_versions": 1}, headers=human)
     assert ok.status_code == 200 and ok.json()["freed"]["total"] == 0
-    s = http.post("/project/storage/settings", json={"project_limit_gb": 3}, headers=human)
+    # limits belong to the computer hosting the team: a person joining from elsewhere can't change them
+    away = http.post("/project/storage/settings", json={"project_limit_gb": 0}, headers=human)
+    assert away.status_code == 403 and away.json()["code"] == "host_only"
+    from fastapi.testclient import TestClient
+    on_host = TestClient(http.app, client=("127.0.0.1", 50000))
+    s = on_host.post("/project/storage/settings", json={"project_limit_gb": 3}, headers=human)
     assert s.status_code == 200 and s.json()["limit_bytes"] == 3 * GB
     assert http.post("/project/storage/prune", json={"keep_versions": 0}, headers=human).status_code == 400
 
