@@ -190,7 +190,7 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .bubble.build .text-button { margin-top: 6px; padding-left: 0; }
 .steps { display: flex; gap: 4px; list-style: none; padding: 0; margin: 0; }
 .steps li { flex: 1; min-width: 0; font: 500 10.5px/1.2 var(--font); color: var(--muted); padding-top: 6px; border-top: 3px solid var(--fill);
-  border-radius: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  border-radius: 2px; white-space: normal; overflow-wrap: anywhere; }
 .steps li.done { border-color: color-mix(in srgb, var(--accent) 50%, var(--fill)); }
 .steps li.now { border-color: var(--accent); color: var(--fg); font-weight: 600; }
 .build.failed .steps li.now { border-color: var(--err); }
