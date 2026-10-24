@@ -18,7 +18,7 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     profile.mkdir()
     env["FREECAD_USER_HOME"] = env["FREECAD_USER_DATA"] = str(profile)
     proc = subprocess.run([python, str(ROOT / "tests" / "panel_gui_check.py"), str(tmp_path)], env=env,
-                          capture_output=True, text=True, timeout=240)
+                          capture_output=True, encoding="utf-8", errors="replace", timeout=240)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     r = json.loads(Path(tmp_path / "panel-verified.json").read_text(encoding="utf-8"))
     assert all(c["no_horizontal_overflow"] and c["scrolls_when_short"] for c in r["layout"].values()), r["layout"]

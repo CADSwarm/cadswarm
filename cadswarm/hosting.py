@@ -75,8 +75,8 @@ the next time an AI helper changes the model. Copy it first, or work through CAD
 
 def deps_ready(python):
     try:
-        r = subprocess.run([python, LAUNCHER, "check"], capture_output=True, text=True, timeout=120,
-                           creationflags=NO_WINDOW)
+        r = subprocess.run([python, LAUNCHER, "check"], capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=120, creationflags=NO_WINDOW)
         return r.returncode == 0 and r.stdout.strip().endswith("ok")
     except (OSError, subprocess.TimeoutExpired):
         return False
