@@ -20,13 +20,13 @@ Devpost's field limits (the sections below are sized for the "built with a story
   Record its brief-to-ready time here: [TBD — from T5].
 - [ ] Printed part (plan 06 T7d): photograph it for the Best Hardware write-up.
 - [ ] Fill in the team roles and the video link.
-- [x] Release: `v0.1.3` (2026-10-24 18:42 UTC, release run 40121511862, `main` `4188a16`) has all five host binaries, `cadswarm_module.wasm` and
+- [x] Release: `v0.1.4` (2026-10-24 21:07 UTC, release run 40132423474, `main` `59c30d9`) has all five host binaries, `cadswarm_module.wasm` and
   `SHA256SUMS.txt`; on 2026-10-24 every downloaded asset matched its checksum (`sha256sum -c`). The
   earlier `v0.1.0` check also ran the released Windows host through the FreeCAD 1.1.4 worker: a human
   join, lock, box (1440 mm3), printability, STL export and `model.FCStd` save.
-- [x] Tests: CI run 40118091369 on `main` `95664cc`: Python 437 / 436 / 435 passed on Linux / Windows
-  / macOS (20–22 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed on all
-  three, web 36 passed; rules 22 passed locally.
+- [x] Tests: CI run 40132359584 on `main` `59c30d9` (v0.1.4): Python 451 / 450 / 449 passed on Linux /
+  Windows / macOS (21–23 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed
+  on all three, web 65 passed; rules 23 passed locally.
 - [x] Live database: Maincloud `cadswarm-calhacks-0180` (new account with the Cal Hacks credits; the old
   `cadswarm-calhacks-ca8c` ran out of credits) runs the module from `feat/panel-tabs-workload-shifting`
   `ff382fe`, published 2026-10-24, and the team server shows `active` in `v_member`.
@@ -166,9 +166,9 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
   has nothing to write until a reviewer supplies findings.
 - The Droid reviewer runs from the host, shows its work in the activity feed, and has a safe failure
   mode; it is optional, and off on the demo host because Droid is not installed there.
-- Tests are part of the story: on every push CI runs about 436 Python tests on Windows, macOS and Linux
+- Tests are part of the story: on every push CI runs about 450 Python tests on Windows, macOS and Linux
   (module adapter, guide, hosting, sandbox, library, style memory, Elastic, reviewer), 35 host tests,
-  36 web tests, and the coordination rules' own unit tests.
+  65 web tests, and the coordination rules' own unit tests.
 
 ## What we learned
 
@@ -198,7 +198,7 @@ Actions · Windows
 ## Try it out
 
 - **Code:** https://github.com/SachchitBalamurugan/cadswarm
-- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.3
+- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.4
 - **Web app:** [TBD — blocked, see "Web link" above] — press **Open the live demo** and enter the
   code `swarm-13`. That opens the panels app on a sample build, no host or account needed.
 - **Video:** [TBD — YouTube/Vimeo URL]
