@@ -3,6 +3,19 @@
 Draft for Cal Hacks 13.0. Replace every `[TBD]` before submitting. Keep the description within
 Devpost's field limits (the sections below are sized for the "built with a story" form).
 
+## Before submitting
+
+- [ ] Public code link: make the repository public, or add the Devpost judges as collaborators.
+  The guide's `releases/latest/download` URLs and the release assets only work unauthenticated on a
+  public repository.
+- [ ] Web link: enable GitHub Pages with source "GitHub Actions" (private repos need a paid plan), or
+  deploy `web/dist` to Vercel/Netlify and use that URL.
+- [ ] Video: record the 2:45 demo using the beats below and upload it; paste the URL under "Try it
+  out".
+- [ ] Fill in the team list and the three `[TBD]` links.
+- [ ] Verify the release: `v0.1.0` assets exist (five host platforms, `cadswarm_module.wasm`,
+  `SHA256SUMS.txt`) and a fresh install downloads and checks them.
+
 ## Project name
 
 CadSwarm
