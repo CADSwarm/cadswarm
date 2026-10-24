@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Copied from ../boards at build time (scripts/copy-boards.mjs)
+public/boards.json

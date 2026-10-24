@@ -24,6 +24,7 @@ import type {
 } from './store';
 import { newId } from './ids';
 import { saveSession } from './session';
+import { saveBytes } from './download';
 
 const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param', 'v_op', 'v_task', 'v_activity',
   'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff'] as const;
@@ -83,14 +84,6 @@ export function splitError(e: unknown): { code: string; message: string } {
   const i = s.indexOf(': ');
   if (i > 0 && /^[a-z_]+$/.test(s.slice(0, i))) return { code: s.slice(0, i), message: s.slice(i + 2) };
   return { code: '', message: s };
-}
-
-export function saveBytes(bytes: Uint8Array, mime: string, filename: string) {
-  const url = URL.createObjectURL(new Blob([bytes.slice()], { type: mime }));
-  const link = document.createElement('a');
-  link.href = url; link.download = filename;
-  document.body.appendChild(link); link.click(); link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
 // Whether the server accepts `WHERE` on a view subscription. Unknown until the first download tries it.

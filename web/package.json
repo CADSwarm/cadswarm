@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/copy-boards.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-boards.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run"

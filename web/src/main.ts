@@ -1,6 +1,6 @@
 import './style.css';
 import { Store } from './store';
-import { startMock } from './mock';
+import { startMockSwarm } from './mock';
 import { mountViewer } from './viewer/scene';
 import { decodeTicket, type Ticket } from './ticket';
 import type { Api } from './api';
@@ -29,8 +29,9 @@ function message(html: string) { panels.innerHTML = `<div class="welcome">${html
 
 async function boot() {
   if (new URLSearchParams(location.search).has('mock')) {
-    startMock(store);
-    mountPanels(panels, store, null);
+    const { api } = startMockSwarm(store); // exercises every panel without a server
+    apiRef = api;
+    mountPanels(panels, store, api);
     return;
   }
   const frag = new URLSearchParams(location.hash.slice(1)).get('t');
