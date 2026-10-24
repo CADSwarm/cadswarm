@@ -65,9 +65,9 @@ CadSwarm turns FreeCAD into a shared workspace for a small team of people and th
 - **Hand off, not start over.** Someone leaving can hand their locks, tasks and a note to an AI; the
   new agent accepts the handoff and continues from the owner's recent ops.
 - **Knowledge that accumulates.** On an Elastic project, agents look up board dimensions from
-  ingested datasheets, recall similar finished designs, and read lessons distilled by a scheduled
-  Workflow from previous reviewers' findings. An Agent Builder expert supplies a validated board
-  spec when the local library does not know the board.
+  ingested datasheets through hybrid search, recall similar finished designs, and read lessons
+  distilled by a scheduled Workflow from previous reviewers' findings, so the second case for a
+  board starts from what the first one learned.
 - **Files and output that are safe by default.** Sandboxed project files with history and no silent
   overwrites, snapshots, STEP/STL export, and a phone web app that shows the same live state.
 
@@ -95,11 +95,11 @@ live panels for the brief, tree, tasks, activity, params and review, animated ag
 preview, pairing by invite, and handoff controls.
 
 **Elastic for what the swarm knows.** An Elasticsearch Serverless project (9.6) holds board
-datasheets, finished designs and distilled lessons. `semantic_text` plus the Jina embedding endpoint
-and reranker give hybrid board search; Agent Builder exposes `board_docs`, `board_lessons` and
-`design_memory` as tools; a scheduled Workflow counts reviewer problems with ES|QL and writes
-per-board lessons. The host asks the Board expert only for boards the local library cannot vouch
-for, parses its JSON, and validates the dimensions before trusting them.
+datasheets, finished designs and distilled lessons. Datasheet PDFs are chunked into documents with
+`semantic_text`; the Jina embedding endpoint and `.jina-reranker-v3.5` turn a plain-language
+question into a precise passage, with ES|QL filtering by `board_id` when the agent names the board.
+Finished briefs are indexed back as design memory, and a scheduled Workflow counts reviewer
+problems with ES|QL and writes one lesson document per board+problem that later agents read.
 
 **Factory Droid for review.** The reviewer uses `droid-sdk` with `restrict_tools` limited to
 inspection and reporting, joins as a `reviewer` member, logs every tool call to `activity`, and
@@ -135,9 +135,9 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
   SpacetimeDB Maincloud, with the rules enforced server-side.
 - A working beginner path: install FreeCAD, double-click one file, follow the guide, and join a team
   with an invite — including automatic first-use downloads with checksums.
-- Elastic is live, not a diagram: 6 datasheet documents indexed with semantic + reranked search, an
-  Agent Builder board expert with three tools, and a `distil-lessons` Workflow that ran end to end
-  and wrote real lessons from a finished design.
+- Elastic is live, not a diagram: 6 datasheet documents indexed, hybrid + reranked search that
+  returns the right passages for a plain-language board question, designs written back as memory,
+  and a `distil-lessons` Workflow that ran end to end and wrote real lessons from a finished design.
 - The Droid reviewer runs from the host, shows its work in the activity feed, and has a safe failure
   mode.
 - Tests are part of the story: the Rust host suite, a Python suite covering the module adapter,
@@ -164,7 +164,7 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 ## Built with
 
 SpacetimeDB 2.13.0 (Rust module, Rust and TypeScript clients) · Rust · Python 3.11+ · FreeCAD 1.x ·
-TypeScript · Vite · three.js · Elasticsearch Serverless 9.6 · Kibana · Elastic Agent Builder · ES|QL
+TypeScript · Vite · three.js · Elasticsearch Serverless 9.6 · Kibana · ES|QL
 · Jina embeddings and reranker · Factory Droid (`droid-sdk`) · Claude Code · OpenAI Codex · GitHub
 Actions · Windows
 
@@ -208,8 +208,9 @@ port cutout that is too low, with tasks for the owners. Fix them; the reviewer p
 now" as a person leaves, and the new agent accepting.
 
 **1:55–2:15 — Knowledge.** In Kibana: the board datasheet chunks, a hybrid search for mounting
-holes, the Board expert, and the `distil-lessons` Workflow's lessons. "Elastic remembers what the
-team learned, so the next design starts smarter."
+holes (show the reranker lifting the right passage), a finished design recalled from
+`cadswarm-designs`, and the `distil-lessons` Workflow's lessons next to the review that produced
+them. "Elastic remembers what the team learned, so the next design starts smarter."
 
 **2:15–2:35 — Output and installation.** Export STEP/STL and open the result. Show the guide's
 first-use download with checksum verification, and the GitHub Actions release page. "One file into
@@ -235,6 +236,12 @@ knowledge segment after the demo brief has finished:
 
    Then `GET /api/workflows/workflow/distil-lessons/executions` shows `status: completed`, and
    `cadswarm-lessons` holds one document per board+problem with a `count`.
+3. Leave one hybrid search open in a Kibana tab so the segment starts from a warm query.
 
-If the Board expert answers `429`, that is the Agent Builder trial quota on its default Claude
-model, not a CadSwarm failure: the search, ingest, design memory and Workflow paths do not use it.
+### Scope note for the Elastic segment
+
+The Elastic build also has an optional Agent Builder expert (`cadswarm-board-expert`) that returns a
+validated board spec for a board outside the local library. It is not part of the demo or the video:
+its model sits on a trial quota that answers `429`, and the shipped path answers board questions
+from the local library plus datasheet search, which needs no model. The code keeps the expert as a
+best-effort extra that degrades to the library, so nothing in the demo depends on it.
