@@ -131,6 +131,16 @@ def main():
                json.dumps({"name": "Plate", "props": {"Length": 2}}), json.dumps({"Plate": 2}),
                expect_error="stale_rev")
 
+    # A pointer outlives the HTTP request that set it: every /call and /sql is a connect and a
+    # disconnect, and a disconnect must not rest it. A tool call on the same part keeps the spot.
+    alice_id = alice.me()["id"]
+    alice.call("move_pointer", alice.fence, "Plate", [5.0, 5.0, 1.0], "editing", "checking the plate")
+    p = [r for r in alice.sql("SELECT * FROM v_pointer") if r["member"] == alice_id][0]
+    assert (p["object"], p["mode"], p["point"]) == ("Plate", "editing", [5.0, 5.0, 1.0]), p
+    alice.call("log_activity", alice.fence, "tool_call", "measuring the plate", ["Plate"])
+    p = [r for r in alice.sql("SELECT * FROM v_pointer") if r["member"] == alice_id][0]
+    assert (p["mode"], p["point"]) == ("pointing", [5.0, 5.0, 1.0]), p
+
     # Tasks and messages.
     alice.call("create_task", alice.fence, "t_smoke001", "motor mount", "", [], "bob-codex", "")
     bob.call("claim_task", bob.fence, "t_smoke001", 1)

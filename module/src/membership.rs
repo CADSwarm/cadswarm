@@ -58,17 +58,10 @@ pub fn on_connect(ctx: &ReducerContext) {
 #[reducer(client_disconnected)]
 pub fn on_disconnect(ctx: &ReducerContext) {
     if let Some(m) = latest_member(ctx, ctx.sender()) {
-        let (ws, id) = (m.ws, m.id);
+        // The pointer is left as it is: every HTTP /call and /sql is a connect and a disconnect,
+        // so resting it here would erase an agent's pointer the moment its request ends. Going
+        // stale (sweep) and leaving rest it instead.
         ctx.db.member().id().update(Member { online: false, last_seen_ms: now_ms(ctx), ..m });
-        // Keep where they were (object, point, label): a handoff snapshot needs it.
-        let (object, point, label) = ctx
-            .db
-            .pointer()
-            .member()
-            .find(&id)
-            .map(|p| (p.object, p.point, p.label))
-            .unwrap_or_default();
-        set_pointer(ctx, ws, id, &object, point, "idle", &label, "");
     }
 }
 

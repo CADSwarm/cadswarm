@@ -386,3 +386,22 @@ def test_spring_step_glides_and_lands_without_overshooting():
     assert abs(x - 10.0) < 0.05
     assert abs(v) < 0.2
     assert math.isfinite(x)
+
+
+def test_a_working_document_only_shows_arrows_on_parts_it_has():
+    class Doc:
+        def __init__(self, name, objects):
+            self.Name, self.objects = name, set(objects)
+
+        def getObject(self, n):
+            return n if n in self.objects else None
+
+    class GuiDoc:
+        def __init__(self, doc):
+            self.Document = doc
+
+    o = overlay.Overlay(source=None)
+    o._gui_doc = GuiDoc(Doc("MyEnclosure", ["Lid"]))
+    assert o._shows({"object": "Lid"}) and not o._shows({"object": "Base"})
+    o._gui_doc = GuiDoc(Doc(overlay.MIRROR_DOC, []))
+    assert o._shows({"object": "Base"})

@@ -526,7 +526,8 @@ def _reduce_motion():
 
 
 class Overlay:
-    """Draws the live pointers over the CadSwarm Live view.  Create on the GUI thread."""
+    """Draws the live pointers over the CadSwarm Live view, or over the active document when it
+    holds the parts being pointed at.  Create on the GUI thread."""
 
     def __init__(self, source, on_error=None, document=MIRROR_DOC):
         self.source = source
@@ -541,6 +542,7 @@ class Overlay:
         self._anno = None
         self._attached = None
         self._view = None
+        self._gui_doc = None
         self._arrows = {}
         self._targets = {}
         self._last = 0.0
@@ -623,11 +625,31 @@ class Overlay:
                 self._warned = True
                 self._warn(f"pointers paused: {e}")
 
-    def _ensure_root(self):
+    def _pick_document(self):
+        """The document whose view gets the arrows: the active one when it holds a part someone is
+        pointing at (your own working copy of the model), otherwise the CadSwarm Live mirror."""
+        import FreeCAD as App
         import FreeCADGui as Gui
-        doc = Gui.getDocument(self.document)
+        active = Gui.ActiveDocument
+        if active is not None and active.Document.Name != self.document:
+            if any(active.Document.getObject(t["object"]) for t in self._targets.values() if t["object"]):
+                return active
+        if self.document in App.listDocuments():
+            return Gui.getDocument(self.document)
+        return None
+
+    def _shows(self, target):
+        """In a document other than the mirror, only arrows on parts that document has."""
+        doc = getattr(self._gui_doc, "Document", None)
+        if doc is None or doc.Name == self.document or not target["object"]:
+            return True
+        return doc.getObject(target["object"]) is not None
+
+    def _ensure_root(self):
+        doc = self._pick_document()
+        self._gui_doc = doc
         view = getattr(doc, "ActiveView", None) if doc is not None else None
-        if view is None:
+        if view is None or not hasattr(view, "getSceneGraph"):
             return None
         graph = view.getSceneGraph()
         self._view = view
@@ -649,6 +671,7 @@ class Overlay:
                 pass
         self._attached = None
         self._view = None
+        self._gui_doc = None
 
     def _view_frame(self):
         """The camera, viewport height and physical/logical pixel ratio for this frame."""
@@ -674,7 +697,7 @@ class Overlay:
             self._reduce = _reduce_motion()
         reduce_motion = self._reduce
         cam, viewport_h, dpr = self._view_frame()
-        keep = set(self._targets)
+        keep = {mid for mid, t in self._targets.items() if self._shows(t)}
         for mid in keep:
             target = self._targets[mid]
             arrow = self._arrows.get(mid)

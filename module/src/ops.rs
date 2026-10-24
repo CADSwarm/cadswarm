@@ -59,7 +59,7 @@ pub fn submit_op(ctx: &ReducerContext, fence: u32, op_id: String, kind: String, 
     }
     let mode = if mutating { "editing" } else { "inspecting" };
     let first = targets.first().cloned().unwrap_or_default();
-    set_pointer(ctx, ws, m.id, &first, vec![], mode, &kind.replace('_', " "), &op_id);
+    set_pointer(ctx, ws, m.id, &first, point_on(ctx, m.id, &first), mode, &kind.replace('_', " "), &op_id);
     Ok(())
 }
 
@@ -100,8 +100,10 @@ pub fn complete_op(
     let now = now_ms(ctx);
     let (ws, by) = (op.ws, op.by);
     let actor = name_of(ctx, by);
-    // The op is finished: rest the pointer; the agent's next tool call moves it again.
-    set_pointer(ctx, ws, by, "", vec![], "idle", "", "");
+    // The op is finished: rest the pointer where it was; the agent's next tool call (or its client
+    // pointing at what the op made) moves it again.
+    let (object, point) = ctx.db.pointer().member().find(&by).map(|p| (p.object, p.point)).unwrap_or_default();
+    set_pointer(ctx, ws, by, &object, point, "idle", "", "");
 
     if !ok {
         let status = if error_code == "lock_violation" { "rejected" } else { "failed" };
