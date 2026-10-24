@@ -23,6 +23,9 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     r = json.loads(Path(tmp_path / "panel-verified.json").read_text(encoding="utf-8"))
     assert all(c["no_horizontal_overflow"] and c["scrolls_when_short"] for c in r["layout"].values()), r["layout"]
     assert r["chat_has_reply"] and r["tasks_grouped_under_request"]
+    # A long chat follows the newest message; scrolled up, it keeps the place and offers a jump back down.
+    assert r["chat_jump"] == {"followed": True, "jump_shown": True, "kept_place": True, "unseen_text": "↓  3 new",
+                              "back_down": True}, r["chat_jump"]
     assert "teammate's computer" in r["away_tip"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]

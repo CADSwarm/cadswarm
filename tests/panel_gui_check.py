@@ -164,6 +164,35 @@ p.answer(p.suggestions["style"][0], False)
 # The chat shows the instruction with its status and the helper's replies.
 chat = p.chat.toPlainText()
 brief = p.task_list.topLevelItem(0)
+
+# A long chat follows the newest message; scrolling up stops that, keeps the place as messages arrive and shows
+# a "new" button that jumps back down.
+p.show()
+p.show_tab(p.team_page)
+long_chat = [{"id": f"m_l{i}", "from": "ann-claude", "to": "carol", "kind": "chat",
+              "body": f"Progress note {i}: the base walls and the lid lip are still lined up.", "at": now + i}
+             for i in range(40)]
+
+
+def chat_snapshot(messages):
+    s.apply_snapshot({**snap, "messages": snap["messages"] + messages})
+    for _ in range(10):
+        QtGui.QApplication.processEvents()
+
+
+chat_snapshot(long_chat)
+bar = p.chat.verticalScrollBar()
+followed = bar.maximum() > 0 and p.chat_at_bottom() and not p.jump.isVisible()
+bar.triggerAction(QtGui.QAbstractSlider.SliderToMinimum)  # what a wheel or drag does
+for _ in range(5):
+    QtGui.QApplication.processEvents()
+jump_shown = p.jump.isVisible() and not p.chat_follow
+chat_snapshot(long_chat + [{**long_chat[0], "id": f"m_n{i}", "at": now + 100 + i} for i in range(3)])
+kept_place, unseen_text = bar.value() == 0, p.jump.text()
+p.jump.click()
+for _ in range(5):
+    QtGui.QApplication.processEvents()
+back_down = p.chat_at_bottom() and p.chat_follow and not p.jump.isVisible()
 result = {
     "layout": checks,
     "follows_window": {"at_1600": wide_w, "at_1000": narrow_w},
@@ -182,6 +211,8 @@ result = {
     "people": p.people.text(),
     "tasks_grouped_under_request": brief.text(0).startswith("🧠") and brief.childCount() == 2,
     "away_tip": p.team_tip.text(),
+    "chat_jump": {"followed": followed, "jump_shown": jump_shown, "kept_place": kept_place,
+                  "unseen_text": unseen_text, "back_down": back_down},
 }
 (out / "panel-verified.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 QtCore.QTimer.singleShot(0, QtGui.QApplication.quit)
