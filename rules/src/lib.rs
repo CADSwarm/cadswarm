@@ -12,6 +12,8 @@ pub const INVITE_MAX_TTL_SECS: u64 = 86_400;
 pub const MUTATING: &[&str] = &[
     "create_primitive", "create_extrusion", "boolean", "set_property", "set_props",
     "set_expression", "set_placement", "delete", "set_param", "run_part_script",
+    // Components library: place a library part or a generated standard part into the model.
+    "insert_component", "insert_standard_part",
 ];
 /// Read-only ops the host answers: FreeCAD queries, Elastic lookups, project file reads.
 pub const QUERIES: &[&str] = &[
@@ -20,12 +22,21 @@ pub const QUERIES: &[&str] = &[
     "list_files", "read_file", "file_history",
     "brep", "storage_status",
     "faces", "fea_status", "fea_reports",
+    // Components library reads (the host's helper; analyze_component is a FreeCAD query).
+    "library_search", "library_recommend", "library_get", "library_export_pack", "standard_parts",
+    "analyze_component", "suggest_settings",
+    // The team's learned design style (the host's helper, cadswarm/style_memory.py).
+    "style_context", "list_style",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
 pub const FILE_WRITES: &[&str] = &[
     "save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage",
     // FEA: a job copies the model and later writes its report into files/fea/.
     "fea_run", "fea_publish",
+    // Components library: files under library/ on the host, mirrored into the `component` table.
+    "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
+    // Style rules live in the host's project database: teaching, confirming and re-learning change them.
+    "teach_style", "resolve_style", "learn_style",
 ];
 /// Team events a completed (non-mutating) op may carry in its result as `_events` for complete_op to emit:
 /// the host's helper can't call reducers, and an FEA report must pop up for every member.
@@ -85,7 +96,8 @@ fn targets(kind: &str) -> &'static [&'static str] {
 /// The object an op creates, if any (core.py CREATES).
 pub fn created_name(kind: &str, args: &Value) -> Option<String> {
     match kind {
-        "create_primitive" | "create_extrusion" | "boolean" | "run_part_script" => str_arg(args, "name"),
+        "create_primitive" | "create_extrusion" | "boolean" | "run_part_script" | "insert_component"
+        | "insert_standard_part" => str_arg(args, "name"),
         _ => None,
     }
 }
@@ -326,6 +338,137 @@ pub fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.trim().as_bytes()))
 }
 
+// ---------------------------------------------------------------------------
+// Team precision settings (cadswarm/settings_spec.json is the one source of truth)
+// ---------------------------------------------------------------------------
+
+pub const SETTINGS_SPEC_JSON: &str = include_str!("../../cadswarm/settings_spec.json");
+pub const MAX_PENDING_SUGGESTIONS: usize = 50;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingSpec {
+    pub key: String,
+    pub kind: String, // num | choice
+    pub unit: String,
+    pub min: f64,
+    pub max: f64,
+    pub choices: Vec<String>,
+    pub param: bool,
+    /// The default as a number (num settings) or text (choice settings).
+    pub default_num: f64,
+    pub default_text: String,
+}
+
+pub fn setting_specs() -> Vec<SettingSpec> {
+    let v: Value = serde_json::from_str(SETTINGS_SPEC_JSON).expect("settings_spec.json is valid JSON");
+    v["settings"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| SettingSpec {
+                    key: s["key"].as_str().unwrap_or_default().into(),
+                    kind: s["kind"].as_str().unwrap_or("num").into(),
+                    unit: s["unit"].as_str().unwrap_or_default().into(),
+                    min: s["min"].as_f64().unwrap_or(f64::MIN),
+                    max: s["max"].as_f64().unwrap_or(f64::MAX),
+                    choices: s["choices"]
+                        .as_array()
+                        .map(|c| c.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
+                    param: s["param"].as_bool().unwrap_or(false),
+                    default_num: s["default"].as_f64().unwrap_or(0.0),
+                    default_text: s["default"].as_str().unwrap_or_default().into(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub fn setting_spec(key: &str) -> Option<SettingSpec> {
+    setting_specs().into_iter().find(|s| s.key == key)
+}
+
+/// Only people change team settings; AI helpers suggest them (`suggest_setting`) and a person accepts.
+pub fn can_change_settings(member_kind: &str) -> bool {
+    member_kind == "human"
+}
+
+/// Validates a value for `key`: numbers within [min, max], choices from the list. Returns the spec.
+pub fn check_setting(key: &str, num: f64, text: &str) -> Result<SettingSpec, String> {
+    let spec = setting_spec(key).ok_or_else(|| format!("bad_args: unknown setting {key:?}"))?;
+    match spec.kind.as_str() {
+        "choice" => {
+            if !spec.choices.iter().any(|c| c == text) {
+                return Err(format!("bad_args: {key} must be one of {:?}", spec.choices));
+            }
+        }
+        _ => {
+            if !num.is_finite() || num < spec.min || num > spec.max {
+                return Err(format!("bad_args: {key} must be between {} and {} {}", spec.min, spec.max, spec.unit));
+            }
+        }
+    }
+    Ok(spec)
+}
+
+// ---------------------------------------------------------------------------
+// Components library: library_* op results carry the rows the host's helper wants mirrored
+// ---------------------------------------------------------------------------
+
+pub const LIBRARY_KINDS: &[&str] =
+    &["library_add", "library_import_url", "library_import_pack", "library_update", "library_delete"];
+pub const MAX_COMPONENTS_PER_RESULT: usize = 200;
+
+pub fn valid_component_id(id: &str) -> bool {
+    id.len() > 2
+        && id.len() <= 48
+        && id.starts_with("c_")
+        && id[2..].chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct ComponentChanges {
+    pub upserts: Vec<Value>,
+    pub deletes: Vec<String>,
+}
+
+/// `_components` (objects with a valid `id`) and `_component_deletes` (ids) from a library op's result.
+/// Results of any other op kind never touch the library.
+pub fn component_changes(kind: &str, result: &Value) -> ComponentChanges {
+    if !LIBRARY_KINDS.contains(&kind) {
+        return ComponentChanges::default();
+    }
+    let upserts = result
+        .get("_components")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter(|c| c.get("id").and_then(Value::as_str).is_some_and(valid_component_id))
+                .take(MAX_COMPONENTS_PER_RESULT)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let deletes = result
+        .get("_component_deletes")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .filter(|id| valid_component_id(id))
+                .take(MAX_COMPONENTS_PER_RESULT)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    ComponentChanges { upserts, deletes }
+}
+
+/// The library component an insert op placed, for its use count.
+pub fn inserted_component(kind: &str, args: &Value) -> Option<String> {
+    (kind == "insert_component").then(|| str_arg(args, "component")).flatten().filter(|id| valid_component_id(id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +518,15 @@ mod tests {
         assert!(is_write("fea_run") && is_write("fea_publish") && !is_write("fea_status") && !is_mutating("fea_run"));
         assert!(check_op("save_file", &json!({"path": "notes.md"}), &[], |_| None, |_| true, 1).is_ok());
         assert!(check_op("explode", &json!({}), &[], |_| None, |_| true, 1).unwrap_err().starts_with("unknown_op:"));
+    }
+
+    #[test]
+    fn reading_the_team_style_is_a_query_and_changing_it_is_a_write() {
+        for k in ["style_context", "list_style", "teach_style", "resolve_style", "learn_style"] {
+            assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
+        }
+        assert!(!is_write("style_context") && !is_write("list_style"));
+        assert!(is_write("teach_style") && is_write("resolve_style") && !is_mutating("teach_style"));
     }
 
     #[test]
@@ -495,6 +647,57 @@ mod tests {
         assert!(!op_result_expired("model-1.stl", 0, now));
         assert!(!op_result_expired("Op-Result:o_1", 0, now), "prefix is case sensitive");
         assert!(!op_result_expired("", 0, now));
+    }
+
+    #[test]
+    fn library_ops_are_known_and_inserting_reserves_the_new_name() {
+        assert!(is_mutating("insert_component") && is_mutating("insert_standard_part"));
+        assert!(is_file_write("library_add") && is_write("library_delete") && !is_mutating("library_add"));
+        assert!(is_query("library_search") && is_query("analyze_component") && !is_write("library_recommend"));
+        let args = json!({"component": "c_abc", "name": "Bearing1"});
+        assert_eq!(created_name("insert_component", &args), Some("Bearing1".into()));
+        let err = check_op("insert_component", &args, &[], |_| h(1, "alice"), |_| false, 2).unwrap_err();
+        assert!(err.starts_with("locked:"), "{err}");
+        assert!(check_op("insert_standard_part", &json!({"family": "iso4762", "name": "Bolt"}), &[], |_| None, |_| false, 1).is_ok());
+        assert_eq!(inserted_component("insert_component", &args), Some("c_abc".into()));
+        assert_eq!(inserted_component("insert_component", &json!({"component": "../x"})), None);
+        assert_eq!(inserted_component("create_primitive", &args), None);
+    }
+
+    #[test]
+    fn settings_come_from_the_shared_spec_and_are_range_checked() {
+        let specs = setting_specs();
+        assert!(specs.len() >= 10);
+        assert!(specs.iter().any(|s| s.key == "tol_clearance" && s.param && s.unit == "mm"));
+        assert!(check_setting("tol_clearance", 0.3, "").is_ok());
+        let c = setting_spec("tol_clearance").unwrap();
+        assert!(check_setting("tol_clearance", c.default_num, "").is_ok(), "the default is in range");
+        assert_eq!(setting_spec("hole_clearance_class").unwrap().default_text, "normal");
+        for s in &specs {
+            let t = if s.kind == "choice" { s.default_text.clone() } else { String::new() };
+            assert!(check_setting(&s.key, s.default_num, &t).is_ok(), "default of {} is valid", s.key);
+            assert!(!s.param || s.kind == "num", "only numbers mirror into Params: {}", s.key);
+        }
+        assert!(check_setting("tol_clearance", 5.0, "").unwrap_err().starts_with("bad_args:"));
+        assert!(check_setting("tol_clearance", f64::NAN, "").is_err());
+        assert!(check_setting("tol_press_fit", -0.1, "").is_ok());
+        assert!(check_setting("hole_clearance_class", 0.0, "close").is_ok());
+        assert!(check_setting("hole_clearance_class", 0.0, "tight").is_err());
+        assert!(check_setting("warp_speed", 1.0, "").unwrap_err().contains("unknown setting"));
+        assert!(can_change_settings("human"));
+        assert!(!can_change_settings("agent") && !can_change_settings("reviewer") && !can_change_settings("host"));
+    }
+
+    #[test]
+    fn only_library_ops_may_change_library_rows() {
+        let r = json!({"_components": [{"id": "c_1", "name": "Bracket"}, {"id": "bad id"}, {"name": "no id"}],
+                       "_component_deletes": ["c_2", "../../etc"]});
+        let c = component_changes("library_add", &r);
+        assert_eq!(c.upserts.len(), 1);
+        assert_eq!(c.upserts[0]["name"], "Bracket");
+        assert_eq!(c.deletes, vec!["c_2".to_string()]);
+        assert_eq!(component_changes("save_file", &r), ComponentChanges::default());
+        assert!(valid_component_id("c_m3_bolt_12") && !valid_component_id("c_") && !valid_component_id("C_X"));
     }
 
     #[test]

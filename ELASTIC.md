@@ -14,6 +14,8 @@ process's environment and is never written to the repo, the database, or an agen
 | `cadswarm-boards` | `python -m cadswarm.ingest boards/sources.json` | `cadswarm.board_docs` tool, `lookup_board` helper op |
 | `cadswarm-designs` | `index_design` (`cadswarm.knowledge`) for a finished brief | `cadswarm.design_memory` tool, `recall_designs` helper op |
 | `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes), from reviewer findings | `cadswarm.board_lessons` tool, `lessons` helper op |
+| `cadswarm-usage` | the helper's style memory, mirrored in bulk after each re-learn: every model change (person or agent), correction and finished brief | Kibana / Discover (how the team works) |
+| `cadswarm-style` | the same mirror: each learned or taught design-style rule with its status, confidence and evidence | `cadswarm.team_style` tool, the `cadswarm-style-analyst` agent |
 
 `cadswarm-boards` and `cadswarm-designs` use `semantic_text` with the JINA embedding endpoint,
 so Elasticsearch chunks and embeds the text itself; queries are hybrid (BM25 + semantic) and
@@ -92,6 +94,22 @@ design reviewer. The reviewer is a Factory Droid agent (`python -m cadswarm.revi
 `cadswarm-host init-reviewer`), so on a machine without Droid every brief finishes with
 `problems: []`: the Workflow still runs and completes, it just distils nothing. The judged demo
 therefore shows board search, design memory and the Workflow itself, not a populated lessons index.
+
+## Team design style
+
+The style memory (`cadswarm/style_memory.py`, in the host helper) keeps its events and rules in the project's
+SQLite database. That database is the source of truth, so it learns with no Elastic at all. When Elastic is
+configured:
+
+- **Mirroring.** After each re-learn, a background thread bulk-copies new events and changed rules to
+  `cadswarm-usage` and `cadswarm-style`. These indices are created by `setup` from `elastic/setup.json`.
+- **Rewording.** Changed rules go to the `cadswarm-style-analyst` Agent Builder agent
+  (`elastic/style_agent.json`, installed by `install_agent` with the board expert). It rewords them as
+  plain instructions.
+- **Checking the wording.** A reworded rule is kept only if it names a rule id that was sent and uses
+  numbers that appear in that rule's evidence. If not, the templated wording stays.
+- **Off the critical path.** Mirroring and rewording both run outside the host's op path. A slow or failing
+  Elastic never delays a build.
 
 ## Validated live (2026-10-24)
 

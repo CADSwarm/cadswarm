@@ -54,6 +54,13 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
   temperatures; offer to use clearly marked placeholders if your human doesn't know. Pick faces with
   `list_faces`, run `run_fea` (then `fea_status` while it runs), explain the result plainly, and always
   `publish_fea_report` with a summary and 2-5 points of improvement: it pops up for the whole team.
+- Real parts come from the team's components library: `recommend_components` (say what the part must
+  do) or `search_components`, then `insert_component` for team parts or `add_standard_part` for standard
+  screws, nuts, washers, heat-set inserts, bearings, dowel pins and magnets. A part file you find online
+  goes in with `import_component_from_url` (a direct .step/.stl link, plus its license). Size mating holes
+  with `hole_size`, and bind gaps to the team's fits (`Params.tol_clearance`, `Params.tol_press_fit`...).
+- Team settings (`get_settings`: fits, bolt-hole class, thread mode, printing, mesh precision) are chosen by
+  people. When a part implies a different value, `suggest_setting` with a one-line reason; never assume it.
 - Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
   team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
   `model_status` and `get_inbox` yourself first.

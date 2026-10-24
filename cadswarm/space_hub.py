@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import ticket
 from .client import HubRequestError, load_json, state_dir
 from .space import SpaceClient, SpaceError
+from .space_library import LibraryRoutes
 
 STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over": 403, "left": 403,
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
@@ -25,7 +26,9 @@ OP_WAIT_SECONDS = 150
 # Events that mean a member actually did something (the panel's "working" indicator).
 ACTIVE_KINDS = ("op", "task_claimed", "task_reported", "file_saved", "file_moved", "fea_started", "fea_report",
                 "snapshot", "exported", "message")
-EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed")
+STYLE_PROFILE = "style-profile"  # artifact key the host refreshes whenever the style is re-learned
+EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed",
+                           "library", "setting_changed", "setting_suggested")
 
 
 def _err(e):
@@ -46,7 +49,7 @@ def _num(v):
         return v
 
 
-class SpaceHub:
+class SpaceHub(LibraryRoutes):
     def __init__(self, cfg, identity=None, timeout=60, space=None):
         self.cfg = cfg
         self.identity = identity or {}
@@ -85,6 +88,12 @@ class SpaceHub:
             ("GET", r"/fea/reports", self.fea_reports),
             # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
+            # The team's learned design style (cadswarm/style_memory.py), kept by the host helper.
+            ("GET", r"/style", self.style_get), ("POST", r"/style/rules", self.style_rules),
+            ("POST", r"/style/teach", self.style_teach), ("POST", r"/style/resolve", self.style_resolve),
+            ("POST", r"/style/learn", self.style_learn),
+            # Components library and team precision settings (space_library.py).
+            *self.library_routes(),
         ]
 
     # ---------------------------------------------------------------- plumbing
@@ -253,7 +262,8 @@ class SpaceHub:
     def _result(self, result_json):
         """An op result over 32 KB is spilled by the host as {"blob": sha256}: read that one blob."""
         r = _json(result_json, {})
-        if isinstance(r, dict) and set(r) == {"blob"}:
+        # (a spilled library result also keeps its rows inline for complete_op: see host executor.rs)
+        if isinstance(r, dict) and "blob" in r and set(r) <= {"blob", "_components", "_component_deletes"}:
             sha = str(r["blob"])
             rows = self._rows("v_artifact_blob", f"hash = '{sha}'") if re.fullmatch(r"[0-9a-f]{64}", sha) else []
             if not rows or not rows[0]["bytes"]:
@@ -317,7 +327,10 @@ class SpaceHub:
 
     def printability(self, body):
         # The host fills `bed` from v_workspace when it is missing.
-        args = {"names": body.get("names"), "min_wall": body.get("min_wall", 1.2)}
+        # min_wall defaults to the team's setting (the worker reads it from the op's _settings).
+        args = {"names": body.get("names")}
+        if body.get("min_wall"):
+            args["min_wall"] = body["min_wall"]
         if body.get("bed"):
             args["bed"] = body["bed"]
         return self.run_op("printability", args)
@@ -535,6 +548,8 @@ class SpaceHub:
                 else:
                     lines.append(f"- {e['kind']}: " + ", ".join(f"{k}={v}" for k, v in e.items()
                                                                if k not in ("seq", "ts", "kind", "actor")))
+        lines += self._library_context()
+        lines += self._style_context()
         unread = self._unconsumed()
         if unread:
             lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
@@ -546,6 +561,46 @@ class SpaceHub:
         self._f("set_context_seq", seq)
         text = "\n".join(lines)
         return {"context": text if len(text) <= max_chars else text[:max_chars - 20] + "\n…(truncated)"}
+
+    def _style_context(self):
+        """The team's learned design style, which the host publishes as the `style-profile` artifact."""
+        try:
+            rows = self._rows("v_artifact_blob", f"hash = '{STYLE_PROFILE}'")
+        except HubRequestError:
+            return []
+        if not rows or not rows[0].get("bytes"):
+            return []
+        b = rows[0]["bytes"]
+        try:
+            text = (bytes.fromhex(b) if isinstance(b, str) else bytes(b)).decode("utf-8")
+        except (ValueError, TypeError):
+            return []
+        return [text[:1500]] if text.strip() else []
+
+    def _library_context(self):
+        """Team settings and a library summary for the context block; empty if the module predates them."""
+        from . import settings as team_settings
+        try:
+            values = team_settings.effective(self._rows("v_setting"))
+            comps = self._rows("v_component")
+            pending = [g for g in self._rows("v_suggestion") if g["status"] == "pending"]
+        except HubRequestError:
+            return []
+        keys = ("tol_clearance", "tol_slip_fit", "tol_press_fit", "hole_clearance_class", "thread_mode",
+                "xy_compensation", "min_wall", "default_material")
+        out = ["Team settings (fits are Params too, e.g. Params.tol_clearance): "
+               + ", ".join(f"{k}={values[k]}" for k in keys)
+               + (f". {len(pending)} setting suggestion(s) await a person." if pending else "")]
+        if comps:
+            top = sorted(comps, key=lambda c: -int(c.get("uses") or 0))[:6]
+            out.append(f"Components library: {len(comps)} team part(s), e.g. "
+                       + ", ".join(f"{c['name']} ({c['id']})" for c in top)
+                       + "; plus standard screws, nuts, washers, inserts, bearings, pins and magnets. "
+                         "Check it (recommend_components) before modelling a part.")
+        else:
+            out.append("Components library: standard screws, nuts, washers, inserts, bearings, pins and magnets "
+                       "(add_standard_part); the team has no parts of its own yet.")
+        return out
 
     # ------------------------------------------------------------- briefs etc.
 
@@ -643,6 +698,21 @@ class SpaceHub:
 
     def recall_designs(self, body):
         return self.run_op("recall_designs", {"query": body.get("query") or "", "board": body.get("board") or ""})
+
+    def style_get(self, topic=None, board=None):
+        return self.run_op("style_context", {"query": topic or "", "board": board or ""})
+
+    def style_rules(self, body):
+        return self.run_op("list_style", {"statuses": body.get("statuses")} if body.get("statuses") else {})
+
+    def style_teach(self, body):
+        return self.run_op("teach_style", {"statement": body.get("statement") or "", "scope": body.get("scope") or "team"})
+
+    def style_resolve(self, body):
+        return self.run_op("resolve_style", {"rule_id": body.get("rule_id") or "", "decision": body.get("decision") or ""})
+
+    def style_learn(self, body):
+        return self.run_op("learn_style", {})
 
     def prune_storage(self, body):
         return self.run_op("prune_storage", dict(body or {}))

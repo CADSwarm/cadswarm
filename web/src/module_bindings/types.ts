@@ -81,6 +81,39 @@ export const CadObject = __t.object("CadObject", {
 });
 export type CadObject = __Infer<typeof CadObject>;
 
+export const Component = __t.object("Component", {
+  id: __t.string(),
+  ws: __t.u64(),
+  name: __t.string(),
+  category: __t.string(),
+  tags: __t.array(__t.string()),
+  description: __t.string(),
+  source: __t.string(),
+  sourceUrl: __t.string(),
+  license: __t.string(),
+  author: __t.string(),
+  format: __t.string(),
+  hash: __t.string(),
+  size: __t.u64(),
+  version: __t.u32(),
+  bbox: __t.array(__t.f64()),
+  volume: __t.f64(),
+  featuresJson: __t.string(),
+  stdJson: __t.string(),
+  suggestJson: __t.string(),
+  uses: __t.u32(),
+  createdMs: __t.u64(),
+  updatedMs: __t.u64(),
+});
+export type Component = __Infer<typeof Component>;
+
+export const ComponentPreview = __t.object("ComponentPreview", {
+  id: __t.string(),
+  ws: __t.u64(),
+  mesh: __t.byteArray(),
+});
+export type ComponentPreview = __Infer<typeof ComponentPreview>;
+
 export const Handoff = __t.object("Handoff", {
   id: __t.string(),
   ws: __t.u64(),
@@ -191,6 +224,17 @@ export const Preview = __t.object("Preview", {
 });
 export type Preview = __Infer<typeof Preview>;
 
+export const ProjectSetting = __t.object("ProjectSetting", {
+  key: __t.string(),
+  ws: __t.u64(),
+  setting: __t.string(),
+  num: __t.f64(),
+  text: __t.string(),
+  setBy: __t.u64(),
+  updatedMs: __t.u64(),
+});
+export type ProjectSetting = __Infer<typeof ProjectSetting>;
+
 export const Receipt = __t.object("Receipt", {
   key: __t.string(),
   ws: __t.u64(),
@@ -211,6 +255,22 @@ export const Review = __t.object("Review", {
   atMs: __t.u64(),
 });
 export type Review = __Infer<typeof Review>;
+
+export const SettingSuggestion = __t.object("SettingSuggestion", {
+  id: __t.string(),
+  ws: __t.u64(),
+  setting: __t.string(),
+  num: __t.f64(),
+  text: __t.string(),
+  reason: __t.string(),
+  component: __t.string(),
+  by: __t.u64(),
+  status: __t.string(),
+  createdMs: __t.u64(),
+  resolvedBy: __t.u64(),
+  resolvedMs: __t.u64(),
+});
+export type SettingSuggestion = __Infer<typeof SettingSuggestion>;
 
 export const SweepSchedule = __t.object("SweepSchedule", {
   scheduledId: __t.u64(),

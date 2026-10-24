@@ -28,6 +28,7 @@ from PySide import QtCore, QtGui
 from ..client import HubRequestError, load_json, save_json
 from ..paths import app_dir
 from ..space_hub import SpaceHub
+from . import library_ui, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -519,7 +520,10 @@ class TeamPanel(QtGui.QDockWidget):
         self.tabs.addTab(self.build_command_tab(), "Tell a helper")
         self.tabs.addTab(self.build_chat_tab(), "Team chat")
         self.tabs.addTab(self.build_activity_tab(), "Activity")
-        self.tab_names = ["Tasks", "Tell a helper", "Team chat", "Activity"]
+        # Appended last: bump() and setCurrentIndex() elsewhere use the first four indexes.
+        self.library = library_ui.LibraryTab(session)
+        self.tabs.addTab(self.library, "Library")
+        self.tab_names = ["Tasks", "Tell a helper", "Team chat", "Activity", "Library"]
         lay.addWidget(self.tabs, 5)
 
         edit = QtGui.QGroupBox("Change the model yourself")
@@ -528,7 +532,11 @@ class TeamPanel(QtGui.QDockWidget):
                                                   "with everyone when you click Save"),
                    ("Change a shared size…", self.set_param, "e.g. make every hole 5 mm: every part that uses it updates"),
                    ("Check for clashes", run_interference, "Find parts that overlap each other"),
-                   ("Save as 3D file…", run_export, "Save a STEP file for printing or other CAD programs")]
+                   ("Save as 3D file…", run_export, "Save a STEP file for printing or other CAD programs"),
+                   ("Add a part from the library…", library_ui.show_library,
+                    "Screws, bearings, inserts and your team's own parts: place one, or upload a STEP file"),
+                   ("Precision settings…", library_ui.show_settings,
+                    "The team's clearances, fits, bolt-hole sizes and mesh precision, and what AI helpers suggest")]
         for i, (label, fn, tip) in enumerate(buttons):
             b = QtGui.QPushButton(label)
             b.setToolTip(tip)
@@ -536,7 +544,7 @@ class TeamPanel(QtGui.QDockWidget):
             grid.addWidget(b, i // 2, i % 2)
         self.params = QtGui.QLabel("")
         self.params.setWordWrap(True)
-        grid.addWidget(self.params, 2, 0, 1, 2)
+        grid.addWidget(self.params, (len(buttons) + 1) // 2, 0, 1, 2)
         lay.addWidget(edit)
 
         more = QtGui.QToolButton()
@@ -547,6 +555,9 @@ class TeamPanel(QtGui.QDockWidget):
                           ("Save a snapshot of the model", save_snapshot),
                           ("Simulation (FEA) reports…", show_fea_reports),
                           ("Storage and free up space…", show_storage),
+                          ("Components library…", library_ui.show_library),
+                          ("Precision settings…", library_ui.show_settings),
+                          ("Learned design style…", style_ui.show_style),
                           (None, None),
                           ("Add an AI helper…", add_helper), ("Invite teammates…", invite_teammates),
                           (None, None),
@@ -926,6 +937,8 @@ class TeamPanel(QtGui.QDockWidget):
             if ev["name"] != me:
                 self.bump(2)
             return
+        if k == "library" and self.library.loaded:
+            self.library.reload()
         line = describe_event(ev)
         if line:
             self.activity.append(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
@@ -1322,6 +1335,7 @@ class EditPartDialog(QtGui.QDialog):
     def __init__(self, session, name):
         super().__init__(Gui.getMainWindow())
         self.session, self.name = session, name
+        self.decimals, self.step = library_ui.editor_precision(session)  # the team's editing precision
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
         self.info = session.client.get(f"/objects/{name}")
         self.was_mine = self.info_owner() == session.ident["name"]
@@ -1395,11 +1409,11 @@ class EditPartDialog(QtGui.QDialog):
         self.watch.start(300)
         self.update_state()
 
-    @staticmethod
-    def spinbox(unit, low=-100000, high=100000):
+    def spinbox(self, unit, low=-100000, high=100000):
         s = QtGui.QDoubleSpinBox()
         s.setRange(low, high)
-        s.setDecimals(2)
+        s.setDecimals(self.decimals)
+        s.setSingleStep(self.step if unit != "°" else 1.0)
         s.setSuffix(f" {unit}")
         s.setKeyboardTracking(False)
         return s
@@ -1669,6 +1683,19 @@ def describe_event(ev):
         return f"{who}'s simulation: {ev.get('text')}"
     if k == "fea_failed":
         return f"{who}'s simulation of {names(ev.get('target') or [])} failed: {ev.get('error')}"
+    if k == "library":
+        bits = []
+        if ev.get("added"):
+            bits.append(f"added {names(ev['added'])} to the components library")
+        if ev.get("removed"):
+            bits.append(f"removed {names(ev['removed'])} from the library")
+        return f"{who} {' and '.join(bits)}" if bits else None
+    if k == "setting_changed":
+        return f"{who} {'reset' if ev.get('reset') else 'set'} the team setting {ev.get('setting')} to " \
+               f"{ev.get('value')}{(' ' + ev['unit']) if ev.get('unit') else ''}"
+    if k == "setting_suggested":
+        return f"{who} suggests {ev.get('setting')} = {ev.get('value')}: {ev.get('reason')} " \
+               "(accept or dismiss it in Precision settings)"
     return None
 
 
@@ -2256,6 +2283,13 @@ def register_commands():
     Gui.addCommand("CadSwarm_NewTask", Cmd("New task…", "Give the team (or yourself) something to do", lambda: (
         show_panel(), SESSION.panel.new_task())))
     Gui.addCommand("CadSwarm_EditPart", Cmd("Edit a part…", "Change a part yourself and share the change", edit_part))
+    Gui.addCommand("CadSwarm_Library", Cmd("Components library…", "Place screws, bearings, inserts or your team's own "
+                                                                "parts, or upload a STEP file", library_ui.show_library))
+    Gui.addCommand("CadSwarm_Settings", Cmd("Precision settings…", "The team's clearances, fits and precision, and "
+                                                                 "what AI helpers suggest", library_ui.show_settings))
+    Gui.addCommand("CadSwarm_Style", Cmd("Learned design style…", "The design rules CadSwarm learned from how your "
+                                                                 "team works; confirm, dismiss or teach one",
+                                         style_ui.show_style))
     Gui.addCommand("CadSwarm_TellHelper", Cmd("Tell a helper…", "Give an AI helper an instruction", lambda: (
         show_panel(), SESSION.panel.tabs.setCurrentIndex(1), SESSION.panel.cmd_text.setFocus())))
     Gui.addCommand("CadSwarm_Disconnect", Cmd("Leave team", "Leave the session (releases your locks)",

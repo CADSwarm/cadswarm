@@ -25,3 +25,7 @@ dist-ssr
 
 # Copied from ../boards at build time (scripts/copy-boards.mjs)
 public/boards.json
+
+# Copied from ../cadswarm at build time (scripts/copy-boards.mjs)
+public/settings_spec.json
+public/standard_parts.json

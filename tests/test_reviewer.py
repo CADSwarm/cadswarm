@@ -18,3 +18,11 @@ def test_tool_events_become_activity_with_targets():
 def test_the_reviewer_cannot_reach_geometry_tools():
     assert not any(t.endswith(("create_primitive", "set_props", "run_part_script", "delete_object", "lock_objects"))
                    for t in REVIEW_TOOLS)
+
+
+def test_the_review_checks_the_team_style_when_there_is_one():
+    brief = {"id": "b_1", "text": "case"}
+    assert "Team design style" not in review_prompt(brief, "Pico", [180, 180, 180], 1)
+    p = review_prompt(brief, "Pico", [180, 180, 180], 1, "Team design style:\n- [confirmed] Walls are 2.4 mm")
+    assert "5. Team design style" in p and "Walls are 2.4 mm" in p and '"style: <the rule>' in p
+    assert p.index("Walls are 2.4 mm") < p.index("report_review")

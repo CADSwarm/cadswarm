@@ -17,6 +17,8 @@ pub mod cad_object_type;
 pub mod cancel_handoff_reducer;
 pub mod claim_task_reducer;
 pub mod complete_op_reducer;
+pub mod component_preview_type;
+pub mod component_type;
 pub mod create_invite_reducer;
 pub mod create_task_reducer;
 pub mod handoff_type;
@@ -33,7 +35,9 @@ pub mod op_type;
 pub mod param_type;
 pub mod pointer_type;
 pub mod preview_type;
+pub mod project_setting_type;
 pub mod put_artifact_reducer;
+pub mod put_component_preview_reducer;
 pub mod put_preview_reducer;
 pub mod receipt_type;
 pub mod redeem_invite_reducer;
@@ -42,6 +46,8 @@ pub mod release_objects_reducer;
 pub mod report_review_reducer;
 pub mod report_task_reducer;
 pub mod request_handoff_reducer;
+pub mod reset_setting_reducer;
+pub mod resolve_suggestion_reducer;
 pub mod review_type;
 pub mod revoke_member_reducer;
 pub mod send_message_reducer;
@@ -49,9 +55,12 @@ pub mod set_bed_reducer;
 pub mod set_brief_reducer;
 pub mod set_brief_stl_reducer;
 pub mod set_context_seq_reducer;
+pub mod set_setting_reducer;
+pub mod setting_suggestion_type;
 pub mod start_op_reducer;
 pub mod submit_brief_reducer;
 pub mod submit_op_reducer;
+pub mod suggest_setting_reducer;
 pub mod sweep_schedule_type;
 pub mod sync_objects_reducer;
 pub mod take_over_reducer;
@@ -61,6 +70,8 @@ pub mod v_activity_table;
 pub mod v_artifact_blob_table;
 pub mod v_artifact_table;
 pub mod v_brief_table;
+pub mod v_component_preview_table;
+pub mod v_component_table;
 pub mod v_event_table;
 pub mod v_handoff_table;
 pub mod v_lock_table;
@@ -74,6 +85,8 @@ pub mod v_pointer_table;
 pub mod v_preview_table;
 pub mod v_receipt_table;
 pub mod v_review_table;
+pub mod v_setting_table;
+pub mod v_suggestion_table;
 pub mod v_task_table;
 pub mod v_workspace_table;
 pub mod workspace_type;
@@ -89,6 +102,8 @@ pub use cad_object_type::CadObject;
 pub use cancel_handoff_reducer::cancel_handoff;
 pub use claim_task_reducer::claim_task;
 pub use complete_op_reducer::complete_op;
+pub use component_preview_type::ComponentPreview;
+pub use component_type::Component;
 pub use create_invite_reducer::create_invite;
 pub use create_task_reducer::create_task;
 pub use handoff_type::Handoff;
@@ -105,7 +120,9 @@ pub use op_type::Op;
 pub use param_type::Param;
 pub use pointer_type::Pointer;
 pub use preview_type::Preview;
+pub use project_setting_type::ProjectSetting;
 pub use put_artifact_reducer::put_artifact;
+pub use put_component_preview_reducer::put_component_preview;
 pub use put_preview_reducer::put_preview;
 pub use receipt_type::Receipt;
 pub use redeem_invite_reducer::redeem_invite;
@@ -114,6 +131,8 @@ pub use release_objects_reducer::release_objects;
 pub use report_review_reducer::report_review;
 pub use report_task_reducer::report_task;
 pub use request_handoff_reducer::request_handoff;
+pub use reset_setting_reducer::reset_setting;
+pub use resolve_suggestion_reducer::resolve_suggestion;
 pub use review_type::Review;
 pub use revoke_member_reducer::revoke_member;
 pub use send_message_reducer::send_message;
@@ -121,9 +140,12 @@ pub use set_bed_reducer::set_bed;
 pub use set_brief_reducer::set_brief;
 pub use set_brief_stl_reducer::set_brief_stl;
 pub use set_context_seq_reducer::set_context_seq;
+pub use set_setting_reducer::set_setting;
+pub use setting_suggestion_type::SettingSuggestion;
 pub use start_op_reducer::start_op;
 pub use submit_brief_reducer::submit_brief;
 pub use submit_op_reducer::submit_op;
+pub use suggest_setting_reducer::suggest_setting;
 pub use sweep_schedule_type::SweepSchedule;
 pub use sync_objects_reducer::sync_objects;
 pub use take_over_reducer::take_over;
@@ -133,6 +155,8 @@ pub use v_activity_table::*;
 pub use v_artifact_blob_table::*;
 pub use v_artifact_table::*;
 pub use v_brief_table::*;
+pub use v_component_preview_table::*;
+pub use v_component_table::*;
 pub use v_event_table::*;
 pub use v_handoff_table::*;
 pub use v_lock_table::*;
@@ -146,6 +170,8 @@ pub use v_pointer_table::*;
 pub use v_preview_table::*;
 pub use v_receipt_table::*;
 pub use v_review_table::*;
+pub use v_setting_table::*;
+pub use v_suggestion_table::*;
 pub use v_task_table::*;
 pub use v_workspace_table::*;
 pub use workspace_type::Workspace;
@@ -240,6 +266,11 @@ pub enum Reducer {
         bytes: Vec<u8>,
         brief: String,
     },
+    PutComponentPreview {
+        fence: u32,
+        id: String,
+        mesh: Vec<u8>,
+    },
     PutPreview {
         fence: u32,
         object: String,
@@ -280,6 +311,15 @@ pub enum Reducer {
         note: String,
         trigger: String,
     },
+    ResetSetting {
+        fence: u32,
+        setting: String,
+    },
+    ResolveSuggestion {
+        fence: u32,
+        suggestion_id: String,
+        accept: bool,
+    },
     RevokeMember {
         fence: u32,
         member_id: u64,
@@ -313,6 +353,12 @@ pub enum Reducer {
         fence: u32,
         seq: u64,
     },
+    SetSetting {
+        fence: u32,
+        setting: String,
+        num: f64,
+        text: String,
+    },
     StartOp {
         fence: u32,
         op_id: String,
@@ -329,6 +375,15 @@ pub enum Reducer {
         kind: String,
         args_json: String,
         expected_revs_json: String,
+    },
+    SuggestSetting {
+        fence: u32,
+        suggestion_id: String,
+        setting: String,
+        num: f64,
+        text: String,
+        reason: String,
+        component: String,
     },
     SyncObjects {
         fence: u32,
@@ -363,6 +418,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::MarkDelivered { .. } => "mark_delivered",
             Reducer::MovePointer { .. } => "move_pointer",
             Reducer::PutArtifact { .. } => "put_artifact",
+            Reducer::PutComponentPreview { .. } => "put_component_preview",
             Reducer::PutPreview { .. } => "put_preview",
             Reducer::RedeemInvite { .. } => "redeem_invite",
             Reducer::Rejoin { .. } => "rejoin",
@@ -370,15 +426,19 @@ impl __sdk::Reducer for Reducer {
             Reducer::ReportReview { .. } => "report_review",
             Reducer::ReportTask { .. } => "report_task",
             Reducer::RequestHandoff { .. } => "request_handoff",
+            Reducer::ResetSetting { .. } => "reset_setting",
+            Reducer::ResolveSuggestion { .. } => "resolve_suggestion",
             Reducer::RevokeMember { .. } => "revoke_member",
             Reducer::SendMessage { .. } => "send_message",
             Reducer::SetBed { .. } => "set_bed",
             Reducer::SetBrief { .. } => "set_brief",
             Reducer::SetBriefStl { .. } => "set_brief_stl",
             Reducer::SetContextSeq { .. } => "set_context_seq",
+            Reducer::SetSetting { .. } => "set_setting",
             Reducer::StartOp { .. } => "start_op",
             Reducer::SubmitBrief { .. } => "submit_brief",
             Reducer::SubmitOp { .. } => "submit_op",
+            Reducer::SuggestSetting { .. } => "suggest_setting",
             Reducer::SyncObjects { .. } => "sync_objects",
             Reducer::TakeOver { .. } => "take_over",
             _ => unreachable!(),
@@ -529,6 +589,13 @@ impl __sdk::Reducer for Reducer {
                 bytes: bytes.clone(),
                 brief: brief.clone(),
             }),
+            Reducer::PutComponentPreview { fence, id, mesh } => {
+                __sats::bsatn::to_vec(&put_component_preview_reducer::PutComponentPreviewArgs {
+                    fence: fence.clone(),
+                    id: id.clone(),
+                    mesh: mesh.clone(),
+                })
+            }
             Reducer::PutPreview {
                 fence,
                 object,
@@ -600,6 +667,21 @@ impl __sdk::Reducer for Reducer {
                 note: note.clone(),
                 trigger: trigger.clone(),
             }),
+            Reducer::ResetSetting { fence, setting } => {
+                __sats::bsatn::to_vec(&reset_setting_reducer::ResetSettingArgs {
+                    fence: fence.clone(),
+                    setting: setting.clone(),
+                })
+            }
+            Reducer::ResolveSuggestion {
+                fence,
+                suggestion_id,
+                accept,
+            } => __sats::bsatn::to_vec(&resolve_suggestion_reducer::ResolveSuggestionArgs {
+                fence: fence.clone(),
+                suggestion_id: suggestion_id.clone(),
+                accept: accept.clone(),
+            }),
             Reducer::RevokeMember { fence, member_id } => {
                 __sats::bsatn::to_vec(&revoke_member_reducer::RevokeMemberArgs {
                     fence: fence.clone(),
@@ -658,6 +740,17 @@ impl __sdk::Reducer for Reducer {
                     seq: seq.clone(),
                 })
             }
+            Reducer::SetSetting {
+                fence,
+                setting,
+                num,
+                text,
+            } => __sats::bsatn::to_vec(&set_setting_reducer::SetSettingArgs {
+                fence: fence.clone(),
+                setting: setting.clone(),
+                num: num.clone(),
+                text: text.clone(),
+            }),
             Reducer::StartOp { fence, op_id } => {
                 __sats::bsatn::to_vec(&start_op_reducer::StartOpArgs {
                     fence: fence.clone(),
@@ -687,6 +780,23 @@ impl __sdk::Reducer for Reducer {
                 kind: kind.clone(),
                 args_json: args_json.clone(),
                 expected_revs_json: expected_revs_json.clone(),
+            }),
+            Reducer::SuggestSetting {
+                fence,
+                suggestion_id,
+                setting,
+                num,
+                text,
+                reason,
+                component,
+            } => __sats::bsatn::to_vec(&suggest_setting_reducer::SuggestSettingArgs {
+                fence: fence.clone(),
+                suggestion_id: suggestion_id.clone(),
+                setting: setting.clone(),
+                num: num.clone(),
+                text: text.clone(),
+                reason: reason.clone(),
+                component: component.clone(),
             }),
             Reducer::SyncObjects {
                 fence,
@@ -719,6 +829,8 @@ pub struct DbUpdate {
     v_artifact: __sdk::TableUpdate<Artifact>,
     v_artifact_blob: __sdk::TableUpdate<ArtifactBlob>,
     v_brief: __sdk::TableUpdate<Brief>,
+    v_component: __sdk::TableUpdate<Component>,
+    v_component_preview: __sdk::TableUpdate<ComponentPreview>,
     v_event: __sdk::TableUpdate<TeamEvent>,
     v_handoff: __sdk::TableUpdate<Handoff>,
     v_lock: __sdk::TableUpdate<CadLock>,
@@ -732,6 +844,8 @@ pub struct DbUpdate {
     v_preview: __sdk::TableUpdate<Preview>,
     v_receipt: __sdk::TableUpdate<Receipt>,
     v_review: __sdk::TableUpdate<Review>,
+    v_setting: __sdk::TableUpdate<ProjectSetting>,
+    v_suggestion: __sdk::TableUpdate<SettingSuggestion>,
     v_task: __sdk::TableUpdate<Task>,
     v_workspace: __sdk::TableUpdate<Workspace>,
 }
@@ -754,6 +868,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "v_brief" => db_update
                     .v_brief
                     .append(v_brief_table::parse_table_update(table_update)?),
+                "v_component" => db_update
+                    .v_component
+                    .append(v_component_table::parse_table_update(table_update)?),
+                "v_component_preview" => db_update
+                    .v_component_preview
+                    .append(v_component_preview_table::parse_table_update(table_update)?),
                 "v_event" => db_update
                     .v_event
                     .append(v_event_table::parse_table_update(table_update)?),
@@ -793,6 +913,12 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "v_review" => db_update
                     .v_review
                     .append(v_review_table::parse_table_update(table_update)?),
+                "v_setting" => db_update
+                    .v_setting
+                    .append(v_setting_table::parse_table_update(table_update)?),
+                "v_suggestion" => db_update
+                    .v_suggestion
+                    .append(v_suggestion_table::parse_table_update(table_update)?),
                 "v_task" => db_update
                     .v_task
                     .append(v_task_table::parse_table_update(table_update)?),
@@ -830,6 +956,11 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.v_artifact_blob =
             cache.apply_diff_to_table::<ArtifactBlob>("v_artifact_blob", &self.v_artifact_blob);
         diff.v_brief = cache.apply_diff_to_table::<Brief>("v_brief", &self.v_brief);
+        diff.v_component = cache.apply_diff_to_table::<Component>("v_component", &self.v_component);
+        diff.v_component_preview = cache.apply_diff_to_table::<ComponentPreview>(
+            "v_component_preview",
+            &self.v_component_preview,
+        );
         diff.v_event = cache.apply_diff_to_table::<TeamEvent>("v_event", &self.v_event);
         diff.v_handoff = cache.apply_diff_to_table::<Handoff>("v_handoff", &self.v_handoff);
         diff.v_lock = cache.apply_diff_to_table::<CadLock>("v_lock", &self.v_lock);
@@ -843,6 +974,9 @@ impl __sdk::DbUpdate for DbUpdate {
         diff.v_preview = cache.apply_diff_to_table::<Preview>("v_preview", &self.v_preview);
         diff.v_receipt = cache.apply_diff_to_table::<Receipt>("v_receipt", &self.v_receipt);
         diff.v_review = cache.apply_diff_to_table::<Review>("v_review", &self.v_review);
+        diff.v_setting = cache.apply_diff_to_table::<ProjectSetting>("v_setting", &self.v_setting);
+        diff.v_suggestion =
+            cache.apply_diff_to_table::<SettingSuggestion>("v_suggestion", &self.v_suggestion);
         diff.v_task = cache.apply_diff_to_table::<Task>("v_task", &self.v_task);
         diff.v_workspace = cache.apply_diff_to_table::<Workspace>("v_workspace", &self.v_workspace);
 
@@ -863,6 +997,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "v_brief" => db_update
                     .v_brief
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "v_component" => db_update
+                    .v_component
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "v_component_preview" => db_update
+                    .v_component_preview
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "v_event" => db_update
                     .v_event
@@ -902,6 +1042,12 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "v_review" => db_update
                     .v_review
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "v_setting" => db_update
+                    .v_setting
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "v_suggestion" => db_update
+                    .v_suggestion
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "v_task" => db_update
                     .v_task
@@ -934,6 +1080,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "v_brief" => db_update
                     .v_brief
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "v_component" => db_update
+                    .v_component
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "v_component_preview" => db_update
+                    .v_component_preview
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "v_event" => db_update
                     .v_event
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -973,6 +1125,12 @@ impl __sdk::DbUpdate for DbUpdate {
                 "v_review" => db_update
                     .v_review
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "v_setting" => db_update
+                    .v_setting
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "v_suggestion" => db_update
+                    .v_suggestion
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "v_task" => db_update
                     .v_task
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -998,6 +1156,8 @@ pub struct AppliedDiff<'r> {
     v_artifact: __sdk::TableAppliedDiff<'r, Artifact>,
     v_artifact_blob: __sdk::TableAppliedDiff<'r, ArtifactBlob>,
     v_brief: __sdk::TableAppliedDiff<'r, Brief>,
+    v_component: __sdk::TableAppliedDiff<'r, Component>,
+    v_component_preview: __sdk::TableAppliedDiff<'r, ComponentPreview>,
     v_event: __sdk::TableAppliedDiff<'r, TeamEvent>,
     v_handoff: __sdk::TableAppliedDiff<'r, Handoff>,
     v_lock: __sdk::TableAppliedDiff<'r, CadLock>,
@@ -1011,6 +1171,8 @@ pub struct AppliedDiff<'r> {
     v_preview: __sdk::TableAppliedDiff<'r, Preview>,
     v_receipt: __sdk::TableAppliedDiff<'r, Receipt>,
     v_review: __sdk::TableAppliedDiff<'r, Review>,
+    v_setting: __sdk::TableAppliedDiff<'r, ProjectSetting>,
+    v_suggestion: __sdk::TableAppliedDiff<'r, SettingSuggestion>,
     v_task: __sdk::TableAppliedDiff<'r, Task>,
     v_workspace: __sdk::TableAppliedDiff<'r, Workspace>,
     __unused: std::marker::PhantomData<&'r ()>,
@@ -1034,6 +1196,12 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
             event,
         );
         callbacks.invoke_table_row_callbacks::<Brief>("v_brief", &self.v_brief, event);
+        callbacks.invoke_table_row_callbacks::<Component>("v_component", &self.v_component, event);
+        callbacks.invoke_table_row_callbacks::<ComponentPreview>(
+            "v_component_preview",
+            &self.v_component_preview,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<TeamEvent>("v_event", &self.v_event, event);
         callbacks.invoke_table_row_callbacks::<Handoff>("v_handoff", &self.v_handoff, event);
         callbacks.invoke_table_row_callbacks::<CadLock>("v_lock", &self.v_lock, event);
@@ -1047,6 +1215,12 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
         callbacks.invoke_table_row_callbacks::<Preview>("v_preview", &self.v_preview, event);
         callbacks.invoke_table_row_callbacks::<Receipt>("v_receipt", &self.v_receipt, event);
         callbacks.invoke_table_row_callbacks::<Review>("v_review", &self.v_review, event);
+        callbacks.invoke_table_row_callbacks::<ProjectSetting>("v_setting", &self.v_setting, event);
+        callbacks.invoke_table_row_callbacks::<SettingSuggestion>(
+            "v_suggestion",
+            &self.v_suggestion,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<Task>("v_task", &self.v_task, event);
         callbacks.invoke_table_row_callbacks::<Workspace>("v_workspace", &self.v_workspace, event);
     }
@@ -1713,6 +1887,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         v_artifact_table::register_table(client_cache);
         v_artifact_blob_table::register_table(client_cache);
         v_brief_table::register_table(client_cache);
+        v_component_table::register_table(client_cache);
+        v_component_preview_table::register_table(client_cache);
         v_event_table::register_table(client_cache);
         v_handoff_table::register_table(client_cache);
         v_lock_table::register_table(client_cache);
@@ -1726,6 +1902,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         v_preview_table::register_table(client_cache);
         v_receipt_table::register_table(client_cache);
         v_review_table::register_table(client_cache);
+        v_setting_table::register_table(client_cache);
+        v_suggestion_table::register_table(client_cache);
         v_task_table::register_table(client_cache);
         v_workspace_table::register_table(client_cache);
     }
@@ -1734,6 +1912,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "v_artifact",
         "v_artifact_blob",
         "v_brief",
+        "v_component",
+        "v_component_preview",
         "v_event",
         "v_handoff",
         "v_lock",
@@ -1747,6 +1927,8 @@ impl __sdk::SpacetimeModule for RemoteModule {
         "v_preview",
         "v_receipt",
         "v_review",
+        "v_setting",
+        "v_suggestion",
         "v_task",
         "v_workspace",
     ];

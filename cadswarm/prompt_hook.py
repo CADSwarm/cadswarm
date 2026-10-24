@@ -34,6 +34,22 @@ def fea_hint(prompt):
     return FEA_HINT if isinstance(prompt, str) and FEA_WORDS.search(prompt) else ""
 
 
+# Words that usually mean "this needs a real part". A false positive only adds a short reminder.
+PART_WORDS = re.compile(r"\b(screws?|bolts?|nuts?|washers?|inserts?|heat[- ]set|bearings?|608|axles?|shafts?|"
+                        r"pins?|dowels?|magnets?|fasten\w*|hinges?|pulleys?|motors?|nema ?\d+|"
+                        r"m(2|2\.5|3|4|5|6|8)\b|tolerances?|clearances?|press[- ]fit|slip[- ]fit|fits? (in|on)|"
+                        r"library|components?|standard parts?|step files?)", re.I)
+LIBRARY_HINT = ("\n## This may need a library part or a fit\n"
+                "Check the team's components library first: recommend_components (say what the part must do) "
+                "or search_components; standard parts go in with add_standard_part, team parts with "
+                "insert_component. Size mating holes with hole_size (it applies the team's fits) and bind gaps "
+                "to Params.tol_*. If a part needs a different team setting, suggest_setting with the reason.")
+
+
+def library_hint(prompt):
+    return LIBRARY_HINT if isinstance(prompt, str) and PART_WORDS.search(prompt) else ""
+
+
 def main():
     raw = ""
     try:
@@ -60,7 +76,8 @@ def main():
             return  # never rejoin here: that would bump the fence and supersede the live MCP server
         hub.space.timeout = 1.8
         text = hub.get("/context")["context"]
-        hint = fea_hint(payload.get("prompt") if isinstance(payload, dict) else None)
+        prompt = payload.get("prompt") if isinstance(payload, dict) else None
+        hint = fea_hint(prompt) + library_hint(prompt)
         text = text[:6000 - len(hint)] + hint
         # Windows pipes default to the ANSI codepage; the CLIs read hook output as UTF-8.
         sys.stdout.reconfigure(encoding="utf-8")

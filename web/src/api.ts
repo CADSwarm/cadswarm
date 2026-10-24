@@ -19,15 +19,24 @@ import type VReviewRow from './module_bindings/v_review_table';
 import type VArtifactRow from './module_bindings/v_artifact_table';
 import type VHandoffRow from './module_bindings/v_handoff_table';
 import type VOpRow from './module_bindings/v_op_table';
+import type VComponentRow from './module_bindings/v_component_table';
+import type VSettingRow from './module_bindings/v_setting_table';
+import type VSuggestionRow from './module_bindings/v_suggestion_table';
 import type {
-  Activity, Artifact, Brief, Handoff, Member, Obj, Op, Pointer, Preview, Review, State, Store, Task,
+  Activity, Artifact, Brief, Component, Handoff, Member, Obj, Op, Pointer, Preview, Review, Setting, State, Store,
+  Suggestion, Task,
 } from './store';
 import { newId } from './ids';
 import { saveSession } from './session';
 import { saveBytes } from './download';
 
 const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param', 'v_op', 'v_task', 'v_activity',
-  'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff'] as const;
+  'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff', 'v_component', 'v_setting',
+  'v_suggestion'] as const;
+
+/** What placing a library part needs: a team part's id, or a standard family + size (+ length). */
+export interface PlaceRequest { component?: string; family?: string; size?: string; length?: number; name: string; label?: string }
+export interface PartMeta { name: string; category: string; tags: string[]; description: string; license: string }
 
 export interface Api {
   fence(): number;
@@ -41,6 +50,16 @@ export interface Api {
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
   cancelHandoff(id: string): void;
   downloadArtifact(hash: string, filename: string): Promise<void>;
+  /** Place a library part in the model; resolves true once the host has built it. */
+  placeComponent(req: PlaceRequest): Promise<boolean>;
+  /** Upload a part file (STEP, FCStd, STL) to the team library. */
+  addComponent(filename: string, bytes: Uint8Array, meta: PartMeta): Promise<boolean>;
+  importComponentUrl(url: string, meta: PartMeta): Promise<boolean>;
+  setSetting(setting: string, num: number, text: string): Promise<void>;
+  resetSetting(setting: string): Promise<void>;
+  resolveSuggestion(id: string, accept: boolean): Promise<void>;
+  /** A library part's preview STL (null until FreeCAD has measured it). */
+  componentPreview(id: string): Promise<Uint8Array | null>;
 }
 
 // ---- Row mapping (pure; u64 → number is safe for ids, seqs and epoch millis) ----
@@ -76,6 +95,19 @@ export const toHandoff = (r: Infer<typeof VHandoffRow>): Handoff => ({
 });
 export const toOp = (r: Infer<typeof VOpRow>): Op => ({
   id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error, argsJson: r.argsJson,
+});
+
+export const toComponent = (r: Infer<typeof VComponentRow>): Component => ({
+  id: r.id, name: r.name, category: r.category, tags: [...r.tags], description: r.description, source: r.source,
+  sourceUrl: r.sourceUrl, license: r.license, author: r.author, format: r.format, size: num(r.size), bbox: [...r.bbox],
+  volume: r.volume, featuresJson: r.featuresJson, suggestJson: r.suggestJson, uses: r.uses, updatedMs: num(r.updatedMs),
+});
+export const toSetting = (r: Infer<typeof VSettingRow>): Setting => ({
+  setting: r.setting, num: r.num, text: r.text, setBy: num(r.setBy), updatedMs: num(r.updatedMs),
+});
+export const toSuggestion = (r: Infer<typeof VSuggestionRow>): Suggestion => ({
+  id: r.id, setting: r.setting, num: r.num, text: r.text, reason: r.reason, component: r.component, by: num(r.by),
+  status: r.status, createdMs: num(r.createdMs),
 });
 
 /** Reducer errors are "<code>: <message>" (plan 00); split on the first ": ". */
@@ -161,6 +193,9 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         previews,
         artifacts: [...conn.db.vArtifact.iter()].map(toArtifact),
         handoffs: [...conn.db.vHandoff.iter()].map(toHandoff),
+        components: [...conn.db.vComponent.iter()].map(toComponent),
+        settings: [...conn.db.vSetting.iter()].map(toSetting),
+        suggestions: [...conn.db.vSuggestion.iter()].map(toSuggestion),
       } satisfies Partial<State>);
     }
     function schedule() {
@@ -170,7 +205,7 @@ export function connect(store: Store, uri: string, db: string, token: string | n
     }
     const handles = [conn.db.vMe, conn.db.vWorkspace, conn.db.vMember, conn.db.vLock, conn.db.vObject, conn.db.vParam,
       conn.db.vOp, conn.db.vTask, conn.db.vActivity, conn.db.vPointer, conn.db.vBrief, conn.db.vReview, conn.db.vPreview,
-      conn.db.vArtifact, conn.db.vHandoff];
+      conn.db.vArtifact, conn.db.vHandoff, conn.db.vComponent, conn.db.vSetting, conn.db.vSuggestion];
     for (const h of handles) { h.onInsert(schedule); h.onDelete(schedule); }
 
     function report(e: unknown) {
@@ -189,6 +224,19 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         const tick = () => { if (test()) done(true); else if (Date.now() - t0 > ms) done(false); else setTimeout(tick, 150); };
         tick();
       });
+    }
+
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves false. */
+    async function runOp(kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> {
+      const opId = newId('o_');
+      try {
+        await r.submitOp({ fence: fence(), opId, kind, argsJson: JSON.stringify(args), expectedRevsJson: '' });
+      } catch (e) { report(e); return false; }
+      await waitFor(() => ['done', 'failed', 'rejected'].includes(store.state.ops.find(o => o.id === opId)?.status ?? ''), ms);
+      const op = store.state.ops.find(o => o.id === opId);
+      if (!op || op.status === 'queued' || op.status === 'running') { report(new Error('The host is still working on it; check back in a moment.')); return false; }
+      if (op.status !== 'done') { report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return false; }
+      return true;
     }
 
     const api: Api = {
@@ -230,6 +278,39 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         return id;
       },
       cancelHandoff: id => void quiet(r.cancelHandoff({ fence: fence(), handoffId: id })),
+      placeComponent: req => req.family
+        ? runOp('insert_standard_part', { family: req.family, size: req.size, name: req.name, label: req.label,
+          ...(req.length ? { length: req.length } : {}) })
+        : runOp('insert_component', { component: req.component, name: req.name, label: req.label }),
+      addComponent: async (filename, bytes, meta) => {
+        if (bytes.length > 20 * 1024 * 1024) { report(new Error('Parts uploaded from here can be at most 20 MB; add bigger ones from FreeCAD.')); return false; }
+        const { toBase64 } = await import('./ui/library-data');
+        return runOp('library_add', { base64: toBase64(bytes), filename, ...meta }, 120000);
+      },
+      importComponentUrl: (url, meta) => runOp('library_import_url', { url, ...meta }, 120000),
+      setSetting: (setting, n, text) => quiet(r.setSetting({ fence: fence(), setting, num: n, text })),
+      resetSetting: setting => quiet(r.resetSetting({ fence: fence(), setting })),
+      resolveSuggestion: (id, accept) => quiet(r.resolveSuggestion({ fence: fence(), suggestionId: id, accept })),
+      // Preview meshes are never kept subscribed: subscribe to the one row, read it, unsubscribe.
+      componentPreview: id => new Promise<Uint8Array | null>(done => {
+        if (!/^c_[a-z0-9_]+$/.test(id)) { done(null); return; }
+        const timer = setTimeout(() => done(null), 15000);
+        const take = () => [...conn.db.vComponentPreview.iter()].find(p => p.id === id)?.mesh ?? null;
+        const attempt = (sql: string, onRefused: () => void) => {
+          const handle = conn.subscriptionBuilder()
+            .onApplied(() => {
+              const mesh = take();
+              try { handle.unsubscribe(); } catch { /* already ended */ }
+              clearTimeout(timer);
+              done(mesh ? new Uint8Array(mesh) : null);
+            })
+            .onError(() => onRefused())
+            .subscribe(sql);
+        };
+        const whole = () => attempt('SELECT * FROM v_component_preview', () => { clearTimeout(timer); done(null); });
+        if (!filteredViewOk) { whole(); return; }
+        attempt(`SELECT * FROM v_component_preview WHERE id = '${id}'`, () => { filteredViewOk = false; whole(); });
+      }),
       // Export bytes are never kept subscribed (plan 00): subscribe to the one blob, save it, unsubscribe.
       // If the server refuses WHERE on a view, fall back to the whole view for the length of the download.
       downloadArtifact: (hash, filename) => new Promise<void>((ok, bad) => {

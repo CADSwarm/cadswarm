@@ -118,6 +118,11 @@ pub fn complete_op(
             }
             emit(ctx, ws, &kind, by, data);
         }
+        // Library ops mirror the host's library/ folder into the `component` table.
+        let (added, removed) = crate::library::apply_component_changes(ctx, ws, &op.kind, &worker_result);
+        if !added.is_empty() || !removed.is_empty() {
+            emit(ctx, ws, "library", by, json!({"name": actor, "op": op.kind, "added": added, "removed": removed}));
+        }
         ctx.db.op().id().update(Op { status: "done".into(), result_json, finished_ms: now, ..op });
         return Ok(());
     }
@@ -138,6 +143,7 @@ pub fn complete_op(
     }
     let notified = rules::owners_to_notify(&recomputed, by, |n| holder(ctx, ws, n).map(|h| h.id));
     let args: Value = serde_json::from_str(&op.args_json).unwrap_or(Value::Null);
+    crate::library::count_use(ctx, ws, &op.kind, &args);
     let what = if op.kind == "set_param" {
         format!("Params.{}={}", args["alias"].as_str().unwrap_or("?"), args["value"])
     } else {

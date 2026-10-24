@@ -67,6 +67,8 @@ const QUERIES: &[&str] = &[
     "SELECT * FROM v_member",
     "SELECT * FROM v_handoff",
     "SELECT * FROM v_param",
+    "SELECT * FROM v_setting",
+    "SELECT * FROM v_object",
 ];
 
 /// Whether a host whose latest member row has this status should call `rejoin` by itself.
@@ -162,6 +164,19 @@ impl Space {
             .next()
             .map(|w| [w.bed_x_mm, w.bed_y_mm, w.bed_z_mm])
             .unwrap_or([180.0, 180.0, 180.0])
+    }
+
+    /// The team's precision settings as `[{"setting", "num", "text"}]` (missing ones are at their default).
+    /// The worker and helper read them from an op's `_settings`.
+    pub fn settings_rows(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.conn
+                .db
+                .v_setting()
+                .iter()
+                .map(|r| serde_json::json!({"setting": r.setting, "num": r.num, "text": r.text}))
+                .collect(),
+        )
     }
 
     fn op_row(o: Op) -> OpRow {
@@ -293,6 +308,11 @@ impl Space {
         self.call("put_preview", |cb| self.conn.reducers.put_preview_then(fence, object, mesh, cb))
     }
 
+    pub fn put_component_preview(&self, id: &str, mesh: Vec<u8>) -> Result<()> {
+        let (fence, id) = (self.fence(), id.to_string());
+        self.call("put_component_preview", |cb| self.conn.reducers.put_component_preview_then(fence, id, mesh, cb))
+    }
+
     pub fn put_artifact(&self, hash: &str, name: &str, mime: &str, bytes: Vec<u8>, brief: &str) -> Result<()> {
         let fence = self.fence();
         let (hash, name, mime, brief) = (hash.to_string(), name.to_string(), mime.to_string(), brief.to_string());
@@ -339,6 +359,17 @@ impl Space {
             .find(|m| m.id == id)
             .map(|m| (m.name, m.kind))
             .unwrap_or_else(|| ("?".into(), "agent".into()))
+    }
+
+    /// Who last changed each of these objects, `{name: {id, name, kind}}`, so the style memory can tell a
+    /// person correcting an agent's part from an agent tidying its own.
+    pub fn last_actors(&self, names: &[String]) -> serde_json::Value {
+        let mut out = serde_json::Map::new();
+        for o in self.conn.db.v_object().iter().filter(|o| names.contains(&o.name) && o.last_actor != 0) {
+            let (name, kind) = self.member_name_kind(o.last_actor);
+            out.insert(o.name.clone(), serde_json::json!({"id": o.last_actor, "name": name, "kind": kind}));
+        }
+        serde_json::Value::Object(out)
     }
 
     /// The planner's plan JSON (which may also carry the seeded board's datasheet sources).
