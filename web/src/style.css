@@ -65,7 +65,12 @@ a { color: var(--accent); }
 .tabbar [role=tab]:hover { color: var(--body); }
 .tabbar [role=tab][aria-selected="true"] { color: var(--text); border-bottom-color: var(--bone); font-weight: 600; box-shadow: none; }
 .tabbar svg { display: none; width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.badge { min-width: 16px; padding: 1px 5px; border-radius: 999px; background: var(--err); color: #fff; font: 600 11px/14px var(--font); }
+/* A fixed-height pill centres the digits in the circle. Digit ink sits a touch below the
+   middle of the font box, so one extra pixel of bottom padding lifts the glyph to the
+   optical centre; min-width still lets the pill grow for two- or three-digit counts. */
+.badge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px;
+  padding: 0 5px 1px; border-radius: 999px; background: var(--err); color: #fff;
+  font: 600 11px/1 var(--font); font-variant-numeric: tabular-nums; }
 .badge:empty { display: none; }
 
 .tab { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 20px; overscroll-behavior: contain; }
