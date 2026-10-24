@@ -136,6 +136,19 @@ QtGui.QApplication.processEvents()
 p.grab().save(str(out / "panel-520x900-sizes.png"))
 sizes = [[p.sizes_page.rows.topLevelItem(i).text(c) for c in range(2)]
          for i in range(p.sizes_page.rows.topLevelItemCount())]
+size_item = p.sizes_page.rows.topLevelItem(0)
+sizes_editable = bool(p.sizes_page.rows.editTriggers() & QtGui.QAbstractItemView.DoubleClicked) \
+    and bool(size_item.flags() & QtCore.Qt.ItemIsEditable)
+# Typing in the Value cell must go through the same set_param path as the dialog and the site.
+inline = []
+real_change = panel.panes.change_param
+panel.panes.change_param = lambda session, alias, value, done=None, failed=None: inline.append((alias, value))
+try:
+    size_item.setText(1, "70 mm")
+    QtGui.QApplication.processEvents()
+finally:
+    panel.panes.change_param = real_change
+sizes_inline = inline
 p.show_tab(p.files_page)
 p.files_page.reload(force=True)
 QtGui.QApplication.processEvents()
@@ -146,6 +159,7 @@ for _ in range(5):
     QtGui.QApplication.processEvents()
 files = [item.data(0, QtCore.Qt.UserRole) for item in
          [p.files_page.find_path(f["path"]) for f in p.files_page.listing["files"]]]
+file_sizes = [p.files_page.find_path(f["path"]).text(2) for f in p.files_page.listing["files"]]
 history = [[p.files_page.history.topLevelItem(i).text(c) for c in range(4)]
            for i in range(p.files_page.history.topLevelItemCount())]
 chat_text = p.chat.toPlainText()
@@ -280,7 +294,10 @@ result = {
     "toast": toast,
     "tabs": tabs,
     "sizes": sizes,
+    "sizes_editable": sizes_editable,
+    "sizes_inline": sizes_inline,
     "files": files,
+    "file_sizes": file_sizes,
     "history": history,
     "refusal_card": {"holder": "Refused · held by ann-claude" in chat_text,
                      "nothing_changed": "Nothing changed" in chat_text},

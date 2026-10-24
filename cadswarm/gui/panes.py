@@ -37,6 +37,15 @@ def _exec(dlg):
     return (getattr(dlg, "exec", None) or dlg.exec_)()
 
 
+class _ValueEditDelegate(QtGui.QStyledItemDelegate):
+    """Edits the Value column in place; the size's name stays a label."""
+
+    def createEditor(self, parent, option, index):
+        if index.column() != 1:
+            return None
+        return super().createEditor(parent, option, index)
+
+
 # ------------------------------------------------------------------ refusal card
 
 # What an agent's message or an op error says when a lock stopped it. Deliberately broad:
@@ -134,6 +143,8 @@ class SharedSizesTab(QtGui.QWidget):
         self.session = session
         self.key = None
         self.last_change = ""
+        self.shown = {}
+        self.filling = False
         lay = _p().page_layout(self)
 
         intro = QtGui.QFrame()
@@ -175,8 +186,13 @@ class SharedSizesTab(QtGui.QWidget):
         h.setSectionResizeMode(0, QtGui.QHeaderView.Stretch)
         h.setSectionResizeMode(1, QtGui.QHeaderView.Interactive)
         self.rows.setColumnWidth(1, 110)
-        self.rows.itemDoubleClicked.connect(lambda *_: self.change_selected())
-        self.rows.setToolTip("Double-click a size to change it. Every part that reads it updates.")
+        # The value edits in place, like the site's size fields: one double-click, type, Enter.
+        self.rows.setEditTriggers(QtGui.QAbstractItemView.DoubleClicked
+                                  | QtGui.QAbstractItemView.SelectedClicked
+                                  | QtGui.QAbstractItemView.EditKeyPressed)
+        self.rows.setItemDelegate(_ValueEditDelegate(self.rows))
+        self.rows.itemChanged.connect(self.value_edited)
+        self.rows.setToolTip("Double-click a value to edit it. Every part that reads it updates.")
         lay.addWidget(self.rows, 1)
 
         buttons = QtGui.QGridLayout()
@@ -208,13 +224,20 @@ class SharedSizesTab(QtGui.QWidget):
         if key == self.key:
             return
         self.key = key
-        self.rows.clear()
-        for alias, value in sorted(params.items()):
-            item = QtGui.QTreeWidgetItem([pretty_alias(alias).capitalize(), value_text(value)])
-            item.setData(0, QtCore.Qt.UserRole, alias)
-            item.setToolTip(0, f"Params.{alias}")
-            item.setToolTip(1, "Double-click to change this size")
-            self.rows.addTopLevelItem(item)
+        self.filling = True
+        try:
+            self.rows.clear()
+            self.shown = {}
+            for alias, value in sorted(params.items()):
+                item = QtGui.QTreeWidgetItem([pretty_alias(alias).capitalize(), value_text(value)])
+                item.setData(0, QtCore.Qt.UserRole, alias)
+                item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable)
+                item.setToolTip(0, f"Params.{alias}")
+                item.setToolTip(1, "Double-click to edit this size")
+                self.rows.addTopLevelItem(item)
+                self.shown[alias] = value_text(value)
+        finally:
+            self.filling = False
         self.empty.setVisible(not params)
         self.rows.setVisible(bool(params))
         self.count.setText(f"{len(params)} size{'s' if len(params) != 1 else ''}" if params else "")
@@ -231,6 +254,29 @@ class SharedSizesTab(QtGui.QWidget):
     def selected_alias(self):
         item = self.rows.currentItem()
         return item.data(0, QtCore.Qt.UserRole) if item else None
+
+    def value_edited(self, item, column):
+        """A value typed straight into the tree, the same change the site's field sends."""
+        if self.filling or column != 1:
+            return
+        alias = item.data(0, QtCore.Qt.UserRole)
+        if not alias:
+            return
+        before = self.shown.get(alias, "")
+        text = item.text(1).strip()
+        if text == before:
+            return  # a tooltip or colour change, not an edit
+        if not text:
+            self.restore(item, alias, before)
+            return
+        self.apply(alias, text, item)
+
+    def restore(self, item, alias, before=None):
+        self.filling = True
+        try:
+            item.setText(1, self.shown.get(alias, "") if before is None else before)
+        finally:
+            self.filling = False
 
     def change_any(self):
         if not self.session.ensure_connected("change a shared size"):
@@ -257,18 +303,32 @@ class SharedSizesTab(QtGui.QWidget):
         if ok and text.strip():
             self.apply(alias, text.strip())
 
-    def apply(self, alias, value):
+    def apply(self, alias, value, item=None):
+        before = self.shown.get(alias, "")
+
         def done(r):
             changed = (r or {}).get("recomputed") or 0
+            self.shown[alias] = value_text(value)
             self.last_change = (f"<span style='color:#1a7f37'>✓</span> <b>{html.escape(pretty_alias(alias))}</b> "
                                 f"is now <b>{html.escape(value)}</b>"
                                 + (f" · {changed} part{'s' if changed != 1 else ''} updated" if changed else ""))
             self.note.setText(self.last_change)
             _p().say(f"{pretty_alias(alias)} is now {value}")
-        change_param(self.session, alias, value, done)
+
+        def failed():
+            if item is not None:
+                try:
+                    self.restore(item, alias, before)
+                except RuntimeError:  # the row was rebuilt while the request was away
+                    pass
+            self.note.setText(f"<span style='color:#cf222e'>Couldn't change "
+                              f"{html.escape(pretty_alias(alias))}. The sheet is still "
+                              f"{html.escape(before or 'unchanged')}.</span>")
+
+        change_param(self.session, alias, value, done, failed)
 
 
-def change_param(session, alias, value, done=None):
+def change_param(session, alias, value, done=None, failed=None):
     """Hold Params for one set_param op, then let go (the same sequence the Team tab uses)."""
     def work(c):
         c.post("/locks", {"names": ["Params"]})
@@ -276,7 +336,7 @@ def change_param(session, alias, value, done=None):
             return c.post("/ops", {"op": "set_param", "args": {"alias": alias, "value": value}})
         finally:
             c.post("/locks/release", {"names": ["Params"]})
-    session.run_async(work, done=done, purpose="change a shared size")
+    session.run_async(work, done=done, failed=failed, purpose="change a shared size")
 
 
 # ------------------------------------------------------------------ project files
@@ -286,6 +346,19 @@ def _when(ts):
         return time.strftime("%b %d %H:%M", time.localtime(float(ts)))
     except (TypeError, ValueError, OSError):
         return ""
+
+
+def _size(n):
+    """A file size the way the site writes it: 920 B, 1.8 KB, 4 MB."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return ""
+    for unit, scale in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if n >= scale:
+            value = n / scale
+            return f"{value:.1f} {unit}" if value < 10 else f"{value:.0f} {unit}"
+    return f"{int(n)} B"
 
 
 def _folder_icon():
@@ -343,7 +416,7 @@ class FilesTab(QtGui.QWidget):
 
         self.tree = QtGui.QTreeWidget()
         self.tree.setObjectName("list")
-        self.tree.setHeaderLabels(["Name", "Version", "Saved by", "When"])
+        self.tree.setHeaderLabels(["Name", "Version", "Size", "Saved by", "When"])
         self.tree.setRootIsDecorated(True)
         self.tree.setMinimumHeight(190)
         th = self.tree.header()
@@ -352,9 +425,11 @@ class FilesTab(QtGui.QWidget):
         th.setSectionResizeMode(1, QtGui.QHeaderView.Interactive)
         th.setSectionResizeMode(2, QtGui.QHeaderView.Interactive)
         th.setSectionResizeMode(3, QtGui.QHeaderView.Interactive)
-        self.tree.setColumnWidth(1, 58)
-        self.tree.setColumnWidth(2, 92)
-        self.tree.setColumnWidth(3, 96)
+        th.setSectionResizeMode(4, QtGui.QHeaderView.Interactive)
+        self.tree.setColumnWidth(1, 52)
+        self.tree.setColumnWidth(2, 64)
+        self.tree.setColumnWidth(3, 88)
+        self.tree.setColumnWidth(4, 96)
         self.tree.currentItemChanged.connect(lambda *_: self.selected())
         self.tree.itemDoubleClicked.connect(lambda *_: self.save_copy())
         self.tree.setToolTip("Click a file to see its history. Double-click to save a copy.")
@@ -437,7 +512,7 @@ class FilesTab(QtGui.QWidget):
             if path in nodes:
                 return nodes[path]
             parent, _, name = path.rpartition("/")
-            item = QtGui.QTreeWidgetItem(folder_node(parent), [f"{_folder_icon()} {name}", "", "", ""])
+            item = QtGui.QTreeWidgetItem(folder_node(parent), [f"{_folder_icon()} {name}", "", "", "", ""])
             item.setExpanded(True)
             item.setData(0, QtCore.Qt.UserRole, None)
             nodes[path] = item
@@ -450,12 +525,13 @@ class FilesTab(QtGui.QWidget):
             parent, _, name = path.rpartition("/")
             item = QtGui.QTreeWidgetItem(folder_node(parent),
                                          [f"{_file_icon(path)} {name}", str(f.get("version", "")),
-                                          f.get("author") or "", _when(f.get("updated_at"))])
+                                          _size(f.get("size")), f.get("author") or "",
+                                          _when(f.get("updated_at"))])
             item.setData(0, QtCore.Qt.UserRole, path)
             item.setToolTip(0, path)
             item.setToolTip(1, f"Version {f.get('version')}")
         if not files:
-            empty = QtGui.QTreeWidgetItem(["(nothing saved yet)", "", "", ""])
+            empty = QtGui.QTreeWidgetItem(["(nothing saved yet)", "", "", "", ""])
             empty.setFlags(QtCore.Qt.NoItemFlags)
             self.tree.addTopLevelItem(empty)
         self.fit_file_columns()
@@ -469,9 +545,10 @@ class FilesTab(QtGui.QWidget):
         self.folder_button.setVisible(bool(self._host_folder()))
 
     def fit_file_columns(self):
-        self.tree.setColumnWidth(1, max(52, self.tree.sizeHintForColumn(1)))
-        self.tree.setColumnWidth(2, max(80, min(130, self.tree.sizeHintForColumn(2))))
-        self.tree.setColumnWidth(3, max(88, min(130, self.tree.sizeHintForColumn(3))))
+        self.tree.setColumnWidth(1, max(48, self.tree.sizeHintForColumn(1)))
+        self.tree.setColumnWidth(2, max(56, self.tree.sizeHintForColumn(2)))
+        self.tree.setColumnWidth(3, max(76, min(130, self.tree.sizeHintForColumn(3))))
+        self.tree.setColumnWidth(4, max(88, min(130, self.tree.sizeHintForColumn(4))))
 
     def find_path(self, path):
         stack = [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
