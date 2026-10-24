@@ -42,7 +42,8 @@ impl HostConfig {
 /// Ask the Python package where FreeCAD and the worker script are, so both languages agree.
 pub fn python_says(python: &Path, expr: &str) -> Result<PathBuf> {
     let out = Command::new(python)
-        .args(["-c", &format!("import cadswarm.config as c; print({expr})")])
+        // -I: never import a cadswarm checkout that happens to be in the working directory.
+        .args(["-I", "-c", &format!("import cadswarm.config as c; print({expr})")])
         .output()
         .with_context(|| format!("running {}", python.display()))?;
     if !out.status.success() {

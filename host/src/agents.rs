@@ -64,7 +64,7 @@ impl Agent {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
         let setup = Command::new(&cfg.cadswarm_python)
-            .args(["-m", "cadswarm.cli", "setup", "--client", "claude", "--invite", ticket, "--name", name, "--dir"])
+            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", "claude", "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;
