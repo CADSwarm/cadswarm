@@ -6,9 +6,9 @@ const base = {
     { id: 1, name: 'you', kind: 'human', client: 'phone', role: 'member', status: 'active', statusText: '', fence: 1, online: true },
     { id: 5, name: 'reviewer', kind: 'reviewer', client: 'droid', role: 'member', status: 'left', statusText: '', fence: 1, online: false },
   ],
-  objects: [{ name: 'Base' }, { name: 'Lid' }],
+  objects: [{ name: 'Base' }, { name: 'Lid' }, { name: 'Params' }],
   params: [{ alias: 'wall' }],
-  locks: [],
+  locks: [{ object: 'Params', holder: 1 }],
   tasks: [{ id: 't_1', status: 'open' }, { id: 't_2', status: 'done' }],
   ops: [{ id: 'o_1', status: 'done' }, { id: 'o_2', status: 'queued' }],
   activity: [
@@ -44,6 +44,20 @@ describe('sponsors panel', () => {
     expect(latestReviewOf([{ round: 3, passed: true, findingsJson: '[]' }, { round: 1, passed: false, findingsJson: '[]' }])?.round).toBe(3);
   });
 
+  it('does not show another brief’s review as this brief’s verdict', () => {
+    const state = {
+      ...(base as object),
+      briefs: [{ id: 'b_3', board: '', status: 'building', updatedMs: 30, planJson: '{}' }],
+      reviews: [
+        { id: 'r1', brief: 'b_old', round: 3, passed: true, findingsJson: '[]' },
+        { id: 'r2', brief: 'b_3', round: 1, passed: false, findingsJson: '[{"object":"Lid","problem":"clips"}]' },
+      ],
+    } as never;
+    const factory = sponsorCards(state, '').find(c => c.id === 'factory')!;
+    expect(factory.facts).toContainEqual(['last review', 'round 1 · 1 findings']);
+    expect(factory.list?.rows).toEqual(['Lid: clips']);
+  });
+
   it('shows Factory as the reviewer, its verdict, its finds and the tools it called', () => {
     const factory = sponsorCards(base, 'cadswarm-demo').find(c => c.id === 'factory')!;
     expect(factory.facts).toContainEqual(['agent', 'reviewer · droid · left']);
@@ -70,6 +84,8 @@ describe('sponsors panel', () => {
   it('counts the team state SpacetimeDB holds', () => {
     const space = sponsorCards(base, 'cadswarm-demo').find(c => c.id === 'spacetime')!;
     expect(space.facts).toContainEqual(['database', 'cadswarm-demo']);
+    // The Params spreadsheet is not a part, and holding it is not holding a part.
+    expect(space.facts).toContainEqual(['model', '2 parts · 1 params · 0 held']);
     expect(space.facts).toContainEqual(['members', '1 active · 2 joined']);
     expect(space.facts).toContainEqual(['work', '1 open tasks · 1/2 ops done']);
     expect(space.facts).toContainEqual(['events', '4 activity rows · seq 4']);

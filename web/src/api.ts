@@ -89,8 +89,9 @@ export interface Api {
   deleteTask(id: string): Promise<void>;
   /** Stop a whole request; its unstarted tasks are cancelled with it. */
   cancelBrief(id: string): Promise<void>;
-  /** Ask the host whether the parts fit the bed, are closed solids and have printable walls. */
-  checkPrintability(): Promise<Printability | null>;
+  /** Ask the host whether the parts fit the bed, are closed solids and have printable walls.
+   * Pass the bed the person typed so a check does not silently use the saved one. */
+  checkPrintability(bedMm?: [number, number, number]): Promise<Printability | null>;
   movePointer(object: string, point: number[], mode: string, label: string): void;
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
@@ -328,6 +329,34 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       try { return JSON.parse(resultJson) as T; } catch { return null; }
     }
 
+    /** Read one artifact blob (a spilled op result) and unsubscribe; null when it cannot be read. */
+    function readBlob(hash: string): Promise<Uint8Array | null> {
+      return new Promise(done => {
+        if (!/^[0-9a-f]{64}$/i.test(hash)) { done(null); return; }
+        let finished = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = (bytes: Uint8Array | null) => {
+          if (finished) return;
+          finished = true; clearTimeout(timer); done(bytes);
+        };
+        timer = setTimeout(() => finish(null), 15000);
+        const take = () => [...conn.db.vArtifactBlob.iter()].find(b => b.hash === hash)?.bytes ?? null;
+        const attempt = (sql: string, onRefused: () => void) => {
+          const handle = conn.subscriptionBuilder()
+            .onApplied(() => {
+              const bytes = take();
+              try { handle.unsubscribe(); } catch { /* already ended */ }
+              finish(bytes ? new Uint8Array(bytes) : null);
+            })
+            .onError(() => onRefused())
+            .subscribe(sql);
+        };
+        const whole = () => attempt('SELECT * FROM v_artifact_blob', () => finish(null));
+        if (!filteredViewOk) { whole(); return; }
+        attempt(`SELECT * FROM v_artifact_blob WHERE hash = '${hash}'`, () => { filteredViewOk = false; whole(); });
+      });
+    }
+
     const api: Api = {
       fence,
       redeem: async (tok, name) => {
@@ -348,9 +377,18 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       cancelTask: (id, reason) => quiet(r.cancelTask({ fence: fence(), taskId: id, reason })),
       deleteTask: id => quiet(r.deleteTask({ fence: fence(), taskId: id })),
       cancelBrief: id => quiet(r.cancelBrief({ fence: fence(), briefId: id })),
-      checkPrintability: async () => {
-        const v = await runOpResult('printability', {}, 120000);
-        return v === null ? null : toPrintability(v);
+      checkPrintability: async bedMm => {
+        const v = await runOpResult('printability', bedMm ? { bed: bedMm } : {}, 120000);
+        if (v === null) return null;
+        // A result over 32 KB is spilled to an artifact as {"blob": sha256}: read it back, or a big
+        // model would look like it had no parts at all.
+        if (typeof v.blob === 'string' && Object.keys(v).every(k => k === 'blob' || k.startsWith('_'))) {
+          const bytes = await readBlob(v.blob);
+          if (!bytes) { report(new Error('That check expired; run it again.')); return null; }
+          try { return toPrintability(JSON.parse(new TextDecoder().decode(bytes))); }
+          catch { report(new Error('The printability answer could not be read; run it again.')); return null; }
+        }
+        return toPrintability(v);
       },
       setParam: async (alias, value) => {
         // set_param needs the `Params` lock (rules::needed_locks). Hold it only until the host finishes the op.

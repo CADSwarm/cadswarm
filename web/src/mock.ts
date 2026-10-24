@@ -81,14 +81,19 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
 
   function build(i: number, rev: number) {
     const [name, ...b] = parts[i];
+    const task = store.state.tasks.find(t => t.objects[0] === name);
+    if (task?.status === 'cancelled') return; // a stopped part stays stopped, even mid-build
     const builder = workerOf(i);
     const objects: Obj[] = [...store.state.objects.filter(o => o.name !== name),
       { name, label: name, typeId: 'Part::Box', rev, bbox: b, volume: 1, visible: true, broken: false, usedBy: [], lastActor: builder }];
     const previews = new Map(store.state.previews);
     previews.set(name, { object: name, rev, mesh: boxStl(...(b as [number, number, number, number, number, number])) });
-    const tasks: Task[] = store.state.tasks.map((t, k) =>
+    // Match tasks to parts by the object they name, not by row index: deleting one must not shift the rest.
+    const order = (t: Task) => parts.findIndex(([n]) => n === t.objects[0]);
+    const tasks: Task[] = store.state.tasks.map(t =>
       t.status === 'cancelled' ? t
-        : k < i ? { ...t, status: 'done' } : k === i ? { ...t, status: 'claimed', owner: builder } : t);
+        : t.objects[0] === name ? { ...t, status: 'claimed', owner: builder }
+        : order(t) >= 0 && order(t) < i ? { ...t, status: 'done' } : t);
     store.set({
       objects, previews, tasks,
       locks: [...store.state.locks.filter(l => l.object !== name), { object: name, holder: builder }],
@@ -124,7 +129,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     } else if (step === n + 1) {
       store.set({
         briefs: brief('reviewing'),
-        tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
+        tasks: store.state.tasks.map(t => t.status === 'cancelled' ? t : { ...t, status: 'done' }),
         pointers: [...store.state.pointers.map(p => ({ ...p, mode: 'idle' })),
           { member: 5, object: 'Standoff1', point: [], mode: 'inspecting', label: 'checking holes', op: '', seq: seq++, atMs: Date.now() }],
         reviews: [{ id: 'r_mock0001', brief: briefId, round: 1, passed: false, atMs: Date.now(),
@@ -134,7 +139,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     } else if (step === n + 2) {
       build(3, 2);
       store.set({
-        tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
+        tasks: store.state.tasks.map(t => t.status === 'cancelled' ? t : { ...t, status: 'done' }),
         // The reviewer keeps its own arrow and moves it to whatever it re-checks.
         pointers: [...store.state.pointers.filter(p => p.member !== 5),
           { member: 5, object: 'Lid', point: [], mode: 'inspecting', label: 're-checking the lid', op: '', seq: seq++, atMs: Date.now() }],
@@ -208,8 +213,9 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
           ? { ...t, status: 'cancelled' } : t),
         activity: say(1, `cancelled “${b?.text ?? id}”`, 'status') });
     },
-    checkPrintability: async (): Promise<Printability> => {
-      const bed = store.state.workspace ?? { bedXMm: 180, bedYMm: 180, bedZMm: 180 };
+    checkPrintability: async (bedMm?: [number, number, number]): Promise<Printability> => {
+      const saved = store.state.workspace ?? { bedXMm: 180, bedYMm: 180, bedZMm: 180 };
+      const bed = bedMm ? { bedXMm: bedMm[0], bedYMm: bedMm[1], bedZMm: bedMm[2] } : saved;
       const across = (a: number, b: number) => [Math.min(a, b), Math.max(a, b)] as const;
       const [bx, by] = across(bed.bedXMm, bed.bedYMm);
       const objects = store.state.objects.map(o => {

@@ -64,25 +64,30 @@ pub fn next_action(s: &BriefState) -> Action {
         "planning" if s.seeding || s.planner_alive => Action::Wait,
         "planning" if s.open + s.active + s.done == 0 => Action::Plan,
         "planning" => Action::Build(s.open.min(MAX_WORKERS)),
-        "building" if s.open + s.active == 0 && s.done > 0 => {
+        "building" if s.open + s.active == 0 => {
             if s.exporting {
                 Action::Wait
-            } else if s.reviewer_enabled {
-                Action::Review
+            } else if s.done > 0 {
+                // Finished parts are delivered even when another task is blocked: the export skips
+                // parts no done task promised, and the blocked task keeps its question on the board.
+                // Failing here would throw those parts away for a decision that is still open.
+                if s.reviewer_enabled {
+                    Action::Review
+                } else {
+                    Action::Export
+                }
+            } else if s.cancelled > 0 && s.blocked == 0 {
+                Action::Fail("every task was stopped; a person needs to steer".into())
+            } else if s.planned && s.blocked == 0 {
+                // The plan is written but its rows are gone: the last task was removed.
+                Action::Fail("every task was removed; a person needs to steer".into())
             } else {
-                Action::Export
+                // Nothing can be built right now, but this is not a stuck brief: a blocked task is
+                // waiting for a person's answer and its own helper may report it done afterwards
+                // (only a cancelled task is refused), and the subscription may still be delivering
+                // the first task rows. The stuck task stays visible on the board meanwhile.
+                Action::Wait
             }
-        }
-        // Nothing is running and nothing was built: every task was stopped, blocked or removed.
-        // A brief must not sit in `building` forever waiting for work that will never arrive.
-        "building" if s.open + s.active == 0 && s.cancelled > 0 => {
-            Action::Fail("every task was stopped; a person needs to steer".into())
-        }
-        "building" if s.open + s.active == 0 && s.blocked > 0 => {
-            Action::Fail("every task is blocked; a person needs to steer".into())
-        }
-        "building" if s.planned && s.open + s.active + s.done + s.cancelled + s.blocked == 0 => {
-            Action::Fail("every task was removed; a person needs to steer".into())
         }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
@@ -537,14 +542,19 @@ mod tests {
     #[test]
     fn a_brief_whose_every_task_was_stopped_fails_instead_of_hanging() {
         assert!(matches!(next_action(&BriefState { cancelled: 2, ..st("building") }), Action::Fail(_)));
-        assert!(matches!(next_action(&BriefState { blocked: 2, ..st("building") }), Action::Fail(_)));
+        // A blocked task is not a dead brief: its helper can still report it done after a person
+        // answers, so wait for that instead of closing the brief and throwing the answer away.
+        assert_eq!(next_action(&BriefState { blocked: 2, ..st("building") }), Action::Wait);
+        assert_eq!(next_action(&BriefState { planned: true, blocked: 1, ..st("building") }), Action::Wait);
+        // One stopped task and one stuck one: the stuck one can still finish, so wait for it.
+        assert_eq!(next_action(&BriefState { cancelled: 1, blocked: 1, ..st("building") }), Action::Wait);
         // The last task was deleted after the plan was written: no rows are left to count.
         assert!(matches!(next_action(&BriefState { planned: true, ..st("building") }), Action::Fail(_)));
         // A brief whose task rows have not arrived from the subscription yet must not be failed.
         assert_eq!(next_action(&st("building")), Action::Wait);
         // A cancelled task does not hide finished work: the build still reviews and exports.
         assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
-        // A blocked task does not hide a finished part either.
+        // Nor does a blocked one: its part is skipped on purpose and its question stays on the board.
         assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Export);
     }
 

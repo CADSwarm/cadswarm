@@ -128,6 +128,7 @@ export function mountAsk(el: HTMLElement, store: Store, api: Api | null, picked:
         const review = s.reviews.filter(r => r.brief === i.brief.id).sort((a, b) => b.round - a.round)[0];
         return [i.id, i.at, i.brief.status, i.brief.stlHash,
           s.tasks.filter(t => t.brief === i.brief.id && t.status === 'done').length,
+          s.tasks.filter(t => t.brief === i.brief.id).length,
           review ? `${review.id}:${review.round}:${review.passed}:${review.findingsJson}` : ''];
       }
       return [i.id, i.at, i.type];
