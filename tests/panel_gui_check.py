@@ -11,6 +11,11 @@ from pathlib import Path
 
 import FreeCADGui as Gui
 Gui.showMainWindow()
+# FreeCAD puts its Mod folders ahead of PYTHONPATH when it starts, so an installed CadSwarm
+# would shadow this checkout. Test the repository, not whatever happens to be installed.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+for _name in [n for n in sys.modules if n == "cadswarm" or n.startswith("cadswarm.")]:
+    del sys.modules[_name]
 from PySide import QtCore, QtGui  # noqa: E402
 
 from cadswarm.gui import panel  # noqa: E402
@@ -52,13 +57,34 @@ snap = {
                   "at": now - 290},
                  {"id": "m_3", "from": "ann-claude", "to": "carol", "kind": "chat",
                   "body": "Done. The base walls are 3 mm now; the lid still clears the posts by 0.4 mm.",
-                  "at": now - 120}],
+                  "at": now - 120},
+                 {"id": "m_4", "from": "bob-codex", "to": "carol", "kind": "chat",
+                  "body": "Refused · held by ann-claude\nNothing changed. Ask them instead.",
+                  "at": now - 60}],
 }
 
 
 class FakeClient:
     cfg = {"db": "team-db"}
     hub = "http://x"
+
+    def get(self, path):
+        if path == "/project/files":
+            return {"files": [
+                {"path": "notes/plan.md", "version": 2, "size": 1840, "author": "ann-claude",
+                 "updated_at": now - 600},
+                {"path": "bom.csv", "version": 1, "size": 640, "author": "bob-codex",
+                 "updated_at": now - 2400}],
+                "folders": ["notes"]}
+        raise panel.HubRequestError(404, {"code": "not_found", "error": path})
+
+    def post(self, path, body=None):
+        if path == "/project/files/history":
+            return {"path": body["path"], "current": {"path": body["path"], "version": 2, "size": 1840,
+                                                      "author": "ann-claude", "updated_at": now - 600},
+                    "older_versions": [{"version": 1, "size": 1500, "author": "bob-codex",
+                                        "saved_at": now - 9000, "reason": "replaced"}]}
+        raise panel.HubRequestError(404, {"code": "not_found", "error": path})
 
 
 s = panel.SESSION
@@ -98,6 +124,46 @@ for w, h in ((340, 640), (520, 900)):
         QtGui.QApplication.processEvents()
         p.grab().save(str(out / f"panel-{w}x{h}-{name}.png"))
     p.show_tab(p.team_page)
+
+# The three panes the site shows: shared sizes, the project folder with history, and refusals as cards.
+p.resize(520, 900)
+p.show()
+for _ in range(5):
+    QtGui.QApplication.processEvents()
+tabs = [p.tabs.tabText(i) for i in range(p.tabs.count())]
+p.show_tab(p.sizes_page)
+QtGui.QApplication.processEvents()
+p.grab().save(str(out / "panel-520x900-sizes.png"))
+sizes = [[p.sizes_page.rows.topLevelItem(i).text(c) for c in range(2)]
+         for i in range(p.sizes_page.rows.topLevelItemCount())]
+size_item = p.sizes_page.rows.topLevelItem(0)
+sizes_editable = bool(p.sizes_page.rows.editTriggers() & QtGui.QAbstractItemView.DoubleClicked) \
+    and bool(size_item.flags() & QtCore.Qt.ItemIsEditable)
+# Typing in the Value cell must go through the same set_param path as the dialog and the site.
+inline = []
+real_change = panel.panes.change_param
+panel.panes.change_param = lambda session, alias, value, done=None, failed=None: inline.append((alias, value))
+try:
+    size_item.setText(1, "70 mm")
+    QtGui.QApplication.processEvents()
+finally:
+    panel.panes.change_param = real_change
+sizes_inline = inline
+p.show_tab(p.files_page)
+p.files_page.reload(force=True)
+QtGui.QApplication.processEvents()
+p.grab().save(str(out / "panel-520x900-files.png"))
+file_item = p.files_page.find_path("notes/plan.md")
+p.files_page.tree.setCurrentItem(file_item)
+for _ in range(5):
+    QtGui.QApplication.processEvents()
+files = [item.data(0, QtCore.Qt.UserRole) for item in
+         [p.files_page.find_path(f["path"]) for f in p.files_page.listing["files"]]]
+file_sizes = [p.files_page.find_path(f["path"]).text(2) for f in p.files_page.listing["files"]]
+history = [[p.files_page.history.topLevelItem(i).text(c) for c in range(4)]
+           for i in range(p.files_page.history.topLevelItemCount())]
+chat_text = p.chat.toPlainText()
+p.show_tab(p.team_page)
 
 wide = sorted((w.minimumSizeHint().width(), type(w).__name__, w.objectName(), getattr(w, "text", lambda: "")()[:30],
                type(w.parent()).__name__, w.parent().objectName() if w.parent() else "")
@@ -226,6 +292,18 @@ result = {
     "chat_jump": {"followed": followed, "jump_shown": jump_shown, "kept_place": kept_place,
                   "unseen_text": unseen_text, "back_down": back_down},
     "toast": toast,
+    "tabs": tabs,
+    "sizes": sizes,
+    "sizes_editable": sizes_editable,
+    "sizes_inline": sizes_inline,
+    "files": files,
+    "file_sizes": file_sizes,
+    "history": history,
+    "refusal_card": {"holder": "Refused · held by ann-claude" in chat_text,
+                     "nothing_changed": "Nothing changed" in chat_text},
+    # The team writes "Already locked: Base by ann-claude (active)"; the card names just the holder.
+    "refusal_parse": list(panel.panes.parse_refusal(
+        "Already locked: Base by ann-claude (active). Message the holder")),
 }
 (out / "panel-verified.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 QtCore.QTimer.singleShot(0, QtGui.QApplication.quit)

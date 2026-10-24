@@ -28,6 +28,20 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
                               "back_down": True}, r["chat_jump"]
     assert r["toast"] == "✓  Created task “Lid”"  # confirmations reach people who never open the console
     assert "teammate's computer" in r["away_tip"]
+    # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
+    assert [t.split(" ")[0] for t in r["tabs"]] == ["Team", "Tasks", "Activity", "Sizes", "Files", "Library",
+                                                     "Sponsors", "Tools"], r["tabs"]
+    assert r["sizes"] == [["Pcb l", "65 mm"], ["Wall", "3 mm"]], r["sizes"]
+    # Values edit in place, like the site's size fields; files show their size like the site's rows.
+    assert r["sizes_editable"] is True, r["sizes_editable"]
+    assert r["sizes_inline"] == [["pcb_l", "70 mm"]], r["sizes_inline"]
+    assert sorted(r["files"]) == ["bom.csv", "notes/plan.md"], r["files"]
+    assert r["file_sizes"] == ["1.8 KB", "640 B"], r["file_sizes"]
+    assert r["history"][0][0] == "2 ✓" and r["history"][0][3] == "current version", r["history"]
+    assert r["history"][1][0] == "1" and r["history"][1][3] == "replaced", r["history"]
+    assert r["refusal_card"] == {"holder": True, "nothing_changed": True}, r["refusal_card"]
+    assert r["refusal_parse"] == ["Refused · held by ann-claude", "Nothing changed. Ask them instead.",
+                                  "ann-claude"], r["refusal_parse"]
     assert "Round 2 asks for changes" in r["review"] and "Lid clip is 0.4 mm too short." in r["review"]
     assert "256 x 256 x 256" in r["review"]
     # The Sponsors tab is a first-class tab, built only from the snapshot this refresh already read.

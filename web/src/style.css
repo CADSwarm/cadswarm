@@ -65,7 +65,12 @@ a { color: var(--accent); }
 .tabbar [role=tab]:hover { color: var(--body); }
 .tabbar [role=tab][aria-selected="true"] { color: var(--text); border-bottom-color: var(--bone); font-weight: 600; box-shadow: none; }
 .tabbar svg { display: none; width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.badge { min-width: 16px; padding: 1px 5px; border-radius: 999px; background: var(--err); color: #fff; font: 600 11px/14px var(--font); }
+/* A fixed-height pill centres the digits in the circle. Digit ink sits a touch below the
+   middle of the font box, so one extra pixel of bottom padding lifts the glyph to the
+   optical centre; min-width still lets the pill grow for two- or three-digit counts. */
+.badge { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px;
+  padding: 0 5px 1px; border-radius: 999px; background: var(--err); color: #fff;
+  font: 600 11px/1 var(--font); font-variant-numeric: tabular-nums; }
 .badge:empty { display: none; }
 
 .tab { display: none; flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 20px; overscroll-behavior: contain; }
@@ -166,6 +171,32 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .param .alias .src, .src { color: var(--accent); text-decoration: none; text-transform: none; font-size: 12px; }
 .params > p { margin: 0; padding: 12px 16px; color: var(--muted); }
 .sources { font-size: 12px; }
+
+/* ---- Shared sizes: the one sheet every part reads from ---- */
+.sizes-intro { margin: 0 2px 14px; }
+.sizes-holder { margin: 0 2px 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--body); font-size: 13px; line-height: 1.45; }
+.sizes-sheet { margin-top: 0; }
+.param.changed input { box-shadow: inset 0 0 0 1.5px var(--ok); }
+.param.static { grid-template-columns: 1fr auto; }
+.size-value { font: 500 14px/1.2 var(--font-mono); color: var(--text); }
+.sizes-note { margin: 10px 2px 0; }
+
+/* ---- Project files: the folder, its versions, and their history ---- */
+.files-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 2px 0; }
+.files-status { margin: 0 2px 12px; }
+.files-list .row-item { cursor: pointer; }
+.files-list .row-item:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: -2px; }
+.file-icon { flex: none; width: 18px; text-align: center; font-size: 15px; }
+.file-version { flex: none; font: 500 12px/1 var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.history-list .row-item { min-height: 38px; }
+.history-list .row-item.current { background: color-mix(in srgb, var(--ok) 8%, transparent); }
+
+/* ---- Refusals: a card, not a line, so the holder and "nothing changed" read at a glance ---- */
+.refusal { display: grid; gap: 5px; padding: 10px 12px; border: 1px solid rgba(229, 83, 75, .45);
+  background: rgba(229, 83, 75, .08); border-radius: 8px; }
+.refusal-meta { color: var(--refused); font: 600 13px/1.35 var(--font-body); overflow-wrap: anywhere; }
+.refusal-detail { color: var(--body); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 
 /* ---- Printer bed and the reviewer's last round ---- */
 .card-empty { margin: 0; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line);

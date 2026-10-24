@@ -127,6 +127,9 @@ describe('mock swarm', () => {
     const { stop, api } = startMockSwarm(store);
     expect(store.state.briefs[0].status).toBe('building');
     expect(store.state.tasks.length).toBe(5);
+    // The demo shows a refused change as a card in the team log, not as an ordinary line.
+    expect(store.state.activity.find(a => a.kind === 'refused')?.summary)
+      .toMatch(/Already locked: Base by worker1/);
     vi.advanceTimersByTime(1800 * 6);
     const b = store.state.briefs[0];
     expect(b.status).toBe('ready');
