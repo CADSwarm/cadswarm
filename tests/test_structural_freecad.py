@@ -79,6 +79,11 @@ def test_accepted_operation_runs_in_the_worker(tmp_path):
 def test_real_freecad_gui_accept_reject_cancel(tmp_path):
     python, env = runtime()
     env["QT_QPA_PLATFORM"] = "offscreen"
+    # Keep startup workbenches/preferences isolated from an open desktop session.
+    profile = tmp_path / "freecad-profile"
+    profile.mkdir()
+    env["FREECAD_USER_HOME"] = str(profile)
+    env["FREECAD_USER_DATA"] = str(profile)
     proc = subprocess.run([python, str(ROOT / "tests" / "structural_gui_check.py"), str(tmp_path)], env=env,
                           capture_output=True, text=True, timeout=240)
     assert proc.returncode == 0, proc.stdout + proc.stderr
