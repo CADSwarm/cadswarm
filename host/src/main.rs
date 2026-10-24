@@ -119,8 +119,8 @@ fn run(cfg: &HostConfig) -> Result<()> {
         cfg.doc_path(),
         Duration::from_secs(120),
     );
-    // Fallback until plan 03 Task 5 lands `cadswarm.config.helper_script()`: without a helper,
-    // helper ops complete as failed with `helper_unavailable`. Delete once the helper is on main.
+    // Optional: an old cadswarm package without helper.py still runs FreeCAD ops; file and
+    // knowledge ops then complete as failed with `helper_unavailable`.
     let mut helper = match config::python_says(&cfg.cadswarm_python, "c.helper_script()") {
         Ok(script) => Some(worker::WorkerDriver::new(
             cfg.cadswarm_python.clone(),
@@ -149,7 +149,7 @@ fn run(cfg: &HostConfig) -> Result<()> {
             }
             continue;
         }
-        orchestrator.tick(&space);
+        orchestrator.tick(&space, helper.as_mut());
         std::thread::sleep(Duration::from_millis(100));
     }
 }
