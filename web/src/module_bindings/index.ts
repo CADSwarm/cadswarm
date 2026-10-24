@@ -48,6 +48,7 @@ import LogActivityReducer from "./log_activity_reducer";
 import MarkDeliveredReducer from "./mark_delivered_reducer";
 import MovePointerReducer from "./move_pointer_reducer";
 import PutArtifactReducer from "./put_artifact_reducer";
+import PutComponentPreviewReducer from "./put_component_preview_reducer";
 import PutPreviewReducer from "./put_preview_reducer";
 import RedeemInviteReducer from "./redeem_invite_reducer";
 import RejoinReducer from "./rejoin_reducer";
@@ -56,15 +57,19 @@ import RenameMeReducer from "./rename_me_reducer";
 import ReportReviewReducer from "./report_review_reducer";
 import ReportTaskReducer from "./report_task_reducer";
 import RequestHandoffReducer from "./request_handoff_reducer";
+import ResetSettingReducer from "./reset_setting_reducer";
+import ResolveSuggestionReducer from "./resolve_suggestion_reducer";
 import RevokeMemberReducer from "./revoke_member_reducer";
 import SendMessageReducer from "./send_message_reducer";
 import SetBedReducer from "./set_bed_reducer";
 import SetBriefReducer from "./set_brief_reducer";
 import SetBriefStlReducer from "./set_brief_stl_reducer";
 import SetContextSeqReducer from "./set_context_seq_reducer";
+import SetSettingReducer from "./set_setting_reducer";
 import StartOpReducer from "./start_op_reducer";
 import SubmitBriefReducer from "./submit_brief_reducer";
 import SubmitOpReducer from "./submit_op_reducer";
+import SuggestSettingReducer from "./suggest_setting_reducer";
 import SyncObjectsReducer from "./sync_objects_reducer";
 import TakeOverReducer from "./take_over_reducer";
 
@@ -75,6 +80,8 @@ import VActivityRow from "./v_activity_table";
 import VArtifactRow from "./v_artifact_table";
 import VArtifactBlobRow from "./v_artifact_blob_table";
 import VBriefRow from "./v_brief_table";
+import VComponentRow from "./v_component_table";
+import VComponentPreviewRow from "./v_component_preview_table";
 import VEventRow from "./v_event_table";
 import VHandoffRow from "./v_handoff_table";
 import VLockRow from "./v_lock_table";
@@ -88,6 +95,8 @@ import VPointerRow from "./v_pointer_table";
 import VPreviewRow from "./v_preview_table";
 import VReceiptRow from "./v_receipt_table";
 import VReviewRow from "./v_review_table";
+import VSettingRow from "./v_setting_table";
+import VSuggestionRow from "./v_suggestion_table";
 import VTaskRow from "./v_task_table";
 import VWorkspaceRow from "./v_workspace_table";
 
@@ -123,6 +132,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VBriefRow),
+  vComponent: __table({
+    name: 'v_component',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VComponentRow),
+  vComponentPreview: __table({
+    name: 'v_component_preview',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VComponentPreviewRow),
   vEvent: __table({
     name: 'v_event',
     indexes: [
@@ -214,6 +237,20 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VReviewRow),
+  vSetting: __table({
+    name: 'v_setting',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VSettingRow),
+  vSuggestion: __table({
+    name: 'v_suggestion',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VSuggestionRow),
   vTask: __table({
     name: 'v_task',
     indexes: [
@@ -246,6 +283,7 @@ const reducersSchema = __reducers(
   __reducerSchema("mark_delivered", MarkDeliveredReducer),
   __reducerSchema("move_pointer", MovePointerReducer),
   __reducerSchema("put_artifact", PutArtifactReducer),
+  __reducerSchema("put_component_preview", PutComponentPreviewReducer),
   __reducerSchema("put_preview", PutPreviewReducer),
   __reducerSchema("redeem_invite", RedeemInviteReducer),
   __reducerSchema("rejoin", RejoinReducer),
@@ -254,15 +292,19 @@ const reducersSchema = __reducers(
   __reducerSchema("report_review", ReportReviewReducer),
   __reducerSchema("report_task", ReportTaskReducer),
   __reducerSchema("request_handoff", RequestHandoffReducer),
+  __reducerSchema("reset_setting", ResetSettingReducer),
+  __reducerSchema("resolve_suggestion", ResolveSuggestionReducer),
   __reducerSchema("revoke_member", RevokeMemberReducer),
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("set_bed", SetBedReducer),
   __reducerSchema("set_brief", SetBriefReducer),
   __reducerSchema("set_brief_stl", SetBriefStlReducer),
   __reducerSchema("set_context_seq", SetContextSeqReducer),
+  __reducerSchema("set_setting", SetSettingReducer),
   __reducerSchema("start_op", StartOpReducer),
   __reducerSchema("submit_brief", SubmitBriefReducer),
   __reducerSchema("submit_op", SubmitOpReducer),
+  __reducerSchema("suggest_setting", SuggestSettingReducer),
   __reducerSchema("sync_objects", SyncObjectsReducer),
   __reducerSchema("take_over", TakeOverReducer),
 );
@@ -281,6 +323,10 @@ type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "ta
     readonly "v_artifact_blob": Omit<typeof tablesSchema.schemaType.tables["vArtifactBlob"], "accessorName"> & { readonly accessorName: "v_artifact_blob" };
     /** @deprecated Use `vBrief` instead. This alias will be removed in the next major version. */
     readonly "v_brief": Omit<typeof tablesSchema.schemaType.tables["vBrief"], "accessorName"> & { readonly accessorName: "v_brief" };
+    /** @deprecated Use `vComponent` instead. This alias will be removed in the next major version. */
+    readonly "v_component": Omit<typeof tablesSchema.schemaType.tables["vComponent"], "accessorName"> & { readonly accessorName: "v_component" };
+    /** @deprecated Use `vComponentPreview` instead. This alias will be removed in the next major version. */
+    readonly "v_component_preview": Omit<typeof tablesSchema.schemaType.tables["vComponentPreview"], "accessorName"> & { readonly accessorName: "v_component_preview" };
     /** @deprecated Use `vEvent` instead. This alias will be removed in the next major version. */
     readonly "v_event": Omit<typeof tablesSchema.schemaType.tables["vEvent"], "accessorName"> & { readonly accessorName: "v_event" };
     /** @deprecated Use `vHandoff` instead. This alias will be removed in the next major version. */
@@ -307,6 +353,10 @@ type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "ta
     readonly "v_receipt": Omit<typeof tablesSchema.schemaType.tables["vReceipt"], "accessorName"> & { readonly accessorName: "v_receipt" };
     /** @deprecated Use `vReview` instead. This alias will be removed in the next major version. */
     readonly "v_review": Omit<typeof tablesSchema.schemaType.tables["vReview"], "accessorName"> & { readonly accessorName: "v_review" };
+    /** @deprecated Use `vSetting` instead. This alias will be removed in the next major version. */
+    readonly "v_setting": Omit<typeof tablesSchema.schemaType.tables["vSetting"], "accessorName"> & { readonly accessorName: "v_setting" };
+    /** @deprecated Use `vSuggestion` instead. This alias will be removed in the next major version. */
+    readonly "v_suggestion": Omit<typeof tablesSchema.schemaType.tables["vSuggestion"], "accessorName"> & { readonly accessorName: "v_suggestion" };
     /** @deprecated Use `vTask` instead. This alias will be removed in the next major version. */
     readonly "v_task": Omit<typeof tablesSchema.schemaType.tables["vTask"], "accessorName"> & { readonly accessorName: "v_task" };
     /** @deprecated Use `vWorkspace` instead. This alias will be removed in the next major version. */
@@ -333,6 +383,8 @@ const tableAccessorAliases = {
   "v_artifact": "vArtifact",
   "v_artifact_blob": "vArtifactBlob",
   "v_brief": "vBrief",
+  "v_component": "vComponent",
+  "v_component_preview": "vComponentPreview",
   "v_event": "vEvent",
   "v_handoff": "vHandoff",
   "v_lock": "vLock",
@@ -346,6 +398,8 @@ const tableAccessorAliases = {
   "v_preview": "vPreview",
   "v_receipt": "vReceipt",
   "v_review": "vReview",
+  "v_setting": "vSetting",
+  "v_suggestion": "vSuggestion",
   "v_task": "vTask",
   "v_workspace": "vWorkspace",
 } as const;
@@ -376,6 +430,10 @@ export type DbView = __DbViewBase & {
   readonly "v_artifact_blob": __DbViewBase["vArtifactBlob"];
   /** @deprecated Use `vBrief` instead. This alias will be removed in the next major version. */
   readonly "v_brief": __DbViewBase["vBrief"];
+  /** @deprecated Use `vComponent` instead. This alias will be removed in the next major version. */
+  readonly "v_component": __DbViewBase["vComponent"];
+  /** @deprecated Use `vComponentPreview` instead. This alias will be removed in the next major version. */
+  readonly "v_component_preview": __DbViewBase["vComponentPreview"];
   /** @deprecated Use `vEvent` instead. This alias will be removed in the next major version. */
   readonly "v_event": __DbViewBase["vEvent"];
   /** @deprecated Use `vHandoff` instead. This alias will be removed in the next major version. */
@@ -402,6 +460,10 @@ export type DbView = __DbViewBase & {
   readonly "v_receipt": __DbViewBase["vReceipt"];
   /** @deprecated Use `vReview` instead. This alias will be removed in the next major version. */
   readonly "v_review": __DbViewBase["vReview"];
+  /** @deprecated Use `vSetting` instead. This alias will be removed in the next major version. */
+  readonly "v_setting": __DbViewBase["vSetting"];
+  /** @deprecated Use `vSuggestion` instead. This alias will be removed in the next major version. */
+  readonly "v_suggestion": __DbViewBase["vSuggestion"];
   /** @deprecated Use `vTask` instead. This alias will be removed in the next major version. */
   readonly "v_task": __DbViewBase["vTask"];
   /** @deprecated Use `vWorkspace` instead. This alias will be removed in the next major version. */
@@ -418,6 +480,10 @@ export type Tables = __TablesBase & {
   readonly "v_artifact_blob": __TablesBase["vArtifactBlob"];
   /** @deprecated Use `vBrief` instead. This alias will be removed in the next major version. */
   readonly "v_brief": __TablesBase["vBrief"];
+  /** @deprecated Use `vComponent` instead. This alias will be removed in the next major version. */
+  readonly "v_component": __TablesBase["vComponent"];
+  /** @deprecated Use `vComponentPreview` instead. This alias will be removed in the next major version. */
+  readonly "v_component_preview": __TablesBase["vComponentPreview"];
   /** @deprecated Use `vEvent` instead. This alias will be removed in the next major version. */
   readonly "v_event": __TablesBase["vEvent"];
   /** @deprecated Use `vHandoff` instead. This alias will be removed in the next major version. */
@@ -444,6 +510,10 @@ export type Tables = __TablesBase & {
   readonly "v_receipt": __TablesBase["vReceipt"];
   /** @deprecated Use `vReview` instead. This alias will be removed in the next major version. */
   readonly "v_review": __TablesBase["vReview"];
+  /** @deprecated Use `vSetting` instead. This alias will be removed in the next major version. */
+  readonly "v_setting": __TablesBase["vSetting"];
+  /** @deprecated Use `vSuggestion` instead. This alias will be removed in the next major version. */
+  readonly "v_suggestion": __TablesBase["vSuggestion"];
   /** @deprecated Use `vTask` instead. This alias will be removed in the next major version. */
   readonly "v_task": __TablesBase["vTask"];
   /** @deprecated Use `vWorkspace` instead. This alias will be removed in the next major version. */

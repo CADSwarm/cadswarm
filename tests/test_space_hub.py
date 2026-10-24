@@ -341,6 +341,28 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]
 
 
+def test_style_routes_become_helper_ops(world):
+    hub, fake = world
+    finish_ops_with(fake, {"text": "", "rules": [], "pending": 0})
+    hub.request("GET", "/style", params={"topic": "lid", "board": "pico"})
+    assert fake.calls[-1][1][2] == "style_context"
+    assert json.loads(fake.calls[-1][1][3]) == {"query": "lid", "board": "pico"}
+    hub.post("/style/teach", {"statement": "Walls are 2.4 mm"})
+    assert fake.calls[-1][1][2] == "teach_style"
+    assert json.loads(fake.calls[-1][1][3]) == {"statement": "Walls are 2.4 mm", "scope": "team"}
+    hub.post("/style/resolve", {"rule_id": "r_1", "decision": "confirm"})
+    assert fake.calls[-1][1][2] == "resolve_style"
+
+
+def test_the_context_carries_the_published_style_profile(world):
+    hub, fake = world
+    text = "Team design style (learned ...):\n- [confirmed] Walls are 2.4 mm"
+    fake.tables["v_artifact_blob"] = [{"hash": "style-profile", "ws": 1, "bytes": text.encode().hex()}]
+    assert "[confirmed] Walls are 2.4 mm" in hub.get("/context")["context"]
+    fake.tables["v_artifact_blob"] = []
+    assert "Team design style" not in hub.get("/context")["context"]
+
+
 def test_people_see_each_others_chat(world):
     _hub, fake = world
     fake.tables["v_message"].append({"id": "m_chat", "from": 3, "to": "all", "kind": "chat", "body": "lunch?",

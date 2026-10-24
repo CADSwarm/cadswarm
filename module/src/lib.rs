@@ -7,6 +7,7 @@ pub mod util;
 pub mod views;
 
 pub mod handoff;
+pub mod library;
 pub mod locks;
 pub mod membership;
 pub mod ops;

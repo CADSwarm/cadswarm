@@ -65,6 +65,22 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
 10. Work with the other AI helpers. list_helpers shows who is free and what each one holds. Split a big job
    with delegate_task (it assigns a task to a helper and wakes it); you're told when it's done. Ask a helper
    who holds a part for a change with send_message instead of touching it. Don't hand work back and forth.
+11. Components library. Before modelling a screw, nut, washer, insert, bearing, dowel pin, magnet, board or any
+   part someone may already have, check the team's library: recommend_components (say what the part must do)
+   or search_components. Prefer the team's own parts, then built-in standard parts (add_standard_part), then a
+   part file you find online (import_component_from_url, with a direct .step/.stp/.stl/.FCStd link and its
+   license). Place team parts with insert_component. Tell your person which part you chose and why.
+   For the hole a part needs (clearance, insert, bearing seat), use hole_size: it applies the team's fits.
+12. Team settings (get_settings): clearances and fits (tol_clearance, tol_slip_fit, tol_press_fit), bolt-hole
+   class, thread mode, printing (xy_compensation, min_wall, layer_height) and precision (mesh_deviation...).
+   Fits are also Params (Params.tol_clearance etc.): bind gaps to them instead of hard-coding numbers.
+   Only people change settings. When a part you add implies a different value (a press-fit bearing, small
+   holes that need a finer mesh), call suggest_setting with a one-line reason; a person accepts it.
+13. Team design style. CadSwarm learns how this team designs (the values people use, the corrections they keep
+   making to agent work, preferred parts, problems reviews keep finding) and shows it as "Team design style" in
+   your context. Follow it. Before modelling a new kind of part, call team_style(topic=...) for the rules that
+   apply. A [confirmed] rule is the team's decision: never go against it without asking your person. When your
+   person states a lasting preference ("we always use 2.4 mm walls"), propose it with teach_style.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 
@@ -470,6 +486,127 @@ def recall_designs(query: str, board: str | None = None) -> dict:
     return call("POST", "/knowledge/designs", {"query": query, "board": board}, doing="recalling past designs")
 
 
+@mcp.tool()
+def team_style(topic: str | None = None, board: str | None = None) -> dict:
+    """The design-style rules this team follows, learned from how its people and agents work in CadSwarm
+    (e.g. wall thickness, fits, preferred inserts, what people keep correcting). `topic` ranks rules for the part
+    you are about to make; `board` adds that board's rules. [confirmed] rules are the team's decisions."""
+    return call("GET", "/style", doing=f"checking team style{' for ' + topic if topic else ''}",
+                topic=topic or "", board=board or "")
+
+
+@mcp.tool()
+def teach_style(statement: str) -> dict:
+    """Propose a lasting design rule your person stated, e.g. "Lids use 4 M3 heat-set inserts". It waits as a
+    candidate until a person confirms it in the CadSwarm panel (Learned style); then every agent follows it."""
+    return call("POST", "/style/teach", {"statement": statement}, doing="saving a team style rule")
+
+
+@mcp.tool()
+def style_rules() -> dict:
+    """Every learned style rule with its evidence and status (confirmed, active, or a candidate awaiting a person).
+    A person can confirm or dismiss candidates in the CadSwarm panel (Learned style)."""
+    return call("POST", "/style/rules", {})
+
+
+# --------------------------------------------------- components library & settings
+
+@mcp.tool()
+def search_components(query: str = "", category: str | None = None, constraints: dict | None = None,
+                      limit: int = 10) -> dict:
+    """Search the team's components library (team parts and built-in standard parts).
+    category: fastener, bearing, insert, board, electronics, enclosure, motion, structural, hardware, other.
+    constraints narrow standard sizes and team parts: {"thread": "M3"}, {"bore_d": 8}, {"od_max": 20},
+    {"max_dims": [x, y, z]} (a team part must fit in that box, any orientation)."""
+    return call("POST", "/library/search", {"query": query, "category": category, "constraints": constraints,
+                                            "limit": limit}, doing=f"searching the library for {query or category}")
+
+
+@mcp.tool()
+def recommend_components(need: str, constraints: dict | None = None, limit: int = 5) -> dict:
+    """Which library parts suit a need, e.g. "an 8 mm axle that spins", "hold the lid shut", "fasten the PCB
+    with M2.5". Each recommendation has why, a concrete size for standard parts, the hole the mating part needs
+    (from the team's fits), how to place it (insert_with) and the settings it implies (suggest).
+    constraints as in search_components, plus {"length": 12} or {"grip": 8} for screws."""
+    return call("POST", "/library/recommend", {"need": need, "constraints": constraints, "limit": limit},
+                doing=f"choosing parts for {need[:60]}")
+
+
+@mcp.tool()
+def get_component(id: str) -> dict:
+    """One library part: size, holes FreeCAD found, license and source, or for a standard family (c_std_...)
+    its sizes, lengths and the hole each size needs with the team's current settings."""
+    return call("GET", f"/library/{id}")
+
+
+@mcp.tool()
+def insert_component(id: str, placement: dict | None = None, name: str | None = None,
+                     label: str | None = None) -> dict:
+    """Place a team library part (an id from search_components) into the model. You own the new object.
+    placement: {"base": [x, y, z], "rotation": {"axis": [0, 0, 1], "angle": 90}}."""
+    return call("POST", "/library/insert", {"id": id, "placement": placement, "name": name, "label": label},
+                doing=f"placing {id}", targets=[name] if name else None)
+
+
+@mcp.tool()
+def add_standard_part(family: str, size: str, length: float | None = None, placement: dict | None = None,
+                      name: str | None = None) -> dict:
+    """Place a built-in standard part: family iso4762 (socket head screw), iso7380 (button head), iso4032 (hex
+    nut), iso7089 (washer), heat_set_insert, ball_bearing (e.g. size 608), iso8734 (dowel pin, size = diameter),
+    magnet_disc (e.g. 6x2). Screws and pins need a length from the catalog (get_component c_std_<family>).
+    Screws: the underside of the head is at z=0 and the shank points down -Z; other parts sit on z=0.
+    The result says which hole the mating part needs (`hole`)."""
+    return call("POST", "/library/insert", {"family": family, "size": size, "length": length,
+                                            "placement": placement, "name": name},
+                doing=f"adding a {size} {family}", targets=[name] if name else None)
+
+
+@mcp.tool()
+def hole_size(family: str, size: str, purpose: str | None = None) -> dict:
+    """The hole diameter (and depth for inserts) a part needs for a standard part, using the team's fits.
+    purpose: "through" (a screw passes through), "thread" (the screw holds in this part: follows the team's
+    thread_mode), "seat" (a bearing, insert, magnet or pin sits in it). Defaults by part kind."""
+    return call("POST", "/library/hole", {"family": family, "size": size, "purpose": purpose})
+
+
+@mcp.tool()
+def import_component_from_url(url: str, name: str | None = None, category: str = "other",
+                              tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
+    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CadSwarm .zip pack) to the
+    team's library, e.g. a vendor's CAD download or a model in a GitHub repo. The host downloads it (public
+    internet only, up to 50 MB), FreeCAD measures it, and the team sees it. Always pass the license you saw
+    on the source page. Then place it with insert_component."""
+    return call("POST", "/library/import-url", {"url": url, "name": name, "category": category, "tags": tags,
+                                                "description": description, "license": license},
+                doing=f"importing a part from {url[:80]}")
+
+
+@mcp.tool()
+def add_component_from_file(path: str, name: str | None = None, category: str = "other",
+                            tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
+    """Add a part file already saved in the project files (save_file, e.g. library-inbox/bracket.step) to the
+    team's library."""
+    return call("POST", "/library/upload", {"path": path, "name": name, "category": category, "tags": tags,
+                                            "description": description, "license": license},
+                doing=f"adding {path} to the library")
+
+
+@mcp.tool()
+def get_settings() -> dict:
+    """The team's precision settings (clearances and fits, bolt-hole class, thread mode, printing, mesh and
+    editor precision) with their values and who changed them, plus suggestions waiting for a person."""
+    return call("GET", "/settings")
+
+
+@mcp.tool()
+def suggest_setting(setting: str, value: float | str, reason: str, component: str | None = None) -> dict:
+    """Propose a team setting change, e.g. tol_press_fit 0.0 because "the 608 bearing seats are printed".
+    A person accepts or dismisses it in FreeCAD's Settings; until then nothing changes. `component` is the
+    library part that prompted it, if any."""
+    return call("POST", "/settings/suggest", {"setting": setting, "value": value, "reason": reason,
+                                              "component": component}, doing=f"suggesting {setting}={value}")
+
+
 # ------------------------------------------------------------- tasks & chat
 
 @mcp.tool()
@@ -572,9 +709,9 @@ def set_brief_plan(brief_id: str, plan_json: dict | str) -> dict:
 
 
 @mcp.tool()
-def check_printability(names: list[str] | None = None, min_wall: float = 1.2) -> dict:
+def check_printability(names: list[str] | None = None, min_wall: float | None = None) -> dict:
     """Can these parts be 3D printed? Checks each part against the printer bed, that it is a closed
-    solid, and lists suspected walls thinner than `min_wall` mm."""
+    solid, and lists suspected walls thinner than `min_wall` mm (default: the team's min_wall setting)."""
     return call("POST", "/printability", {"names": names, "min_wall": min_wall},
                 doing="checking printability", targets=names)
 

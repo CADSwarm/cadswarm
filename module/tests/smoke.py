@@ -208,6 +208,60 @@ def main():
     host.call("put_artifact", host.fence, h, "model-1.stl", "model/stl", [], "")  # empty keeps the blob
     assert len(alice.sql(f"SELECT * FROM v_artifact_blob WHERE hash = '{h}'")) == 1
 
+    # Components library: only a library op's result (completed by the host) adds or removes rows.
+    alice.call("submit_op", alice.fence, "o_smoke000010", "library_add",
+               json.dumps({"base64": "eA==", "filename": "bracket.step"}), "")
+    host.call("start_op", host.fence, "o_smoke000010")
+    row = {"id": "c_bracket_abc123", "name": "Bracket", "category": "structural", "tags": ["l bracket"],
+           "source": "upload", "format": "step", "bbox": [0, 0, 0, 40, 20, 5], "volume": 900.5,
+           "features": {"holes": [{"d": 3.4, "count": 2}]}, "suggest": []}
+    host.call("complete_op", host.fence, "o_smoke000010", True,
+              json.dumps({"_components": [row, {"id": "../evil", "name": "x"}]}), [], [], [], [], [], "", "")
+    comps = carol.sql("SELECT * FROM v_component")
+    assert [c["id"] for c in comps] == ["c_bracket_abc123"], comps
+    c = comps[0]
+    assert c["bbox"] == [0, 0, 0, 40, 20, 5] and c["tags"] == ["l bracket"], c
+    assert json.loads(c["features_json"]) == {"holes": [{"d": 3.4, "count": 2}]}, c
+    assert eve.sql("SELECT * FROM v_component") == []
+    host.call("put_component_preview", host.fence, "c_bracket_abc123", list(b"solid"))
+    alice.call("put_component_preview", alice.fence, "c_bracket_abc123", [], expect_error="not_allowed")
+    prev = carol.sql("SELECT * FROM v_component_preview WHERE id = 'c_bracket_abc123'")
+    assert decode_bytes(prev[0]["mesh"]) == b"solid", prev
+    # Placing it counts a use.
+    alice.call("submit_op", alice.fence, "o_smoke000011", "insert_component",
+               json.dumps({"component": "c_bracket_abc123", "name": "Bracket1"}), "")
+    host.call("start_op", host.fence, "o_smoke000011")
+    host.call("complete_op", host.fence, "o_smoke000011", True, json.dumps({"name": "Bracket1"}),
+              ["Bracket1"], [], [], [], [], "", "")
+    assert carol.sql("SELECT * FROM v_component")[0]["uses"] == 1
+    lock = [l for l in alice.sql("SELECT * FROM v_lock") if l["object"] == "Bracket1"]
+    assert lock and lock[0]["holder"] == alice.me()["id"], "the placer owns the placed part"
+
+    # Settings: people set them, helpers only suggest, a person accepts.
+    alice.call("set_setting", alice.fence, "tol_clearance", 0.3, "", expect_error="not_allowed")
+    carol.call("set_setting", carol.fence, "tol_clearance", 9.0, "", expect_error="bad_args")
+    carol.call("set_setting", carol.fence, "hole_clearance_class", 0.0, "snug", expect_error="bad_args")
+    carol.call("set_setting", carol.fence, "tol_clearance", 0.3, "")
+    sets = {r["setting"]: r for r in alice.sql("SELECT * FROM v_setting")}
+    assert sets["tol_clearance"]["num"] == 0.3, sets
+    queued = [o for o in host.sql("SELECT * FROM v_op") if o["kind"] == "set_param" and o["status"] == "queued"]
+    assert queued and json.loads(queued[-1]["args_json"])["alias"] == "tol_clearance", queued
+    assert queued[-1]["allowed"] == ["Params"], queued[-1]
+    alice.call("suggest_setting", alice.fence, "g_smoke001", "tol_press_fit", 0.0, "", "printed 608 seats",
+               "c_bracket_abc123")
+    alice.call("suggest_setting", alice.fence, "g_smoke002", "tol_press_fit", 0.0, "", " ", "", expect_error="bad_args")
+    bob.call("resolve_suggestion", bob.fence, "g_smoke001", True, expect_error="not_allowed")
+    carol.call("resolve_suggestion", carol.fence, "g_smoke001", True)
+    g = [x for x in carol.sql("SELECT * FROM v_suggestion") if x["id"] == "g_smoke001"][0]
+    assert g["status"] == "accepted" and g["resolved_by"] == carol.me()["id"], g
+    sets = {r["setting"]: r for r in alice.sql("SELECT * FROM v_setting")}
+    assert sets["tol_press_fit"]["num"] == 0.0, sets
+    carol.call("resolve_suggestion", carol.fence, "g_smoke001", False, expect_error="already accepted")
+    carol.call("reset_setting", carol.fence, "tol_clearance")
+    assert "tol_clearance" not in {r["setting"] for r in alice.sql("SELECT * FROM v_setting")}
+    kinds = {e["kind"] for e in carol.sql("SELECT * FROM v_event")}
+    assert {"library", "setting_changed", "setting_suggested"} <= kinds, kinds
+
     print("smoke: all checks passed")
 
 

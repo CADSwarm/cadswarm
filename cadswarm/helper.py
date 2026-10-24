@@ -1,6 +1,9 @@
 """Host-side helper for ops that are not FreeCAD geometry: project files and storage, Elastic
-board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design), and FEA jobs
-(fea_run, fea_status, fea_publish, fea_reports; see fea_jobs.py). The
+board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design), the team's
+learned design style (observe_op, observe_brief, learn_style, style_context, teach_style, resolve_style;
+see style_memory.py), and FEA jobs
+(fea_run, fea_status, fea_publish, fea_reports; see fea_jobs.py), and the components library
+(library_*, standard_parts, suggest_settings; see library/ops.py). The
 Rust host drives it like the FreeCAD worker:
 
     python cadswarm/helper.py <project_dir>
@@ -20,6 +23,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import threading
 import time
 
 if __package__ in (None, ""):  # run as a script by the host: make `cadswarm` importable
@@ -30,6 +34,8 @@ from cadswarm.knowledge import Elastic, ElasticError, design_doc  # noqa: E402
 from cadswarm.paths import project_layout  # noqa: E402
 from cadswarm.fea_jobs import FeaJobError  # noqa: E402
 from cadswarm.storage import FileError  # noqa: E402
+from cadswarm.library.ops import HANDLERS as LIBRARY_HANDLERS, LibraryError  # noqa: E402
+from cadswarm.style_memory import ANALYST_ID, StyleError, StyleMemory  # noqa: E402
 
 
 class HelperError(Exception):
@@ -50,6 +56,14 @@ class Project:
         self.clock = clock
         self._elastic = None
         self._fea = None
+        self._style = None
+
+    @property
+    def style(self):
+        """What the team's way of working has taught CadSwarm (style_memory.py)."""
+        if self._style is None:
+            self._style = StyleMemory(self.db, self.clock)
+        return self._style
 
     @property
     def fea(self):
@@ -82,10 +96,10 @@ def _author(a):
     return _actor(a).get("name") or "someone"
 
 
-def _people_only(a, what):
+def _people_only(a, what, where="Team tools > Storage and free up space"):
     if _actor(a).get("kind") != "human":
         raise HelperError("humans_only", f"Only a person can {what}. Ask someone on the team to do it "
-                                         "(in FreeCAD: Team tools > Storage and free up space).")
+                                         f"(in FreeCAD: {where}).")
 
 
 def _first(a, *keys):
@@ -157,6 +171,72 @@ def index_design(p, a):
     return {"indexed": brief["id"]}
 
 
+def _optional_elastic(p):
+    try:
+        return p.elastic
+    except HelperError:  # not configured: style still learns locally
+        return None
+
+
+def _learn(p, reword=True):
+    """Re-distil now, then mirror to Elastic and let the analyst reword rules off the host's critical path.
+
+    `profile` is the team-wide style block the host publishes for every agent's per-turn context."""
+    out = p.style.distil()
+    out["profile"] = p.style.context("", "", 6)["text"]
+    es = _optional_elastic(p)
+    if es is not None:
+        def converse(text):
+            return es.converse(text, agent_id=ANALYST_ID)
+
+        def after():
+            try:
+                p.style.mirror(es.es)
+            except Exception:  # best effort: the next distil mirrors what is left
+                pass
+        threading.Thread(target=after, daemon=True).start()
+        if reword and out["changed"]:
+            out["rewording"] = p.style.write_up_in_background(converse, set(out["changed"]))
+    return out
+
+
+def observe_op(p, a):
+    out = p.style.observe_op(a)
+    if p.style.due():
+        learned = _learn(p)
+        out.update(distilled=learned["rules"], profile=learned["profile"])
+    return out
+
+
+def observe_brief(p, a):
+    out = p.style.observe_brief(a)
+    learned = _learn(p)  # a finished brief is the natural moment to re-learn
+    out.update(distilled=learned["rules"], profile=learned["profile"])
+    return out
+
+
+def style_context(p, a):
+    return p.style.context(a.get("query") or a.get("topic") or "", a.get("board") or "", int(a.get("limit") or 8))
+
+
+def teach_style(p, a):
+    # A person's rule is the team's decision; an agent's is only a proposal until a person confirms it.
+    proposed = _actor(a).get("kind") != "human"
+    rule = p.style.teach(_need(a, "statement"), _author(a), a.get("scope") or "team", proposed)
+    return {"rule": rule, "profile": p.style.context("", "", 6)["text"]}
+
+
+def resolve_style(p, a):
+    _people_only(a, "confirm or dismiss a design-style rule", "the CadSwarm panel > Learned style")
+    rule = p.style.resolve(_need(a, "rule_id"), _need(a, "decision"), _author(a))
+    return {"rule": rule, "profile": p.style.context("", "", 6)["text"]}
+
+
+def list_style(p, a):
+    statuses = tuple(s for s in (a.get("statuses") or ["confirmed", "active", "candidate"]))
+    return {"rules": p.style.rules(statuses)}
+
+
 HANDLERS = {
     "list_files": list_files,
     "read_file": read_file,
@@ -175,12 +255,20 @@ HANDLERS = {
     "board_spec": board_spec,
     "recall_designs": recall_designs,
     "index_design": index_design,
+    "observe_op": observe_op,
+    "observe_brief": observe_brief,
+    "learn_style": lambda p, a: _learn(p),
+    "style_context": style_context,
+    "list_style": list_style,
+    "teach_style": teach_style,
+    "resolve_style": resolve_style,
     # FEA: solves run in the background on a copy of the model; results carry `_events` for the team.
     "fea_run": lambda p, a: p.fea.with_events(p.fea.start(a, _actor(a))),
     "fea_status": lambda p, a: p.fea.with_events(p.fea.status(a.get("job_id"))),
     "fea_publish": lambda p, a: p.fea.with_events(p.fea.publish(a.get("job_id"), a.get("summary") or "",
                                                                 a.get("improvements"), _actor(a))),
     "fea_reports": lambda p, a: p.fea.with_events(p.fea.reports()),
+    **LIBRARY_HANDLERS,
 }
 
 
@@ -195,7 +283,7 @@ def handle(project, req):
         return {"id": rid, "ok": True, "result": fn(project, args)}
     except FileError as e:
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
-    except HelperError as e:
+    except (HelperError, LibraryError, StyleError) as e:
         return {"id": rid, "ok": False, "code": e.code, "error": str(e)}
     except FeaJobError as e:
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}

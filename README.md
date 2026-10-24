@@ -122,6 +122,7 @@ Phone stand/
     fea/2026-10-23 21.05 shelf bracket/   simulation reports: report.html, report.json, plot.png
   exports/             3D files (STEP/STL), each with a new name, never overwritten or auto-deleted
   snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd"), never auto-deleted
+  library/             the team's components library: one folder per part (part.step + meta.json)
   AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
   .cadswarm-team/      the team server's data, plus older versions of files (the last 20 of each)
   README.txt           explains the above to anyone browsing the folder
@@ -206,6 +207,65 @@ publishes the report. It **pops up in every teammate's FreeCAD**, can be exporte
 lists past reports. If a helper forgets to publish, the hub publishes the automatic checks after 5 minutes.
 
 FEA here is a design aid for linear-elastic behaviour with idealised supports, not a certification.
+
+### Components library and precision settings
+
+The **Library** tab (Team panel in FreeCAD, and the web app) is the team's parts shelf, like Onshape's:
+
+- **Your team's parts.** **Upload a part…** adds a STEP, FreeCAD or STL file; **Add from a link…** adds one
+  from a direct download link (a vendor's CAD file, a model on GitHub). FreeCAD measures each part (size,
+  volume, holes) and makes a preview. Parts live with the project on the hosting computer, in `library/`.
+- **Standard parts**, built to their real dimensions: socket and button head screws (ISO 4762 / 7380), hex
+  nuts, washers, heat-set inserts, ball bearings (608 and friends), dowel pins and disc magnets.
+- **Place in model** puts the part in the shared model (you hold it) and offers to position it.
+  **Which part should I use?** describes a need ("an 8 mm axle that spins") and suggests parts, each with the
+  hole the mating part needs.
+- **More ▾ › Export the library as a pack…** saves the team's parts (and settings) as a `.zip` in the project
+  files; **Import a pack…** brings them into another project. A pack's settings arrive as suggestions only.
+
+AI helpers use the same library: they check it before modelling a screw or a bearing
+(`recommend_components`, `search_components`), place parts (`add_standard_part`, `insert_component`), size
+mating holes with the team's fits (`hole_size`), and can add a part they found online
+(`import_component_from_url`, with its license).
+
+**Precision settings** (Team tools, or the button in *Change the model yourself*) hold the team's
+clearances and fits (general clearance, slip fit, press fit), bolt-hole class (ISO 273 close / normal /
+loose), how screws hold in printed parts (heat-set inserts, tapped, self-tapping), printing values (XY
+compensation, thinnest wall, layer height), mesh precision for STL exports and previews, the smallest clash
+the clash check reports, and the part editor's decimals and arrow step. Fits are also shared sizes
+(`Params.tol_clearance`, `Params.tol_press_fit`...), so geometry bound to them updates when they change.
+
+Only people change settings. When a part implies a different value (a press-fit bearing seat, holes so small
+a 0.2 mm mesh would facet them), an AI helper **suggests** it with a reason; the suggestion waits at the top
+of Settings for someone to **Accept** or **Dismiss**.
+
+### Learned design style
+
+CadSwarm learns how your team designs and teaches it to every AI helper. The host notes each change to the
+shared model: who made it, whether a person or a helper, and what changed. It also notes every finished
+brief. From that it works out rules:
+
+- **Shared sizes the team settles on.** For example, "Params.wall is 2.4 mm".
+- **What people keep correcting** after a helper. This is the strongest signal, so it counts double.
+- **Preferred parts.** For example, "M3 heat-set inserts".
+- **Modelling habits.** For example, binding sizes to Params.
+- **Problems reviews keep finding** for a board.
+
+A rule backed by enough consistent, recent evidence from more than one person or day is **active**. Planners,
+workers, handed-off helpers and the reviewer get it in their prompts, and every helper turn shows it as
+"Team design style". Weaker rules, and rules a helper proposes (`teach_style`), wait under **Team tools ›
+Learned design style…** for a person to **Confirm** or **Dismiss**.
+
+- **Confirmed rules** are always followed and never fade.
+- **Dismissed rules** stay away until their evidence doubles.
+- **Unused learned rules** fade after about a month.
+
+You can also type a rule yourself. It is confirmed at once. The reviewer flags parts that break a rule as
+`style:` findings, and those findings feed the next round of learning.
+
+Rules live in the project database on the hosting computer, so learning works with or without Elastic.
+`python -m cadswarm.style_memory show --project <folder>` lists them. With Elastic configured, the rules
+are also mirrored and an LLM rewords them: see [ELASTIC.md](ELASTIC.md).
 
 ---
 
@@ -310,6 +370,9 @@ host\target\release\cadswarm-host --data .\team-model invite --kind human --role
 .venv\Scripts\cadswarm install-workbench
 ```
 
+Republishing an existing team's database after `module/` or `rules/` changes (owner login, keeping
+the data, bindings, restarting the host): see [docs/publishing-spacetimedb.md](docs/publishing-spacetimedb.md).
+
 ### Packaging a release
 
 The guide's first-use download needs three assets per platform. `scripts/package-release.ps1` builds
@@ -360,6 +423,10 @@ through the MCP tools instead.
   `delete_object`, `set_param`, `run_part_script`
 - **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
 - **Simulation (FEA):** `list_faces`, `run_fea` (static / modal / thermal), `fea_status`, `publish_fea_report`
+- **Components library:** `search_components`, `recommend_components`, `get_component`, `insert_component`,
+  `add_standard_part`, `hole_size`, `import_component_from_url`, `add_component_from_file`
+- **Team settings:** `get_settings`, `suggest_setting` (people accept suggestions; helpers never change settings)
+- **Team design style:** `team_style`, `style_rules`, `teach_style` (a helper's rule waits for a person)
 - **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
   `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,

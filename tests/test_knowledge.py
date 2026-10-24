@@ -136,3 +136,12 @@ def test_lessons_are_a_term_query_on_the_board_sorted_by_count(url):
     method, path, _xsrf, body = SEEN[-1]
     assert (method, path) == ("POST", "/cadswarm-lessons/_search")
     assert body == {"size": 3, "query": {"term": {"board_id": "raspberry-pi-pico"}}, "sort": [{"count": "desc"}]}
+
+
+def test_kibana_errors_carry_their_message_and_a_duplicate_counts_as_existing():
+    from cadswarm.knowledge import _already_exists
+    e = ElasticError(400, json.dumps({"statusCode": 400, "error": "Bad Request",
+                                      "message": "Tool with id cadswarm.board_docs already exists"}))
+    assert "already exists" in str(e) and _already_exists(e)
+    assert _already_exists(ElasticError(409, "{}"))
+    assert not _already_exists(ElasticError(400, json.dumps({"error": "Bad Request", "message": "bad query"})))

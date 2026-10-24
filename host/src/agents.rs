@@ -167,6 +167,9 @@ pub fn planner_prompt(brief_id: &str, text: &str, board: &str, params: &[(String
          For each part call create_task with a short title, objects = the exact FreeCAD object names it will create, \
          brief = \"{brief_id}\", and a detail that states the geometry in terms of Params names \
          (e.g. inner length = pcb_l + 2*gap). Add any extra Params you need with set_param first (lock Params, then release it). \
+         Gaps use the team's fits, which are Params too (tol_clearance, tol_slip_fit, tol_press_fit). \
+         For screws, inserts, bearings, magnets or any bought part, call recommend_components and name the chosen part \
+         (id, or standard family and size) and the hole it needs (hole_size) in the task detail. \
          Finally call set_brief_plan with brief_id \"{brief_id}\" and plan_json = a JSON object \
          {{\"parts\": [{{\"name\": ..., \"task\": ..., \"summary\": ...}}]}}. \
          Do NOT build any geometry yourself. Stop after set_brief_plan.",
@@ -179,7 +182,8 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
         "You are WORKER {n} building parts for CadSwarm brief {brief_id}.\n\
          Loop: call list_tasks; pick an OPEN task whose brief is \"{brief_id}\"; claim_task it; \
          lock_objects its object names; build exactly what its detail says, binding every dimension \
-         to Params with expressions (e.g. \"Params.pcb_l + 2 * Params.gap\"); run check_interference \
+         to Params with expressions (e.g. \"Params.pcb_l + 2 * Params.gap\"); place the parts the detail names \
+         with add_standard_part or insert_component instead of modelling them; run check_interference \
          and fix clashes with your own parts; report_result done with evidence (object names, volumes). \
          Read get_inbox between tasks and follow any steer messages. \
          When list_tasks shows no OPEN task for brief \"{brief_id}\", stop."

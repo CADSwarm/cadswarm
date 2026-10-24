@@ -4,10 +4,13 @@ import { memberColor } from '../color';
 import { mountBrief } from './brief';
 import { mountHandoff } from './handoff';
 import { mountParams } from './params';
+import { mountLibrary } from './library';
+import { mountSettings } from './settings';
 import { esc } from './esc';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
-const TABS = [['build', 'Build'], ['parts', 'Parts'], ['tasks', 'Tasks'], ['activity', 'Activity']] as const;
+const TABS = [['build', 'Build'], ['parts', 'Parts'], ['library', 'Library'], ['tasks', 'Tasks'], ['activity', 'Activity'],
+  ['settings', 'Settings']] as const;
 type Tab = typeof TABS[number][0];
 export const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 const STEP_LABEL: Record<string, string> = { new: 'Sent', planning: 'Plan', building: 'Build', reviewing: 'Review', ready: 'Ready' };
@@ -65,14 +68,18 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null) {
       <h2>Team</h2><ul id="team" class="team"></ul>
     </div>
     <div class="tab" id="tab-parts" data-tab="parts" role="tabpanel"><h2>Parts</h2><ul id="tree" class="list"></ul></div>
+    <div class="tab" id="tab-library" data-tab="library" role="tabpanel"><h2>Components library</h2><section id="library"></section></div>
     <div class="tab" id="tab-tasks" data-tab="tasks" role="tabpanel"><h2>Tasks</h2><ul id="tasks" class="list"></ul></div>
     <div class="tab" id="tab-activity" data-tab="activity" role="tabpanel"><h2>Activity</h2><ol id="activity" class="list feed"></ol></div>
+    <div class="tab" id="tab-settings" data-tab="settings" role="tabpanel"><h2>Precision settings</h2><section id="settings"></section></div>
     <div class="toast" role="status" aria-live="polite" hidden></div>`;
 
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   mountBrief($('#brief'), api, store.state.briefs.length === 0);
   mountHandoff($('#handoff'), store, api);
   mountParams($('#params'), store, api);
+  mountLibrary($('#library'), store, api);
+  mountSettings($('#settings'), store, api);
 
   // Tabs (phones only; wide screens show every section stacked).
   function select(tab: Tab) {
@@ -169,7 +176,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null) {
       `<li>${chip(a.member)} <span class="summary">${esc(a.summary)}</span> <time class="muted small">${ago(a.atMs)}</time></li>`).join('')
       || '<li class="empty muted">Quiet so far.</li>';
 
-    const counts: Record<Tab, number> = { build: 0, parts: parts.length, tasks: s.tasks.filter(t => t.status !== 'done').length, activity: 0 };
+    const counts: Record<Tab, number> = { build: 0, parts: parts.length, library: s.components.length,
+      tasks: s.tasks.filter(t => t.status !== 'done').length, activity: 0,
+      settings: s.suggestions.filter(g => g.status === 'pending').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });
 
     if (s.notice && s.notice.at !== lastNotice) {

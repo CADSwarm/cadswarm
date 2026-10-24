@@ -2,7 +2,7 @@
 // `?mock` runs it: a brief is planned, five parts are built by agents, the reviewer sends one round back,
 // then the STL is ready. The mock Api answers the panels (brief, lock, params, download) locally.
 import type { Api } from './api';
-import type { Store, Obj, Task, Activity } from './store';
+import type { Store, Obj, Task, Activity, Component } from './store';
 import { newId } from './ids';
 import { saveBytes } from './download';
 
@@ -45,7 +45,20 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     ['Base', 0, 0, 0, 70, 32, 2], ['WallN', 0, 30, 2, 70, 32, 14], ['WallS', 0, 0, 2, 70, 2, 14],
     ['Standoff1', 10, 10, 2, 13, 13, 6], ['Lid', 0, 0, 16, 70, 32, 18],
   ];
+  const mount: Component = {
+    id: 'c_nema17_mount_9d8b6b', name: 'NEMA17 motor mount', category: 'motion', tags: ['motor', 'nema17'],
+    description: 'L bracket for a NEMA17 stepper', source: 'upload', sourceUrl: '', license: 'our own design', author: 'you',
+    format: 'step', size: 48211, bbox: [0, 0, 0, 42, 42, 5], volume: 6300, uses: 2, updatedMs: Date.now(),
+    featuresJson: JSON.stringify({ holes: [{ d: 3.4, count: 4 }, { d: 22.2, count: 1 }] }),
+    suggestJson: JSON.stringify([{ setting: 'hole_clearance_class', value: 'normal', reason: '4 ISO 273 normal holes' }]),
+  };
   store.set({ connected: true, meId: 1, members, workspace: { bedXMm: 180, bedYMm: 180, bedZMm: 180 },
+    components: [mount, { ...mount, id: 'c_esp32_s3_case_1a2b3c', name: 'ESP32-S3 case (last build)', category: 'enclosure',
+      tags: ['esp32', 'case'], description: '', source: 'pack', uses: 0, bbox: [0, 0, 0, 70, 32, 18], featuresJson: '{}', suggestJson: '[]' }],
+    settings: [{ setting: 'tol_clearance', num: 0.25, text: '', setBy: 1, updatedMs: Date.now() }],
+    suggestions: [{ id: 'g_mock1', setting: 'tol_press_fit', num: 0, text: '', component: 'c_std_ball_bearing', by: 3,
+      reason: 'The 608 bearing seats are printed: printed holes come out undersize, so a nominal seat already grips.',
+      status: 'pending', createdMs: Date.now() }],
     params: [{ alias: 'wall', value: '2 mm', num: 2 }, { alias: 'gap', value: '0.5 mm', num: 0.5 },
       { alias: 'standoff_h', value: '4 mm', num: 4 }, { alias: 'clear_top', value: '17 mm', num: 17 }] });
 
@@ -163,6 +176,38 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       if (hash !== STL_HASH) throw new Error('Unknown export.');
       saveBytes(mergeStl([...store.state.previews.values()].map(p => p.mesh)), 'model/stl', filename);
     },
+    placeComponent: async req => {
+      const b = req.family === 'ball_bearing' ? [0, 0, 0, 22, 22, 7] : [0, 0, -10, 5.5, 5.5, 3];
+      const objects: Obj[] = [...store.state.objects, { name: req.name, label: req.label ?? req.name, typeId: 'Part::Feature',
+        rev: 1, bbox: b, volume: 1, visible: true, broken: false, usedBy: [], lastActor: 1 }];
+      const previews = new Map(store.state.previews);
+      previews.set(req.name, { object: req.name, rev: 1, mesh: boxStl(...(b as [number, number, number, number, number, number])) });
+      store.set({ objects, previews, locks: [...store.state.locks, { object: req.name, holder: 1 }],
+        components: store.state.components.map(c => c.id === req.component ? { ...c, uses: c.uses + 1 } : c),
+        activity: say(1, `placed ${req.label ?? req.name}`, 'status') });
+      return true;
+    },
+    addComponent: async (filename, bytes, meta) => {
+      store.set({ components: [...store.state.components, { id: newId('c_').toLowerCase(), name: meta.name || filename,
+        category: meta.category, tags: meta.tags, description: meta.description, source: 'upload', sourceUrl: '',
+        license: meta.license, author: 'you', format: filename.split('.').pop()?.toLowerCase() ?? 'step', size: bytes.length,
+        bbox: [], volume: 0, featuresJson: '{}', suggestJson: '[]', uses: 0, updatedMs: Date.now() }] });
+      return true;
+    },
+    importComponentUrl: async (url, meta) => {
+      notice(`The demo can't download ${url}; in a real build the host fetches it.`);
+      return !!meta;
+    },
+    setSetting: async (setting, num, text) => store.set({ settings: [...store.state.settings.filter(s => s.setting !== setting),
+      { setting, num, text, setBy: 1, updatedMs: Date.now() }] }),
+    resetSetting: async setting => store.set({ settings: store.state.settings.filter(s => s.setting !== setting) }),
+    resolveSuggestion: async (id, accept) => {
+      const g = store.state.suggestions.find(x => x.id === id);
+      store.set({ suggestions: store.state.suggestions.map(x => x.id === id ? { ...x, status: accept ? 'accepted' : 'dismissed' } : x),
+        settings: g && accept ? [...store.state.settings.filter(s => s.setting !== g.setting),
+          { setting: g.setting, num: g.num, text: g.text, setBy: 1, updatedMs: Date.now() }] : store.state.settings });
+    },
+    componentPreview: async id => id.startsWith('c_nema17') ? boxStl(0, 0, 0, 42, 42, 5) : id.startsWith('c_esp32') ? boxStl(0, 0, 0, 70, 32, 18) : null,
   };
   return { stop: () => clearInterval(timer), api };
 }

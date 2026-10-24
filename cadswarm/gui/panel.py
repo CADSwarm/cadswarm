@@ -29,6 +29,7 @@ from ..client import HubRequestError, load_json, save_json
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
+from . import library_ui, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -687,6 +688,8 @@ class TeamPanel(QtGui.QDockWidget):
         self.activity = QtGui.QTextBrowser()
         self.activity.setMinimumHeight(160)
         self.activity_button = self.section(lay, "Activity", self.activity)
+        self.library = library_ui.LibraryTab(session)
+        self.library_button = self.section(lay, "Library", self.library)
 
         more = QtGui.QToolButton()
         more.setText("Team tools ▾")
@@ -699,6 +702,9 @@ class TeamPanel(QtGui.QDockWidget):
                           ("Save a snapshot of the model", save_snapshot),
                           ("Simulation (FEA) reports…", show_fea_reports),
                           ("Storage and free up space…", show_storage),
+                          ("Components library…", library_ui.show_library),
+                          ("Precision settings…", library_ui.show_settings),
+                          ("Learned design style…", style_ui.show_style),
                           (None, None),
                           ("Set up a helper step by step…", add_helper), ("Invite teammates…", invite_teammates),
                           ("Restart my AI helpers", restart_helpers), ("Show my AI helpers' logs", show_helper_log),
@@ -1069,6 +1075,8 @@ class TeamPanel(QtGui.QDockWidget):
                 self.note_activity(f"{stamp} 🤝 <b style='color:#a371f7'>{html.escape(ev['name'])}</b> → "
                                    f"<b>{html.escape(ev['to'])}</b>: {body}")
             return
+        if k == "library" and self.library.loaded:
+            self.library.reload()
         line = describe_event(ev)
         if line:
             self.note_activity(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
@@ -1838,6 +1846,7 @@ class EditPartDialog(QtGui.QDialog):
     def __init__(self, session, name):
         super().__init__(Gui.getMainWindow())
         self.session, self.name = session, name
+        self.decimals, self.step = library_ui.editor_precision(session)  # the team's editing precision
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
         self.info = session.client.get(f"/objects/{name}")
         self.was_mine = self.info_owner() == session.ident["name"]
@@ -1911,11 +1920,11 @@ class EditPartDialog(QtGui.QDialog):
         self.watch.start(300)
         self.update_state()
 
-    @staticmethod
-    def spinbox(unit, low=-100000, high=100000):
+    def spinbox(self, unit, low=-100000, high=100000):
         s = QtGui.QDoubleSpinBox()
         s.setRange(low, high)
-        s.setDecimals(2)
+        s.setDecimals(self.decimals)
+        s.setSingleStep(self.step if unit != "°" else 1.0)
         s.setSuffix(f" {unit}")
         s.setKeyboardTracking(False)
         return s
@@ -2187,6 +2196,19 @@ def describe_event(ev):
         return f"{who}'s simulation: {ev.get('text')}"
     if k == "fea_failed":
         return f"{who}'s simulation of {names(ev.get('target') or [])} failed: {ev.get('error')}"
+    if k == "library":
+        bits = []
+        if ev.get("added"):
+            bits.append(f"added {names(ev['added'])} to the components library")
+        if ev.get("removed"):
+            bits.append(f"removed {names(ev['removed'])} from the library")
+        return f"{who} {' and '.join(bits)}" if bits else None
+    if k == "setting_changed":
+        return f"{who} {'reset' if ev.get('reset') else 'set'} the team setting {ev.get('setting')} to " \
+               f"{ev.get('value')}{(' ' + ev['unit']) if ev.get('unit') else ''}"
+    if k == "setting_suggested":
+        return f"{who} suggests {ev.get('setting')} = {ev.get('value')}: {ev.get('reason')} " \
+               "(accept or dismiss it in Precision settings)"
     return None
 
 
@@ -2792,6 +2814,13 @@ def register_commands():
     Gui.addCommand("CadSwarm_NewTask", Cmd("New task…", "Give the team (or yourself) something to do", lambda: (
         show_panel(), SESSION.panel.new_task())))
     Gui.addCommand("CadSwarm_EditPart", Cmd("Edit a part…", "Change a part yourself and share the change", edit_part))
+    Gui.addCommand("CadSwarm_Library", Cmd("Components library…", "Place screws, bearings, inserts or your team's own "
+                                                                "parts, or upload a STEP file", library_ui.show_library))
+    Gui.addCommand("CadSwarm_Settings", Cmd("Precision settings…", "The team's clearances, fits and precision, and "
+                                                                 "what AI helpers suggest", library_ui.show_settings))
+    Gui.addCommand("CadSwarm_Style", Cmd("Learned design style…", "The design rules CadSwarm learned from how your "
+                                                                 "team works; confirm, dismiss or teach one",
+                                         style_ui.show_style))
     Gui.addCommand("CadSwarm_TellHelper", Cmd("Chat with helpers", "Tell an AI helper what to do; it answers in the "
                                                                    "Chat", lambda: (
         show_panel(), SESSION.panel.msg.setText("@"), SESSION.panel.msg.setFocus(), SESSION.panel.maybe_complete())))
