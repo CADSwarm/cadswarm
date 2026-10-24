@@ -16,6 +16,7 @@ pub const HELPER_KINDS: &[&str] = &[
     "list_files", "read_file", "file_history", "save_file", "make_folder", "move_file", "delete_file",
     "restore_file", "snapshot", "storage_status", "prune_storage", "lookup_board", "recall_designs",
     "board_spec", "index_design",
+    "fea_run", "fea_status", "fea_publish", "fea_reports",
 ];
 pub const MAX_INLINE_RESULT: usize = 32 * 1024;
 
@@ -172,6 +173,7 @@ mod tests {
     fn file_and_knowledge_ops_go_to_the_helper() {
         assert!(is_helper_kind("save_file") && is_helper_kind("prune_storage") && is_helper_kind("lookup_board"));
         assert!(is_helper_kind("board_spec") && is_helper_kind("index_design") && is_helper_kind("recall_designs"));
+        assert!(is_helper_kind("fea_run") && is_helper_kind("fea_publish") && !is_helper_kind("faces"));
         assert!(!is_helper_kind("create_primitive") && !is_helper_kind("brep") && !is_helper_kind("export"));
     }
 

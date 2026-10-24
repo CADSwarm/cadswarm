@@ -1,5 +1,6 @@
-"""Host-side helper for ops that are not FreeCAD geometry: project files and storage and Elastic
-board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design). The
+"""Host-side helper for ops that are not FreeCAD geometry: project files and storage, Elastic
+board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design), and FEA jobs
+(fea_run, fea_status, fea_publish, fea_reports; see fea_jobs.py). The
 Rust host drives it like the FreeCAD worker:
 
     python cadswarm/helper.py <project_dir>
@@ -27,6 +28,7 @@ if __package__ in (None, ""):  # run as a script by the host: make `cadswarm` im
 from cadswarm.files import ProjectFiles, safe_label, unique_path  # noqa: E402
 from cadswarm.knowledge import Elastic, ElasticError, design_doc  # noqa: E402
 from cadswarm.paths import project_layout  # noqa: E402
+from cadswarm.fea_jobs import FeaJobError  # noqa: E402
 from cadswarm.storage import FileError  # noqa: E402
 
 
@@ -47,6 +49,15 @@ class Project:
         self.files = ProjectFiles(self.layout, self.db, clock)
         self.clock = clock
         self._elastic = None
+        self._fea = None
+
+    @property
+    def fea(self):
+        """FEA jobs, created on first use (tests set a fake runner)."""
+        if self._fea is None:
+            from cadswarm.fea_jobs import FeaJobs
+            self._fea = FeaJobs(self, self.clock)
+        return self._fea
 
     @property
     def elastic(self):
@@ -164,6 +175,12 @@ HANDLERS = {
     "board_spec": board_spec,
     "recall_designs": recall_designs,
     "index_design": index_design,
+    # FEA: solves run in the background on a copy of the model; results carry `_events` for the team.
+    "fea_run": lambda p, a: p.fea.with_events(p.fea.start(a, _actor(a))),
+    "fea_status": lambda p, a: p.fea.with_events(p.fea.status(a.get("job_id"))),
+    "fea_publish": lambda p, a: p.fea.with_events(p.fea.publish(a.get("job_id"), a.get("summary") or "",
+                                                                a.get("improvements"), _actor(a))),
+    "fea_reports": lambda p, a: p.fea.with_events(p.fea.reports()),
 }
 
 
@@ -180,6 +197,8 @@ def handle(project, req):
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
     except HelperError as e:
         return {"id": rid, "ok": False, "code": e.code, "error": str(e)}
+    except FeaJobError as e:
+        return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
     except ElasticError as e:
         return {"id": rid, "ok": False, "code": "elastic_error", "error": str(e)}
     except Exception as e:  # report, never die: the host keeps one helper for the whole session

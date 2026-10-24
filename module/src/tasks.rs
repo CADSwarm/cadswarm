@@ -91,8 +91,10 @@ pub fn send_message(ctx: &ReducerContext, fence: u32, message_id: String, to: St
     if message_id.is_empty() || ctx.db.message().id().find(&message_id).is_some() {
         return Err("bad_args: message_id must be new and non-empty".into());
     }
-    let kind = rules::message_kind(&m.kind, if kind.is_empty() { "message" } else { &kind });
-    let addr = rules::address(&to, live_by_name(ctx, m.ws, &to).map(|x| x.id));
+    let target = live_by_name(ctx, m.ws, &to);
+    let kind = rules::message_kind(&m.kind, if kind.is_empty() { "message" } else { &kind },
+                                   target.as_ref().map(|x| x.kind.as_str()))?;
+    let addr = rules::address(&to, target.as_ref().map(|x| x.id));
     let body: String = body.chars().take(4000).collect();
     let preview: String = body.chars().take(300).collect();
     ctx.db.message().insert(Message {

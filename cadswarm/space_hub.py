@@ -22,7 +22,10 @@ STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over"
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
           "not_found": 404, "bad_args": 400, "unknown_op": 400, "unreachable": 0}
 OP_WAIT_SECONDS = 150
-EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported")
+# Events that mean a member actually did something (the panel's "working" indicator).
+ACTIVE_KINDS = ("op", "task_claimed", "task_reported", "file_saved", "file_moved", "fea_started", "fea_report",
+                "snapshot", "exported", "message")
+EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed")
 
 
 def _err(e):
@@ -60,10 +63,10 @@ class SpaceHub:
             ("GET", r"/participants", self.participants_route), ("POST", r"/takeover", self.takeover),
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
-            ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat),
+            ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
-            ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief),
+            ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
             ("POST", r"/reviews", self.report_review),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
             # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
@@ -76,6 +79,10 @@ class SpaceHub:
             ("POST", r"/project/storage/prune", self.prune_storage),
             ("POST", r"/project/storage/settings", self.storage_settings),
             ("POST", r"/project/snapshot", self.snapshot),
+            # FEA: faces is a worker query; the job ops run in the host helper (cadswarm/fea_jobs.py).
+            ("POST", r"/fea/faces", self.fea_faces), ("POST", r"/fea/run", self.fea_run),
+            ("GET", r"/fea/jobs/(?P<jid>[^/]+)", self.fea_job), ("POST", r"/fea/jobs/(?P<jid>[^/]+)/publish", self.fea_publish),
+            ("GET", r"/fea/reports", self.fea_reports),
             # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
         ]
@@ -147,13 +154,13 @@ class SpaceHub:
                               "role": m["role"], "kind": m["kind"], "seq": self.latest_seq()})
         return dict(self.identity)
 
-    def create_invite(self, kind="human", role="member", ttl=86400, project=""):
-        """A fresh single-use code. Any member may mint human or agent invites; the module lets only
-        the host mint host and reviewer invites."""
+    def create_invite(self, kind="human", role="member", ttl=86400, project="", uri=None):
+        """A fresh single-use `cadswarm-2:` code. `uri` overrides the address in it (a LAN host hands out its
+        network address instead of 127.0.0.1). The module lets only the host mint host or reviewer invites."""
         from .invite import make_invite
         token = ticket.new_token()
         self._f("create_invite", ticket.hash_token(token), kind, role, int(ttl))
-        return make_invite({"v": 1, "uri": self.cfg["uri"], "db": self.cfg["db"], "token": token,
+        return make_invite({"v": 1, "uri": (uri or self.cfg["uri"]).rstrip("/"), "db": self.cfg["db"], "token": token,
                             "kind": kind, "role": role, "host_addr": ""}, project)
 
     def heartbeat(self, body):
@@ -191,9 +198,19 @@ class SpaceHub:
         locks = {}
         for l in self._rows("v_lock"):
             locks.setdefault(l["holder"], []).append(l["object"])
+        working = {}  # each member's oldest claimed task: what they're working on
+        for t in sorted(self._rows("v_task"), key=lambda t: t["updated_ms"]):
+            if t["status"] == "claimed":
+                working.setdefault(t["owner"], {"id": t["id"], "title": t["title"]})
+        acted = {}  # when each member last actually did something
+        for e in self._rows("v_event"):
+            if e["kind"] in ACTIVE_KINDS:
+                acted[e["actor"]] = max(acted.get(e["actor"], 0), e["at_ms"])
+        now_ms = time.time() * 1000
         return [{"id": m["id"], "name": m["name"], "kind": m["kind"], "client": m["client"], "role": m["role"],
                  "status": m["status"], "doing": m["status_text"], "last_seen": m["last_seen_ms"] / 1000,
-                 "locks": sorted(locks.get(m["id"], []))}
+                 "locks": sorted(locks.get(m["id"], [])), "task": working.get(m["id"]),
+                 "idle_s": round(max(0.0, now_ms - acted[m["id"]]) / 1000, 1) if m["id"] in acted else None}
                 for m in sorted(self._rows("v_member"), key=lambda m: m["id"])
                 if m["status"] not in ("left", "taken_over")]
 
@@ -247,6 +264,48 @@ class SpaceHub:
 
     def ops(self, body):
         return self.run_op(body.get("op"), body.get("args"), body.get("expected_revs"))
+
+    # ---------------------------------------------------------------------- FEA
+
+    def _fea_op(self, kind, args):
+        r = self.run_op(kind, args)
+        return {k: v for k, v in r.items() if k != "_events"} if isinstance(r, dict) else r  # events: for the module
+
+    def _fea_wait(self, out, wait):
+        """Poll fea_status from here (never inside the host, which runs one op at a time) for up to `wait` s."""
+        deadline = time.time() + min(float(wait or 0), 55.0)
+        while out.get("status") in ("queued", "running") and time.time() < deadline:
+            time.sleep(min(3.0, max(0.0, deadline - time.time())))
+            out = self._fea_op("fea_status", {"job_id": out["job_id"]})
+        return out
+
+    def fea_faces(self, body):
+        names = body.get("names") or body.get("name")
+        return self.run_op("faces", {"names": [names] if isinstance(names, str) else names or [],
+                                     "select": body.get("select")})
+
+    def fea_run(self, body):
+        args = {k: v for k, v in body.items() if k != "wait"}
+        target = args.get("target")
+        targets = [target] if isinstance(target, str) else list(target or [])
+        objects = {o["name"]: o for o in self._rows("v_object")}
+        missing = [t for t in targets if t not in objects]
+        if missing:
+            raise HubRequestError(400, {"error": f"No part named {missing} in the model (see model_status).",
+                                        "code": "bad_args"})
+        args["revs"] = {t: objects[t]["rev"] for t in targets}
+        args["seq"] = self.latest_seq()
+        return self._fea_wait(self._fea_op("fea_run", args), body.get("wait", 0))
+
+    def fea_job(self, jid, wait=0):
+        return self._fea_wait(self._fea_op("fea_status", {"job_id": jid}), wait)
+
+    def fea_publish(self, body, jid):
+        return self._fea_op("fea_publish", {"job_id": jid, "summary": body.get("summary") or "",
+                                            "improvements": body.get("improvements") or []})
+
+    def fea_reports(self):
+        return self._fea_op("fea_reports", {})
 
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})
@@ -379,7 +438,7 @@ class SpaceHub:
     def _unconsumed(self):
         me = self.me_id
         consumed = {r["message_id"] for r in self._rows("v_receipt") if r["member"] == me and r["state"] == "consumed"}
-        rank = {"steer": 0, "handoff": 1}
+        rank = {"steer": 0, "handoff": 1, "chat": 3}  # people's chat is background, read last
         mine = [m for m in self._rows("v_message")
                 if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
@@ -392,6 +451,31 @@ class SpaceHub:
         return {"messages": [{"id": m["id"], "from": names.get(m["from"], "?"), "to": "all" if m["to"] == "all" else "you",
                               "kind": m["kind"], "body": m["body"], "task_id": m["task_id"] or None,
                               "at": m["created_ms"] / 1000} for m in rows]}
+
+    def commands(self, limit=20):
+        """The instructions this person sent to AI helpers and how far each got: sent (not read yet), seen (the
+        helper read it) or done (the helper said it handled it)."""
+        names = self._names()
+        members = [m for m in self._rows("v_member") if m["status"] not in ("left", "taken_over")]
+        agents = [m["id"] for m in members if m["kind"] != "human"]
+        receipts = {(r["message_id"], r["member"]): r["state"] for r in self._rows("v_receipt")}
+        mine = sorted((m for m in self._rows("v_message") if m["from"] == self.me_id and m["kind"] == "steer"),
+                      key=lambda m: m["created_ms"], reverse=True)[:int(limit)]
+        order = ("sent", "seen", "done")
+        out = []
+        for m in mine:
+            if m["to"] == "all":
+                targets = agents
+            elif m["to"].startswith("member:"):
+                targets = [int(m["to"].split(":", 1)[1])]
+            else:
+                targets = []  # addressed to someone who hasn't joined yet
+            states = {names.get(t, str(t)): {"delivered": "seen", "consumed": "done"}.get(receipts.get((m["id"], t)), "sent")
+                      for t in targets}
+            out.append({"id": m["id"], "body": m["body"], "at": m["created_ms"] / 1000, "task_id": m["task_id"] or None,
+                        "to": "all helpers" if m["to"] == "all" else self._to_name(m["to"], names),
+                        "state": min(states.values(), key=order.index) if states else "sent", "by_helper": states})
+        return {"commands": out}
 
     def ack(self, body):
         ids = list(body.get("ids", []))
@@ -453,9 +537,12 @@ class SpaceHub:
                                                                if k not in ("seq", "ts", "kind", "actor")))
         unread = self._unconsumed()
         if unread:
-            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages:")
+            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
+                         "COMMAND = a person's instruction for you: do it first. chat = people talking: "
+                         "background only, act on it only if it asks you something:")
             for m in unread[:5]:
-                lines.append(f"- [{m['kind']}] {names.get(m['from'], '?')}: {m['body'][:200]}")
+                tag = {"steer": "COMMAND", "chat": "chat"}.get(m["kind"], m["kind"])
+                lines.append(f"- [{tag}] {names.get(m['from'], '?')}: {m['body'][:200]}")
         self._f("set_context_seq", seq)
         text = "\n".join(lines)
         return {"context": text if len(text) <= max_chars else text[:max_chars - 20] + "\n…(truncated)"}
@@ -466,6 +553,19 @@ class SpaceHub:
         plan = body.get("plan_json")
         self._f("set_brief", bid, "", plan if isinstance(plan, str) else json.dumps(plan))
         return {"brief": bid, "ok": True}
+
+    def briefs(self, limit=20):
+        """Requests handed to the whole team (the host plans them into tasks and starts helpers), newest first,
+        with how many of each one's tasks are done."""
+        names = self._names()
+        tasks = self._rows("v_task")
+        out = []
+        for b in sorted(self._rows("v_brief"), key=lambda b: b["created_ms"], reverse=True)[:int(limit)]:
+            mine = [t for t in tasks if t.get("brief") == b["id"]]
+            out.append({"id": b["id"], "text": b["text"], "status": b["status"], "by": names.get(b["by"], "?"),
+                        "at": b["created_ms"] / 1000, "tasks": len(mine),
+                        "done": sum(1 for t in mine if t["status"] == "done")})
+        return {"briefs": out}
 
     def submit_brief(self, body):
         bid = ticket.new_id("b_")

@@ -26,9 +26,9 @@ import FreeCADGui as Gui
 from PySide import QtCore, QtGui
 
 from .. import hosting
-from ..agent_setup import CLIENTS, FIRST_PROMPT, find_agent_cli, open_agent_terminal, redeem, trust_in_codex, \
-    write_agent_config
-from ..client import HubRequestError, load_json, state_dir
+from ..agent_setup import CLIENTS, find_agent_cli, identity_matches, open_agent_terminal, redeem, trust_in_codex, \
+    write_agent_config, write_launcher
+from ..client import HubRequestError
 from ..invite import InviteError, read_invite
 from ..paths import freecad_python, projects_dir, resolve_project_folder
 from ..space import SpaceError
@@ -247,7 +247,23 @@ class Checklist(QtGui.QWidget):
                 self.timer.stop()
 
 
+NO_PYTHON = ("This FreeCAD has no Python of its own (the snap and Flatpak versions of FreeCAD don't include "
+             "one), so it can't run a team server or connect an AI helper by itself. You can still join a "
+             "teammate's project from here. To host, install FreeCAD from freecad.org (the AppImage on Linux), "
+             "or set CADSWARM_FREECAD_PYTHON to a FreeCAD Python before starting FreeCAD.")
+
+
 class SetupWizard(QtGui.QDialog):
+    @property
+    def python(self):
+        """FreeCAD's bundled Python; raises a plain-language error where a step needs one and there is none."""
+        if self._python is None:
+            try:
+                self._python = freecad_python()
+            except RuntimeError:
+                raise RuntimeError(NO_PYTHON)
+        return self._python
+
     def __init__(self, reason=None, start=None):
         super().__init__(Gui.getMainWindow())
         self.setWindowTitle("CadSwarm — get started")
@@ -255,7 +271,7 @@ class SetupWizard(QtGui.QDialog):
         self.setStyleSheet(STYLE)
         self.reason = reason
         self.p = panel.prefs()
-        self.python = freecad_python()
+        self._python = None       # looked up only when hosting or connecting a helper needs it
         self.mode = None          # "host" | "join"
         self.host_mode = "maincloud"
         self.project = self.p.GetString("ProjectName")
@@ -774,9 +790,10 @@ class SetupWizard(QtGui.QDialog):
 
     def agent_invite(self, role):
         """A single-use agent invite, or (when this folder already signed in) just its team details."""
-        if load_json(os.path.join(state_dir(self.folder), "identity.json")):
-            return {"v": 1, "uri": self.uri or self.p.GetString("Uri"), "db": self.db or self.p.GetString("Db"),
-                    "token": "", "kind": "agent", "role": role, "host_addr": ""}
+        team = {"v": 1, "uri": self.uri or self.p.GetString("Uri"), "db": self.db or self.p.GetString("Db"),
+                "token": "", "kind": "agent", "role": role, "host_addr": ""}
+        if identity_matches(self.folder, team):  # one signed in to another team, or the old hub, starts over
+            return team
         return read_invite(panel.SESSION.client.create_invite("agent", role, 86400, self.project))
 
     def step_write_config(self, log):
@@ -785,6 +802,7 @@ class SetupWizard(QtGui.QDialog):
         self.agent_name = f"{slug(self.name)}-{self.client}"
         written = write_agent_config(self.folder, self.client, self.agent_invite(self.my_role()), self.agent_name,
                                      python=self.python)
+        written.append(write_launcher(self.folder, self.client, self.project, self.my_role()))
         for f in written:
             log(f"wrote {f}")
         self.p.SetString("AgentClient", self.client)
@@ -806,21 +824,13 @@ class SetupWizard(QtGui.QDialog):
                  "tools — say <b>Yes</b>." if self.client == "claude"
                  else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
         lay.addWidget(label(f"<b>2.</b> A window opens. {trust} If it asks you to sign in, follow its steps."))
-        role = self.my_role()
-        prompt = FIRST_PROMPT[role].format(project=self.project)
         if self.client == "codex":
             lay.addWidget(label("<b>3.</b> Type <code>/hooks</code> and trust the <b>CadSwarm</b> hook. Codex skips "
                                 "hooks you haven't approved, so without this it won't see its team's updates. "
                                 "Do it again after updating CadSwarm."))
-        n = 4 if self.client == "codex" else 3
-        lay.addWidget(label(f"<b>{n}.</b> Paste this as your first message and press Enter:"))
-        box = QtGui.QPlainTextEdit(prompt)
-        box.setReadOnly(True)
-        box.setMaximumHeight(70)
-        lay.addWidget(box)
-        copy = QtGui.QPushButton("Copy message")
-        copy.clicked.connect(lambda: copy_to_clipboard(prompt, copy))
-        lay.addWidget(copy, 0, QtCore.Qt.AlignLeft)
+        lay.addWidget(label("Your helper gets its first instructions automatically and starts working with the "
+                            "team — nothing to paste. Next time, open it again from the team panel "
+                            "(“Add AI helper”) and it carries on where it left off.", "hint"))
         lay.addSpacing(6)
         self.helper_status = label("⏳ Waiting for your AI helper to join the team…")
         lay.addWidget(self.helper_status)

@@ -349,6 +349,9 @@ def host_env():
     """What `cadswarm-host` and `spacetime` run with: this checkout on PYTHONPATH (inside FreeCAD the
     package lives in the add-on folder, not site-packages) and the CLI's folder on PATH."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+    # A FreeCAD AppImage exports PYTHONHOME for its own Python; passed on, it breaks every other Python the host
+    # starts (agent CLIs' tools, a system Python). FreeCAD's bundled Python finds its home without it.
+    env.pop("PYTHONHOME", None)
     env["PYTHONPATH"] = os.pathsep.join(p for p in (ROOT, env.get("PYTHONPATH")) if p)
     # A downloaded host lives in the app folder, far from this checkout's board library.
     boards = os.path.join(ROOT, "boards", "boards.json")

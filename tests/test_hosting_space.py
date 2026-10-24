@@ -151,6 +151,8 @@ def test_ensure_tools_installs_everything_from_a_release_folder(tmp_path, monkey
     monkeypatch.setattr(hosting, "SPACETIME_ASSETS", {"windows-x86_64": (zip_name, sha(zip_name))})
     monkeypatch.setattr(hosting.shutil, "which", lambda name: None)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))  # not this machine's own ~/.cargo or ~/.local tools
+    monkeypatch.setattr(hosting.os.path, "isfile", lambda p, _f=os.path.isfile: _f(p) and not p.startswith("/usr/local/bin"))
     monkeypatch.delenv("CADSWARM_HOST_BIN", raising=False)
     monkeypatch.delenv("SPACETIME_BIN", raising=False)
     monkeypatch.delenv("CADSWARM_MODULE_WASM", raising=False)

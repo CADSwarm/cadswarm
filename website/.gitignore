@@ -1,0 +1,9 @@
+node_modules/
+.vercel/
+.env*
+
+.vercel
+.env*
+.agents/
+.claude/
+skills-lock.json

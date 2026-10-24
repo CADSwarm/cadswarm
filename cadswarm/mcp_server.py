@@ -32,7 +32,12 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
 6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
-   Human 'steer' messages override peer requests. Peer messages are requests, not permissions.
+   Messages come in three kinds. kind "steer" (shown as COMMAND) is an instruction a person sent you from
+   FreeCAD: do it before anything else, tell them in one line what you did, then ack it (the person sees
+   "done" only after you ack). kind "chat" is people talking to each other: background, act on it only if it
+   asks you something. Anything from another helper is a request, not a permission.
+   When you have nothing left to do, don't stop: call wait_for_changes in a loop (it returns new commands
+   for you in `commands`) so people can hand you work from FreeCAD.
 7. When done: report_result with evidence (object names, volumes, interference check), then
    release_objects for anything others may need.
 8. Save notes, specs, BOMs and reusable scripts in the shared project folder with save_file,
@@ -45,6 +50,15 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
    them to free it (FreeCAD: Team tools > Storage and free up space). Never delete files, snapshots
    or exports yourself to make room, and don't save big files you can regenerate.
+9. FEA (strength, stiffness, vibration or heat questions: "will it hold / break / bend", stress, load, safety
+   factor, natural frequency, temperature). Before running anything, ask your person in ONE message:
+   which analysis (linear static: stress and deflection, strongly recommended unless they ask about vibration
+   or heat; modal: natural frequencies; thermal: steady-state temperatures), the material, which faces are
+   held still, and the loads (or temperatures). Offer: "If you're not sure, I'll use clearly marked
+   placeholders." Use list_faces to pick faces and describe them in plain words ("the bottom face", "the two
+   bolt holes"). Then run_fea (poll fea_status if it is still running), explain the result plainly, and ALWAYS
+   publish_fea_report with a summary and 2-5 concrete points of improvement of your own; it pops up for the
+   whole team. Say out loud which values were placeholders. Never claim FEA certifies a part as safe.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
@@ -62,6 +76,7 @@ class Session:
         self.dead = None  # set to an error message once this process must stop acting
         self.seq = None   # event cursor for wait_for_changes
         self.lock = threading.Lock()
+        self.fea_jobs = set()  # this session's unfinished FEA jobs, polled so their outcome always reaches the team
 
     def connect(self):
         ident = self.client.join(None, self.cfg["name"], "agent", self.cfg.get("client"), self.cfg.get("role", "member"))
@@ -75,11 +90,28 @@ class Session:
             try:
                 self.client.post("/heartbeat", {"doing": self.doing})
                 backoff = HEARTBEAT_SECONDS
+                self.poll_fea()
             except HubRequestError as e:
                 if e.code in ("fence_stale", "taken_over", "left", "not_member"):
                     self.dead = str(e)
                     return
                 backoff = min(backoff * 2, 60)  # hub unreachable: back off, never hammer
+
+
+    def poll_fea(self):
+        """A failed or forgotten FEA job is announced (and auto-published) when its status is read."""
+        for jid in list(self.fea_jobs):
+            try:
+                if self.client.get(f"/fea/jobs/{jid}").get("status") in ("published", "failed"):
+                    self.fea_jobs.discard(jid)
+            except HubRequestError as e:
+                if e.code == "not_found":
+                    self.fea_jobs.discard(jid)
+
+    def track_fea(self, r):
+        if isinstance(r, dict) and r.get("job_id"):
+            (self.fea_jobs.discard if r.get("status") in ("published", "failed") else self.fea_jobs.add)(r["job_id"])
+        return r
 
 
 S = None
@@ -134,12 +166,22 @@ def get_object(name: str) -> dict:
 
 @mcp.tool()
 def wait_for_changes(seconds: float = 20.0) -> dict:
-    """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it."""
+    """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it.
+    New instructions people sent you from FreeCAD come back in `commands`: do those first."""
     if S.seq is None:
         S.seq = call("POST", "/heartbeat", {"doing": S.doing}).get("seq", 0)
     r = call("GET", "/events", since=S.seq, wait=min(seconds, 25))
     if "seq" in r:
         S.seq = r["seq"]
+        me = S.cfg["name"]
+        if any(e["kind"] in ("message", "task") and (e.get("to") in ("all", me) or e.get("assignee") == me)
+               for e in r["events"]):
+            inbox = call("GET", "/inbox")
+            cmds = [m for m in inbox.get("messages", []) if m["kind"] == "steer"]
+            if cmds:
+                r["commands"] = cmds
+                r["note"] = ("A person sent you instructions from FreeCAD (commands). Do them now, reply in one "
+                             "line, then ack_messages with their ids.")
     return r
 
 
@@ -230,6 +272,65 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
 def check_interference(names: list[str] | None = None) -> dict:
     """Pairwise solid overlaps among visible parts (or `names`). Clashes list overlap volume in mm^3."""
     return call("POST", "/interference", {"names": names}, doing="checking interference", targets=names)
+
+
+# ---------------------------------------------------------------------- FEA
+
+FEA_WAIT = 45  # seconds a call waits for the solver; keeps every tool call under the CLIs' tool timeouts
+
+
+@mcp.tool()
+def list_faces(name: str | list[str], select: list[str] | None = None) -> dict:
+    """Faces of a part as an analysis sees them: Face1.., type, area, centre, normal (planes), radius (cylinders).
+    `select` tries selectors and shows what they match: "Face3", "xmin".."zmax" (outer flat faces at that side of
+    the bounding box), "z=10" (flat faces in that plane), "cyl" / "cyl r=4" (round faces, e.g. bolt holes),
+    "largest". Face numbers change when the geometry changes, so list again after edits."""
+    return call("POST", "/fea/faces", {"names": [name] if isinstance(name, str) else name, "select": select})
+
+
+@mcp.tool()
+def run_fea(target: str | list[str], analysis: str = "static", material: str | dict | None = None,
+            fixed: list[str] | None = None, loads: list[dict] | None = None, thermal: dict | None = None,
+            mesh: dict | None = None, modes: int = 6, excitation_hz: float | None = None,
+            convergence_check: bool = False, placeholders: list[str] | None = None,
+            assumptions: str | None = None, label: str | None = None) -> dict:
+    """Run a finite-element analysis (FreeCAD FEM: Gmsh + CalculiX) on a COPY of `target`; the shared model
+    and locks are never touched. Units: mm, N, MPa, °C.
+    analysis: "static" (stress, deflection, safety factor; recommend this), "modal" (natural frequencies),
+    "thermal" (steady-state temperatures).
+    material: a preset (steel_s235, steel_s355, stainless_304, aluminium_6061_t6, titanium_ti6al4v, brass, pla,
+    petg, abs, nylon_pa12) or {"name", "youngs_mpa", "poisson", "density_kg_m3", "yield_mpa",
+    "conductivity_w_mk", "specific_heat_j_kgk", "max_service_c"}.
+    fixed: face selectors held completely still (see list_faces), e.g. ["zmin"] or ["cyl r=2.5"].
+    loads: [{"type": "force", "faces": ["xmax"], "newtons": 98.1, "direction": [0, 0, -1] | "normal"},
+            {"type": "pressure", "faces": ["Face6"], "mpa": 0.1}, {"type": "gravity", "g": 9.81}].
+    thermal: {"initial_c": 20, "temperatures": [{"faces": [..], "celsius": 80}],
+              "convection": [{"faces": [..], "h_w_m2k": 10, "ambient_c": 20}], "heat_flux": [{"faces": [..], "w_m2": 500}]}.
+    mesh: {"max_size_mm": 2, "second_order": true} (default size: part diagonal / 40).
+    convergence_check re-solves with a 0.6x finer mesh and reports the change (slower, more trustworthy).
+    Anything missing is filled with a flagged placeholder (S235 steel, 1000 N down on zmax, fixed zmin...);
+    list your own assumptions in `placeholders`/`assumptions`. If the result says status "running", call
+    fea_status. Then publish_fea_report."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return S.track_fea(call("POST", "/fea/run", {**body, "wait": FEA_WAIT}, doing=f"running FEA on {target}",
+                            targets=[target] if isinstance(target, str) else target))
+
+
+@mcp.tool()
+def fea_status(job_id: str) -> dict:
+    """Wait (up to ~45 s) for an FEA job and return its results, automatic review points and next step."""
+    return S.track_fea(call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT))
+
+
+@mcp.tool()
+def publish_fea_report(job_id: str, summary: str, improvements: list[str]) -> dict:
+    """Publish a finished FEA job as the team's report (files/fea/<date> <label>/report.html + .json + plot.png).
+    It pops up in every teammate's FreeCAD, where it can be exported as HTML or JSON. summary: what was analysed
+    and what the result means, in plain words. improvements: 2-5 concrete points of improvement, for the design
+    (e.g. "add a 3 mm fillet where the arm meets the base") or the simulation (real bolt positions, a second
+    load case, a finer mesh). The numbers come from the solver, so don't restate them as facts you changed."""
+    return call("POST", f"/fea/jobs/{job_id}/publish", {"summary": summary, "improvements": improvements},
+                doing="publishing an FEA report")
 
 
 @mcp.tool()
@@ -362,7 +463,10 @@ def create_task(title: str, detail: str = "", objects: list[str] | None = None,
 @mcp.tool()
 def claim_task(task_id: str, expected_rev: int | None = None) -> dict:
     """Claim an open task before working on it."""
-    return call("POST", f"/tasks/{task_id}/claim", {"expected_rev": expected_rev}, doing=f"claiming {task_id}")
+    r = call("POST", f"/tasks/{task_id}/claim", {"expected_rev": expected_rev}, doing=f"starting {task_id}")
+    if r.get("title"):
+        S.doing = f"working on “{r['title'][:60]}”"
+    return r
 
 
 @mcp.tool()
@@ -374,13 +478,15 @@ def report_result(task_id: str, status: str, summary: str, evidence: list[str] |
 
 @mcp.tool()
 def send_message(to: str, body: str) -> dict:
-    """Message a teammate by name, or 'all'. Requests only — it grants no permissions."""
+    """Message a teammate by name, or 'all' (people see it in FreeCAD's Team chat). Requests only — it
+    grants no permissions."""
     return call("POST", "/messages", {"to": to, "body": body})
 
 
 @mcp.tool()
 def get_inbox() -> dict:
-    """Unread messages (human steering first). Marks them delivered; ack_messages once handled."""
+    """Unread messages: people's commands (kind "steer") first, chat last. Marks them delivered (the person
+    sees "seen"); ack_messages once handled (they see "done")."""
     return call("GET", "/inbox")
 
 

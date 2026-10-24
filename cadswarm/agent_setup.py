@@ -38,18 +38,30 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 - Shared dimensions go in the `Params` sheet (`set_param`); bind geometry with expressions
   like `Params.hole_pitch` so a change propagates to every part that depends on it.
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
-- Read `get_inbox` often, `ack_messages` what you handled. Human `steer` messages come first.
+- Read `get_inbox` often, `ack_messages` what you handled. A person's COMMAND (kind `steer`, sent from
+  FreeCAD's "Tell a helper" tab) comes first: do it, say what you did, then ack it. `chat` is people
+  talking; only act on it if it asks you. When you run out of work, keep calling `wait_for_changes`
+  so new commands and tasks reach you.
 - Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
   subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
   `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and
   save with `if_exists="replace"` and its `expected_version`. `save_snapshot` before risky changes.
   Never write files any other way; your own working folder is not shared with the team.
 - Finish with `report_result` (evidence: object names, volumes, interference) and release locks.
+- Strength, stiffness, vibration or heat questions ("will it hold?", stress, load, natural frequency,
+  temperature) are FEA tasks. First ask, in one message: which analysis (recommend **linear static**
+  unless it's about vibration or heat), the material, which faces are held still, and the loads or
+  temperatures; offer to use clearly marked placeholders if your human doesn't know. Pick faces with
+  `list_faces`, run `run_fea` (then `fea_status` while it runs), explain the result plainly, and always
+  `publish_fea_report` with a summary and 2-5 points of improvement: it pops up for the whole team.
 - Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
   team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
   `model_status` and `get_inbox` yourself first.
 {end}
 """
+
+RESUME_PROMPT = ("We're continuing our team's CAD project \"{project}\". Check model_status, your inbox and the "
+                 "tasks, then carry on with your part. Tell me in plain words what you're doing.")
 
 FIRST_PROMPT = {
     "lead": "You're leading our team's CAD project \"{project}\". Ask me what we're building, then plan the "
@@ -170,6 +182,7 @@ def setup_codex(project, python):
         f"command = {toml_string(python)}",
         f"args = [{toml_string(LAUNCHER)}, 'mcp']",
         f"env = {{ CADSWARM_PROJECT = {toml_string(project)} }}",
+        "tool_timeout_sec = 120  # FEA tool calls wait up to ~75 s for the solver",
         "",
         "# UserPromptSubmit injects team context (who holds which parts, what changed) before each prompt.",
         "[hooks]",
@@ -233,6 +246,15 @@ def redeem(t, name, client):
             "fence": me["fence"], "name": me["name"], "role": me["role"], "kind": me["kind"]}
 
 
+def identity_matches(project, invite):
+    """True if `project` already holds a SpacetimeDB sign-in for the team `invite` points at. A sign-in for
+    another team, or one left by the old FastAPI hub, doesn't count (it would only be refused)."""
+    ident = load_json(os.path.join(state_dir(project), "identity.json")) or {}
+    cfg = load_json(os.path.join(state_dir(project), "config.json")) or {}
+    return bool(ident.get("token")) and "hub" not in ident and isinstance(ident.get("participant_id"), int) \
+        and cfg.get("db") == invite.get("db") and cfg.get("uri", "").rstrip("/") == invite.get("uri", "").rstrip("/")
+
+
 def write_agent_config(project, client, invite, name, python=None, fresh=False):
     """Everything an AI helper in `project` needs to join the team. Returns the files written.
     `invite` is a decoded ticket (see invite.read_invite). The invite is redeemed only when this
@@ -250,7 +272,9 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False):
         f.write("*\n")  # identity.json holds a SpacetimeDB token
     writers = {"claude": setup_claude, "codex": setup_codex, "droid": setup_droid}
     written = writers[client](project, python)
-    if not load_json(ident_path):
+    if not identity_matches(project, invite):
+        if not invite.get("token"):
+            raise ValueError("This helper folder isn't signed in to this team yet; it needs a fresh invite code.")
         save_json(ident_path, redeem(invite, name, client))
     save_json(os.path.join(state_dir(project), "config.json"), {
         "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
@@ -287,16 +311,55 @@ def find_agent_cli(client):
                  if os.path.isfile(c) and (os.name == "nt" or os.access(c, os.X_OK))), None)
 
 
+def _sh_quote(text):
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+
+def write_launcher(project, client, project_name, role):
+    """The start script for this helper: starts the agent CLI with its first message, so nobody has to paste it;
+    later starts send a short "carry on" message instead."""
+    exe = find_agent_cli(client) or CLIENTS[client]["exe"]
+    first = FIRST_PROMPT[role].format(project=project_name)
+    resume = RESUME_PROMPT.format(project=project_name)
+    sd = state_dir(project)
+    if os.name == "nt":
+        q = lambda t: '"' + t.replace('"', "'") + '"'  # noqa: E731  (cmd has no way to escape a quote here)
+        text = "\r\n".join([
+            "@echo off", "rem Starts your CadSwarm AI helper (written by the CadSwarm guide).",
+            f'cd /d "{project}"',
+            f'if exist ".cadswarm\\started" ( "{exe}" {q(resume)} & goto :eof )',
+            'type nul > ".cadswarm\\started"', f'"{exe}" {q(first)}', ""])
+        path = os.path.join(sd, "start-helper.cmd")
+    else:
+        text = "\n".join([
+            "#!/bin/sh", "# Starts your CadSwarm AI helper (written by the CadSwarm guide).",
+            f"cd {_sh_quote(project)} || exit 1",
+            f"if [ -f .cadswarm/started ]; then exec {_sh_quote(exe)} {_sh_quote(resume)}; fi",
+            "touch .cadswarm/started", f"exec {_sh_quote(exe)} {_sh_quote(first)}", ""])
+        path = os.path.join(sd, "start-helper.sh")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    if os.name != "nt":
+        os.chmod(path, 0o700)
+    return path
+
+
 def open_agent_terminal(client, project):
-    """Open a terminal window in `project` running the AI helper. Returns a short status string."""
+    """Open a terminal window in `project` running the AI helper (through its start script when the guide wrote
+    one, which also sends the first message). Returns the agent's path."""
     exe = find_agent_cli(client)
     if not exe:
         raise FileNotFoundError(f"{CLIENTS[client]['label']} isn't installed on this computer yet.")
+    launcher = os.path.join(state_dir(project), "start-helper.cmd" if os.name == "nt" else "start-helper.sh")
+    # Not FreeCAD's bundle settings: an AppImage's PYTHONHOME would break any other Python the agent starts.
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
     if os.name == "nt":
-        subprocess.Popen(["cmd.exe", "/k", exe], cwd=project, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        cmd = ["cmd.exe", "/k", launcher if os.path.exists(launcher) else exe]
+        subprocess.Popen(cmd, cwd=project, env=env, creationflags=subprocess.CREATE_NEW_CONSOLE)
     elif sys.platform == "darwin":
-        cmd = f"cd {shlex.quote(project)} && {shlex.quote(exe)}"
-        as_str = cmd.replace("\\", "\\\\").replace('"', '\\"')
+        run = (f"sh {shlex.quote(launcher)}" if os.path.exists(launcher)
+               else f"cd {shlex.quote(project)} && {shlex.quote(exe)}")
+        as_str = run.replace("\\", "\\\\").replace('"', '\\"')  # an AppleScript string literal
         script = f'tell application "Terminal" to do script "{as_str}"'
         subprocess.Popen(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'])
     else:
@@ -305,16 +368,15 @@ def open_agent_terminal(client, project):
             "kitty", "alacritty", "xterm")) if p), None)
         if not term:
             raise FileNotFoundError("Couldn't find a terminal program to open.")
+        argv = ["sh", launcher] if os.path.exists(launcher) else [exe]
         name = os.path.basename(os.path.realpath(term))
         if name in ("gnome-terminal", "gnome-terminal.wrapper", "kgx"):
-            args = [term, "--", exe]
-        elif name == "konsole":
-            args = [term, "-e", exe]
+            args = [term, "--", *argv]
         elif name == "xfce4-terminal":
-            args = [term, "-x", exe]
+            args = [term, "-x", *argv]
         elif name == "kitty":
-            args = [term, exe]
-        else:
-            args = [term, "-e", exe]
-        subprocess.Popen(args, cwd=project)
+            args = [term, *argv]
+        else:  # konsole, alacritty, xterm and the rest
+            args = [term, "-e", *argv]
+        subprocess.Popen(args, cwd=project, env=env)
     return exe

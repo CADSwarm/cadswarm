@@ -4,23 +4,34 @@
 
 Each teammate's AI helper (Claude Code, Codex, Droid, or the CLI you already use) builds part of one
 shared 3D model, live.
-You watch the parts appear in FreeCAD and chat with the helpers to steer them.
+You watch the parts appear in FreeCAD, give the helpers tasks and instructions, and change parts
+yourself when that's quicker.
 
-## Get started (Windows, macOS or Linux, about 5 minutes)
+## Get started (about 5 minutes)
+
+**Quick install:** paste one line into a terminal. It downloads CadSwarm, finds FreeCAD (and offers to
+install the official FreeCAD if you don't have it), puts CadSwarm into FreeCAD, offers a shortcut, and opens
+FreeCAD.
+
+| | Paste this |
+|---|---|
+| **Windows** (PowerShell) | `irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 \| iex` |
+| **macOS** (Terminal) | `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh \| bash` |
+| **Linux** (terminal) | `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh \| bash` |
+
+Or install by hand:
 
 1. **Install FreeCAD** (free) from [freecad.org/downloads](https://www.freecad.org/downloads.php).
-   Default options are fine.
+   Default options are fine. On Linux, use the official AppImage: the snap, Flatpak and distro packages
+   have no Python of their own, so with them you can join a team but not start one (the installer offers to
+   fetch the official FreeCAD for you).
 2. **Download CadSwarm**: on this page click the green **Code** button, then **Download ZIP**.
    Unzip it anywhere, for example your Downloads folder.
-3. **Run the installer** in the unzipped folder. It puts CadSwarm into FreeCAD, offers a desktop
-   shortcut, and opens FreeCAD.
-   - *Windows:* double-click `Install CadSwarm.cmd`.
-   - *macOS:* right-click `Install CadSwarm.command` and choose **Open** (the first time, macOS asks
-     because the file came from the internet).
-   - *Linux:* in a terminal, `sh "Install CadSwarm.command"`. Use FreeCAD from your distribution's
-     packages (`sudo apt install freecad`), or extract the AppImage into `~/Applications/FreeCAD` with
-     `--appimage-extract`: CadSwarm needs a FreeCAD whose Python it can run, which Flatpak and Snap
-     installs don't offer.
+3. **Run the installer** in the unzipped folder:
+   - Windows: double-click **`Install CadSwarm.cmd`**.
+   - macOS: double-click **`Install CadSwarm.command`** (if macOS says it can't be opened, right-click it,
+     choose **Open**, then **Open** again).
+   - Linux: run `bash "Install CadSwarm.sh"` (or right-click it and choose **Run as a Program**).
 4. **Follow the guide that opens in FreeCAD.**
    - *First person on the team:* choose **Start a new team project**, name it, and copy the
      **invite code** to your teammates.
@@ -51,10 +62,48 @@ own after a reboot until you do).
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
   FreeCAD.
 - The first setup downloads about 70 MB of helper software into CadSwarm's app folder, plus the team
-  server download above if you host. Nothing is installed into FreeCAD itself.
+  server download above if you host. Nothing is installed into FreeCAD itself. On Linux, an official FreeCAD
+  the installer fetched for you is unpacked there too (`FreeCAD-<version>`, about 3 GB).
+- Installer options (macOS/Linux, after `| bash -s --` or on `install/install.sh`): `--yes` (no questions;
+  never downloads FreeCAD), `--get-freecad`, `--no-shortcut`, `--no-launch`. `CADSWARM_FREECAD` picks a
+  specific FreeCAD; `CADSWARM_REF` makes the quick install use another branch or tag.
 - When you start a team, the guide asks **where to save the project** (default
   `Documents\CadSwarm\<project name>`). If you pick a folder that already has other things in it,
   the project gets its own subfolder there, so your files are never mixed in or overwritten.
+
+## Working with your team in FreeCAD
+
+The **CadSwarm Team** panel on the right (wide, with large text and buttons) has four tabs, so talking and
+giving orders never get mixed up:
+
+- **Who's here** (top) shows every person and AI helper. A helper that is busy shows a turning
+  **◐ Working on "…"**; one with nothing to do shows **Ready for instructions**.
+- **Tasks**: click **＋ New task…**, say what kind of task it is (build a part, change one, check strength,
+  fix clashes), describe it, and pick who does it: a helper, "whichever helper is free first", or yourself.
+  Leave **Start right away** ticked and the helper is told to begin. For a task that's already on the
+  list, use **Ask to start**, **I'll do it** or **Mark done**.
+- **Tell a helper**: instructions for one AI helper (or all of them). A helper does these before anything
+  else. Each one shows **⏳ not read yet**, **👀 read — working on it** or **✓ done**. The quick buttons fill in
+  common ones (check for clashes, run a strength check, give me a status, pause, let go of a part).
+  Helpers read new instructions when they finish a step, and between tasks they wait for new ones, so you
+  don't have to go back to their window. Pick **🧠 The whole team — plan it and build it** instead of a
+  helper to hand over a whole request ("a stand for a 7 mm thick phone"): the team server plans it into
+  tasks and starts AI helpers itself (using the agent CLI on the hosting computer), and the list shows its
+  progress (*planning*, *building (1/3 parts done)*, *done*).
+- **Helpers start themselves.** When the guide connects an AI helper and you click **Open**, it starts
+  with its first instructions already sent; nothing to paste. Opening it again later sends a short
+  "carry on" instead.
+- **Team chat**: people talking to each other. Helpers can read it, and their replies show up here marked
+  *(AI helper)*, but they never take chat as an order.
+- **Activity**: what happened, written by CadSwarm (parts added, tasks finished, files saved, reports).
+
+**Changing a part yourself.** Select the part in the 3D view and click **✎ Edit a part…**. While the
+editor is open, the part is held by you, so no helper can change it at the same time. Type a new size
+or position, or move it with FreeCAD's own **Edit ▸ Placement** / **Transform** and the editor picks up the
+move. **Save to team** sends the change to everyone; **Done** hands the part back. A part held by a helper
+offers **Ask … to let go** (or, if it has gone quiet, **Free it anyway**). If you move a part in the 3D view
+without opening the editor, CadSwarm puts it back and explains, so your view never silently differs
+from your team's.
 
 ## Your project folder
 
@@ -64,6 +113,7 @@ Phone stand/
   files/               notes, plans, BOMs and scripts the AI helpers saved, in subfolders that
     parts/base/notes.md  grow as the project does
     docs/bom.csv
+    fea/2026-10-23 21.05 shelf bracket/   simulation reports: report.html, report.json, plot.png
   exports/             3D files (STEP/STL), each with a new name, never overwritten or auto-deleted
   snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd"), never auto-deleted
   AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
@@ -127,6 +177,29 @@ Big projects are welcome, but the host's computer is protected and a project can
   a person.
 - Binary files up to 100 MB are accepted over HTTP; a 100 MB save briefly needs about 500 MB of RAM on the
   host while it is decoded.
+
+### Strength checks (FEA)
+
+Ask your AI helper things like *"will this bracket hold 10 kg?"*, *"what's the natural frequency of the
+arm?"* or *"how hot does the motor mount get?"*. It recognises a simulation request and asks you, in one
+message, which analysis to run (it recommends **linear static**: stress, deflection and safety factor;
+**modal** and **steady-state thermal** are also available), the material, which faces are held still and
+the loads. If you don't know, it uses clearly marked placeholders (generic S235 steel, 1000 N on the top
+face, bottom face fixed...) and the report says so in a yellow box.
+
+The analysis runs FreeCAD's own FEM tools (Gmsh mesher + CalculiX solver, both in the standard FreeCAD
+download) on a **copy** of the part. If this FreeCAD has no Gmsh (some Linux packages and snaps), the team
+server installs it once by itself: the official Gmsh 4.15.2 build from PyPI, checked against a fixed SHA-256,
+unpacked into `%APPDATA%\CadSwarm\tools` (`~/.local/share/CadSwarm/tools` elsewhere), never into FreeCAD or the
+system. Set `CADSWARM_NO_AUTO_INSTALL=1` to turn that off. The solve runs in a separate process: the shared model, its locks and everyone else's
+work are untouched, and one long solve never blocks the team. When it finishes, the helper adds a plain-words
+summary and its own points of improvement to the automatic checks (safety factor, stress peaks at supports or
+sharp corners, coarse mesh, no convergence check, resonance, temperature limits, placeholders...) and
+publishes the report. It **pops up in every teammate's FreeCAD**, can be exported as a self-contained
+**HTML** page or as **JSON** data, and is kept in `files/fea/`. **Team tools > Simulation (FEA) reports...**
+lists past reports. If a helper forgets to publish, the hub publishes the automatic checks after 5 minutes.
+
+FEA here is a design aid for linear-elastic behaviour with idealised supports, not a certification.
 
 ---
 
@@ -280,6 +353,7 @@ through the MCP tools instead.
 - **Modelling:** `create_primitive`, `create_extrusion`, `boolean`, `set_props`, `set_placement`,
   `delete_object`, `set_param`, `run_part_script`
 - **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
+- **Simulation (FEA):** `list_faces`, `run_fea` (static / modal / thermal), `fea_status`, `publish_fea_report`
 - **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
   `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
@@ -304,21 +378,24 @@ spec the local library lacks. See [ELASTIC.md](ELASTIC.md).
    (someone who lost their identity file) inherits that participant's own work.
 7. Tasks and messages can be addressed to a teammate who hasn't joined yet. They're delivered when
    that name joins.
-8. Human messages are `steer` messages and always come first in every inbox. Peer messages are
-   requests, never permissions.
+8. A person's instructions to a helper are `steer` messages (shown as COMMAND) and always come first
+   in every inbox; the sender sees sent → seen (delivered) → done (acknowledged). Team chat is `chat`,
+   last in the inbox and never treated as an order. Only people can give commands; a person's
+   "command" to another person is delivered as chat. Peer messages are requests, never permissions.
 
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m pytest        # 255 tests; the integration and sandbox tests drive real FreeCAD
+.venv\Scripts\python -m pytest        # the integration and sandbox tests drive real FreeCAD
 ```
 
 See [demo/README.md](demo/README.md) for a three-agent demo script.
 
 ## Known limits (hackathon MVP)
 
-- The FreeCAD mirror is read-only. Human geometry edits go through the panel (lock, param,
-  takeover) or an agent, not direct GUI modelling.
+- Hand edits go through **✎ Edit a part**: sizes of primitives (box, cylinder, sphere, cone, torus) and
+  position/rotation of any part. Sketch-based or fused parts can be moved but not reshaped by hand; ask a
+  helper for those.
 - `run_part_script` is sandboxed (see "Model scripts run in a sandbox"), but how well depends on the
   platform: strong on Windows with AppContainers, much weaker on macOS/Linux and in the Windows fallback.
   Each script also pays about half a second to start its own FreeCAD process. The sandbox protects your

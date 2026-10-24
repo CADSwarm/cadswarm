@@ -37,11 +37,18 @@ pub struct WorkerDriver {
     timeout: Duration,
     running: Option<Running>,
     next_id: u64,
+    env: Vec<(String, String)>,
 }
 
 impl WorkerDriver {
     pub fn new(python: PathBuf, script: PathBuf, doc: PathBuf, timeout: Duration) -> Self {
-        WorkerDriver { python, script, doc, timeout, running: None, next_id: 0 }
+        WorkerDriver { python, script, doc, timeout, running: None, next_id: 0, env: vec![] }
+    }
+
+    /// An extra environment variable for the child (e.g. the helper learns FreeCAD's Python for FEA).
+    pub fn with_env(mut self, key: &str, value: impl Into<String>) -> Self {
+        self.env.push((key.to_string(), value.into()));
+        self
     }
 
     fn start(&mut self) -> Result<(), WorkerError> {
@@ -52,6 +59,7 @@ impl WorkerDriver {
             .env("CADSWARM_FREECAD_BIN", bin_dir)
             .env("PYTHONIOENCODING", "utf-8")
             .env("PYTHONUNBUFFERED", "1")
+            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

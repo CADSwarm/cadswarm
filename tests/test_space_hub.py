@@ -280,3 +280,62 @@ def test_storage_settings_are_host_only(world):
     with pytest.raises(HubRequestError) as e:
         hub.post("/project/storage/settings", {"limit_gb": 5})
     assert e.value.code == "host_only"
+
+
+# ---- the FreeCAD dashboard: commands (sent / seen / done), chat last, what each helper is doing
+
+def test_commands_show_sent_seen_done(world):
+    hub, fake = world
+    fake.tables["v_me"] = [member(3, "carol", kind="human", fence=2)]
+    hub.identity["participant_id"] = 3
+    fake.tables["v_message"] = [
+        {"id": "m_1", "from": 3, "to": "member:2", "kind": "steer", "body": "make the lid 20 mm", "task_id": "", "created_ms": 10},
+        {"id": "m_2", "from": 3, "to": "all", "kind": "steer", "body": "check for clashes", "task_id": "", "created_ms": 11},
+        {"id": "m_3", "from": 3, "to": "all", "kind": "chat", "body": "hi team", "task_id": "", "created_ms": 12},
+    ]
+    fake.tables["v_receipt"] = [{"message_id": "m_1", "member": 2, "state": "delivered"},
+                                {"message_id": "m_2", "member": 2, "state": "delivered"}]
+    cmds = {c["body"]: c for c in hub.get("/commands")["commands"]}
+    assert set(cmds) == {"make the lid 20 mm", "check for clashes"}  # chat isn't an instruction
+    assert cmds["make the lid 20 mm"]["state"] == "seen" and cmds["make the lid 20 mm"]["to"] == "bob-codex"
+    assert cmds["check for clashes"]["state"] == "sent"  # alice hasn't read it yet
+    assert cmds["check for clashes"]["by_helper"] == {"alice-claude": "sent", "bob-codex": "seen"}
+    fake.tables["v_receipt"][0]["state"] = "consumed"
+    assert {c["body"]: c for c in hub.get("/commands")["commands"]}["make the lid 20 mm"]["state"] == "done"
+
+
+def test_chat_comes_last_and_commands_are_labelled_for_agents(world):
+    hub, fake = world
+    fake.tables["v_message"].append({"id": "m_e", "from": 3, "to": "all", "kind": "chat", "body": "lunch at 1?",
+                                     "task_id": "", "created_ms": 0})
+    kinds = [m["kind"] for m in hub.get("/inbox")["messages"]]
+    assert kinds[0] == "steer" and kinds[-1] == "chat"
+    ctx = hub.get("/context")["context"]
+    assert "[COMMAND] carol: use M4 bolts" in ctx and "[chat] carol: lunch at 1?" in ctx
+
+
+def test_participants_say_what_each_helper_is_working_on(world, monkeypatch):
+    hub, fake = world
+    fake.tables["v_task"][0].update(status="claimed", owner=2, title="Base plate")
+    fake.tables["v_event"].append({"seq": 6, "kind": "op", "actor": 2, "at_ms": 100_000, "data_json": "{}"})
+    monkeypatch.setattr("cadswarm.space_hub.time.time", lambda: 112.0)
+    team = {p["name"]: p for p in hub.participants()}
+    assert team["bob-codex"]["task"] == {"id": "t_1", "title": "Base plate"}
+    assert team["bob-codex"]["idle_s"] == 12.0
+    assert team["alice-claude"]["task"] is None and team["alice-claude"]["idle_s"] is None
+
+
+def test_requests_to_the_whole_team_show_their_progress(world):
+    hub, fake = world
+    fake.tables["v_brief"] = [
+        {"id": "b_old", "by": 3, "text": "a phone stand", "board": "", "status": "ready", "plan_json": "",
+         "stl_hash": "", "created_ms": 1, "updated_ms": 2},
+        {"id": "b_new", "by": 3, "text": "an enclosure for the pico", "board": "", "status": "building", "plan_json": "",
+         "stl_hash": "", "created_ms": 5, "updated_ms": 6}]
+    fake.tables["v_task"] = [dict(fake.tables["v_task"][0], id="t_a", brief="b_new", status="done"),
+                             dict(fake.tables["v_task"][0], id="t_b", brief="b_new", status="claimed")]
+    briefs = hub.get("/briefs")["briefs"]
+    assert [b["id"] for b in briefs] == ["b_new", "b_old"]  # newest first
+    assert (briefs[0]["tasks"], briefs[0]["done"], briefs[0]["by"]) == (2, 1, "carol")
+    r = hub.post("/briefs", {"text": "a lid"})
+    assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]
