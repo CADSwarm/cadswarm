@@ -99,6 +99,27 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
     def release(body: dict = Body(...), p=Depends(me)):
         return hub.release(p["id"], body.get("names", []), bool(body.get("force")))
 
+    # ------------------------------------------------------------------ FEA
+    @app.post("/fea/faces")
+    def fea_faces(body: dict = Body(...), p=Depends(me)):
+        return hub.fea_faces(body.get("names") or body.get("name"), body.get("select"))
+
+    @app.post("/fea/run")
+    def fea_run(body: dict = Body(...), p=Depends(me)):
+        return hub.fea_start(p["id"], {k: v for k, v in body.items() if k != "wait"}, body.get("wait", 0))
+
+    @app.get("/fea/jobs/{jid}")
+    def fea_job(jid: str, wait: float = 0, p=Depends(me)):
+        return hub.fea_job(jid, wait)
+
+    @app.post("/fea/jobs/{jid}/publish")
+    def fea_publish(jid: str, body: dict = Body(default={}), p=Depends(me)):
+        return hub.fea_publish(p["id"], jid, body.get("summary", ""), body.get("improvements"))
+
+    @app.get("/fea/reports")
+    def fea_reports(p=Depends(me)):
+        return hub.fea_reports()
+
     @app.post("/interference")
     def interference(body: dict = Body(default={}), p=Depends(me)):
         return hub.query("interference", {"names": body.get("names"), "min_volume": body.get("min_volume", 1e-3)})

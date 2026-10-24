@@ -162,3 +162,49 @@ def test_project_files_snapshots_and_exports_over_http(hub_env):
     assert e1["file"] != e2["file"] and e1["file"].startswith("Phone stand ")
     s, blob = a("GET", e2["url"])
     assert s == 200 and b"ISO-10303-21" in blob
+
+
+def test_fea_on_a_copy_matches_beam_theory(hub_env):
+    """Steel cantilever 100 x 20 x 10 mm, fixed at x=0, 1000 N down at the tip: δ = FL³/3EI ≈ 0.952 mm."""
+    import os
+    http, hub, data = hub_env
+    a = agent(http, "hana-claude", "claude")
+    b = agent(http, "ivan-codex", "codex")
+    s, r = op(a, "create_primitive", kind="box", name="Cantilever", props={"Length": 100, "Width": 20, "Height": 10},
+              placement={"base": [0, 500, 0]})
+    assert s == 200
+    s, faces = a("POST", "/fea/faces", {"names": ["Cantilever"], "select": ["xmin", "xmax", "cyl"]})
+    assert s == 422 and faces["code"] == "bad_args" and "cyl" in faces["error"]  # a box has no round faces: refused with a reason
+    s, faces = a("POST", "/fea/faces", {"names": ["Cantilever"], "select": ["xmin", "xmax"]})
+    assert s == 200 and faces["face_count"] == 6 and len(faces["selected"]["xmin"]) == 1
+    mtime, objects = os.path.getmtime(hub.worker.doc_path), {o["name"] for o in hub.model()["objects"]}
+
+    body = {"target": "Cantilever", "material": "steel_s235", "fixed": ["xmin"], "mesh": {"max_size_mm": 3},
+            "loads": [{"type": "force", "faces": ["xmax"], "newtons": 1000, "direction": [0, 0, -1]}]}
+    s, job = a("POST", "/fea/run", {**body, "wait": 0})
+    assert s == 200 and job["status"] in ("queued", "running", "done")
+    s, r = op(b, "create_primitive", kind="sphere", name="Marble", props={"Radius": 2},
+              placement={"base": [0, -300, 0]})
+    assert s == 200  # the solve runs in its own process: teammates keep working meanwhile
+    s, job = a("GET", f"/fea/jobs/{job['job_id']}?wait=55")
+    if job.get("code") in ("missing_tool", "missing_mesher"):
+        pytest.skip(job["error"])
+    assert job["status"] == "done", job
+    res = job["results"]
+    assert res["max_displacement_mm"] == pytest.approx(0.952, rel=0.15)
+    assert res["max_displacement_vector"][2] < 0  # it bends down, the way it was pushed
+    assert res["max_von_mises_mpa"] == pytest.approx(300, rel=0.25)
+    assert abs(res["reactions"][0]["fz"] - 1000) < 50
+    assert os.path.getmtime(hub.worker.doc_path) > mtime  # only because Marble was added...
+    after = {o["name"] for o in hub.model()["objects"]}
+    assert after == objects | {"Marble"} and not any(n.startswith(("Fem", "Mesh", "Analysis")) for n in after)
+
+    s, pub = a("POST", f"/fea/jobs/{job['job_id']}/publish", {"summary": "Bends 1 mm.", "improvements": ["Thicker"]})
+    assert s == 200 and pub["files"]["html"].endswith("report.html")
+    s, page = a("POST", "/project/files/read", {"path": pub["files"]["html"]})
+    assert "Bends 1 mm." in page["text"]
+
+    s, job = a("POST", "/fea/run", {"target": "Cantilever", "analysis": "modal", "material": "steel_s235",
+                                    "fixed": ["xmin"], "mesh": {"max_size_mm": 3}, "wait": 55})
+    first = [m["hz"] for m in job["results"]["modes"] if m["hz"] >= 1][0]
+    assert first == pytest.approx(836, rel=0.15)  # (1.875²/2π)·√(EI/ρAL⁴)

@@ -566,9 +566,50 @@ def q_dependents(a):
     return {"dependents": sorted(seen)}
 
 
+def fea_target(names):
+    import fea_runner  # next to this file, like sandbox
+    if not names:
+        raise OpError("bad_args", "Name the part(s) to analyse")
+    shapes = []
+    for n in names:
+        shape = getattr(get_obj(n), "Shape", None)
+        if shape is None or shape.isNull() or not shape.Solids:
+            raise OpError("bad_args", f"{n} has no solid to analyse")
+        shapes.append(shape)
+    try:
+        return fea_runner.analysis_shape(Part.makeCompound(shapes) if len(shapes) > 1 else shapes[0])
+    except fea_runner.FeaError as e:
+        raise OpError(e.code, str(e))
+
+
+def q_faces(a):
+    """Faces of the part(s) an analysis would mesh, plus what `select` selectors resolve to."""
+    import fea_runner
+    names = a.get("names") or []
+    shape, warnings = fea_target(names)
+    bb = shape.BoundBox
+    out = {"names": names, "bbox": [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)],
+           "faces": fea_runner.face_table(shape)[:300], "face_count": len(shape.Faces), "warnings": warnings}
+    if a.get("select"):
+        try:
+            out["selected"] = {s: fea_runner.select_faces(shape, [s]) for s in a["select"]}
+        except fea_runner.FeaError as e:
+            raise OpError(e.code, str(e))
+    return out
+
+
+def q_fea_shape(a):
+    """A BREP copy of the target(s) for the FEA process; the live document is only read."""
+    names = a.get("names") or []
+    shapes = [get_obj(n).Shape for n in names]
+    fea_target(names)  # same checks as list_faces, so errors show up before a job is queued
+    return {"brep": (Part.makeCompound(shapes) if len(shapes) > 1 else shapes[0]).exportBrepToString()}
+
+
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
+           "faces": q_faces, "fea_shape": q_fea_shape,
            "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],
                               "script_sandbox": sandbox.info(sys.executable)}}
 

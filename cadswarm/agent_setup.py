@@ -42,6 +42,12 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
   save with `if_exists="replace"` and its `expected_version`. `save_snapshot` before risky changes.
   Never write files any other way; your own working folder is not shared with the team.
 - Finish with `report_result` (evidence: object names, volumes, interference) and release locks.
+- Strength, stiffness, vibration or heat questions ("will it hold?", stress, load, natural frequency,
+  temperature) are FEA tasks. First ask, in one message: which analysis (recommend **linear static**
+  unless it's about vibration or heat), the material, which faces are held still, and the loads or
+  temperatures; offer to use clearly marked placeholders if your human doesn't know. Pick faces with
+  `list_faces`, run `run_fea` (then `fea_status` while it runs), explain the result plainly, and always
+  `publish_fea_report` with a summary and 2-5 points of improvement: it pops up for the whole team.
 - Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
   team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
   `model_status` and `get_inbox` yourself first.
@@ -167,6 +173,7 @@ def setup_codex(project, python):
         f"command = {toml_string(python)}",
         f"args = [{toml_string(LAUNCHER)}, 'mcp']",
         f"env = {{ CADSWARM_PROJECT = {toml_string(project)} }}",
+        "tool_timeout_sec = 120  # FEA tool calls wait up to ~75 s for the solver",
         "",
         "# UserPromptSubmit injects team context (who holds which parts, what changed) before each prompt.",
         "[hooks]",

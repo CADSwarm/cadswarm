@@ -13,8 +13,25 @@ CLIs add to the model's context. Contract borrowed from Amoeba's prompt hooks:
 """
 import json
 import os
+import re
 import sys
 import threading
+
+# Words that usually mean "simulate this". A false positive only adds a short reminder.
+FEA_WORDS = re.compile(r"\b(fea|fem|finite[- ]element|stress(es|ed)?|strain|deflect\w*|deform\w*|bend(s|ing)?|"
+                       r"loads?|loaded|loading|strength|strong enough|(will|would|can|does) (it|this|that) hold|holds? (up|\d+)|support \d+|break(s|ing)?|crack\w*|yield\w*|"
+                       r"safety factor|simulat\w*|natural freq\w*|vibrat\w*|resonan\w*|modal|eigen\w*|"
+                       r"thermal|heat\w*|temperatures?|how hot|overheat\w*)\b", re.I)
+FEA_HINT = ("\n## This looks like an FEA (simulation) request\n"
+            "Before simulating, ask in ONE message: which analysis — linear static (stress, deflection, safety "
+            "factor; recommend it unless they ask about vibration or heat), modal (natural frequencies) or thermal "
+            "(steady-state temperatures) — plus the material, the faces held still and the loads/temperatures. "
+            "Offer clearly marked placeholders if they don't know. Then list_faces, run_fea, fea_status, explain, "
+            "and always publish_fea_report with a summary and 2-5 points of improvement.")
+
+
+def fea_hint(prompt):
+    return FEA_HINT if isinstance(prompt, str) and FEA_WORDS.search(prompt) else ""
 
 
 def main():
@@ -42,6 +59,8 @@ def main():
             return  # never join here: that would bump the fence and supersede the live MCP server
         client.timeout = 1.8
         text = client.get("/context")["context"]
+        hint = fea_hint(payload.get("prompt") if isinstance(payload, dict) else None)
+        text = text[:6000 - len(hint)] + hint
         # Windows pipes default to the ANSI codepage; the CLIs read hook output as UTF-8.
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stdout.write(text[:6000] + "\n")

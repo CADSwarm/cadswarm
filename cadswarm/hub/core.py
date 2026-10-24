@@ -20,6 +20,7 @@ is testable with a fake worker. Concepts carried over from Amoeba:
 * Tasks (create -> claim at revision -> report) and messages (delivered vs
   consumed receipts, human steering first) mirror Amoeba's swarm.
 """
+import base64
 import json
 import os
 import shutil
@@ -29,6 +30,7 @@ import time
 import uuid
 
 from ..config import ORPHAN_AFTER_SECONDS, STALE_AFTER_SECONDS
+from . import fea
 from .files import FileError, ProjectFiles, safe_label, unique_path
 from .worker_client import WorkerError
 
@@ -49,6 +51,9 @@ CREATE TABLE IF NOT EXISTS messages (
   task_id TEXT, created_at REAL);
 CREATE TABLE IF NOT EXISTS receipts (
   message_id TEXT, participant_id TEXT, state TEXT, at REAL, PRIMARY KEY (message_id, participant_id));
+CREATE TABLE IF NOT EXISTS fea_jobs (
+  id TEXT PRIMARY KEY, pid TEXT NOT NULL, status TEXT NOT NULL, job TEXT NOT NULL, result TEXT, plot BLOB,
+  revs TEXT, seq INTEGER, folder TEXT, report TEXT, created_at REAL, finished_at REAL, published_at REAL);
 """
 
 # Which argument names an op must hold locks on (beyond what it creates).
@@ -90,6 +95,11 @@ class Hub:
         self.db.executescript(SCHEMA)
         self.layout = layout
         self.files = ProjectFiles(layout, self.db, clock) if layout else None
+        self.fea_slot = threading.Semaphore(1)  # one solve at a time; CalculiX already uses every core
+        self.fea_done = threading.Condition()
+        self.fea_notes = {}  # job id -> latest progress note (e.g. "Installing the Gmsh mesher…")
+        self.x("UPDATE fea_jobs SET status='failed', result=? WHERE status IN ('queued','running')",
+               json.dumps({"ok": False, "code": "hub_restarted", "error": "The team server restarted mid-analysis."}))
 
     # ---------------------------------------------------------- project files
 
@@ -392,6 +402,14 @@ class Hub:
             for row in self.q("SELECT * FROM participants WHERE status='stale' AND stale_since < ?",
                               now - ORPHAN_AFTER_SECONDS):
                 self.leave(row["id"])
+            # A finished analysis always reaches the team, even if its AI helper never publishes it.
+            for row in self.q("SELECT j.id FROM fea_jobs j LEFT JOIN participants p ON p.id=j.pid "
+                              "WHERE j.status='done' AND (j.finished_at < ? OR p.status IS NULL OR "
+                              "p.status != 'active')", now - fea.PUBLISH_GRACE):
+                try:
+                    self.fea_publish(HUB_ID, row["id"], auto=True)
+                except HubError as e:
+                    print(f"[hub] auto-publishing {row['id']} failed: {e}")
 
     def _resume_tasks(self, pid):
         self.x("UPDATE tasks SET status='claimed', rev=rev+1, updated_at=? WHERE owner=? AND status='awaiting_takeover'",
@@ -575,6 +593,155 @@ class Hub:
                  "locks": self.locks_of(r["id"])}
                 for r in self.q("SELECT * FROM participants WHERE status NOT IN ('left','taken_over') ORDER BY joined_at")]
 
+    # -------------------------------------------------------------------- FEA
+
+    def fea_faces(self, names, select=None):
+        names = [names] if isinstance(names, str) else list(names or [])
+        return self.query("faces", {"names": names, "select": select})
+
+    def fea_start(self, pid, args, wait=0.0):
+        """Queue an analysis of a copy of the target; it never touches the live model or its locks."""
+        try:
+            job = fea.normalize_job(args)
+        except fea.FeaInputError as e:
+            raise HubError(400, "bad_args", str(e))
+        brep = self.query("fea_shape", {"names": job["target"]})["brep"]
+        with self.lock:
+            jid = new_id("fea")
+            revs = {r["name"]: r["rev"] for r in self.q(
+                f"SELECT name, rev FROM objects WHERE name IN ({','.join('?' * len(job['target']))})", *job["target"])}
+            ahead = self.one("SELECT COUNT(*) AS n FROM fea_jobs WHERE status IN ('queued','running')")["n"]
+            self.x("INSERT INTO fea_jobs (id, pid, status, job, revs, seq, created_at) VALUES (?,?,?,?,?,?,?)",
+                   jid, pid, "queued", json.dumps(job), json.dumps(revs), self.seq(), self.clock())
+            self.emit("fea_started", pid, name=self.name_of(pid), job_id=jid, target=job["target"],
+                      analysis=job["analysis"])
+        threading.Thread(target=self._fea_thread, args=(jid, job, brep), daemon=True).start()
+        out = self.fea_job(jid, wait)
+        if out["status"] in ("queued", "running") and ahead:
+            out["queue_position"] = ahead
+        return out
+
+    def _fea_thread(self, jid, job, brep):
+        with self.fea_slot:
+            with self.lock:
+                self.x("UPDATE fea_jobs SET status='running' WHERE id=?", jid)
+            def progress(text):  # e.g. a one-time mesher install: tell the team why it's taking a while
+                with self.lock:
+                    row = self.one("SELECT pid FROM fea_jobs WHERE id=?", jid)
+                    self.emit("fea_progress", row["pid"], name=self.name_of(row["pid"]), job_id=jid, text=text)
+                    self.fea_notes[jid] = text
+            try:
+                result, png = fea.run_job(self.worker.python, job, brep, progress=progress)
+            except Exception as e:  # never leave a job 'running' forever
+                result, png = {"ok": False, "code": "fea_error", "error": f"{type(e).__name__}: {e}"}, None
+        with self.lock:
+            self.fea_notes.pop(jid, None)
+            ok = bool(result.get("ok"))
+            self.x("UPDATE fea_jobs SET status=?, result=?, plot=?, finished_at=? WHERE id=?",
+                   "done" if ok else "failed", json.dumps(result), png, self.clock(), jid)
+            row = self.one("SELECT pid FROM fea_jobs WHERE id=?", jid)
+            if not ok:
+                self.emit("fea_failed", row["pid"], name=self.name_of(row["pid"]), job_id=jid,
+                          target=job["target"], error=result.get("error", "")[:300])
+                self.system_message(row["pid"], f"FEA job {jid} failed: {result.get('error')}")
+        with self.fea_done:
+            self.fea_done.notify_all()
+
+    def fea_job(self, jid, wait=0.0):
+        """Job state; long-polls up to `wait` seconds while it is queued or running."""
+        deadline = time.time() + min(float(wait or 0), 55.0)
+        while True:
+            with self.lock:
+                row = self.one("SELECT * FROM fea_jobs WHERE id=?", jid)
+            if not row:
+                raise HubError(404, "unknown_job", f"No FEA job {jid}")
+            if row["status"] not in ("queued", "running") or time.time() >= deadline:
+                break
+            with self.fea_done:
+                self.fea_done.wait(min(1.0, max(0.05, deadline - time.time())))
+        job = json.loads(row["job"])
+        out = {"job_id": jid, "status": row["status"], "analysis": job["analysis"], "target": job["target"],
+               "placeholders": job["placeholders"]}
+        if row["status"] in ("queued", "running"):
+            out["next_step"] = f"call fea_status('{jid}') to keep waiting"
+            if jid in self.fea_notes:
+                out["note"] = self.fea_notes[jid]
+        elif row["status"] == "failed":
+            r = json.loads(row["result"] or "{}")
+            out.update(error=r.get("error"), code=r.get("code"))
+        else:
+            r = json.loads(row["result"])
+            out.update(results=r.get("results"), mesh=r.get("mesh"), warnings=r.get("warnings"),
+                       geometry=r.get("geometry"), resolved_faces=r.get("resolved"),
+                       automatic_points=[i["text"] for i in fea.rules(job, r)],
+                       headline=fea.build_report(jid, job, r, "", 0, 0, {}, 0, "", [], False, 0)["headline"])
+            if row["status"] == "done":
+                out["next_step"] = (f"publish_fea_report('{jid}', summary, improvements): explain the result in "
+                                    "plain words and add 2-5 points of improvement of your own")
+            else:
+                out["report_folder"] = f"files/{row['folder']}"
+        return out
+
+    def fea_publish(self, pid, jid, summary="", improvements=None, auto=False):
+        """Write the report into files/fea/<stamp> <label>/ and pop it up in every teammate's FreeCAD."""
+        with self.lock:
+            row = self.one("SELECT * FROM fea_jobs WHERE id=?", jid)
+            if not row:
+                raise HubError(404, "unknown_job", f"No FEA job {jid}")
+            if row["status"] == "published":
+                raise HubError(409, "already_published", f"{jid} is already published in files/{row['folder']}",
+                               folder=row["folder"])
+            if row["status"] != "done":
+                raise HubError(409, "not_ready", f"{jid} is {row['status']}; only a finished analysis can be published")
+            owner = self.one("SELECT status FROM participants WHERE id=?", row["pid"])
+            if not auto and pid != row["pid"] and owner and owner["status"] == "active":
+                raise HubError(403, "not_owner", f"{jid} belongs to {self.name_of(row['pid'])}")
+            if self.files is None:
+                raise HubError(501, "no_project_folder", "This team server has no project folder for reports.")
+            points = []
+            for p in improvements or []:
+                p = {"text": p} if isinstance(p, str) else dict(p or {})
+                if str(p.get("text") or "").strip():
+                    sev = p.get("severity") if p.get("severity") in ("critical", "warning", "info") else "info"
+                    points.append({"text": str(p["text"])[:1000], "severity": sev})
+            job, result = json.loads(row["job"]), json.loads(row["result"])
+            report = fea.build_report(jid, job, result, self.name_of(row["pid"]), row["created_at"], row["finished_at"],
+                                      json.loads(row["revs"] or "{}"), row["seq"], str(summary or "")[:4000],
+                                      points[:10], auto, self.clock())
+            stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(self.clock()))
+            base = f"fea/{stamp} {safe_label(job['label'] or '-'.join(job['target']), 'analysis')}"
+            folder, n = base, 2
+            while os.path.exists(self.files.full(self.files.clean(folder, allow_folder=True))):
+                folder, n = f"{base} {n}", n + 1
+            files = {"json": f"{folder}/report.json", "html": f"{folder}/report.html"}
+            if row["plot"]:
+                files["plot"] = f"{folder}/plot.png"
+            report["files"] = files
+            author = self.name_of(row["pid"])
+            if row["plot"]:
+                self._file_call(self.files.save, files["plot"], author,
+                                base64_data=base64.b64encode(row["plot"]).decode())
+            self._file_call(self.files.save, files["json"], author, text=json.dumps(report, indent=2))
+            self._file_call(self.files.save, files["html"], author, text=fea.render_html(report))
+            self.x("UPDATE fea_jobs SET status='published', folder=?, report=?, published_at=? WHERE id=?",
+                   folder, json.dumps(report), self.clock(), jid)
+            self.emit("fea_report", row["pid"], name=author, report_id=jid, folder=folder, title=report["title"],
+                      analysis=job["analysis"], verdict=report["verdict"], headline=report["headline"],
+                      placeholders=len(job["placeholders"]), auto=auto)
+            return {"published": True, "folder": f"files/{folder}", "files": files, "verdict": report["verdict"],
+                    "headline": report["headline"], "improvements": len(report["improvements"])}
+
+    def fea_reports(self, limit=100):
+        rows = self.q("SELECT id, pid, folder, report, published_at FROM fea_jobs WHERE status='published' "
+                      "ORDER BY published_at DESC LIMIT ?", limit)
+        out = []
+        for r in rows:
+            rep = json.loads(r["report"])
+            out.append({"id": r["id"], "by": rep["by"], "folder": r["folder"], "title": rep["title"],
+                        "analysis": rep["analysis"], "verdict": rep["verdict"], "headline": rep["headline"],
+                        "published_at": r["published_at"], "placeholders": len(rep["inputs"]["placeholders"])})
+        return {"reports": out}
+
     # ------------------------------------------------------------------ tasks
 
     def create_task(self, pid, title, detail="", objects=None, assignee=None):
@@ -732,7 +899,7 @@ class Hub:
                                  f"{t['title']}")
             events = self.q("SELECT * FROM events WHERE seq > ? AND actor != ? AND kind IN "
                             "('op','taken_over','stale','joined','task','task_reported','file_saved','file_moved','file_deleted',"
-                            "'snapshot') ORDER BY seq DESC LIMIT 12",
+                            "'snapshot','fea_report','fea_failed') ORDER BY seq DESC LIMIT 12",
                             since, pid)
             if events:
                 lines.append("Since your last prompt:")
@@ -743,8 +910,15 @@ class Hub:
                                      f"deleted {d['deleted']} recomputed {d['recomputed']}")
                     elif e["kind"] == "file_saved":
                         lines.append(f"- {d['name']} saved files/{d['path']} (v{d['version']})")
+                    elif e["kind"] == "fea_report":
+                        lines.append(f"- {d['name']} published FEA report \"{d['title']}\" ({d['verdict']}: "
+                                     f"{d['headline']}): files/{d['folder']}/report.json")
                     else:
                         lines.append(f"- {e['kind']}: " + ", ".join(f"{k}={v}" for k, v in d.items()))
+            for j in self.q("SELECT id, status FROM fea_jobs WHERE pid=? AND status IN ('queued','running','done')", pid):
+                lines.append(f"FEA job {j['id']} is {j['status']}: " + (
+                    "call publish_fea_report now with your summary and points of improvement (the team is waiting "
+                    "for the report)." if j["status"] == "done" else "check it with fea_status."))
             unread = self._unconsumed(pid)
             if unread:
                 lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages:")

@@ -51,6 +51,7 @@ Phone stand/
   files/               notes, plans, BOMs and scripts the AI helpers saved, in subfolders that
     parts/base/notes.md  grow as the project does
     docs/bom.csv
+    fea/2026-10-23 21.05 shelf bracket/   simulation reports: report.html, report.json, plot.png
   exports/             3D files (STEP/STL), each with a new name, never overwritten or auto-deleted
   snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd"), never auto-deleted
   AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
@@ -114,6 +115,29 @@ Big projects are welcome, but the host's computer is protected and a project can
   a person.
 - Binary files up to 100 MB are accepted over HTTP; a 100 MB save briefly needs about 500 MB of RAM on the
   host while it is decoded.
+
+### Strength checks (FEA)
+
+Ask your AI helper things like *"will this bracket hold 10 kg?"*, *"what's the natural frequency of the
+arm?"* or *"how hot does the motor mount get?"*. It recognises a simulation request and asks you, in one
+message, which analysis to run (it recommends **linear static**: stress, deflection and safety factor;
+**modal** and **steady-state thermal** are also available), the material, which faces are held still and
+the loads. If you don't know, it uses clearly marked placeholders (generic S235 steel, 1000 N on the top
+face, bottom face fixed...) and the report says so in a yellow box.
+
+The analysis runs FreeCAD's own FEM tools (Gmsh mesher + CalculiX solver, both in the standard FreeCAD
+download) on a **copy** of the part. If this FreeCAD has no Gmsh (some Linux packages and snaps), the team
+server installs it once by itself: the official Gmsh 4.15.2 build from PyPI, checked against a fixed SHA-256,
+unpacked into `%APPDATA%\CadSwarm\tools` (`~/.local/share/CadSwarm/tools` elsewhere), never into FreeCAD or the
+system. Set `CADSWARM_NO_AUTO_INSTALL=1` to turn that off. The solve runs in a separate process: the shared model, its locks and everyone else's
+work are untouched, and one long solve never blocks the team. When it finishes, the helper adds a plain-words
+summary and its own points of improvement to the automatic checks (safety factor, stress peaks at supports or
+sharp corners, coarse mesh, no convergence check, resonance, temperature limits, placeholders...) and
+publishes the report. It **pops up in every teammate's FreeCAD**, can be exported as a self-contained
+**HTML** page or as **JSON** data, and is kept in `files/fea/`. **Team tools > Simulation (FEA) reports...**
+lists past reports. If a helper forgets to publish, the hub publishes the automatic checks after 5 minutes.
+
+FEA here is a design aid for linear-elastic behaviour with idealised supports, not a certification.
 
 ---
 
@@ -204,6 +228,7 @@ the prompt goes through without it.
 - **Modelling:** `create_primitive`, `create_extrusion`, `boolean`, `set_props`, `set_placement`,
   `delete_object`, `set_param`, `run_part_script`
 - **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
+- **Simulation (FEA):** `list_faces`, `run_fea` (static / modal / thermal), `fea_status`, `publish_fea_report`
 - **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
   `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,

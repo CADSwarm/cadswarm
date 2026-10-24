@@ -42,6 +42,15 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
    them to free it (FreeCAD: Team tools > Storage and free up space). Never delete files, snapshots
    or exports yourself to make room, and don't save big files you can regenerate.
+9. FEA (strength, stiffness, vibration or heat questions: "will it hold / break / bend", stress, load, safety
+   factor, natural frequency, temperature). Before running anything, ask your person in ONE message:
+   which analysis (linear static: stress and deflection, strongly recommended unless they ask about vibration
+   or heat; modal: natural frequencies; thermal: steady-state temperatures), the material, which faces are
+   held still, and the loads (or temperatures). Offer: "If you're not sure, I'll use clearly marked
+   placeholders." Use list_faces to pick faces and describe them in plain words ("the bottom face", "the two
+   bolt holes"). Then run_fea (poll fea_status if it is still running), explain the result plainly, and ALWAYS
+   publish_fea_report with a summary and 2-5 concrete points of improvement of your own; it pops up for the
+   whole team. Say out loud which values were placeholders. Never claim FEA certifies a part as safe.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
@@ -83,12 +92,14 @@ class Session:
 S = None
 
 
-def call(method, path, body=None, doing=None, **params):
+def call(method, path, body=None, doing=None, timeout=None, **params):
     if S.dead:
         return {"error": f"This agent session can no longer act: {S.dead}", "code": "inactive"}
     if doing:
         S.doing = doing
     try:
+        if timeout:
+            return S.client.request(method, path, body if method != "GET" else None, params or None, timeout=timeout)
         if method == "GET":
             return S.client.get(path, **params)
         return S.client.post(path, body)
@@ -226,6 +237,65 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
 def check_interference(names: list[str] | None = None) -> dict:
     """Pairwise solid overlaps among visible parts (or `names`). Clashes list overlap volume in mm^3."""
     return call("POST", "/interference", {"names": names}, doing="checking interference")
+
+
+# ---------------------------------------------------------------------- FEA
+
+FEA_WAIT = 45  # seconds a call waits for the solver; keeps every tool call under the CLIs' tool timeouts
+
+
+@mcp.tool()
+def list_faces(name: str | list[str], select: list[str] | None = None) -> dict:
+    """Faces of a part as an analysis sees them: Face1.., type, area, centre, normal (planes), radius (cylinders).
+    `select` tries selectors and shows what they match: "Face3", "xmin".."zmax" (outer flat faces at that side of
+    the bounding box), "z=10" (flat faces in that plane), "cyl" / "cyl r=4" (round faces, e.g. bolt holes),
+    "largest". Face numbers change when the geometry changes, so list again after edits."""
+    return call("POST", "/fea/faces", {"names": [name] if isinstance(name, str) else name, "select": select})
+
+
+@mcp.tool()
+def run_fea(target: str | list[str], analysis: str = "static", material: str | dict | None = None,
+            fixed: list[str] | None = None, loads: list[dict] | None = None, thermal: dict | None = None,
+            mesh: dict | None = None, modes: int = 6, excitation_hz: float | None = None,
+            convergence_check: bool = False, placeholders: list[str] | None = None,
+            assumptions: str | None = None, label: str | None = None) -> dict:
+    """Run a finite-element analysis (FreeCAD FEM: Gmsh + CalculiX) on a COPY of `target`; the shared model
+    and locks are never touched. Units: mm, N, MPa, °C.
+    analysis: "static" (stress, deflection, safety factor; recommend this), "modal" (natural frequencies),
+    "thermal" (steady-state temperatures).
+    material: a preset (steel_s235, steel_s355, stainless_304, aluminium_6061_t6, titanium_ti6al4v, brass, pla,
+    petg, abs, nylon_pa12) or {"name", "youngs_mpa", "poisson", "density_kg_m3", "yield_mpa",
+    "conductivity_w_mk", "specific_heat_j_kgk", "max_service_c"}.
+    fixed: face selectors held completely still (see list_faces), e.g. ["zmin"] or ["cyl r=2.5"].
+    loads: [{"type": "force", "faces": ["xmax"], "newtons": 98.1, "direction": [0, 0, -1] | "normal"},
+            {"type": "pressure", "faces": ["Face6"], "mpa": 0.1}, {"type": "gravity", "g": 9.81}].
+    thermal: {"initial_c": 20, "temperatures": [{"faces": [..], "celsius": 80}],
+              "convection": [{"faces": [..], "h_w_m2k": 10, "ambient_c": 20}], "heat_flux": [{"faces": [..], "w_m2": 500}]}.
+    mesh: {"max_size_mm": 2, "second_order": true} (default size: part diagonal / 40).
+    convergence_check re-solves with a 0.6x finer mesh and reports the change (slower, more trustworthy).
+    Anything missing is filled with a flagged placeholder (S235 steel, 1000 N down on zmax, fixed zmin...);
+    list your own assumptions in `placeholders`/`assumptions`. If the result says status "running", call
+    fea_status. Then publish_fea_report."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/fea/run", {**body, "wait": FEA_WAIT}, doing=f"running FEA on {target}",
+                timeout=FEA_WAIT + 30)
+
+
+@mcp.tool()
+def fea_status(job_id: str) -> dict:
+    """Wait (up to ~45 s) for an FEA job and return its results, automatic review points and next step."""
+    return call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT, timeout=FEA_WAIT + 30)
+
+
+@mcp.tool()
+def publish_fea_report(job_id: str, summary: str, improvements: list[str]) -> dict:
+    """Publish a finished FEA job as the team's report (files/fea/<date> <label>/report.html + .json + plot.png).
+    It pops up in every teammate's FreeCAD, where it can be exported as HTML or JSON. summary: what was analysed
+    and what the result means, in plain words. improvements: 2-5 concrete points of improvement, for the design
+    (e.g. "add a 3 mm fillet where the arm meets the base") or the simulation (real bolt positions, a second
+    load case, a finer mesh). The numbers come from the solver, so don't restate them as facts you changed."""
+    return call("POST", f"/fea/jobs/{job_id}/publish", {"summary": summary, "improvements": improvements},
+                doing="publishing an FEA report")
 
 
 @mcp.tool()

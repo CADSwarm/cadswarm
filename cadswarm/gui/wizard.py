@@ -213,7 +213,23 @@ class Checklist(QtGui.QWidget):
                 self.timer.stop()
 
 
+NO_PYTHON = ("This FreeCAD has no Python of its own (the snap and Flatpak versions of FreeCAD don't include "
+             "one), so it can't run a team server or connect an AI helper by itself. You can still join a "
+             "teammate's project from here. To host, install FreeCAD from freecad.org (the AppImage on Linux), "
+             "or set CADSWARM_FREECAD_PYTHON to a FreeCAD Python before starting FreeCAD.")
+
+
 class SetupWizard(QtGui.QDialog):
+    @property
+    def python(self):
+        """FreeCAD's bundled Python; raises a plain-language error where a step needs one and there is none."""
+        if self._python is None:
+            try:
+                self._python = freecad_python()
+            except RuntimeError:
+                raise RuntimeError(NO_PYTHON)
+        return self._python
+
     def __init__(self, reason=None, start=None):
         super().__init__(Gui.getMainWindow())
         self.setWindowTitle("CadSwarm — get started")
@@ -221,7 +237,7 @@ class SetupWizard(QtGui.QDialog):
         self.setStyleSheet(STYLE)
         self.reason = reason
         self.p = panel.prefs()
-        self.python = freecad_python()
+        self._python = None       # looked up only when hosting or connecting a helper needs it
         self.mode = None          # "host" | "join"
         self.project = self.p.GetString("ProjectName")
         self.name = self.p.GetString("Name") or default_name()

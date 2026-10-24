@@ -11,6 +11,8 @@ Networking runs on background threads (event long-poll, heartbeats, BREP
 fetches) that only ever push into a queue; a QTimer drains it on the GUI
 thread, so FreeCAD's document and Qt widgets are touched from one thread only.
 """
+import html
+import json
 import os
 import queue
 import threading
@@ -83,6 +85,7 @@ class Session:
         self.tasks = []
         self.panel = None
         self.timer = None
+        self.fea_dialogs = []  # open report popups (kept referenced so Qt doesn't drop them)
         # What the panel's banner tells the user: disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
 
@@ -249,6 +252,8 @@ class Session:
             elif kind == "event":
                 if self.panel:
                     self.panel.on_event(data)
+                if data.get("kind") == "fea_report":
+                    open_fea_report(data["folder"])
             elif kind == "refresh":
                 refresh = True
             elif kind == "offline":
@@ -461,6 +466,7 @@ class TeamPanel(QtGui.QDockWidget):
         menu = QtGui.QMenu(more)
         for label, fn in (("Project files…", show_project_files), ("Open project folder", open_project_folder),
                           ("Save a snapshot of the model", save_snapshot),
+                          ("Simulation (FEA) reports…", show_fea_reports),
                           ("Storage and free up space…", show_storage),
                           (None, None),
                           ("Add an AI helper…", add_helper), ("Invite teammates…", invite_teammates),
@@ -726,6 +732,16 @@ def describe_event(ev):
         return f"{who} saved a snapshot of the model ({ev.get('file')})"
     if k == "exported":
         return f"{who} saved a 3D file ({ev.get('file')})"
+    if k == "fea_started":
+        what = {"static": "a strength check", "modal": "a vibration check", "thermal": "a heat check"}
+        return f"{who} started {what.get(ev.get('analysis'), 'a simulation')} of {names(ev.get('target') or [])}…"
+    if k == "fea_report":
+        return f"{who} published a simulation report: {ev.get('title')} — {ev.get('headline')} " \
+               "(Team tools ▸ Simulation reports)"
+    if k == "fea_progress":
+        return f"{who}'s simulation: {ev.get('text')}"
+    if k == "fea_failed":
+        return f"{who}'s simulation of {names(ev.get('target') or [])} failed: {ev.get('error')}"
     return None
 
 
@@ -1102,6 +1118,160 @@ def show_storage():
     (getattr(dlg, "exec", None) or dlg.exec_)()
 
 
+VERDICT_WORDS = {"ok": ("#1a7f37", "Looks OK"), "check": ("#9a6700", "Check the warnings"),
+                 "fail": ("#cf222e", "Needs changes")}
+
+
+class FeaReportDialog(QtGui.QDialog):
+    """One simulation report, as it pops up for everyone on the team. Non-modal, so work can go on."""
+
+    def __init__(self, folder):
+        super().__init__(Gui.getMainWindow())
+        self.folder = folder
+        self.report = json.loads(SESSION.client.post("/project/files/read", {"path": f"{folder}/report.json"})["text"])
+        page = SESSION.client.post("/project/files/read", {"path": f"{folder}/report.html"})["text"]
+        self.png = None
+        if self.report["files"].get("plot"):
+            try:
+                self.png = SESSION.client.request(
+                    "GET", "/project/files/download?" + urlencode({"path": self.report["files"]["plot"]}), raw=True)
+            except HubRequestError:
+                pass
+        r = self.report
+        self.setWindowTitle(f"CadSwarm — simulation report: {r['title']}")
+        self.resize(780, 720)
+        lay = QtGui.QVBoxLayout(self)
+        color, word = VERDICT_WORDS.get(r["verdict"], VERDICT_WORDS["check"])
+        head = QtGui.QLabel(f"<b style='font-size:13pt'>{html.escape(r['title'])}</b><br>"
+                            f"<span style='color:#8b949e'>{html.escape(r['analysis_name'])} by {html.escape(r['by'])}"
+                            f"</span><br><span style='background:{color};color:white;font-weight:bold'>&nbsp;{word}&nbsp;"
+                            f"</span>&nbsp; {html.escape(r['headline'])}"
+                            + ("<br><span style='color:#9a6700'><b>Uses placeholder values</b> — see the yellow box"
+                               "</span>" if r["inputs"]["placeholders"] else ""))
+        head.setTextFormat(QtCore.Qt.RichText)
+        lay.addWidget(head)
+        self.view = QtGui.QTextBrowser()
+        self.view.setOpenExternalLinks(True)
+        self.view.setStyleSheet("QTextBrowser { background: white; color: #1f2328; }")  # paper, even in dark themes
+        if self.png:
+            img = QtGui.QImage.fromData(self.png)
+            self.view.document().addResource(QtGui.QTextDocument.ImageResource, QtCore.QUrl("plot.png"), img)
+        self.view.setHtml(page)
+        lay.addWidget(self.view, 1)
+        row = QtGui.QHBoxLayout()
+        for label, fn in (("Export HTML…", self.export_html), ("Export JSON…", self.export_json)):
+            b = QtGui.QPushButton(label)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        row.addWidget(QtGui.QLabel(f"<small style='color:#8b949e'>Saved in the project: files/{html.escape(folder)}"
+                                   "</small>"))
+        row.addStretch(1)
+        close = QtGui.QPushButton("Close")
+        close.clicked.connect(self.close)
+        row.addWidget(close)
+        lay.addLayout(row)
+
+    def _save(self, title, ext, pattern, data):
+        name = f"{safe_name(self.report['title'])} report.{ext}"
+        dest, _ = QtGui.QFileDialog.getSaveFileName(self, title, name, pattern)
+        if not dest:
+            return
+        with open(dest, "wb") as f:
+            f.write(data)
+        say(f"Saved the simulation report to {dest}")
+
+    def export_html(self):
+        from ..hub.fea import standalone_html
+        self._save("Export report as HTML", "html", "Web page (*.html)",
+                   standalone_html(self.report, self.png).encode("utf-8"))
+
+    def export_json(self):
+        self._save("Export report data as JSON", "json", "JSON (*.json)",
+                   json.dumps(self.report, indent=2).encode("utf-8"))
+
+    def closeEvent(self, ev):
+        if self in SESSION.fea_dialogs:
+            SESSION.fea_dialogs.remove(self)
+        super().closeEvent(ev)
+
+
+def safe_name(text):
+    return "".join(c if c.isalnum() or c in " -_." else " " for c in text).strip()[:60] or "simulation"
+
+
+def open_fea_report(folder):
+    """Pop up a report (from the team's event stream or the reports list). At most 5 stay open."""
+    for d in SESSION.fea_dialogs:
+        if d.folder == folder:
+            d.raise_()
+            d.activateWindow()
+            return
+    try:
+        dlg = FeaReportDialog(folder)
+    except (HubRequestError, ValueError, KeyError) as e:
+        warn(f"Couldn't open the simulation report in {folder}: {e}")
+        return
+    while len(SESSION.fea_dialogs) >= 5:
+        SESSION.fea_dialogs.pop(0).close()
+    SESSION.fea_dialogs.append(dlg)
+    dlg.show()
+    dlg.raise_()
+    dlg.activateWindow()
+
+
+class FeaReportsDialog(QtGui.QDialog):
+    """Every simulation report the team has published; double-click to open one."""
+
+    def __init__(self):
+        super().__init__(Gui.getMainWindow())
+        self.setWindowTitle("CadSwarm — simulation reports")
+        self.resize(720, 400)
+        lay = QtGui.QVBoxLayout(self)
+        lay.addWidget(QtGui.QLabel("Simulations (FEA) your team's AI helpers ran. Double-click one to open it."))
+        self.tree = QtGui.QTreeWidget()
+        self.tree.setHeaderLabels(["When", "Report", "Result", "Verdict", "By"])
+        self.tree.setColumnWidth(0, 110)
+        self.tree.setColumnWidth(1, 220)
+        self.tree.setColumnWidth(2, 220)
+        self.tree.itemDoubleClicked.connect(lambda item, _col: self.open(item))
+        lay.addWidget(self.tree, 1)
+        row = QtGui.QHBoxLayout()
+        b = QtGui.QPushButton("Open")
+        b.clicked.connect(lambda: self.open(self.tree.currentItem()))
+        row.addWidget(b)
+        row.addStretch(1)
+        close = QtGui.QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        try:
+            reports = SESSION.client.get("/fea/reports")["reports"]
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            reports = []
+        for r in reports:
+            when = time.strftime("%b %d %H:%M", time.localtime(r["published_at"]))
+            item = QtGui.QTreeWidgetItem([when, r["title"], r["headline"],
+                                          VERDICT_WORDS.get(r["verdict"], ("", r["verdict"]))[1]
+                                          + (" (placeholders)" if r["placeholders"] else ""), r["by"]])
+            item.setData(0, QtCore.Qt.UserRole, r["folder"])
+            self.tree.addTopLevelItem(item)
+        if not reports:
+            QtGui.QTreeWidgetItem(self.tree, ["", "(no simulations yet — ask an AI helper \"will this hold 5 kg?\")"])
+
+    def open(self, item):
+        folder = item.data(0, QtCore.Qt.UserRole) if item else None
+        if folder:
+            open_fea_report(folder)
+
+
+def show_fea_reports():
+    if not SESSION.ensure_connected("see the team's simulation reports"):
+        return
+    dlg = FeaReportsDialog()
+    (getattr(dlg, "exec", None) or dlg.exec_)()
+
+
 def lock_selected():
     show_panel()
     SESSION.panel.lock()
@@ -1125,5 +1295,7 @@ def register_commands():
     Gui.addCommand("CadSwarm_Release", Cmd("Release selected", "Release your locks on the selected parts", release_selected))
     Gui.addCommand("CadSwarm_Interference", Cmd("Check for clashes", "Find parts that overlap", run_interference))
     Gui.addCommand("CadSwarm_Export", Cmd("Save as 3D file…", "Save the shared model as a STEP file", run_export))
+    Gui.addCommand("CadSwarm_FeaReports", Cmd("Simulation reports…", "Open the team's FEA (simulation) reports",
+                                              show_fea_reports))
     Gui.addCommand("CadSwarm_Disconnect", Cmd("Leave team", "Leave the session (releases your locks)",
                                               lambda: SESSION.disconnect() if SESSION.connected else None, False))
