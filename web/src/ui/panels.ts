@@ -7,6 +7,7 @@ import { mountParams } from './params';
 import { freeHelper, helperNow, startInstruction } from './helpers';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
+import { mountSponsors } from './sponsors';
 import { esc } from './esc';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
@@ -98,6 +99,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   el.innerHTML = `
     <header class="sidebar-head">
       <span class="brand">CadSwarm</span>
+      <button type="button" class="debug-open" data-sponsors aria-haspopup="dialog" title="How CadSwarm uses its sponsors (debug: Shift+D)">sponsors</button>
       <span class="conn" data-conn></span>
     </header>
     <nav class="tabbar" role="tablist" aria-label="Sections">
@@ -147,6 +149,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   mountHandoff($('[data-handoff]'), store, api);
   mountLibrary($('[data-library]'), store, api);
   mountSettings($('[data-settings]'), store, api);
+  // A debug view of the outside services, for showing a judge how each one is wired in.
+  const sponsors = mountSponsors(document.body, store, project);
+  $('[data-sponsors]').addEventListener('click', sponsors.open);
 
   function select(tab: Tab) {
     el.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
