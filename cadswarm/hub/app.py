@@ -249,6 +249,10 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
     def chat(limit: int = 50, p=Depends(me)):
         return {"messages": hub.chat(limit)}
 
+    @app.get("/commands")
+    def commands(limit: int = 20, p=Depends(me)):
+        return {"commands": hub.commands(p["id"], limit)}
+
     @app.get("/inbox")
     def inbox(p=Depends(me)):
         return {"messages": hub.inbox(p["id"])}

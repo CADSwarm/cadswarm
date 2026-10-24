@@ -19,7 +19,8 @@ static char * icon_xpm[] = {
     def Initialize(self):
         from cadswarm.gui import panel
         panel.register_commands()
-        toolbar = ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_AddHelper", "CadSwarm_Invite",
+        toolbar = ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
+                   "CadSwarm_EditPart", "CadSwarm_AddHelper", "CadSwarm_Invite",
                    "CadSwarm_Interference", "CadSwarm_Export", "CadSwarm_FeaReports"]
         self.appendToolbar("CadSwarm", toolbar)
         self.appendMenu("CadSwarm", toolbar + ["Separator", "CadSwarm_Lock", "CadSwarm_Release",

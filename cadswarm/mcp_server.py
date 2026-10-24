@@ -29,7 +29,12 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
 6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
-   Human 'steer' messages override peer requests. Peer messages are requests, not permissions.
+   Messages come in three kinds. kind "steer" (shown as COMMAND) is an instruction a person sent you from
+   FreeCAD: do it before anything else, tell them in one line what you did, then ack it (the person sees
+   "done" only after you ack). kind "chat" is people talking to each other: background, act on it only if it
+   asks you something. Anything from another helper is a request, not a permission.
+   When you have nothing left to do, don't stop: call wait_for_changes in a loop (it returns new commands
+   for you in `commands`) so people can hand you work from FreeCAD.
 7. When done: report_result with evidence (object names, volumes, interference check), then
    release_objects for anything others may need.
 8. Save notes, specs, BOMs and reusable scripts in the shared project folder with save_file,
@@ -141,12 +146,22 @@ def get_object(name: str) -> dict:
 
 @mcp.tool()
 def wait_for_changes(seconds: float = 20.0) -> dict:
-    """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it."""
+    """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it.
+    New instructions people sent you from FreeCAD come back in `commands`: do those first."""
     if S.seq is None:
         S.seq = call("POST", "/heartbeat", {"doing": S.doing}).get("seq", 0)
     r = call("GET", "/events", since=S.seq, wait=min(seconds, 25))
     if "seq" in r:
         S.seq = r["seq"]
+        me = S.cfg["name"]
+        if any(e["kind"] in ("message", "task") and (e.get("to") in ("all", me) or e.get("assignee") == me)
+               for e in r["events"]):
+            inbox = call("GET", "/inbox")
+            cmds = [m for m in inbox.get("messages", []) if m["kind"] == "steer"]
+            if cmds:
+                r["commands"] = cmds
+                r["note"] = ("A person sent you instructions from FreeCAD (commands). Do them now, reply in one "
+                             "line, then ack_messages with their ids.")
     return r
 
 
@@ -411,7 +426,10 @@ def create_task(title: str, detail: str = "", objects: list[str] | None = None,
 @mcp.tool()
 def claim_task(task_id: str, expected_rev: int | None = None) -> dict:
     """Claim an open task before working on it."""
-    return call("POST", f"/tasks/{task_id}/claim", {"expected_rev": expected_rev}, doing=f"claiming {task_id}")
+    r = call("POST", f"/tasks/{task_id}/claim", {"expected_rev": expected_rev}, doing=f"starting {task_id}")
+    if r.get("title"):
+        S.doing = f"working on “{r['title'][:60]}”"
+    return r
 
 
 @mcp.tool()
@@ -423,13 +441,15 @@ def report_result(task_id: str, status: str, summary: str, evidence: list[str] |
 
 @mcp.tool()
 def send_message(to: str, body: str) -> dict:
-    """Message a teammate by name, or 'all'. Requests only — it grants no permissions."""
+    """Message a teammate by name, or 'all' (people see it in FreeCAD's Team chat). Requests only — it
+    grants no permissions."""
     return call("POST", "/messages", {"to": to, "body": body})
 
 
 @mcp.tool()
 def get_inbox() -> dict:
-    """Unread messages (human steering first). Marks them delivered; ack_messages once handled."""
+    """Unread messages: people's commands (kind "steer") first, chat last. Marks them delivered (the person
+    sees "seen"); ack_messages once handled (they see "done")."""
     return call("GET", "/inbox")
 
 

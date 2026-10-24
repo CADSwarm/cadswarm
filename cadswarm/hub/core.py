@@ -65,6 +65,11 @@ CREATES = {"create_primitive": "name", "create_extrusion": "name", "boolean": "n
            "run_part_script": "name"}
 MUTATING = set(TARGETS) | set(CREATES) | {"set_param", "run_part_script"}
 HUB_ID = "hub"
+# "message" is the legacy kind (a person's becomes a command); "command" and "chat" are what the panel sends.
+SEND_KINDS = {"message", "chat", "command", "steer", "handoff", "help", "result", "notice"}
+# Events that mean a participant actually did something (for the "working" indicator).
+ACTIVE_KINDS = ("op", "task_claimed", "task_reported", "file_saved", "file_moved", "fea_started", "fea_report",
+                "snapshot", "exported", "message")
 
 
 class HubError(Exception):
@@ -588,9 +593,17 @@ class Hub:
         return objs
 
     def participants(self):
+        now = self.clock()
+        acted = {r["actor"]: r["ts"] for r in self.q(
+            "SELECT actor, MAX(ts) AS ts FROM events WHERE kind IN (" + ",".join("?" * len(ACTIVE_KINDS)) + ") "
+            "GROUP BY actor", *ACTIVE_KINDS)}
+        working = {}
+        for t in self.q("SELECT id, title, owner FROM tasks WHERE status='claimed' ORDER BY updated_at"):
+            working.setdefault(t["owner"], {"id": t["id"], "title": t["title"]})
         return [{"id": r["id"], "name": r["name"], "kind": r["kind"], "client": r["client"], "role": r["role"],
                  "status": r["status"], "doing": r["status_text"], "last_seen": r["last_seen"],
-                 "locks": self.locks_of(r["id"])}
+                 "locks": self.locks_of(r["id"]), "task": working.get(r["id"]),
+                 "idle_s": round(now - acted[r["id"]], 1) if r["id"] in acted else None}
                 for r in self.q("SELECT * FROM participants WHERE status NOT IN ('left','taken_over') ORDER BY joined_at")]
 
     # -------------------------------------------------------------------- FEA
@@ -804,15 +817,25 @@ class Hub:
     # --------------------------------------------------------------- messages
 
     def send(self, pid, to, body, kind="message", task_id=None):
+        """kind: "chat" is people talking (agents read it as background, never as an order); "command"
+        (stored as "steer") is an instruction for an AI helper and outranks everything in its inbox."""
         if not all(isinstance(v, str) for v in (to, body, kind)) or not (task_id is None or isinstance(task_id, str)):
             raise HubError(400, "bad_args", "to, body and kind must be strings")
         if not body.strip():
             raise HubError(400, "bad_args", "body is empty")
+        if kind not in SEND_KINDS:
+            raise HubError(400, "bad_args", f"kind must be one of {sorted(SEND_KINDS)}")
         with self.lock:
             me = self.one("SELECT kind FROM participants WHERE id=?", pid)
             to_id, queued = self.address(to)
-            if me["kind"] == "human" and kind == "message":
-                kind = "steer"  # a person's words outrank peer requests in every inbox
+            if kind == "command" or (me["kind"] == "human" and kind == "message"):
+                kind = "steer"  # a person's instruction outranks peer requests in every inbox
+            if kind == "steer" and me["kind"] != "human":
+                kind = "message"  # only people give orders; a helper's "command" is a request
+            if kind == "steer" and to_id != "all" and not queued:
+                target = self.one("SELECT kind FROM participants WHERE id=?", to_id)
+                if target and target["kind"] == "human":
+                    kind = "chat"  # people can't be commanded; it's a chat message to them
             mid = new_id("m")
             self.x("INSERT INTO messages VALUES (?,?,?,?,?,?,?)", mid, pid, to_id, kind, body[:4000], task_id, self.clock())
             self.emit("message", pid, id=mid, name=self.name_of(pid),
@@ -828,8 +851,36 @@ class Hub:
             "SELECT m.* FROM messages m LEFT JOIN receipts r ON r.message_id=m.id AND r.participant_id=? "
             "WHERE (m.to_id=? OR m.to_id='all') AND (m.from_id IS NULL OR m.from_id != ?) "
             "AND (r.state IS NULL OR r.state != 'consumed') "
-            "ORDER BY CASE m.kind WHEN 'steer' THEN 0 WHEN 'handoff' THEN 1 ELSE 2 END, m.created_at",
+            "ORDER BY CASE m.kind WHEN 'steer' THEN 0 WHEN 'handoff' THEN 1 WHEN 'chat' THEN 3 ELSE 2 END, m.created_at",
             pid, pid, pid)
+
+    def commands(self, pid, limit=20):
+        """The instructions this person sent to AI helpers, with how far each got: sent (not read yet),
+        seen (the helper read it) or done (the helper said it handled it)."""
+        with self.lock:
+            rows = self.q("SELECT * FROM messages WHERE from_id=? AND kind='steer' ORDER BY created_at DESC LIMIT ?",
+                          pid, limit)
+            agents = [r["id"] for r in self.q("SELECT id FROM participants WHERE kind='agent' "
+                                              "AND status NOT IN ('left','taken_over')")]
+            out = []
+            for m in rows:
+                if m["to_id"] == "all":
+                    targets = agents
+                elif m["to_id"].startswith("@"):
+                    targets = []  # addressed to someone who hasn't joined yet
+                else:
+                    targets = [m["to_id"]]
+                states = {}
+                for t in targets:
+                    r = self.one("SELECT state FROM receipts WHERE message_id=? AND participant_id=?", m["id"], t)
+                    states[self.name_of(t)] = {"delivered": "seen", "consumed": "done"}.get(r["state"] if r else None, "sent")
+                order = ("sent", "seen", "done")
+                overall = min(states.values(), key=order.index) if states else "sent"
+                out.append({"id": m["id"], "body": m["body"], "at": m["created_at"], "task_id": m["task_id"],
+                            "to": "all helpers" if m["to_id"] == "all" else
+                            (m["to_id"][1:] if m["to_id"].startswith("@") else self.name_of(m["to_id"])),
+                            "state": overall, "by_helper": states})
+            return out
 
     def inbox(self, pid, limit=10):
         with self.lock:
@@ -921,9 +972,12 @@ class Hub:
                     "for the report)." if j["status"] == "done" else "check it with fea_status."))
             unread = self._unconsumed(pid)
             if unread:
-                lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages:")
+                lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
+                             "COMMAND = a person's instruction for you: do it first. chat = people talking: "
+                             "background only, act on it only if it asks you something:")
                 for m in unread[:5]:
-                    lines.append(f"- [{m['kind']}] {self.name_of(m['from_id'])}: {m['body'][:200]}")
+                    tag = {"steer": "COMMAND", "chat": "chat"}.get(m["kind"], m["kind"])
+                    lines.append(f"- [{tag}] {self.name_of(m['from_id'])}: {m['body'][:200]}")
             self.x("UPDATE participants SET context_seq=? WHERE id=?", self.seq(), pid)
             text = "\n".join(lines)
             return text if len(text) <= max_chars else text[:max_chars - 20] + "\n…(truncated)"

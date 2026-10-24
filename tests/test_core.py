@@ -223,6 +223,58 @@ def test_inbox_human_steering_first_and_ack_requires_delivery(env):
     assert hub.inbox(bob) == []
 
 
+def test_chat_is_not_a_command_and_comes_last(env):
+    hub, _, alice, bob = env
+    human = hub.join("secret", "carol", kind="human", client="freecad")["participant_id"]
+    dave = hub.join("secret", "dave", kind="human", client="freecad")["participant_id"]
+    hub.send(human, "all", "lunch at 1?", kind="chat")
+    hub.send(alice, "bob-codex", "please widen the slot")
+    hub.send(human, "bob-codex", "use M4 bolts", kind="command")
+    kinds = [m["kind"] for m in hub.inbox(bob)]
+    assert kinds == ["steer", "message", "chat"]
+    from_helper = hub.send(alice, "bob-codex", "do it now", kind="command")["id"]
+    assert {m["id"]: m["kind"] for m in hub.inbox(bob)}[from_helper] == "message"  # helpers can't give orders
+    hub.send(human, "dave", "people can't be ordered around", kind="command")
+    assert hub.inbox(dave)[-1]["kind"] == "chat"  # a person's "command" to a person is just chat
+    with pytest.raises(HubError):
+        hub.send(human, "all", "x", kind="shout")
+    assert "[COMMAND] carol: use M4 bolts" in hub.context(bob) and "[chat] carol" in hub.context(bob)
+
+
+def test_commands_show_sent_seen_done(env):
+    hub, _, alice, bob = env
+    human = hub.join("secret", "carol", kind="human", client="freecad")["participant_id"]
+    one = hub.send(human, "bob-codex", "make the lid 20 mm", kind="command")["id"]
+    hub.send(human, "all", "check for clashes", kind="command")
+    hub.send(human, "all", "hi team", kind="chat")
+    cmds = {c["body"]: c for c in hub.commands(human)}
+    assert set(cmds) == {"make the lid 20 mm", "check for clashes"}  # chat isn't an instruction
+    assert cmds["make the lid 20 mm"]["state"] == "sent" and cmds["make the lid 20 mm"]["to"] == "bob-codex"
+    hub.inbox(bob)
+    c = {c["body"]: c for c in hub.commands(human)}
+    assert c["make the lid 20 mm"]["state"] == "seen"
+    assert c["check for clashes"]["state"] == "sent"  # alice hasn't read it yet
+    assert c["check for clashes"]["by_helper"] == {"alice-claude": "sent", "bob-codex": "seen"}
+    hub.ack(bob, [one])
+    assert {c["body"]: c for c in hub.commands(human)}["make the lid 20 mm"]["state"] == "done"
+
+
+def test_participants_say_what_each_helper_is_working_on(env):
+    hub, clock, alice, bob = env
+    t = hub.create_task(alice, "Base plate")
+    team = {p["name"]: p for p in hub.participants()}
+    assert team["bob-codex"]["task"] is None and team["bob-codex"]["idle_s"] is None
+    hub.claim_task(bob, t["id"])
+    clock.t += 5
+    box(hub, bob, "Plate")
+    clock.t += 12
+    team = {p["name"]: p for p in hub.participants()}
+    assert team["bob-codex"]["task"] == {"id": t["id"], "title": "Base plate"}
+    assert team["bob-codex"]["idle_s"] == 12.0
+    hub.report_task(bob, t["id"], "done", "built")
+    assert {p["name"]: p for p in hub.participants()}["bob-codex"]["task"] is None
+
+
 def test_human_can_force_release_and_force_takeover(env):
     hub, _, alice, bob = env
     human = hub.join("secret", "carol", kind="human")["participant_id"]
