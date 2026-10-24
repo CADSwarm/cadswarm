@@ -8,6 +8,7 @@ import { loadSession, lastDb, forgetSession } from './session';
 import { PointerGate } from './pointer-gate';
 import { mountPair } from './ui/pair';
 import { mountPanels } from './ui/panels';
+import { mountSheet, type SheetControl } from './ui/sheet-controller';
 import { esc } from './ui/esc';
 
 const store = new Store();
@@ -19,6 +20,14 @@ app.innerHTML = `<main class="layout">
 </main>`;
 const panels = document.getElementById('panels')!;
 const topbar = document.getElementById('topbar');
+let sheet: SheetControl | null = null;
+
+/** The shell appears only after a build is open: the model, the sheet, the top bar. */
+function showBuild(api: Api, project: string) {
+  mountPanels(panels, store, api, () => (picked ? [picked] : []), project, topbar);
+  if (!sheet) sheet = mountSheet(panels, px => dispatchEvent(new CustomEvent('cadswarm:inset', { detail: px })));
+  else sheet.setStop(sheet.stop());
+}
 
 // Human pointers: at most 5 move_pointer calls a second, only when the pick changed.
 let apiRef: Api | null = null;
@@ -63,7 +72,7 @@ async function boot() {
   if (new URLSearchParams(location.search).has('mock')) {
     const { api } = startMockSwarm(store); // exercises every panel without a server
     apiRef = api;
-    mountPanels(panels, store, api, () => (picked ? [picked] : []), 'Enclosure', topbar);
+    showBuild(api, 'Enclosure');
     return;
   }
   const frag = new URLSearchParams(location.hash.slice(1)).get('t');
@@ -105,7 +114,7 @@ async function start(t: Ticket | null) {
     await new Promise<void>(done => mountPair(panels, ticket, async name => { await api.redeem(ticket.token, name); done(); }));
   }
   apiRef = api;
-  mountPanels(panels, store, api, () => (picked ? [picked] : []), target.db, topbar);
+  showBuild(api, target.db);
 }
 
 boot().catch(e => message(`<p class="err">${esc((e as Error).message ?? String(e))}</p>`));

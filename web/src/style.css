@@ -49,7 +49,8 @@ a { color: var(--accent); }
 /* ---- Sidebar chrome: the sheet header, then quiet underline tabs ---- */
 .sheet-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--surface-2);
   border-bottom: 1px solid var(--line); flex: none; }
-.sheet-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 9px; }
+.sheet-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 9px; margin: 0; padding: 0;
+  border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .sheet-kicker { font: 600 14px/1.2 var(--font-body); letter-spacing: -0.01em; color: var(--text); }
 .sheet-title b { font: 500 14px/1.2 var(--font-body); color: var(--body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet-last { display: none; }
@@ -285,6 +286,7 @@ textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-
   .panels.dragging { transition: none; }
   .grabber { display: flex; flex: none; justify-content: center; align-items: center; padding: 8px 0 2px;
     touch-action: none; cursor: grab; }
+  .sheet-head { touch-action: none; }
   .grabber span { width: 36px; height: 4px; border-radius: 999px; background: rgb(244 243 241 / .3); }
   .sheet-head { padding: 0 16px 8px; background: none; border: 0; }
   .sheet-title { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }

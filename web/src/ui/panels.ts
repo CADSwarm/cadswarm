@@ -88,11 +88,11 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   el.innerHTML = `
     <div class="grabber" data-grabber aria-hidden="true"><span></span></div>
     <header class="sheet-head">
-      <div class="sheet-title">
+      <button type="button" class="sheet-title" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
         <span class="sheet-kicker">CadSwarm</span>
         <b data-project>this build</b>
         <span class="sheet-last" data-sheet-last></span>
-      </div>
+      </button>
       <span class="conn" data-conn></span>
       <button type="button" class="sheet-toggle" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg>
