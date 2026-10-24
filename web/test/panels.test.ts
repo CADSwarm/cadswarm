@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadBoards, parseBoards } from '../src/ui/brief';
-import { parseMm } from '../src/ui/params';
+import { datasheetLinks, parseMm } from '../src/ui/params';
 import { currentBrief, findingLines, latestReview } from '../src/ui/panels';
 import { mergeStl, startMockSwarm } from '../src/mock';
 import { Store } from '../src/store';
@@ -27,6 +27,18 @@ describe('panel helpers', () => {
     expect(parseMm('3,2 mm')).toBe(3.2);
     expect(parseMm('0')).toBeNull();
     expect(parseMm('abc')).toBeNull();
+  });
+  it('shows only web datasheet links from the brief plan', () => {
+    const plan = JSON.stringify({ parts: [], sources: {
+      pcb: 'https://files.seeedstudio.com/xiao.pdf', holes: 'https://files.seeedstudio.com/xiao.pdf',
+      ports: 'javascript:alert(1)', extra: 'https://x/y' } });
+    expect(datasheetLinks(plan)).toEqual({
+      pcb: 'https://files.seeedstudio.com/xiao.pdf', holes: 'https://files.seeedstudio.com/xiao.pdf' });
+    expect(datasheetLinks('{}')).toEqual({});
+    expect(datasheetLinks('{"sources":{"pcb":"ftp://x"}}')).toEqual({});
+    expect(datasheetLinks('{"sources":null}')).toEqual({});
+    expect(datasheetLinks('not json')).toEqual({});
+    expect(datasheetLinks('')).toEqual({});
   });
   it('picks the newest brief and its latest review', () => {
     const briefs = [{ id: 'b_1', updatedMs: 1 }, { id: 'b_2', updatedMs: 5 }] as never[];

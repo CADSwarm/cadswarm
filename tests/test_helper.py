@@ -1,0 +1,103 @@
+from cadswarm import helper
+from cadswarm.knowledge import ElasticError
+
+
+class FakeElastic:
+    def __init__(self):
+        self.calls = []
+
+    def search(self, index, query, k=5, filters=None):
+        self.calls.append((index, query, k, filters))
+        return [{"score": 1.0, "source": {"board_id": "raspberry-pi-pico", "source_url": "https://d/p.pdf",
+                                          "title": "Pico datasheet"}, "chunks": ["holes are 47 x 11.4 mm apart"]}]
+
+    def lessons(self, board, k=5):
+        return [{"board_id": board, "problem": "clips usb plug", "count": 2,
+                 "lesson": "Seen 2 time(s) on raspberry-pi-pico: clips usb plug. Design to avoid it."}]
+
+    def board_spec(self, board, question=""):
+        return {"label": "Pico", "pcb": [51.0, 21.0, 1.0], "sources": {"pcb": "https://d/p.pdf"}}
+
+    def index_design(self, doc):
+        self.indexed = doc
+
+
+def project(tmp_path, elastic):
+    p = helper.Project(tmp_path)
+    p.elastic = elastic
+    return p
+
+
+def test_lookup_returns_passages_with_their_sources(tmp_path):
+    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "lookup_board", "args": {"question": "pico holes"}})
+    assert r["ok"] and r["result"]["answers"][0]["source_url"] == "https://d/p.pdf"
+    assert "47 x 11.4" in r["result"]["answers"][0]["text"]
+
+
+def test_unknown_ops_and_failures_are_errors_not_crashes(tmp_path):
+    assert helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "nope", "args": {}})["code"] == "unknown_op"
+
+    class Broken(FakeElastic):
+        def search(self, *a, **k):
+            raise RuntimeError("down")
+    r = helper.handle(project(tmp_path, Broken()), {"id": 2, "op": "recall_designs", "args": {"query": "x"}})
+    assert r["ok"] is False and "down" in r["error"]
+
+
+def test_index_design_builds_the_document(tmp_path):
+    fake = FakeElastic()
+    r = helper.handle(project(tmp_path, fake), {"id": 1, "op": "index_design", "args": {
+        "brief": {"id": "b_1", "text": "case", "board": "raspberry-pi-pico", "status": "ready"},
+        "plan": {"parts": []}, "reviews": [], "params": {"wall": 2.0}}})
+    assert r["ok"] and fake.indexed["brief_id"] == "b_1"
+
+
+def test_recall_designs_filters_by_board_and_reads_lessons(tmp_path):
+    fake = FakeElastic()
+    r = helper.handle(project(tmp_path, fake), {"id": 1, "op": "recall_designs",
+                                                "args": {"query": "pico case", "board": "raspberry-pi-pico"}})
+    assert r["ok"]
+    assert fake.calls == [("cadswarm-designs", "pico case", 3, {"board_id": "raspberry-pi-pico"})]
+    assert r["result"]["designs"][0]["board_id"] == "raspberry-pi-pico"
+    assert r["result"]["lessons"] == ["Seen 2 time(s) on raspberry-pi-pico: clips usb plug. Design to avoid it."]
+
+
+def test_recall_without_a_board_skips_lessons(tmp_path):
+    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "recall_designs", "args": {"query": "pico case"}})
+    assert r["ok"] and r["result"]["lessons"] == []
+
+
+def test_missing_args_are_bad_args(tmp_path):
+    p = project(tmp_path, FakeElastic())
+    for op, args in (("lookup_board", {}), ("recall_designs", {}), ("board_spec", {}), ("index_design", {})):
+        assert helper.handle(p, {"id": 1, "op": op, "args": args})["code"] == "bad_args"
+
+
+def test_elastic_errors_are_reported_with_their_own_code(tmp_path):
+    class Busy(FakeElastic):
+        def search(self, *a, **k):
+            raise ElasticError(503, '{"error": {"reason": "busy"}}')
+
+    r = helper.handle(project(tmp_path, Busy()), {"id": 1, "op": "lookup_board", "args": {"question": "x"}})
+    assert r["ok"] is False and r["code"] == "elastic_error" and "busy" in r["error"]
+
+
+def test_unconfigured_host_reports_not_configured_but_files_still_work(tmp_path, monkeypatch):
+    for var in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    p = helper.Project(tmp_path)
+    assert helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "x"}})["code"] == "not_configured"
+    assert helper.handle(p, {"id": 2, "op": "list_files", "args": {}})["ok"] is True
+
+
+def test_board_spec_passes_through(tmp_path):
+    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "board_spec", "args": {"board": "raspberry-pi-pico"}})
+    assert r["ok"] and r["result"]["pcb"] == [51.0, 21.0, 1.0]
+
+
+def test_an_unsourced_board_spec_is_reported_as_unverified(tmp_path):
+    class Unsourced(FakeElastic):
+        def board_spec(self, board, question=""):
+            raise ValueError("pcb has no source_url")
+    r = helper.handle(project(tmp_path, Unsourced()), {"id": 9, "op": "board_spec", "args": {"board": "mystery-board"}})
+    assert r["ok"] is False and r["code"] == "spec_unverified" and "source_url" in r["error"]
