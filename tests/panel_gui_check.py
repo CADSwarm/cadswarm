@@ -80,10 +80,10 @@ for w, h in ((340, 640), (520, 900)):
         "scrolls_when_short": scroll.verticalScrollBar().maximum() > 0 if h < 800 else True,
     }
     p.grab().save(str(out / f"panel-{w}x{h}.png"))
-    p.tabs.setCurrentIndex(1)
+    p.tasks_button.setChecked(True)
     QtGui.QApplication.processEvents()
     p.grab().save(str(out / f"panel-{w}x{h}-tasks.png"))
-    p.tabs.setCurrentIndex(0)
+    p.tasks_button.setChecked(False)
 
 wide = sorted((w.minimumSizeHint().width(), type(w).__name__, w.objectName(), getattr(w, "text", lambda: "")()[:30],
                type(w.parent()).__name__, w.parent().objectName() if w.parent() else "")
@@ -115,18 +115,53 @@ narrow_w = docked.width()
 mw.grab().save(str(out / "window-1000x700.png"))
 s.panel = p
 
-# The chat shows the instruction with its status and the helper's replies; targets are helpers first.
+# Typing @li offers the helpers whose names start that way.
+p.msg.setText("@")
+p.msg.setCursorPosition(1)
+p.maybe_complete()
+offered_all = [p.completer.completionModel().index(i, 0).data() for i in range(p.completer.completionCount())]
+p.msg.setText("@b")
+p.msg.setCursorPosition(2)
+p.maybe_complete()
+offered_b = [p.completer.completionModel().index(i, 0).data() for i in range(p.completer.completionCount())]
+p.completer.popup().hide()
+p.insert_mention("bob-codex")
+filled = p.msg.text()
+p.completed_at = 0
+
+# "@bob-codex ..." gives bob-codex a task and wakes it; people can't be handed tasks.
+sent = []
+
+
+class Recorder:
+    def post(self, path, body=None):
+        sent.append((path, body))
+        return {"id": "t_new"} if path == "/tasks" else {}
+
+
+s.ensure_connected = lambda purpose: True
+s.run_async = lambda work, done=None, purpose="", failed=None: work(Recorder())
+s.act_async = lambda method, path, body=None, done=None, purpose="", failed=None: sent.append((path, body))
+p.msg.setText("@bob-codex make the lid 20 mm tall")
+p.send()
+p.msg.setText("@team a stand for a 7 mm phone")
+p.send()
+
+# The chat shows the instruction with its status and the helper's replies.
 chat = p.chat.toPlainText()
-targets = [p.to.itemData(i) for i in range(p.to.count())]
 brief = p.task_list.topLevelItem(0)
 result = {
     "layout": checks,
     "follows_window": {"at_1600": wide_w, "at_1000": narrow_w},
     "chat_has_reply": "lid still clears the posts" in chat and "✓ done" in chat,
-    "targets": targets,
+    "offered_all": offered_all,
+    "offered_b": offered_b,
+    "filled": filled,
+    "sent": sent,
+    "helpers_listed": [p.team.topLevelItem(i).data(0, QtCore.Qt.UserRole) for i in range(p.team.topLevelItemCount())],
+    "people": p.people.text(),
     "tasks_grouped_under_request": brief.text(0).startswith("🧠") and brief.childCount() == 2,
     "away_tip": p.team_tip.text(),
-    "tabs": [p.tabs.tabText(i) for i in range(p.tabs.count())],
 }
 (out / "panel-verified.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 QtCore.QTimer.singleShot(0, QtGui.QApplication.quit)

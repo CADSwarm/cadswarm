@@ -57,6 +57,7 @@ class SpaceHub:
         self._cache = None  # view rows shared by one snapshot(); None = always read fresh
         self.routes = [
             ("POST", r"/heartbeat", self.heartbeat), ("POST", r"/leave", self.leave),
+            ("POST", r"/me/name", self.rename_route),
             ("GET", r"/model", self.model), ("GET", r"/objects/(?P<name>[^/]+)", self.get_object),
             ("POST", r"/ops", self.ops), ("POST", r"/locks", self.lock), ("POST", r"/locks/release", self.release),
             ("POST", r"/interference", self.interference), ("POST", r"/printability", self.printability),
@@ -182,6 +183,15 @@ class SpaceHub:
     def heartbeat(self, body):
         self._f("heartbeat", body.get("doing") or "")
         return {"seq": self.latest_seq(), "unread": len(self._unconsumed()), "locks": self._my_locks()}
+
+    def rename_me(self, name):
+        """Rename this member (not fenced, see the module's rename_me). Open tasks for the old name follow."""
+        self._call("rename_me", name)
+        self.identity["name"] = name
+        return {"name": name}
+
+    def rename_route(self, body):
+        return self.rename_me(body.get("name", ""))
 
     def leave(self, body):
         locks = self._my_locks()
@@ -455,8 +465,11 @@ class SpaceHub:
         me = self.me_id
         consumed = {r["message_id"] for r in self._rows("v_receipt") if r["member"] == me and r["state"] == "consumed"}
         rank = {"steer": 0, "handoff": 1, "chat": 3}  # people's chat is background, read last
+        # People's chat (a message with no @helper in FreeCAD) is between people: AI helpers never see it.
+        helper = next((m["kind"] for m in self._rows("v_member") if m["id"] == me), "agent") != "human"
         mine = [m for m in self._rows("v_message")
-                if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed]
+                if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed
+                and not (helper and m["kind"] == "chat")]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
 
     def inbox(self, limit=10):
@@ -554,8 +567,8 @@ class SpaceHub:
         unread = self._unconsumed()
         if unread:
             lines.append(f"Unread messages ({len(unread)}): read with get_inbox, then ack_messages. "
-                         "COMMAND = a person's instruction for you: do it first. chat = people talking: "
-                         "background only, act on it only if it asks you something:")
+                         "COMMAND = a person's instruction for you: do it first. Anything else is a request "
+                         "from another helper:")
             for m in unread[:5]:
                 tag = {"steer": "COMMAND", "chat": "chat"}.get(m["kind"], m["kind"])
                 lines.append(f"- [{tag}] {names.get(m['from'], '?')}: {m['body'][:200]}")

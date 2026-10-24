@@ -77,32 +77,35 @@ own after a reboot until you do).
 ## Working with your team in FreeCAD
 
 The **CadSwarm Team** panel on the right follows the size of the FreeCAD window (drag its edge to give it
-more or less room) and scrolls when the window is short.
+more or less room) and scrolls when the window is short. It has three parts:
 
-- **Who's here** (top) shows every person and AI helper. A helper that is busy shows a turning
-  **◐ Working on "…"**; one with nothing to do shows **Ready for instructions**. If a helper is away, a
-  line under the list says why (for example, it runs on a teammate's computer that isn't on).
-- **Chat**: one conversation with your team. Pick who you're talking to:
-  - an **AI helper** (or **All AI helpers**): it does what you ask before anything else and answers right
-    there, first with what it'll do and then with what it did. Your message shows **⏳ not read yet**,
-    **👀 read, working on it** or **✓ done**. The quick buttons (Status?, Clashes, Strength, Pause, Let go)
-    send common requests in one click. Enter sends; Shift+Enter starts a new line.
-  - **🧠 The whole team: plan it and build it** to hand over a whole request ("a stand for a 7 mm thick
-    phone"): the team server plans it into parts, starts AI helpers itself (with the agent CLI on the
-    hosting computer) and shows the progress in **Tasks**.
-  - **People only**, or one person: plain chat. AI helpers can read it but don't act on it.
-- **Tasks**: everything that needs doing. Whole-team requests show their parts underneath them with
-  progress. Click **＋ New task…**, describe it and pick who does it: a helper, whichever helper is free
-  first, the whole team, or yourself. For a task already on the list, use **Start it**, **I'll do it** or
-  **Mark done**.
-- **Activity**: what happened, written by CadSwarm (parts added, tasks finished, files saved, reports), and
-  🤝 the messages AI helpers send each other while they work together.
+- **AI helpers**: every helper on the team and what it's doing right now (a turning **◐ Working on "…"**,
+  **Ready for instructions**, or why it's away). **＋ New helper** starts another one on this computer: pick
+  the AI (Claude Code, Codex or Droid) and, if you like, a name. Have as many as you want. Right-click one of
+  yours to **Rename** it, let its **Name follow its task**, **Restart** it, see its log or remove it. A helper
+  you haven't named takes its name from the task it's on ("Build a lid for the enclosure" makes it
+  `lid-enclosure`) and changes it when it gets a new task; once you name it, the name stays. People are listed
+  underneath.
+- **Chat**: one box for everything.
+  - `@name what to do` gives that helper a task (with the parts you have selected) and wakes it; it answers in
+    the chat with what it'll do, then what it did. Typing `@` lists the helpers to pick from. Your message
+    shows **⏳ not read yet**, **👀 read, working on it** or **✓ done**. `@a @b ...` gives each one the task.
+  - `@team what to build` hands a whole request ("a stand for a 7 mm thick phone") to the team: the team server
+    plans it into parts and starts AI helpers itself (with the agent CLI on the hosting computer).
+  - `@all ...` tells every helper something (pause, status...).
+  - No `@` is chat between people. AI helpers never see it.
+  Tasks only go to AI helpers: people pick their own work.
+- **Tasks** and **Activity** fold open underneath. Tasks lists everything that needs doing, whole-team
+  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. Activity is what
+  happened (parts added, tasks finished, files saved, renames) and 🤝 the messages helpers send each other.
 - **AI helpers work together.** A helper can see who is free (`list_helpers`), hand another helper part of
   a job (`delegate_task`, which wakes that helper) and ask the helper who holds a part to change it. When a
   handed-out task is finished, the helper that handed it out is woken with the result. Each helper runs at
   most 30 times an hour, so two helpers can't keep waking each other.
+- **Team tools ▾** has editing a part yourself, shared sizes, clash checks, STEP export, project files,
+  snapshots, reports and storage.
 
-**Changing a part yourself.** Select the part in the 3D view and click **✎ Edit a part…**. While the
+**Changing a part yourself.** Select the part in the 3D view and choose **Team tools ▸ ✎ Edit a part yourself…**. While the
 editor is open, the part is held by you, so no helper can change it at the same time. Type a new size
 or position, or move it with FreeCAD's own **Edit ▸ Placement** / **Transform** and the editor picks up the
 move. **Save to team** sends the change to everyone; **Done** hands the part back. A part held by a helper

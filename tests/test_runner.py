@@ -189,3 +189,50 @@ def test_background_starts_can_be_switched_off_for_a_terminal_session(tmp_path):
     assert not runner.background_on(str(tmp_path))
     runner.set_background(str(tmp_path), True)
     assert runner.background_on(str(tmp_path))
+
+
+def test_a_helper_takes_its_name_from_its_task():
+    assert runner.task_name("Build a lid for the enclosure") == "lid-enclosure"
+    assert runner.task_name("Make the base plate 10 mm longer") == "base-plate"
+    assert runner.task_name("Check strength (FEA)") == "strength-fea"
+    assert runner.task_name("Build a new part") is None
+
+
+class RenameSpace(FakeSpace):
+    """Renames succeed unless the name is held by someone else."""
+    taken = {"lid"}
+
+    def call(self, reducer, *args):
+        if reducer == "rename_me" and args[0] in self.taken:
+            from cadswarm.space import SpaceError
+            raise SpaceError(530, f"name_in_use: {args[0]!r} is already taken")
+        super().call(reducer, *args)
+        if reducer == "rename_me":
+            self.tables["v_me"][0]["name"] = args[0]
+
+
+def test_a_new_task_renames_the_helper_before_it_starts_unless_a_person_named_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, _clock, spawned = make_runner(tmp_path)
+    r.hub.space = RenameSpace(tables())
+    r.step()
+    renames = [a[0] for name, a in r.hub.space.calls if name == "rename_me"]
+    assert renames == ["lid-2"]  # "lid" belongs to someone else (a refused rename is not logged)
+    assert json.load(open(os.path.join(r.folder, ".cadswarm", "config.json")))["name"] == "lid-2"
+    assert len(spawned) == 1
+
+    r2, _c, _s = make_runner(tmp_path / "pinned")
+    r2.hub.space = RenameSpace(tables())
+    runner.pin_name(r2.folder, True)
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r2.step()
+    assert not [c for c in r2.hub.space.calls if c[0] == "rename_me"]
+
+
+def test_a_server_without_renaming_is_left_alone_after_one_try(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, _clock, _spawned = make_runner(tmp_path)
+    r.hub.space.fail["rename_me"] = "no such reducer"
+    r.follow_task("Build a lid")
+    r.follow_task("Build a base")
+    assert len([c for c in r.hub.space.calls if c[0] == "rename_me"]) == 1

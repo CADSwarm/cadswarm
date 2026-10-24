@@ -41,9 +41,8 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
 - Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
   from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
-  you'll do, do it, then a short one saying what you did. `chat` to everyone is people talking; only act
-  on it if it asks you. When you run out of work, keep calling `wait_for_changes` so new messages and
-  tasks reach you. (If FreeCAD started you in the background, stop instead: you're woken when needed.)
+  you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you
+  run out of work, keep calling `wait_for_changes` so new messages and tasks reach you. (If FreeCAD started you in the background, stop instead: you're woken when needed.)
 - Work with the other AI helpers: `list_helpers` shows who is free; `delegate_task` hands one of them a
   task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it.
 - Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in

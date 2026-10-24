@@ -23,6 +23,14 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     r = json.loads(Path(tmp_path / "panel-verified.json").read_text(encoding="utf-8"))
     assert all(c["no_horizontal_overflow"] and c["scrolls_when_short"] for c in r["layout"].values()), r["layout"]
     assert r["chat_has_reply"] and r["tasks_grouped_under_request"]
-    assert r["tabs"] == ["Chat", "Tasks", "Activity"]
-    assert r["targets"][0].startswith("command:")  # an AI helper is the first choice to talk to
     assert "teammate's computer" in r["away_tip"]
+    assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
+    assert "carol (you)" in r["people"]
+    # @ offers every helper plus @team and @all; @b narrows it; picking one fills in "@name ".
+    assert r["offered_all"][:3] == ["ann-claude", "bob-codex", "dee-droid"] and {"team", "all"} <= set(r["offered_all"])
+    assert r["offered_b"] == ["bob-codex"] and r["filled"] == "@bob-codex "
+    # "@bob-codex ..." is a task for bob-codex plus the message that wakes it; "@team ..." is a whole-team request.
+    (task_path, task), (msg_path, msg), (brief_path, brief) = r["sent"]
+    assert task_path == "/tasks" and task["assignee"] == "bob-codex" and task["title"] == "make the lid 20 mm tall"
+    assert msg_path == "/messages" and msg["to"] == "bob-codex" and msg["kind"] == "command" and msg["task_id"] == "t_new"
+    assert brief_path == "/briefs" and brief["text"] == "a stand for a 7 mm phone"

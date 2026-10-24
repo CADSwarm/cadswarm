@@ -16,6 +16,7 @@ Stdlib only: it runs with FreeCAD's Python.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -37,6 +38,11 @@ LOG_LIMIT = 2_000_000
 IDLE_DOING = "listening for instructions"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 GONE = ("not_member", "left", "taken_over", "bad_token")
+# Words that say nothing about what a helper builds, left out of the name it takes from its task.
+NAME_FILLER = {"a", "an", "the", "build", "make", "create", "add", "design", "draw", "model", "change", "update",
+               "fix", "check", "find", "run", "for", "of", "to", "and", "with", "on", "in", "into", "new", "please",
+               "task", "part", "parts", "my", "our", "it", "that", "this", "some", "start", "do", "now", "mm", "cm",
+               "kg", "deg", "x", "tall", "wide", "long", "thick", "existing", "something", "else"}
 
 
 def status_path(folder):
@@ -92,6 +98,25 @@ def set_background(folder, on):
 
 def background_on(folder):
     return not os.path.exists(off_path(folder))
+
+
+def task_name(title):
+    """The name a helper takes from what it's working on: "Build a lid for the enclosure" -> "lid-enclosure"."""
+    words = [w for w in re.findall(r"[a-z0-9]+", (title or "").lower()) if w not in NAME_FILLER and not w.isdigit()]
+    return "-".join(words[:2])[:30].strip("-") or None
+
+
+def name_path(folder):
+    return os.path.join(state_dir(folder), "name.json")
+
+
+def name_pinned(folder):
+    """True once a person named the helper: then its name no longer follows its task."""
+    return bool((load_json(name_path(folder)) or {}).get("pinned"))
+
+
+def pin_name(folder, pinned):
+    save_json(name_path(folder), {"pinned": bool(pinned)})
 
 
 def stop_runner(folder):
@@ -214,6 +239,7 @@ class Runner:
         self.last_beat = 0.0
         self.status = ("starting", "")
         self.last_error = ""  # why the last run failed, shown in FreeCAD until a run succeeds
+        self.can_rename = True  # False on a team server too old to rename members
 
     # ------------------------------------------------------------------ bookkeeping
 
@@ -257,6 +283,33 @@ class Runner:
 
     # ------------------------------------------------------------------------ runs
 
+    def follow_task(self, title):
+        """Unless a person named this helper, take a name from the task it's on (with -2, -3... when another
+        member already has that name)."""
+        base = task_name(title)
+        if not base or not self.can_rename or name_pinned(self.folder):
+            return
+        current = (self.hub.identity.get("name") or "").lower()
+        if current == base or re.fullmatch(re.escape(base) + r"-\d+", current):
+            return
+        for name in [base] + [f"{base}-{i}" for i in range(2, 10)]:
+            try:
+                self.hub.rename_me(name)
+            except HubRequestError as e:
+                if e.code == "name_in_use":
+                    continue
+                self.can_rename = e.code in ("unreachable",)
+                self.log(f"couldn't rename to {name}: {e}")
+                return
+            self.cfg["name"] = name
+            save_json(os.path.join(state_dir(self.folder), "config.json"), self.cfg)
+            self.log(f"now called {name} (its task: {title})")
+            return
+
+    def current_task(self):
+        mine = [t for t in self.hub._rows("v_task") if t["owner"] == self.hub.me_id and t["status"] == "claimed"]
+        return max(mine, key=lambda t: t["updated_ms"])["title"] if mine else None
+
     def allowed(self):
         now = self.clock()
         self.runs = [t for t in self.runs if now - t < 3600]
@@ -291,6 +344,10 @@ class Runner:
             return False
         prompt = wake_prompt(self.cfg.get("name") or "an AI helper", self.project or "your team's project",
                              [line for _, line in work], first)
+        assigned = [k[2:] for k, _ in work if k.startswith("t:")]
+        if assigned:  # a new task: the helper takes its name before it starts
+            titles = {t["id"]: t["title"] for t in self.hub._rows("v_task")}
+            self.follow_task(titles.get(assigned[-1]))
         argv, stdin_text = agent_command(client, exe, self.folder, prompt, resume=bool(self.state.get("started")))
         self.log(f"waking the helper for {len(work)} new thing(s): {', '.join(k for k, _ in work) or 'first start'}")
         self.child = self.spawn(argv, stdin_text)
@@ -335,7 +392,11 @@ class Runner:
             self.write_status()
             return True
         try:
+            just_ran = not self.present
             self.be_present()
+            self.hub.identity["name"] = self.hub.me()["name"]  # a person may have renamed it
+            if just_ran:
+                self.follow_task(self.current_task())
             if "primed" not in self.state:
                 self.seen |= finished_keys(self.hub)
                 self.state["primed"] = True

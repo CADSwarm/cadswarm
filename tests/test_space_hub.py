@@ -304,14 +304,14 @@ def test_commands_show_sent_seen_done(world):
     assert {c["body"]: c for c in hub.get("/commands")["commands"]}["make the lid 20 mm"]["state"] == "done"
 
 
-def test_chat_comes_last_and_commands_are_labelled_for_agents(world):
+def test_commands_come_first_and_peoples_chat_never_reaches_agents(world):
     hub, fake = world
     fake.tables["v_message"].append({"id": "m_e", "from": 3, "to": "all", "kind": "chat", "body": "lunch at 1?",
                                      "task_id": "", "created_ms": 0})
     kinds = [m["kind"] for m in hub.get("/inbox")["messages"]]
-    assert kinds[0] == "steer" and kinds[-1] == "chat"
+    assert kinds[0] == "steer" and "chat" not in kinds
     ctx = hub.get("/context")["context"]
-    assert "[COMMAND] carol: use M4 bolts" in ctx and "[chat] carol: lunch at 1?" in ctx
+    assert "[COMMAND] carol: use M4 bolts" in ctx and "lunch at 1?" not in ctx
 
 
 def test_participants_say_what_each_helper_is_working_on(world, monkeypatch):
@@ -339,3 +339,12 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     assert (briefs[0]["tasks"], briefs[0]["done"], briefs[0]["by"]) == (2, 1, "carol")
     r = hub.post("/briefs", {"text": "a lid"})
     assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]
+
+
+def test_people_see_each_others_chat(world):
+    _hub, fake = world
+    fake.tables["v_message"].append({"id": "m_chat", "from": 3, "to": "all", "kind": "chat", "body": "lunch?",
+                                     "task_id": "", "created_ms": 9})
+    fake.tables["v_member"].append(member(4, "dan", kind="human"))
+    dan = SpaceHub({"uri": "http://x", "db": "d"}, {"participant_id": 4, "fence": 1}, space=fake)
+    assert "m_chat" in [m["id"] for m in dan._unconsumed()]

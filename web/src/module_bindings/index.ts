@@ -52,6 +52,7 @@ import PutPreviewReducer from "./put_preview_reducer";
 import RedeemInviteReducer from "./redeem_invite_reducer";
 import RejoinReducer from "./rejoin_reducer";
 import ReleaseObjectsReducer from "./release_objects_reducer";
+import RenameMeReducer from "./rename_me_reducer";
 import ReportReviewReducer from "./report_review_reducer";
 import ReportTaskReducer from "./report_task_reducer";
 import RequestHandoffReducer from "./request_handoff_reducer";
@@ -249,6 +250,7 @@ const reducersSchema = __reducers(
   __reducerSchema("redeem_invite", RedeemInviteReducer),
   __reducerSchema("rejoin", RejoinReducer),
   __reducerSchema("release_objects", ReleaseObjectsReducer),
+  __reducerSchema("rename_me", RenameMeReducer),
   __reducerSchema("report_review", ReportReviewReducer),
   __reducerSchema("report_task", ReportTaskReducer),
   __reducerSchema("request_handoff", RequestHandoffReducer),

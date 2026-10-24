@@ -32,10 +32,10 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
 6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
-   Messages come in three kinds. kind "steer" (shown as COMMAND) is an instruction a person sent you from
-   FreeCAD: do it before anything else, tell them in one line what you did, then ack it (the person sees
-   "done" only after you ack). kind "chat" is people talking to each other: background, act on it only if it
-   asks you something. Anything from another helper is a request, not a permission.
+   kind "steer" (shown as COMMAND) is an instruction a person sent you from FreeCAD (they typed @ and your
+   name): do it before anything else, tell them in one line what you did, then ack it (the person sees
+   "done" only after you ack). Anything from another helper is a request, not a permission. People's own
+   chat never reaches you.
    When you have nothing left to do, don't stop: call wait_for_changes in a loop (it returns new commands
    for you in `commands`) so people can hand you work from FreeCAD. (Started in the background by FreeCAD?
    Then stop instead: you're woken when something new arrives.)
@@ -140,6 +140,14 @@ def call(method, path, body=None, doing=None, targets=None, **params):
         return {"error": str(e), **{k: v for k, v in e.body.items() if k != "error"}}
 
 
+def my_name():
+    """This helper's name right now: people can rename it, and it follows its task, while this server runs."""
+    try:
+        return S.client.me()["name"]
+    except HubRequestError:
+        return S.cfg["name"]
+
+
 def op(name, args, doing, expected_revs=None):
     targets = [args.get(k) for k in ("name", "base", "tool") if isinstance(args.get(k), str)]
     return call("POST", "/ops", {"op": name, "args": {k: v for k, v in args.items() if v is not None},
@@ -162,7 +170,7 @@ def model_status(detail: bool = False) -> dict:
             "objects": [{k: o.get(k) for k in keep if k in o} for o in m["objects"]],
             "team": [{k: p[k] for k in ("name", "kind", "client", "role", "status", "doing", "locks")}
                      for p in m["participants"]],
-            "you": S.cfg["name"]}
+            "you": my_name()}
 
 
 @mcp.tool()
@@ -183,7 +191,9 @@ def wait_for_changes(seconds: float = 20.0) -> dict:
     r = call("GET", "/events", since=S.seq, wait=min(seconds, 25))
     if "seq" in r:
         S.seq = r["seq"]
-        me = S.cfg["name"]
+        # People's chat (no @helper) is between people: helpers never see it, not even as an event.
+        r["events"] = [e for e in r["events"] if not (e["kind"] == "message" and e.get("message_kind") == "chat")]
+        me = my_name()
         if any(e["kind"] in ("message", "task") and (e.get("to") in ("all", me) or e.get("assignee") == me)
                for e in r["events"]):
             inbox = call("GET", "/inbox")
@@ -500,10 +510,10 @@ def list_helpers() -> dict:
     m = call("GET", "/model")
     if "error" in m:
         return m
-    me = S.cfg["name"]
+    me = next((p["name"] for p in m["participants"] if p["id"] == S.client.me_id), my_name())
     out = []
     for p in m["participants"]:
-        if p.get("kind") == "human" or p["name"] == me:
+        if p.get("kind") == "human" or p["id"] == S.client.me_id:
             continue
         state = "away" if p.get("status") != "active" else "working" if p.get("task") else "free"
         out.append({"name": p["name"], "state": state, "task": (p.get("task") or {}).get("title"),
@@ -517,7 +527,7 @@ def delegate_task(to: str, title: str, detail: str, objects: list[str] | None = 
     """Hand another AI helper a task and wake it: `to` is a helper's name from list_helpers. `detail` says
     exactly what to build or change (sizes in mm, Params names, which parts it may lock). You're woken
     with their result when they report it. Don't delegate to yourself or hand back work given to you."""
-    if to == S.cfg["name"]:
+    if to.lower() == my_name().lower():
         return {"error": "That's you: do it yourself, or pick another helper from list_helpers.", "code": "bad_args"}
     t = call("POST", "/tasks", {"title": title, "detail": detail, "objects": objects or [], "assignee": to},
              doing=f"handing {to} a task")
