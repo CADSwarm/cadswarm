@@ -31,7 +31,11 @@ AGENT_DOC = """{begin}
 
 Your teammates' agents (Claude Code, Codex, Droid) are editing the same live model right now.
 All CAD work goes through the `cadswarm` MCP tools — never edit .FCStd files directly.
-Your human may be new to CAD: explain what you build in plain words and keep dimensions in mm.
+Your human may be new to CAD: keep dimensions in mm and use plain words.
+
+**Be brief.** People watch the model change live, so don't narrate: no running commentary, no restating tool
+calls or their results, no plans-before-acting. Reply in one or two short sentences; when you finish, say what
+changed in at most three lines. A person's COMMAND from FreeCAD or the web app gets a one-line answer.
 
 - Start every task with `model_status` and `list_tasks`; `claim_task` before working.
 - `lock_objects` before changing anything; what you create is yours. Ask owners, don't override them.
@@ -61,13 +65,14 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 """
 
 RESUME_PROMPT = ("We're continuing our team's CAD project \"{project}\". Check model_status, your inbox and the "
-                 "tasks, then carry on with your part. Tell me in plain words what you're doing.")
+                 "tasks, then carry on with your part. Keep your replies short.")
 
 FIRST_PROMPT = {
-    "lead": "You're leading our team's CAD project \"{project}\". Ask me what we're building, then plan the "
-            "parts, put the shared sizes in Params, create one task per part for the team, and start on yours.",
-    "member": "I just joined our team's CAD project \"{project}\". Check the team's tasks, claim one that "
-              "nobody has started, and build it. Tell me in plain words what you're doing.",
+    "lead": "You're leading our team's CAD project \"{project}\". Ask me in one short message what we're "
+            "building, then plan the parts, put the shared sizes in Params, create one task per part, and start on "
+            "yours. Keep your replies short.",
+    "member": "I just joined our team's CAD project \"{project}\". Claim a task nobody has started and build it. "
+              "Keep your replies short: a line when you start, up to three when you finish.",
 }
 
 
@@ -255,7 +260,7 @@ def identity_matches(project, invite):
         and cfg.get("db") == invite.get("db") and cfg.get("uri", "").rstrip("/") == invite.get("uri", "").rstrip("/")
 
 
-def write_agent_config(project, client, invite, name, python=None, fresh=False):
+def write_agent_config(project, client, invite, name, python=None, fresh=False, ephemeral=False):
     """Everything an AI helper in `project` needs to join the team. Returns the files written.
     `invite` is a decoded ticket (see invite.read_invite). The invite is redeemed only when this
     folder has no identity yet (invites work once), and only after the agent CLI's own config
@@ -278,7 +283,7 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False):
         save_json(ident_path, redeem(invite, name, client))
     save_json(os.path.join(state_dir(project), "config.json"), {
         "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
-        "role": invite.get("role") or "member"})
+        "role": invite.get("role") or "member", **({"ephemeral": True} if ephemeral else {})})
     return written
 
 
