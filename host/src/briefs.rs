@@ -29,8 +29,11 @@ pub struct BriefState {
     pub open: usize,
     pub active: usize,
     pub done: usize,
+    /// Stopped by a person. It never becomes done afterwards, so a brief with nothing done and
+    /// every task stopped has nothing left to build.
     pub cancelled: usize,
-    /// Reported blocked by a helper; nothing can reopen it, so it must not hold the brief open.
+    /// Reported blocked by a helper: it wants a person's decision. Nothing can claim it meanwhile,
+    /// but its own helper may report it done after that decision, so it holds the brief open.
     pub blocked: usize,
     /// The planner has written a plan. A building brief always has one; if its task rows vanish
     /// the cache is not merely waiting for the first subscription update.
