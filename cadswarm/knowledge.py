@@ -37,7 +37,7 @@ class Elastic:
             raise ElasticError(0, f"Elastic is not configured on this host (missing {', '.join(missing)})")
         return cls(os.environ["ELASTIC_URL"], os.environ["KIBANA_URL"], os.environ["ELASTIC_API_KEY"])
 
-    def _req(self, base, method, path, body=None, kibana=False):
+    def _req(self, base, method, path, body=None, kibana=False, timeout=None):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(base + path, data=data, method=method)
         req.add_header("authorization", "ApiKey " + self.api_key)
@@ -45,7 +45,7 @@ class Elastic:
         if kibana:
             req.add_header("kbn-xsrf", "true")
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 text = r.read().decode("utf-8")
                 return json.loads(text) if text.strip() else {}
         except urllib.error.HTTPError as e:
@@ -53,11 +53,11 @@ class Elastic:
         except urllib.error.URLError as e:
             raise ElasticError(0, f"cannot reach Elastic: {e.reason}")
 
-    def es(self, method, path, body=None):
-        return self._req(self.es_url, method, path, body)
+    def es(self, method, path, body=None, timeout=None):
+        return self._req(self.es_url, method, path, body, timeout=timeout)
 
-    def kibana(self, method, path, body=None):
-        return self._req(self.kibana_url, method, path, body, kibana=True)
+    def kibana(self, method, path, body=None, timeout=None):
+        return self._req(self.kibana_url, method, path, body, kibana=True, timeout=timeout)
 
     def _exists(self, path):
         try:
@@ -113,8 +113,10 @@ class Elastic:
                 raise
             self.kibana("PUT", f"/api/agent_builder/agents/{agent['id']}", {k: v for k, v in agent.items() if k != "id"})
 
-    def converse(self, text):
-        r = self.kibana("POST", "/api/agent_builder/converse", {"input": text, "agent_id": AGENT_ID})
+    def converse(self, text, timeout=180):
+        # Agent Builder runs a model and its tools, so it needs far longer than a normal API call.
+        r = self.kibana("POST", "/api/agent_builder/converse", {"input": text, "agent_id": AGENT_ID},
+                        timeout=timeout)
         # The reply text lives under response.message in the converse API; fall back to the whole body.
         return (r.get("response") or {}).get("message") or json.dumps(r)
 
@@ -133,7 +135,8 @@ def search_body(query, k=5, filters=None):
     return {
         "size": k,
         "retriever": {"text_similarity_reranker": {
-            "retriever": {"rrf": {"retrievers": [leg("text"), leg("content")]}},
+            # The reranker's window may not exceed the inner rrf's (ES rejects it otherwise).
+            "retriever": {"rrf": {"retrievers": [leg("text"), leg("content")], "rank_window_size": 50}},
             "field": "text", "inference_id": RERANKER, "inference_text": query, "rank_window_size": 50}},
         "fields": [{"field": "content", "format": "chunks"}],
         "_source": {"excludes": ["content", "text"]},
