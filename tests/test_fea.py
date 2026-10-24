@@ -264,8 +264,8 @@ def test_failed_run_is_announced_without_a_report(env):
 
 def test_mesher_install_progress_is_announced(env):
     p, _, _, _ = env
-    jid = start(p, label="slow-mesher")["job_id"]
-    seen = []
+    first = start(p, label="slow-mesher")
+    jid, seen = first["job_id"], kinds(first)  # a fast solver's progress can ride on fea_run's own reply
     import time
     for _ in range(200):
         r = ask(p, "fea_status", job_id=jid)["result"]

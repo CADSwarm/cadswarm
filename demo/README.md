@@ -6,11 +6,24 @@ lead agent and two teammates' agents at the same time while a human watches and 
 ## Setup (about 2 minutes)
 
 ```powershell
-cadswarm hub --data .\demo-model                       # note URL + token
-cadswarm setup --client claude --hub URL --token T --name lead-claude --role lead --dir ..\lead
-cadswarm setup --client codex  --hub URL --token T --name posts-codex           --dir ..\posts
-cadswarm setup --client claude --hub URL --token T --name lid-claude            --dir ..\lid
-cadswarm install-workbench   # then FreeCAD > CadSwarm > Connect as "you-human"
+# 1. Host: publish the module, then start the team (or let FreeCAD's guide do all of this).
+spacetime publish --server maincloud --yes=all --delete-data=never --bin-path module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm cadswarm-demo-1a2b
+host\target\release\cadswarm-host --data .\demo-model init --mode maincloud --db cadswarm-demo-1a2b --python "<FreeCAD>\bin\python.exe"
+host\target\release\cadswarm-host --data .\demo-model run
+
+# 2. Host: one single-use invite per agent (and one for the human watching in FreeCAD).
+host\target\release\cadswarm-host --data .\demo-model invite --kind agent --role lead     # lead-claude
+host\target\release\cadswarm-host --data .\demo-model invite --kind agent --role member   # posts-codex
+host\target\release\cadswarm-host --data .\demo-model invite --kind agent --role member   # lid-claude
+host\target\release\cadswarm-host --data .\demo-model invite --kind human --role lead     # you-human
+
+# 3. Each agent gets its own folder, wired to the team through its ticket.
+cadswarm setup --client claude --invite "<lead ticket>"  --name lead-claude  --dir ..\lead
+cadswarm setup --client codex  --invite "<posts ticket>" --name posts-codex  --dir ..\posts
+cadswarm setup --client claude --invite "<lid ticket>"   --name lid-claude   --dir ..\lid
+
+# 4. The human watches in FreeCAD: install the add-on, then CadSwarm > Get started and paste the human invite.
+cadswarm install-workbench
 ```
 
 Start `claude` or `codex` in each folder and paste the prompt for that agent.

@@ -47,7 +47,8 @@ def test_droid_gets_a_factory_mcp_config(tmp_path, monkeypatch):
     t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
     written = agent_setup.write_agent_config(str(tmp_path), "droid", t, "bob-droid", python="python")
     mcp = json.load(open(tmp_path / ".factory" / "mcp.json"))
-    assert mcp["mcpServers"]["cadswarm"]["args"] == ["-m", "cadswarm.mcp_server"]
+    assert mcp["mcpServers"]["cadswarm"]["args"] == [agent_setup.LAUNCHER, "mcp"]
+    assert mcp["mcpServers"]["cadswarm"]["command"] == "python"
     assert mcp["mcpServers"]["cadswarm"]["env"]["CADSWARM_PROJECT"] == str(tmp_path)
     assert str(tmp_path / ".factory" / "mcp.json") in written
 

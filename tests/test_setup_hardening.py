@@ -135,12 +135,12 @@ def test_stop_team_refuses_an_unrelated_process(tmp_path):
         p.kill()
 
 
-def test_stop_team_stops_our_processes(tmp_path):
-    p = _sleeper(tmp_path, "cadswarm-host")
+def test_stop_team_stops_a_cadswarm_process(tmp_path):
+    p = _sleeper(tmp_path, "cadswarm-host.py")
     time.sleep(0.5)
     try:
         assert hosting.is_our_process(p.pid)
-        assert hosting.stop_team({"host_pid": p.pid, "spacetime_pid": None}) is True
+        assert hosting.stop_team({"host_pid": p.pid}) is True
         assert p.wait(timeout=10) is not None
     finally:
         p.kill()
