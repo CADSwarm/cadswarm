@@ -79,8 +79,9 @@ printed part. Local-mode reach and voice come after that, and only if time is le
 
 | Order | Task | Target done | Blocks |
 |---|---|---|---|
+| 0 | T0 Repo visibility: release downloads must be public | Sat 12:00 | every guide-hosted team |
 | 1 | T1 Integrate release + review fixes into main | Sat 12:00 | everything |
-| 2 | T2 Known bugs from the review (4) | Sat 13:30 | M2 |
+| 2 | T2 Known bugs from the review (4): **done by 3d-cad-b6 on `fix/release-review` `adf90d2`; verify in T1** | — | M2 |
 | 3 | T3 Web polish: pointers and step labels | Sat 13:30 | demo video |
 | 4 | T4 One-command demo stack | Sat 15:00 | M2, video |
 | 5 | T5 M2 rehearsal on Maincloud (people run it) | Sat 17:00 | video, print |
@@ -94,7 +95,32 @@ Out of scope for this event (state it in the Devpost "what's next"): iroh transp
 
 ---
 
+### T0: Release downloads must be reachable without a GitHub login
+
+**Blocker (found by 3d-cad-b6).** The FreeCAD guide's first "Start a team" calls `hosting.ensure_tools`,
+which downloads `https://github.com/SachchitBalamurugan/cadswarm/releases/latest/download/SHA256SUMS.txt`
+and the binaries. The repo is **private**, so anyone not logged in gets 404 and the guide fails with
+"Couldn't check the CadSwarm downloads". Devpost judging also needs a public repo link.
+
+**Decision for the repo owner (Sachchit):** make the repository public (recommended: judges need it anyway).
+The alternative is publishing the release files to a public location and pointing `ensure_tools` at it.
+
+If making it public:
+- [ ] **Scan the full history for secrets first.** Run `gitleaks detect --source . --log-opts="--all"` in a fresh clone (install with `winget install gitleaks`). If gitleaks is not available, use DeepSeek `swarm_fanout` over `git log --all -p` chunks with the instruction "list any API key, token, password, private key or .env content; quote the commit and line". Also grep for `ELASTIC_API_KEY=`, `FACTORY_API_KEY=`, `CARTESIA`, `ApiKey `, `-----BEGIN`, and `trycloudflare.com/#t=` (phone links carry live single-use invite tokens).
+- [ ] If anything is found: rotate the key at its provider **first**, then decide with the owner whether to rewrite history (`git filter-repo`) or accept the rotated key in history.
+- [ ] The owner flips visibility (Settings → General → Danger Zone). Verify with `curl -sI https://github.com/SachchitBalamurugan/cadswarm/releases/latest/download/SHA256SUMS.txt` while logged out: expect `302` then `200`.
+
+**Acceptance:** an anonymous `curl` of `SHA256SUMS.txt` succeeds, and the guide's first start passes `ensure_tools` on a clean machine.
+
+---
+
 ### T1: Integrate `release/v0.1.0` and `fix/release-review` into main
+
+> Updated: `fix/release-review` is now at `adf90d2`. On top of the 1d36ed6 fixes it adds:
+> - T2's four bug fixes
+> - macOS and Linux support (FreeCAD discovery, `install/install.sh`, `Install CadSwarm.command`)
+> - `.github/workflows/test.yml`, whose run 40080333498 passed all 9 jobs
+> Merge that head. Then check that each T2 acceptance test exists, and pick up the tests T2 names if they're missing.
 
 **Owner:** director. **Branch:** `release/v0.1.0`, then a PR into `main`.
 
