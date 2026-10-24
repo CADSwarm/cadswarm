@@ -71,6 +71,7 @@ class Session:
         self.dead = None  # set to an error message once this process must stop acting
         self.seq = None   # event cursor for wait_for_changes
         self.lock = threading.Lock()
+        self.fea_jobs = set()  # this session's unfinished FEA jobs, polled so their outcome always reaches the team
 
     def connect(self):
         ident = self.client.join(None, self.cfg["name"], "agent", self.cfg.get("client"), self.cfg.get("role", "member"))
@@ -84,11 +85,28 @@ class Session:
             try:
                 self.client.post("/heartbeat", {"doing": self.doing})
                 backoff = HEARTBEAT_SECONDS
+                self.poll_fea()
             except HubRequestError as e:
                 if e.code in ("fence_stale", "taken_over", "left", "not_member"):
                     self.dead = str(e)
                     return
                 backoff = min(backoff * 2, 60)  # hub unreachable: back off, never hammer
+
+
+    def poll_fea(self):
+        """A failed or forgotten FEA job is announced (and auto-published) when its status is read."""
+        for jid in list(self.fea_jobs):
+            try:
+                if self.client.get(f"/fea/jobs/{jid}").get("status") in ("published", "failed"):
+                    self.fea_jobs.discard(jid)
+            except HubRequestError as e:
+                if e.code == "not_found":
+                    self.fea_jobs.discard(jid)
+
+    def track_fea(self, r):
+        if isinstance(r, dict) and r.get("job_id"):
+            (self.fea_jobs.discard if r.get("status") in ("published", "failed") else self.fea_jobs.add)(r["job_id"])
+        return r
 
 
 S = None
@@ -279,14 +297,14 @@ def run_fea(target: str | list[str], analysis: str = "static", material: str | d
     list your own assumptions in `placeholders`/`assumptions`. If the result says status "running", call
     fea_status. Then publish_fea_report."""
     body = {k: v for k, v in locals().items() if v is not None}
-    return call("POST", "/fea/run", {**body, "wait": FEA_WAIT}, doing=f"running FEA on {target}",
-                targets=[target] if isinstance(target, str) else target)
+    return S.track_fea(call("POST", "/fea/run", {**body, "wait": FEA_WAIT}, doing=f"running FEA on {target}",
+                            targets=[target] if isinstance(target, str) else target))
 
 
 @mcp.tool()
 def fea_status(job_id: str) -> dict:
     """Wait (up to ~45 s) for an FEA job and return its results, automatic review points and next step."""
-    return call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT)
+    return S.track_fea(call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT))
 
 
 @mcp.tool()

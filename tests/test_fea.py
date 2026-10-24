@@ -4,11 +4,10 @@ import os
 
 import pytest
 
-from cadswarm.hub import fea
-from cadswarm.hub.core import Hub, HubError
-from cadswarm.paths import project_layout
+from cadswarm import fea, fea_jobs, helper
+from cadswarm.client import HubRequestError
 from cadswarm.prompt_hook import fea_hint
-from test_core import Clock, FakeWorker
+from cadswarm.space_hub import SpaceHub
 
 STATIC_RESULT = {
     "ok": True, "warnings": [], "plot": "plot.png", "freecad": "1.1.1",
@@ -146,120 +145,179 @@ def test_fea_hint_detects_simulation_requests():
     assert not fea_hint(None)
 
 
-# --------------------------------------------------------------- hub flow
+# ----------------------------------------------------- jobs on the host helper
 
-class FeaWorker(FakeWorker):
-    python = "freecad-python"
+AGENT = {"id": 4, "name": "alice-claude", "kind": "agent"}
+OTHER = {"id": 5, "name": "bob-codex", "kind": "agent"}
+HUMAN = {"id": 3, "name": "carol", "kind": "human"}
 
-    def call(self, op, args=None, allowed=None):
-        if op == "fea_shape":
-            return {"result": {"brep": "BREP"}}
-        if op == "faces":
-            return {"result": {"faces": [{"face": "Face1"}], "selected": {"xmin": ["Face1"]}}}
-        return super().call(op, args, allowed)
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    lay = project_layout(tmp_path / "Bracket project")
-    os.makedirs(lay["internal"])
+    (tmp_path / "model.FCStd").write_bytes(b"PK fake model")
     clock = Clock()
-    hub = Hub(FeaWorker(), lay["db"], "secret", clock=clock, layout=lay)
-    a = hub.join("secret", "alice-claude")["participant_id"]
-    b = hub.join("secret", "bob-codex")["participant_id"]
+    p = helper.Project(str(tmp_path), clock)
     calls = []
 
-    def fake_run(python, job, brep, timeout=None, progress=None):
-        calls.append((python, job, brep))
+    def fake_run(python, job, model_path, progress=None):
+        calls.append((python, job, open(model_path, "rb").read()))
         if job["label"] == "explode":
             return {"ok": False, "code": "solve_failed", "error": "CalculiX stopped"}, None
+        if job["label"] == "slow-mesher":
+            progress("Installing the Gmsh mesher…")
         return json.loads(json.dumps(STATIC_RESULT)), b"\x89PNG fake"
-    monkeypatch.setattr(fea, "run_job", fake_run)
-    return hub, lay, clock, a, b, calls
+    monkeypatch.setattr(fea_jobs, "freecad_python", lambda: "freecad-python")
+    p._fea = fea_jobs.FeaJobs(p, clock, runner=fake_run)
+    return p, tmp_path, clock, calls
 
 
-def start(hub, pid, **kw):
-    return hub.fea_start(pid, {"target": "Beam", "fixed": ["xmin"], "material": "steel_s235",
-                               "loads": [{"type": "force", "faces": ["xmax"], "newtons": 1000}], **kw}, wait=5)
+def ask(p, op, actor=AGENT, **args):
+    return helper.handle(p, {"id": "1", "op": op, "args": {**args, "_actor": actor}})
 
 
-def test_run_then_publish_writes_report_files_and_tells_everyone(env):
-    hub, lay, _, a, b, calls = env
-    r = start(hub, a, label="shelf load")
-    assert r["status"] == "done" and r["results"]["max_von_mises_mpa"] == 298.4
-    assert calls[0][0] == "freecad-python" and calls[0][2] == "BREP"
-    assert r["automatic_points"] and "publish_fea_report" in r["next_step"]
-    assert "publish_fea_report now" in hub.context(a)
-    seq = hub.seq()
-    p = hub.fea_publish(a, r["job_id"], "It bends but holds.", ["Add a fillet at the root",
-                                                                {"text": "Model the bolts", "severity": "warning"}])
-    folder = p["folder"].removeprefix("files/")
+def finished(p, jid):
+    import time
+    for _ in range(200):
+        r = ask(p, "fea_status", job_id=jid)["result"]
+        if r["status"] not in ("queued", "running"):
+            return r
+        time.sleep(0.01)
+    raise AssertionError("job never finished")
+
+
+def kinds(result):
+    return [e["kind"] for e in result.get("_events", [])]
+
+
+def start(p, actor=AGENT, **kw):
+    r = ask(p, "fea_run", actor, target="Beam", fixed=["xmin"], material="steel_s235",
+            loads=[{"type": "force", "faces": ["xmax"], "newtons": 1000}], revs={"Beam": 3}, seq=9, **kw)
+    assert r["ok"], r
+    return r["result"]
+
+
+def test_run_then_publish_writes_report_files_and_announces_it(env):
+    p, root, _, calls = env
+    r = start(p, label="shelf load")
+    assert kinds(r) == ["fea_started"] and r["_events"][0]["data"]["target"] == ["Beam"]
+    done = finished(p, r["job_id"])
+    assert done["status"] == "done" and done["results"]["max_von_mises_mpa"] == 298.4
+    assert calls[0][0] == "freecad-python" and calls[0][2] == b"PK fake model"  # solved on a copy of the model
+    assert done["automatic_points"] and "publish_fea_report" in done["next_step"]
+    pub = ask(p, "fea_publish", job_id=r["job_id"], summary="It bends but holds.",
+              improvements=["Add a fillet at the root", {"text": "Model the bolts", "severity": "warning"}])
+    assert pub["ok"], pub
+    ev = pub["result"]["_events"]
+    assert [e["kind"] for e in ev] == ["fea_report"] and ev[0]["data"]["verdict"] in ("check", "fail")
+    folder = pub["result"]["folder"].removeprefix("files/")
     for name in ("report.json", "report.html", "plot.png"):
-        assert os.path.exists(os.path.join(lay["files"], *folder.split("/"), name))
-    assert hub.list_files("fea")["files"][0]["version"] == 1
-    rep = json.loads(hub.read_file(f"{folder}/report.json")["text"])
+        assert (root / "files" / folder / name).exists()
+    rep = json.loads(ask(p, "read_file", path=f"{folder}/report.json")["result"]["text"])
     assert rep["summary"] == "It bends but holds." and rep["by"] == "alice-claude" and not rep["auto_published"]
+    assert rep["model"]["revs"] == {"Beam": 3} and rep["model"]["seq"] == 9
     assert sum(i["source"] == "agent" for i in rep["improvements"]) == 2
-    ev = [e for e in hub.events(seq)["events"] if e["kind"] == "fea_report"]
-    assert ev and ev[0]["folder"] == folder and ev[0]["verdict"] == rep["verdict"]
-    assert "published FEA report" in hub.context(b)
-    assert hub.fea_reports()["reports"][0]["folder"] == folder
-    assert hub.fea_job(r["job_id"])["report_folder"] == p["folder"]
+    assert ask(p, "fea_reports")["result"]["reports"][0]["folder"] == folder
+    assert finished(p, r["job_id"])["report_folder"] == pub["result"]["folder"]
+    assert not list((root / ".cadswarm-team" / "fea").glob("*.FCStd"))  # the job's model copy is cleaned up
 
 
 def test_publish_rules(env):
-    hub, _, _, a, b, _ = env
-    r = start(hub, a, label="same")
-    with pytest.raises(HubError) as e:
-        hub.fea_publish(b, r["job_id"], "mine now")
-    assert e.value.code == "not_owner"
-    first = hub.fea_publish(a, r["job_id"], "ok")
-    with pytest.raises(HubError) as e:
-        hub.fea_publish(a, r["job_id"], "again")
-    assert e.value.code == "already_published"
-    second = hub.fea_publish(a, start(hub, a, label="same")["job_id"], "ok")
+    p, _, _, _ = env
+    jid = start(p, label="same")["job_id"]
+    finished(p, jid)
+    assert ask(p, "fea_publish", OTHER, job_id=jid, summary="mine now")["code"] == "not_owner"
+    first = ask(p, "fea_publish", HUMAN, job_id=jid, summary="a person may publish")["result"]
+    assert ask(p, "fea_publish", job_id=jid, summary="again")["code"] == "already_published"
+    jid2 = start(p, label="same")["job_id"]
+    finished(p, jid2)
+    second = ask(p, "fea_publish", job_id=jid2, summary="ok")["result"]
     assert first["folder"] != second["folder"]  # same label and minute: a new folder, nothing overwritten
 
 
-def test_unpublished_result_is_auto_published_by_the_sweep(env):
-    hub, _, clock, a, _, _ = env
-    r = start(hub, a)
-    hub.sweep()
-    assert hub.fea_job(r["job_id"])["status"] == "done"  # still within the grace period
+def test_forgotten_result_is_auto_published_on_the_next_fea_op(env):
+    p, _, clock, _ = env
+    jid = start(p)["job_id"]
+    assert finished(p, jid)["status"] == "done"
     clock.t += fea.PUBLISH_GRACE + 1
-    hub.heartbeat(a)
-    hub.sweep()
-    reps = hub.fea_reports()["reports"]
-    assert len(reps) == 1 and reps[0]["id"] == r["job_id"]
-    rep = json.loads(hub.read_file(f"{reps[0]['folder']}/report.json")["text"])
-    assert rep["auto_published"] and "didn't add a summary" in rep["summary"]
+    r = ask(p, "fea_status", job_id=jid)["result"]
+    assert "fea_report" in kinds(r) and r["_events"][-1]["data"]["auto"] is True
+    rep = ask(p, "fea_reports")["result"]["reports"][0]
+    text = json.loads(ask(p, "read_file", path=f"{rep['folder']}/report.json")["result"]["text"])
+    assert text["auto_published"] and "didn't add a summary" in text["summary"]
 
 
-def test_failed_run_is_reported_without_a_popup(env):
-    hub, _, _, a, _, _ = env
-    seq = hub.seq()
-    r = start(hub, a, label="explode")
-    assert r["status"] == "failed" and "CalculiX" in r["error"]
-    kinds = [e["kind"] for e in hub.events(seq)["events"]]
-    assert "fea_failed" in kinds and "fea_report" not in kinds
-    assert any("failed" in m["body"] for m in hub.inbox(a))
-    with pytest.raises(HubError):
-        hub.fea_publish(a, r["job_id"], "x")
+def test_failed_run_is_announced_without_a_report(env):
+    p, _, _, _ = env
+    jid = start(p, label="explode")["job_id"]
+    r = finished(p, jid)
+    assert r["status"] == "failed" and "CalculiX" in r["error"] and "fea_failed" in kinds(r)
+    assert ask(p, "fea_publish", job_id=jid, summary="x")["code"] == "not_ready"
 
 
-def test_bad_job_is_refused_before_queueing(env):
-    hub, _, _, a, _, calls = env
-    with pytest.raises(HubError) as e:
-        hub.fea_start(a, {"target": "Beam", "analysis": "cfd"})
-    assert e.value.status == 400 and not calls
-    assert hub.fea_faces("Beam", ["xmin"])["selected"] == {"xmin": ["Face1"]}
+def test_mesher_install_progress_is_announced(env):
+    p, _, _, _ = env
+    jid = start(p, label="slow-mesher")["job_id"]
+    seen = []
+    import time
+    for _ in range(200):
+        r = ask(p, "fea_status", job_id=jid)["result"]
+        seen += kinds(r)
+        if r["status"] == "done":
+            break
+        time.sleep(0.01)
+    assert "fea_progress" in seen
 
 
-def test_hub_restart_fails_interrupted_jobs(env, tmp_path):
-    hub, lay, _, a, _, _ = env
-    hub.x("INSERT INTO fea_jobs (id, pid, status, job, created_at) VALUES ('fea_x', ?, 'running', '{}', 0)", a)
-    hub2 = Hub(FeaWorker(), lay["db"], "secret", clock=Clock(), layout=lay)
-    assert hub2.one("SELECT status FROM fea_jobs WHERE id='fea_x'")["status"] == "failed"
+def test_bad_jobs_are_refused_before_anything_runs(env, tmp_path):
+    p, root, _, calls = env
+    assert ask(p, "fea_run", target="Beam", analysis="cfd")["code"] == "bad_args"
+    (root / "model.FCStd").unlink()
+    assert ask(p, "fea_run", target="Beam")["code"] == "not_found"
+    assert ask(p, "fea_status", job_id="fea_nope")["code"] == "not_found" and not calls
+
+
+def test_host_restart_fails_interrupted_jobs(env):
+    p, root, clock, _ = env
+    p.db.execute("INSERT INTO fea_jobs (id, owner, owner_name, status, job, created_at) "
+                 "VALUES ('fea_x', 4, 'alice-claude', 'running', '{}', 0)")
+    fea_jobs.FeaJobs(p, clock)
+    assert p.db.execute("SELECT status FROM fea_jobs WHERE id='fea_x'").fetchone()["status"] == "failed"
+
+
+# ------------------------------------------------------------- SpaceHub routes
+
+def test_space_hub_fea_routes_check_targets_and_poll_from_the_client(monkeypatch):
+    hub = SpaceHub({"uri": "http://x", "db": "d"}, {"participant_id": 1, "token": "t", "fence": 2}, space=object())
+    monkeypatch.setattr(hub, "_rows", lambda view, where="": [{"name": "Beam", "rev": 4}] if view == "v_object" else [])
+    monkeypatch.setattr(hub, "latest_seq", lambda: 17)
+    monkeypatch.setattr("cadswarm.space_hub.time.sleep", lambda s: None)
+    sent, states = [], iter(["running", "done"])
+
+    def run_op(kind, args, expected_revs=None):
+        sent.append((kind, args))
+        if kind == "fea_run":
+            return {"job_id": "fea_1", "status": "queued", "_events": [{"kind": "fea_started", "data": {}}]}
+        return {"job_id": "fea_1", "status": next(states)} if kind == "fea_status" else {"ok": True}
+    monkeypatch.setattr(hub, "run_op", run_op)
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/fea/run", {"target": "Ghost"})
+    assert e.value.code == "bad_args" and not sent
+    r = hub.post("/fea/run", {"target": "Beam", "wait": 30})
+    assert r == {"job_id": "fea_1", "status": "done"}  # events are for the module, not the agent
+    assert sent[0] == ("fea_run", {"target": "Beam", "revs": {"Beam": 4}, "seq": 17})
+    assert [k for k, _ in sent] == ["fea_run", "fea_status", "fea_status"]
+    hub.post("/fea/jobs/fea_1/publish", {"summary": "s", "improvements": ["i"]})
+    assert sent[-1] == ("fea_publish", {"job_id": "fea_1", "summary": "s", "improvements": ["i"]})
+    hub.post("/fea/faces", {"names": "Beam", "select": ["xmin"]})
+    assert sent[-1] == ("faces", {"names": ["Beam"], "select": ["xmin"]})
 
 
 # ------------------------------------------------------- mesher install
@@ -268,7 +326,7 @@ def fake_wheel(tmp_path, version=None):
     """A stand-in Gmsh wheel: a gmsh.py whose 'initialize' prints the version, plus a 'library'."""
     import io
     import zipfile
-    from cadswarm.hub import mesher
+    from cadswarm import mesher
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("gmsh.py", f"def initialize(argv, run=False):\n    print('{version or mesher.GMSH_VERSION}')\n"
@@ -284,7 +342,7 @@ def gmsh_env(tmp_path, monkeypatch):
     import hashlib
     import io
     import platform
-    from cadswarm.hub import mesher
+    from cadswarm import mesher
     monkeypatch.setenv("APPDATA", str(tmp_path / "app"))
     monkeypatch.delenv("CADSWARM_NO_AUTO_INSTALL", raising=False)
     monkeypatch.setattr(platform, "system", lambda: "Linux")
@@ -341,7 +399,7 @@ def test_mesher_install_explains_when_it_cannot(gmsh_env, monkeypatch):
 
 
 def test_run_job_installs_a_missing_mesher_and_retries(monkeypatch):
-    from cadswarm.hub import mesher
+    from cadswarm import mesher
     runs, notes = [], []
 
     def fake_run(python, job, brep, timeout, gmsh_cmd):

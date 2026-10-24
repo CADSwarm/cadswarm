@@ -104,6 +104,30 @@ def select_faces(shape, selectors):
     return picked
 
 
+def load_target(job):
+    """The target object(s) from the job's copy of the saved model (placement applied), as one shape."""
+    import FreeCAD
+    import Part
+    if job.get("brep_path"):  # a bare BREP (tools and tests)
+        shape = Part.Shape()
+        shape.importBrep(job["brep_path"])
+        return shape
+    doc = FreeCAD.openDocument(job["doc_path"])
+    try:
+        shapes = []
+        for name in job["target"]:
+            obj = doc.getObject(name)
+            if obj is None:
+                raise FeaError("bad_args", f"There's no part named {name!r} in the model (see model_status).")
+            shape = getattr(obj, "Shape", None)
+            if shape is None or shape.isNull() or not shape.Solids:
+                raise FeaError("bad_args", f"{name} has no solid to analyse.")
+            shapes.append(shape.copy())
+        return Part.makeCompound(shapes) if len(shapes) > 1 else shapes[0]
+    finally:
+        FreeCAD.closeDocument(doc.Name)
+
+
 def analysis_shape(shape):
     """The one solid that gets meshed: several bodies are fused (bonded), so face names match list_faces."""
     import Part
@@ -462,9 +486,7 @@ def run_once(job, shape, size, tmp):
 def run(job, tmp):
     import FreeCAD
     import Part
-    shape = Part.Shape()
-    shape.importBrep(job["brep_path"])
-    shape, warnings = analysis_shape(shape)
+    shape, warnings = analysis_shape(load_target(job))
     # Faces are resolved on the final solid, so indices match what the mesh groups use.
     job["fixed_faces"] = select_faces(shape, job.get("fixed") or [])
     job["loads_resolved"] = [dict(l, faces=select_faces(shape, l.get("faces") or [])) if l["type"] != "gravity"

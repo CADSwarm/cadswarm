@@ -204,6 +204,8 @@ else
     (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
         --exclude=cadswarm-data --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
         --exclude=node_modules --exclude=target .) | (cd "$DEST.new" && tar -xf -) || die "Copying CadSwarm into FreeCAD failed."
+    WASM="$HERE/module/target/wasm32-unknown-unknown/release/cadswarm_module.wasm"
+    [ -f "$WASM" ] && cp "$WASM" "$DEST.new/module/cadswarm_module.wasm"  # the team server's database module
     rm -rf "$DEST" && mv "$DEST.new" "$DEST" || die "Couldn't replace the old CadSwarm in $DEST"
     ok "Installed CadSwarm into FreeCAD ($DEST)"
 fi

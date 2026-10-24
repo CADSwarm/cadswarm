@@ -83,6 +83,8 @@ if (SamePath $Here $Dest) {
         /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target `
         /XF *.pyc | Out-Null
     if ($LASTEXITCODE -ge 8) { Say "Copying CadSwarm into FreeCAD failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
+    $Wasm = Join-Path $Here "module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm"
+    if (Test-Path $Wasm) { Copy-Item $Wasm (Join-Path $Dest "module\cadswarm_module.wasm") }  # the team server's database module
     Say "  [ok] Installed CadSwarm into FreeCAD" "Green"
 }
 

@@ -67,3 +67,44 @@ def test_cli_setup_explains_a_bad_invite(tmp_path):
         cli.main(["setup", "--client", "claude", "--invite", "cadswarm-1:abc", "--name", "x", "--dir", str(tmp_path)])
     assert "older CadSwarm" in str(e.value)
     assert not (tmp_path / ".cadswarm" / "config.json").exists()
+
+
+# ---- helper folders: right-team sign-in, API key, start script with the first message
+
+def test_a_sign_in_from_another_team_or_the_old_hub_is_replaced(tmp_path, monkeypatch):
+    from cadswarm import agent_setup
+    redeemed = []
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, name, client: redeemed.append(t["db"]) or {
+        "token": "new", "participant_id": 7, "fence": 1, "name": name, "role": "lead", "kind": "agent"})
+    team = {"uri": "http://127.0.0.1:3000", "db": "cadswarm-a-1234", "token": "inv", "role": "lead"}
+    state = tmp_path / ".cadswarm"
+    state.mkdir()
+    (state / "identity.json").write_text(json.dumps({"participant_id": "p_0169f3b6", "token": "old",
+                                                     "hub": "http://127.0.0.1:8765"}))
+    (state / "config.json").write_text(json.dumps({"uri": team["uri"], "db": team["db"]}))
+    assert not agent_setup.identity_matches(str(tmp_path), team)  # the old FastAPI hub's sign-in
+    agent_setup.write_agent_config(str(tmp_path), "claude", team, "anegs-claude", python="/py")
+    assert redeemed == [team["db"]] and agent_setup.identity_matches(str(tmp_path), team)
+    agent_setup.write_agent_config(str(tmp_path), "claude", {**team, "token": ""}, "anegs-claude", python="/py")
+    assert redeemed == [team["db"]]  # same team: the sign-in is kept, no invite needed
+    other = {**team, "db": "cadswarm-b-9999", "token": ""}
+    assert not agent_setup.identity_matches(str(tmp_path), other)
+    with pytest.raises(ValueError, match="fresh invite"):
+        agent_setup.write_agent_config(str(tmp_path), "claude", other, "anegs-claude", python="/py")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX start script")
+def test_start_script_sends_the_first_message(tmp_path, monkeypatch):
+    import subprocess
+    from cadswarm import agent_setup
+    (tmp_path / ".cadswarm").mkdir()
+    fake = tmp_path / "bin" / "claude"
+    fake.parent.mkdir()
+    fake.write_text('#!/bin/sh\necho "ARG=$1"\n')
+    fake.chmod(0o755)
+    monkeypatch.setattr(agent_setup, "find_agent_cli", lambda client: str(fake))
+    script = agent_setup.write_launcher(str(tmp_path), "claude", "Robot's arm", "lead")
+    first = subprocess.run(["sh", script], capture_output=True, text=True).stdout
+    assert "leading our team's CAD project \"Robot's arm\"" in first
+    again = subprocess.run(["sh", script], capture_output=True, text=True).stdout
+    assert "continuing our team's CAD project" in again  # later starts carry on instead of re-planning

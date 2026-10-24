@@ -22,7 +22,7 @@ STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over"
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
           "not_found": 404, "bad_args": 400, "unknown_op": 400, "unreachable": 0}
 OP_WAIT_SECONDS = 150
-EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported")
+EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed")
 
 
 def _err(e):
@@ -76,6 +76,10 @@ class SpaceHub:
             ("POST", r"/project/storage/prune", self.prune_storage),
             ("POST", r"/project/storage/settings", self.storage_settings),
             ("POST", r"/project/snapshot", self.snapshot),
+            # FEA: faces is a worker query; the job ops run in the host helper (cadswarm/fea_jobs.py).
+            ("POST", r"/fea/faces", self.fea_faces), ("POST", r"/fea/run", self.fea_run),
+            ("GET", r"/fea/jobs/(?P<jid>[^/]+)", self.fea_job), ("POST", r"/fea/jobs/(?P<jid>[^/]+)/publish", self.fea_publish),
+            ("GET", r"/fea/reports", self.fea_reports),
             # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
         ]
@@ -146,6 +150,15 @@ class SpaceHub:
         self.identity.update({"participant_id": m["id"], "fence": m["fence"], "name": m["name"],
                               "role": m["role"], "kind": m["kind"], "seq": self.latest_seq()})
         return dict(self.identity)
+
+    def create_invite(self, kind="human", role="member", ttl=86400, project="", uri=None):
+        """A fresh single-use `cadswarm-2:` code. `uri` overrides the address in it (a LAN host hands out its
+        network address instead of 127.0.0.1). The module lets only the host mint host or reviewer invites."""
+        from .invite import make_invite
+        token = ticket.new_token()
+        self._f("create_invite", ticket.hash_token(token), kind, role, int(ttl))
+        return make_invite({"v": 1, "uri": (uri or self.cfg["uri"]).rstrip("/"), "db": self.cfg["db"], "token": token,
+                            "kind": kind, "role": role, "host_addr": ""}, project)
 
     def heartbeat(self, body):
         self._f("heartbeat", body.get("doing") or "")
@@ -238,6 +251,48 @@ class SpaceHub:
 
     def ops(self, body):
         return self.run_op(body.get("op"), body.get("args"), body.get("expected_revs"))
+
+    # ---------------------------------------------------------------------- FEA
+
+    def _fea_op(self, kind, args):
+        r = self.run_op(kind, args)
+        return {k: v for k, v in r.items() if k != "_events"} if isinstance(r, dict) else r  # events: for the module
+
+    def _fea_wait(self, out, wait):
+        """Poll fea_status from here (never inside the host, which runs one op at a time) for up to `wait` s."""
+        deadline = time.time() + min(float(wait or 0), 55.0)
+        while out.get("status") in ("queued", "running") and time.time() < deadline:
+            time.sleep(min(3.0, max(0.0, deadline - time.time())))
+            out = self._fea_op("fea_status", {"job_id": out["job_id"]})
+        return out
+
+    def fea_faces(self, body):
+        names = body.get("names") or body.get("name")
+        return self.run_op("faces", {"names": [names] if isinstance(names, str) else names or [],
+                                     "select": body.get("select")})
+
+    def fea_run(self, body):
+        args = {k: v for k, v in body.items() if k != "wait"}
+        target = args.get("target")
+        targets = [target] if isinstance(target, str) else list(target or [])
+        objects = {o["name"]: o for o in self._rows("v_object")}
+        missing = [t for t in targets if t not in objects]
+        if missing:
+            raise HubRequestError(400, {"error": f"No part named {missing} in the model (see model_status).",
+                                        "code": "bad_args"})
+        args["revs"] = {t: objects[t]["rev"] for t in targets}
+        args["seq"] = self.latest_seq()
+        return self._fea_wait(self._fea_op("fea_run", args), body.get("wait", 0))
+
+    def fea_job(self, jid, wait=0):
+        return self._fea_wait(self._fea_op("fea_status", {"job_id": jid}), wait)
+
+    def fea_publish(self, body, jid):
+        return self._fea_op("fea_publish", {"job_id": jid, "summary": body.get("summary") or "",
+                                            "improvements": body.get("improvements") or []})
+
+    def fea_reports(self):
+        return self._fea_op("fea_reports", {})
 
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})

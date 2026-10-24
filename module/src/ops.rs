@@ -110,6 +110,13 @@ pub fn complete_op(
     }
     let worker_result: Value = serde_json::from_str(&result_json).unwrap_or(Value::Null);
     if !op.mutating {
+        // FEA job results announce themselves (a report pops up for everyone); only those kinds pass.
+        for (kind, mut data) in rules::result_events(&worker_result) {
+            if data.get("name").is_none() {
+                data["name"] = json!(actor);
+            }
+            emit(ctx, ws, &kind, by, data);
+        }
         ctx.db.op().id().update(Op { status: "done".into(), result_json, finished_ms: now, ..op });
         return Ok(());
     }

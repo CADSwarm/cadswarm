@@ -55,6 +55,9 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 {end}
 """
 
+RESUME_PROMPT = ("We're continuing our team's CAD project \"{project}\". Check model_status, your inbox and the "
+                 "tasks, then carry on with your part. Tell me in plain words what you're doing.")
+
 FIRST_PROMPT = {
     "lead": "You're leading our team's CAD project \"{project}\". Ask me what we're building, then plan the "
             "parts, put the shared sizes in Params, create one task per part for the team, and start on yours.",
@@ -238,6 +241,15 @@ def redeem(t, name, client):
             "fence": me["fence"], "name": me["name"], "role": me["role"], "kind": me["kind"]}
 
 
+def identity_matches(project, invite):
+    """True if `project` already holds a SpacetimeDB sign-in for the team `invite` points at. A sign-in for
+    another team, or one left by the old FastAPI hub, doesn't count (it would only be refused)."""
+    ident = load_json(os.path.join(state_dir(project), "identity.json")) or {}
+    cfg = load_json(os.path.join(state_dir(project), "config.json")) or {}
+    return bool(ident.get("token")) and "hub" not in ident and isinstance(ident.get("participant_id"), int) \
+        and cfg.get("db") == invite.get("db") and cfg.get("uri", "").rstrip("/") == invite.get("uri", "").rstrip("/")
+
+
 def write_agent_config(project, client, invite, name, python=None, fresh=False):
     """Everything an AI helper in `project` needs to join the team. Returns the files written.
     `invite` is a decoded ticket (see invite.read_invite). The invite is redeemed only when this
@@ -255,7 +267,9 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False):
         f.write("*\n")  # identity.json holds a SpacetimeDB token
     writers = {"claude": setup_claude, "codex": setup_codex, "droid": setup_droid}
     written = writers[client](project, python)
-    if not load_json(ident_path):
+    if not identity_matches(project, invite):
+        if not invite.get("token"):
+            raise ValueError("This helper folder isn't signed in to this team yet; it needs a fresh invite code.")
         save_json(ident_path, redeem(invite, name, client))
     save_json(os.path.join(state_dir(project), "config.json"), {
         "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
@@ -277,19 +291,59 @@ def find_agent_cli(client):
     return next((c for c in candidates if os.path.exists(c)), None)
 
 
+def _sh_quote(text):
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+
+
+def write_launcher(project, client, project_name, role):
+    """The start script for this helper: starts the agent CLI with its first message, so nobody has to paste it;
+    later starts send a short "carry on" message instead."""
+    exe = find_agent_cli(client) or CLIENTS[client]["exe"]
+    first = FIRST_PROMPT[role].format(project=project_name)
+    resume = RESUME_PROMPT.format(project=project_name)
+    sd = state_dir(project)
+    if os.name == "nt":
+        q = lambda t: '"' + t.replace('"', "'") + '"'  # noqa: E731  (cmd has no way to escape a quote here)
+        text = "\r\n".join([
+            "@echo off", "rem Starts your CadSwarm AI helper (written by the CadSwarm guide).",
+            f'cd /d "{project}"',
+            f'if exist ".cadswarm\\started" ( "{exe}" {q(resume)} & goto :eof )',
+            'type nul > ".cadswarm\\started"', f'"{exe}" {q(first)}', ""])
+        path = os.path.join(sd, "start-helper.cmd")
+    else:
+        text = "\n".join([
+            "#!/bin/sh", "# Starts your CadSwarm AI helper (written by the CadSwarm guide).",
+            f"cd {_sh_quote(project)} || exit 1",
+            f"if [ -f .cadswarm/started ]; then exec {_sh_quote(exe)} {_sh_quote(resume)}; fi",
+            "touch .cadswarm/started", f"exec {_sh_quote(exe)} {_sh_quote(first)}", ""])
+        path = os.path.join(sd, "start-helper.sh")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+    if os.name != "nt":
+        os.chmod(path, 0o700)
+    return path
+
+
 def open_agent_terminal(client, project):
-    """Open a terminal window in `project` running the AI helper. Returns a short status string."""
+    """Open a terminal window in `project` running the AI helper (through its start script when the guide wrote
+    one, which also sends the first message). Returns the agent's path."""
     exe = find_agent_cli(client)
     if not exe:
         raise FileNotFoundError(f"{CLIENTS[client]['label']} isn't installed on this computer yet.")
+    launcher = os.path.join(state_dir(project), "start-helper.cmd" if os.name == "nt" else "start-helper.sh")
+    # Not FreeCAD's bundle settings: an AppImage's PYTHONHOME would break any other Python the agent starts.
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
     if os.name == "nt":
-        subprocess.Popen(["cmd.exe", "/k", exe], cwd=project, creationflags=subprocess.CREATE_NEW_CONSOLE)
+        cmd = ["cmd.exe", "/k", launcher if os.path.exists(launcher) else exe]
+        subprocess.Popen(cmd, cwd=project, env=env, creationflags=subprocess.CREATE_NEW_CONSOLE)
     elif sys.platform == "darwin":
-        script = f'tell application "Terminal" to do script "cd {json.dumps(project)[1:-1]} && {exe}"'
+        run = f"sh {_sh_quote(launcher)}" if os.path.exists(launcher) else f"cd {_sh_quote(project)} && {exe}"
+        script = f"tell application \"Terminal\" to do script {json.dumps(run)}"
         subprocess.Popen(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'])
     else:
         term = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("konsole")
         if not term:
             raise FileNotFoundError("Couldn't find a terminal program to open.")
-        subprocess.Popen([term, "-e", exe] if "gnome" not in term else [term, "--", exe], cwd=project)
+        argv = ["sh", launcher] if os.path.exists(launcher) else [exe]
+        subprocess.Popen([term, "--", *argv] if "gnome" in term else [term, "-e", *argv], cwd=project, env=env)
     return exe

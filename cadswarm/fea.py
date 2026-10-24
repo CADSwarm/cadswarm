@@ -199,31 +199,30 @@ def runner_script():
     return os.path.join(os.path.dirname(worker_script()), "fea_runner.py")
 
 
-def run_job(python, job, brep, timeout=FEA_TIMEOUT, progress=None):
-    """Solve with FreeCAD's python; installs Gmsh first if neither FreeCAD nor CadSwarm has one.
-
-    Returns (result dict, plot PNG bytes or None). `progress(text)` hears about a mesher install.
+def run_job(python, job, model_path, timeout=FEA_TIMEOUT, progress=None):
+    """Solve `job["target"]` from a saved model with FreeCAD's python; installs Gmsh first if neither FreeCAD
+    nor CadSwarm has one. Returns (result dict, plot PNG bytes or None). `progress(text)` hears about a
+    mesher install.
     """
     from . import mesher
     gmsh_cmd = mesher.command()
-    result, png = _run_job(python, job, brep, timeout, gmsh_cmd)
+    result, png = _run_job(python, job, model_path, timeout, gmsh_cmd)
     if result.get("code") == "missing_mesher" and not gmsh_cmd:
         try:
             gmsh_cmd = mesher.install(progress=progress)
         except mesher.MesherError as e:
             return {"ok": False, "code": "missing_mesher", "error": str(e)}, None
-        result, png = _run_job(python, job, brep, timeout, gmsh_cmd)
+        result, png = _run_job(python, job, model_path, timeout, gmsh_cmd)
     return result, png
 
 
-def _run_job(python, job, brep, timeout, gmsh_cmd):
+def _run_job(python, job, model_path, timeout, gmsh_cmd):
     tmp = tempfile.mkdtemp(prefix="cadswarm-fea-")
     try:
-        brep_path = os.path.join(tmp, "shape.brep")
-        with open(brep_path, "w", encoding="utf-8") as f:
-            f.write(brep)
+        doc_path = os.path.join(tmp, "model.FCStd")
+        shutil.copy2(model_path, doc_path)  # the solver opens its own copy; the original is never opened
         with open(os.path.join(tmp, "job.json"), "w", encoding="utf-8") as f:
-            json.dump(dict(job, brep_path=brep_path), f)
+            json.dump(dict(job, doc_path=doc_path), f)
         env = dict(os.environ, CADSWARM_FREECAD_BIN=os.path.dirname(python), PYTHONIOENCODING="utf-8")
         if gmsh_cmd:
             env["CADSWARM_GMSH_CMD"] = json.dumps(gmsh_cmd)

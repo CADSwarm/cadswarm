@@ -15,7 +15,7 @@ import getpass
 import os
 import queue
 import re
-import secrets
+import subprocess
 import threading
 import traceback
 
@@ -24,11 +24,12 @@ import FreeCADGui as Gui
 from PySide import QtCore, QtGui
 
 from .. import hosting
-from ..agent_setup import CLIENTS, FIRST_PROMPT, find_agent_cli, open_agent_terminal, trust_in_codex, \
-    write_agent_config
+from ..agent_setup import CLIENTS, find_agent_cli, identity_matches, open_agent_terminal, trust_in_codex, \
+    write_agent_config, write_launcher
+from .. import ticket
 from ..client import HubRequestError
-from ..invite import InviteError, make_invite, read_invite
-from ..paths import freecad_python, project_layout, projects_dir, resolve_project_folder
+from ..invite import InviteError, read_invite
+from ..paths import freecad_python, projects_dir, resolve_project_folder
 from . import panel
 
 STYLE = """
@@ -271,9 +272,7 @@ class SetupWizard(QtGui.QDialog):
         self.poll.timeout.connect(self.check_helper_joined)
 
         if start == "agent" and panel.SESSION.connected:
-            self.mode = "host" if self.p.GetString("HostDataDir") else "join"
-            self.hub_for_agent = self.p.GetString("HubUrl")
-            self.token = self.p.GetString("WorkspaceToken")
+            self.mode = "host" if own_team(self.p) else "join"
             self.show_page("agent")
         elif start == "reconnect":
             self.show_page("reconnect")
@@ -334,7 +333,7 @@ class SetupWizard(QtGui.QDialog):
         if self.reason:
             lay.addWidget(label(f"<b>{self.reason}</b>"))
         lay.addSpacing(8)
-        if self.project and (self.p.GetString("HostDataDir") or self.p.GetString("HubUrl")):
+        if self.project and (self.p.GetString("HostDataDir") or self.p.GetString("SpaceDb")):
             again = QtGui.QCommandLinkButton(f"Reconnect to “{self.project}”",
                                              "Pick up where you left off with your team.")
             again.clicked.connect(lambda: self.show_page("reconnect"))
@@ -440,11 +439,11 @@ class SetupWizard(QtGui.QDialog):
         self.buttons(secondary="Cancel", secondary_action=self.reject)
         self.host_steps.set_steps([
             ("Get the helper software (one time, about 2 minutes)",
-             "Downloading the small programs that run your team. Needs an internet connection.",
+             "Downloading the small programs your team's AI helpers use. Needs an internet connection.",
              self.step_deps, False),
             ("Start your team's server",
              "If Windows asks whether to allow network access, click “Allow” so teammates can connect.",
-             self.step_start_hub, False),
+             self.step_start_team, False),
             ("Join your team", None, self.step_host_join, True),
         ])
         self.host_steps.start()
@@ -455,38 +454,42 @@ class SetupWizard(QtGui.QDialog):
             return
         hosting.install_deps(self.python, log)
 
-    def step_start_hub(self, log):
+    def step_start_team(self, log):
         data_dir = self.project_dir
-        token_file = project_layout(data_dir)["token"]
-        # Continuing a project keeps its team code, so helpers already connected to it keep working.
-        self.token = open(token_file).read().strip() if os.path.exists(token_file) else secrets.token_urlsafe(9)
-        port = hosting.free_port()
-        url = f"http://127.0.0.1:{port}"
-        log(f"Starting the team server on port {port} (model saved in {data_dir})")
-        pid = hosting.start_hub(self.python, data_dir, self.token, port)
-        self.p.SetString("HostPid", str(pid))  # saved at once, so "Stop hosting" finds it whatever happens next
+        log(f"Starting the team server (model saved in {data_dir})")
+        # Continuing a project keeps its database and host identity (host.json), so helpers stay connected.
+        info = hosting.start_team(self.python, data_dir, "local")
+        self.p.SetString("HostPid", str(info["host_pid"]))  # saved at once, so "Stop hosting" finds it
+        self.p.SetString("SpacetimePid", str(info["spacetime_pid"] or ""))
         try:
-            hosting.wait_healthy(url, timeout=120, pid=pid, data_dir=data_dir)
+            hosting.wait_ready(data_dir, timeout=180, pids=info)
         except Exception:
-            hosting.stop_hub(pid)  # else "Try again" would start a second server on the same project folder
+            hosting.stop_team(info)  # else "Try again" would start a second server on the same project folder
             raise
-        self.hub_for_agent = url
-        self.host_info = {"HostDataDir": data_dir, "HostToken": self.token, "HostPort": str(port),
-                          "HostPid": str(pid)}
+        self.team = info
+        self.p.SetString("HostDataDir", data_dir)
+        self.p.SetString("HostDb", info["db"])
 
     def step_host_join(self, log):
-        panel.SESSION.connect(self.hub_for_agent, self.token, self.name, timeout=10)
-        for k, v in self.host_info.items():
-            self.p.SetString(k, v)
-        lan = f"http://{hosting.lan_ip()}:{self.host_info['HostPort']}"
-        self.p.SetString("InviteCode", make_invite(lan, self.token, self.project))
+        # The host person joins like anyone else: with a single-use invite the team server mints for them.
+        out = subprocess.run([hosting.find_tool("cadswarm-host"), "--data", self.project_dir, "invite",
+                              "--kind", "human", "--role", "lead"], capture_output=True, text=True,
+                             creationflags=hosting.NO_WINDOW)
+        found = re.search(r"ticket: (\S+)", out.stdout)
+        if not found:
+            raise RuntimeError("The team server couldn't make your sign-in." + hosting.log_tail(self.project_dir,
+                                                                                               name="host.log"))
+        invite = ticket.decode(found.group(1))
+        panel.SESSION.connect(self.team["uri"], self.team["db"], self.name, invite=invite, timeout=15)
         self.p.SetString("ProjectName", self.project)
+        self.p.SetString("InviteCode", new_teammate_invite(self.p))
 
     def page_invite(self):
         code = self.p.GetString("InviteCode")
         w, lay = self.page("Your team is ready! 🎉",
-                           "Send this invite code to your teammates — by email, Discord, text, anything. "
-                           "They paste it into CadSwarm to join.")
+                           "Send this invite code to a teammate — by email, Discord, text, anything. "
+                           "They paste it into CadSwarm to join. Each code works once: make a new one for "
+                           "each teammate.")
         box = QtGui.QPlainTextEdit(code)
         box.setObjectName("code")
         box.setReadOnly(True)
@@ -494,8 +497,24 @@ class SetupWizard(QtGui.QDialog):
         lay.addWidget(box)
         copy = QtGui.QPushButton("Copy invite code")
         copy.clicked.connect(lambda: copy_to_clipboard(box.toPlainText(), copy))
-        lay.addWidget(copy, 0, QtCore.Qt.AlignLeft)
-        ips = hosting.local_ips() if self.p.GetString("HostPort") else []
+        another = QtGui.QPushButton("Make a code for another teammate")
+
+        def remint(ip=None):
+            try:
+                code = new_teammate_invite(self.p, ip)
+            except HubRequestError as e:
+                box.setPlainText(panel.friendly_error(e))
+                return
+            self.p.SetString("InviteCode", code)
+            box.setPlainText(code)
+        another.clicked.connect(lambda: remint(pick.currentText() if pick else None))
+        buttons = QtGui.QHBoxLayout()
+        buttons.addWidget(copy)
+        buttons.addWidget(another)
+        buttons.addStretch(1)
+        lay.addLayout(buttons)
+        pick = None
+        ips = hosting.local_ips() if self.p.GetString("HostDataDir") else []
         if len(ips) > 1:
             lay.addWidget(label("This computer has more than one network address. If teammates can't join, "
                                 "pick the one on the network you share (for example your Tailscale one):", "hint"))
@@ -503,12 +522,7 @@ class SetupWizard(QtGui.QDialog):
             pick.addItems(ips)
             lay.addWidget(pick, 0, QtCore.Qt.AlignLeft)
 
-            def use_address(ip):
-                new = make_invite(f"http://{ip}:{self.p.GetString('HostPort')}", self.p.GetString("HostToken"),
-                                  self.p.GetString("ProjectName") or self.project)
-                self.p.SetString("InviteCode", new)
-                box.setPlainText(new)
-            pick.currentTextChanged.connect(use_address)
+            pick.currentTextChanged.connect(remint)
         folder = self.p.GetString("HostDataDir")
         if folder:
             row = QtGui.QHBoxLayout()
@@ -523,7 +537,7 @@ class SetupWizard(QtGui.QDialog):
                             "• The first time, Windows may ask to allow access through its firewall. Click "
                             "<b>Allow access</b>, or teammates can't connect.<br>"
                             "• Keep this computer on while your team works. Your project is saved as you go.<br>"
-                            "• You can copy the code again any time from the team panel (“Invite”).", "hint"))
+                            "• Make more codes any time from the team panel (“Invite”).", "hint"))
         lay.addStretch(1)
         return w
 
@@ -535,10 +549,10 @@ class SetupWizard(QtGui.QDialog):
 
     def page_join(self):
         w, lay = self.page("Join your teammate's project",
-                           "Paste the invite code they sent you. It starts with “cadswarm-1:”.")
+                           "Paste the invite code they sent you. It starts with “cadswarm-2:”.")
         self.code_edit = QtGui.QPlainTextEdit()
         self.code_edit.setObjectName("code")
-        self.code_edit.setPlaceholderText("cadswarm-1:…")
+        self.code_edit.setPlaceholderText("cadswarm-2:…")
         self.code_edit.setMaximumHeight(80)
         lay.addWidget(self.code_edit)
         paste = QtGui.QPushButton("Paste from clipboard")
@@ -557,7 +571,7 @@ class SetupWizard(QtGui.QDialog):
     def enter_join(self):
         self.buttons("Join team ›", self.join_team)
         clip = QtGui.QApplication.clipboard().text()
-        if "cadswarm-1:" in clip and not self.code_edit.toPlainText().strip():
+        if "cadswarm-2:" in clip and not self.code_edit.toPlainText().strip():
             self.code_edit.setPlainText(clip.strip())  # they just copied it: save them a step
 
     def join_team(self):
@@ -573,9 +587,9 @@ class SetupWizard(QtGui.QDialog):
         self.join_error.setText("<span style='color: palette(text)'>Joining…</span>")
         QtGui.QApplication.processEvents()
         try:
-            panel.SESSION.connect(inv["hub"], inv["token"], name, timeout=10)
+            panel.SESSION.connect(inv["uri"], inv["db"], name, invite=inv, timeout=15)
         except HubRequestError as e:
-            if e.code == "name_in_use":
+            if e.code in ("name_in_use", "name_taken"):
                 self.join_error.setText(f"Someone named “{name}” is already in this team. Please use a different name.")
             elif e.code == "unreachable":
                 self.join_error.setText("Couldn't reach your teammate's computer. Check that:<br>"
@@ -586,22 +600,20 @@ class SetupWizard(QtGui.QDialog):
                                         "Try a phone hotspot that you both join, or "
                                         "<a href='https://tailscale.com'>Tailscale</a>.")
             else:
-                self.join_error.setText(panel.friendly_error(e, inv["hub"]))
+                self.join_error.setText(panel.friendly_error(e, inv["uri"]))
             return
         except Exception as e:  # never leave the dialog stuck on "Joining…"
             App.Console.PrintError(f"[CadSwarm] Join failed: {e!r}\n")
             self.join_error.setText("Something went wrong while joining. Please try again; if it keeps "
                                     "happening, ask your teammate to send a fresh invite code.")
             return
-        self.name, self.project, self.token = name, inv["project"] or "Team project", inv["token"]
-        self.hub_for_agent = inv["hub"]
-        self.p.SetString("InviteCode", self.code_edit.toPlainText().strip())
+        self.name, self.project = name, inv["project"] or "Team project"
+        self.p.SetString("InviteCode", "")  # that code is used up
         self.p.SetString("ProjectName", self.project)
         # Forget this computer's hosting only if its own team server is gone: someone who hosts and then joins
         # (their own invite, or another team) must still be able to "Stop hosting" the server they started.
-        port = self.p.GetString("HostPort")
-        if not (port and hosting.health(f"http://127.0.0.1:{port}")):
-            for k in ("HostDataDir", "HostToken", "HostPort", "HostPid"):
+        if not (self.p.GetString("HostDataDir") and hosting.team_ready(self.p.GetString("HostDataDir"))):
+            for k in ("HostDataDir", "HostDb", "HostPid", "SpacetimePid"):
                 self.p.SetString(k, "")  # this computer is not the host
         self.show_page("agent")
 
@@ -671,8 +683,7 @@ class SetupWizard(QtGui.QDialog):
 
     def default_folder(self):
         # The helper's own workspace (it holds its sign-in), next to — never inside — the shared files/.
-        own_team = self.p.GetString("HostToken") and self.p.GetString("HostToken") == getattr(self, "token", None)
-        base = self.p.GetString("HostDataDir") if self.mode == "host" or own_team else ""
+        base = self.p.GetString("HostDataDir") if self.mode == "host" or own_team(self.p) else ""
         base = base or os.path.join(projects_dir(), self.project or "Team project")
         return os.path.join(base, "AI helpers", f"{slug(self.name)}-{self.client}")
 
@@ -727,8 +738,13 @@ class SetupWizard(QtGui.QDialog):
     def step_write_config(self, log):
         self.agent_name = f"{slug(self.name)}-{self.client}"
         role = "lead" if self.mode == "host" else "member"
-        written = write_agent_config(self.folder, self.client, self.hub_for_agent, self.token, self.agent_name,
-                                     role, python=self.python)
+        team = {"uri": panel.SESSION.client.cfg["uri"], "db": panel.SESSION.client.cfg["db"], "role": role}
+        # A folder already signed in to THIS team keeps its sign-in (invites work once). One signed in to another
+        # team, or to the old hub, gets a fresh invite: its old sign-in would only be refused.
+        invite = team if identity_matches(self.folder, team) else \
+            read_invite(panel.SESSION.client.create_invite("agent", role, project=self.project))
+        written = write_agent_config(self.folder, self.client, invite, self.agent_name, python=self.python)
+        written.append(write_launcher(self.folder, self.client, self.project, role))
         for f in written:
             log(f"wrote {f}")
         self.p.SetString("AgentClient", self.client)
@@ -750,21 +766,13 @@ class SetupWizard(QtGui.QDialog):
                  "tools — say <b>Yes</b>." if self.client == "claude"
                  else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
         lay.addWidget(label(f"<b>2.</b> A window opens. {trust} If it asks you to sign in, follow its steps."))
-        role = "lead" if self.mode == "host" else "member"
-        prompt = FIRST_PROMPT[role].format(project=self.project)
         if self.client == "codex":
             lay.addWidget(label("<b>3.</b> Type <code>/hooks</code> and trust the <b>CadSwarm</b> hook. Codex skips "
                                 "hooks you haven't approved, so without this it won't see its team's updates. "
                                 "Do it again after updating CadSwarm."))
-        n = 4 if self.client == "codex" else 3
-        lay.addWidget(label(f"<b>{n}.</b> Paste this as your first message and press Enter:"))
-        box = QtGui.QPlainTextEdit(prompt)
-        box.setReadOnly(True)
-        box.setMaximumHeight(70)
-        lay.addWidget(box)
-        copy = QtGui.QPushButton("Copy message")
-        copy.clicked.connect(lambda: copy_to_clipboard(prompt, copy))
-        lay.addWidget(copy, 0, QtCore.Qt.AlignLeft)
+        lay.addWidget(label("Your helper gets its first instructions automatically and starts working with the "
+                            "team — nothing to paste. Next time, just open it again from its folder or the team "
+                            "panel (“Add AI helper”).", "hint"))
         lay.addSpacing(6)
         self.helper_status = label("⏳ Waiting for your AI helper to join the team…")
         lay.addWidget(self.helper_status)
@@ -811,35 +819,24 @@ class SetupWizard(QtGui.QDialog):
         steps = []
         if self.p.GetString("HostDataDir"):
             steps += [("Check the helper software", None, self.step_deps, False),
-                      ("Start your team's server", None, self.step_restart_hub, False)]
+                      ("Start your team's server", None, self.step_restart_team, False)]
         steps.append(("Join your team", None, self.step_rejoin, True))
         self.re_steps.set_steps(steps)
         self.re_steps.start()
 
-    def step_restart_hub(self, log):
-        port = self.p.GetString("HostPort")
-        url = f"http://127.0.0.1:{port}"
-        if hosting.health(url):
+    def step_restart_team(self, log):
+        data_dir = self.p.GetString("HostDataDir")
+        if hosting.team_ready(data_dir):
             log("Team server is already running.")
-            pid = hosting.pid_on_port(port)
-            if pid:
-                self.p.SetString("HostPid", str(pid))  # a stale PID would make "Stop hosting" do nothing
             return
-        data_dir, token = self.p.GetString("HostDataDir"), self.p.GetString("HostToken")
-        try:
-            pid = hosting.start_hub(self.python, data_dir, token, int(port))
-        except OSError:
-            raise RuntimeError("Couldn't start the team server.")
-        hosting.wait_healthy(url, timeout=120, pid=pid, data_dir=data_dir)
-        self.p.SetString("HostPid", str(pid))
-        lan = f"http://{hosting.lan_ip()}:{port}"
-        self.p.SetString("InviteCode", make_invite(lan, token, self.project))  # the network address may change
+        info = hosting.start_team(self.python, data_dir)  # host.json keeps the same database and identity
+        self.p.SetString("HostPid", str(info["host_pid"]))
+        self.p.SetString("SpacetimePid", str(info["spacetime_pid"] or self.p.GetString("SpacetimePid")))
+        hosting.wait_ready(data_dir, timeout=180, pids=info)
 
     def step_rejoin(self, log):
-        hub = (f"http://127.0.0.1:{self.p.GetString('HostPort')}" if self.p.GetString("HostDataDir")
-               else self.p.GetString("HubUrl"))
-        panel.SESSION.connect(hub, self.p.GetString("HostToken") or self.p.GetString("WorkspaceToken"),
-                              self.p.GetString("Name"), timeout=10)
+        panel.SESSION.connect(self.p.GetString("SpaceUri"), self.p.GetString("SpaceDb"), self.p.GetString("Name"),
+                              timeout=15)
 
     # ---------------------------------------------------------------- finish
 
@@ -849,6 +846,20 @@ class SetupWizard(QtGui.QDialog):
         panel.show_panel()
         if panel.SESSION.connected:
             panel.SESSION.refresh_meta()
+
+
+def own_team(p):
+    """True when the team this computer is in is the one it hosts."""
+    return bool(p.GetString("HostDataDir")) and p.GetString("HostDb") == p.GetString("SpaceDb")
+
+
+def new_teammate_invite(p, ip=None):
+    """A fresh single-use code for a person. A host on the local network hands out its network address."""
+    uri = None
+    if own_team(p) and p.GetString("SpaceUri").startswith("http://127.0.0.1"):
+        port = p.GetString("SpaceUri").rsplit(":", 1)[-1]
+        uri = f"http://{ip or hosting.lan_ip()}:{port}"
+    return panel.SESSION.client.create_invite("human", project=p.GetString("ProjectName"), uri=uri)
 
 
 def run_wizard(reason=None, start=None):
@@ -870,7 +881,7 @@ def stop_hosting():
                          "start it again (CadSwarm ▸ Get started ▸ Reconnect). Your project is saved."):
         return
     panel.SESSION.disconnect()
-    hosting.stop_hub(pid)
+    hosting.stop_team({"host_pid": pid, "spacetime_pid": p.GetString("SpacetimePid")})
     panel.SESSION.set_state("disconnected", panel.STOPPED_HOSTING)
     App.Console.PrintMessage("[CadSwarm] Stopped hosting. Your project is saved.\n")
 

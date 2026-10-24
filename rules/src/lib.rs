@@ -19,9 +19,38 @@ pub const QUERIES: &[&str] = &[
     "lookup_board", "recall_designs",
     "list_files", "read_file", "file_history",
     "brep", "storage_status",
+    "faces", "fea_status", "fea_reports",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
-pub const FILE_WRITES: &[&str] = &["save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage"];
+pub const FILE_WRITES: &[&str] = &[
+    "save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage",
+    // FEA: a job copies the model and later writes its report into files/fea/.
+    "fea_run", "fea_publish",
+];
+/// Team events a completed (non-mutating) op may carry in its result as `_events` for complete_op to emit:
+/// the host's helper can't call reducers, and an FEA report must pop up for every member.
+pub const RESULT_EVENTS: &[&str] = &["fea_started", "fea_progress", "fea_report", "fea_failed"];
+pub const MAX_RESULT_EVENTS: usize = 10;
+
+pub fn is_result_event(kind: &str) -> bool { RESULT_EVENTS.contains(&kind) }
+
+/// The (kind, data) pairs from an op result's `_events` that complete_op may emit; anything else is dropped.
+pub fn result_events(result: &Value) -> Vec<(String, Value)> {
+    result
+        .get("_events")
+        .and_then(Value::as_array)
+        .map(|evs| {
+            evs.iter()
+                .filter_map(|e| {
+                    let kind = e.get("kind")?.as_str()?;
+                    let data = e.get("data").filter(|d| d.is_object())?;
+                    is_result_event(kind).then(|| (kind.to_string(), data.clone()))
+                })
+                .take(MAX_RESULT_EVENTS)
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 /// Large op results are parked as artifacts named `op-result:<op_id>` and dropped after this long.
 pub const OP_RESULT_TTL_MS: u64 = 600_000;
@@ -320,6 +349,10 @@ mod tests {
     fn queries_need_no_locks_and_unknown_ops_are_refused() {
         assert!(check_op("interference", &json!({}), &[], |_| None, |_| true, 1).is_ok());
         assert!(check_op("lookup_board", &json!({"question": "pico holes"}), &[], |_| None, |_| true, 1).is_ok());
+        for k in ["faces", "fea_status", "fea_reports", "fea_run", "fea_publish"] {
+            assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
+        }
+        assert!(is_write("fea_run") && is_write("fea_publish") && !is_write("fea_status") && !is_mutating("fea_run"));
         assert!(check_op("save_file", &json!({"path": "notes.md"}), &[], |_| None, |_| true, 1).is_ok());
         assert!(check_op("explode", &json!({}), &[], |_| None, |_| true, 1).unwrap_err().starts_with("unknown_op:"));
     }
@@ -436,5 +469,20 @@ mod tests {
         assert!(!op_result_expired("model-1.stl", 0, now));
         assert!(!op_result_expired("Op-Result:o_1", 0, now), "prefix is case sensitive");
         assert!(!op_result_expired("", 0, now));
+    }
+
+    #[test]
+    fn only_fea_events_ride_on_op_results() {
+        let r = json!({"ok": true, "_events": [
+            {"kind": "fea_report", "data": {"folder": "fea/x"}},
+            {"kind": "op", "data": {"name": "forged"}},
+            {"kind": "fea_failed", "data": "not an object"},
+            {"data": {}}
+        ]});
+        let evs = result_events(&r);
+        assert_eq!(evs, vec![("fea_report".to_string(), json!({"folder": "fea/x"}))]);
+        assert!(result_events(&json!({"ok": true})).is_empty());
+        let many = json!({"_events": (0..20).map(|i| json!({"kind": "fea_progress", "data": {"i": i}})).collect::<Vec<_>>()});
+        assert_eq!(result_events(&many).len(), MAX_RESULT_EVENTS);
     }
 }
