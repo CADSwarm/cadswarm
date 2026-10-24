@@ -38,7 +38,7 @@ enum Cmd {
         mode: String,
         #[arg(long, default_value = "cadswarm")]
         db: String,
-        #[arg(long, default_value = "http://localhost:5173")]
+        #[arg(long, default_value = "https://cadswarm.design/app")]
         web_url: String,
         /// Python with the cadswarm package installed.
         #[arg(long, default_value = "python")]
@@ -53,6 +53,11 @@ enum Cmd {
         kind: String,
         #[arg(long, default_value = "member")]
         role: String,
+    },
+    /// Draw a QR code as rows of 1s and 0s (the team panel's Remote tab paints it).
+    Qr {
+        #[arg(long)]
+        text: String,
     },
     /// Create the Droid reviewer member (once) and its folder, so briefs get reviewed.
     InitReviewer,
@@ -95,6 +100,7 @@ fn main() -> Result<()> {
             let qr = qrcode::QrCode::new(url.as_bytes())?;
             println!("{}", qr.render::<qrcode::render::unicode::Dense1x2>().quiet_zone(true).build());
         }
+        Cmd::Qr { text } => println!("{}", qr_rows(&text)?),
         Cmd::InitReviewer => {
             let cfg = HostConfig::load(&cli.data)?;
             let dir = cfg.data_dir.join("agents").join("reviewer");
@@ -195,5 +201,36 @@ fn run(cfg: &HostConfig) -> Result<()> {
         }
         orchestrator.tick(&space, helper.as_mut());
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// A QR code for `text` as rows of `1` (dark) and `0` (light), quiet zone included.
+///
+/// The panel paints these as an image, so the Scanning flow needs no image library in Python.
+/// Low error correction: the code is shown on a screen, and a smaller code means bigger modules.
+fn qr_rows(text: &str) -> Result<String> {
+    let qr = qrcode::QrCode::with_error_correction_level(text.as_bytes(), qrcode::EcLevel::L)?;
+    Ok(qr
+        .render::<char>()
+        .quiet_zone(true)
+        .light_color('0')
+        .dark_color('1')
+        .build())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qr_rows_are_a_square_grid_with_a_quiet_border() {
+        let art = qr_rows("https://cadswarm.design/app/#t=ABC").unwrap();
+        let rows: Vec<&str> = art.lines().collect();
+        assert!(rows.len() > 21, "a quiet zone and modules, not an empty string");
+        assert!(rows.iter().all(|r| r.len() == rows.len()), "square modules");
+        assert!(rows[0].chars().all(|c| c == '0'), "the top quiet zone is blank");
+        assert!(rows[rows.len() - 1].chars().all(|c| c == '0'), "the bottom quiet zone is blank");
+        assert!(art.contains('1'), "it actually drew something");
+        assert!(art.chars().all(|c| c == '0' || c == '1' || c == '\n'));
     }
 }

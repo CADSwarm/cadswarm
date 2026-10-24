@@ -27,6 +27,8 @@ NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LOCAL_URI = "http://127.0.0.1:3000"
 LOCAL_PORT = 3000
 MAINCLOUD_URI = "https://maincloud.spacetimedb.com"
+# Where a phone opens the live build. The host's own setting wins when it points somewhere a phone can reach.
+DEFAULT_WEB_URL = "https://cadswarm.design/app"
 # Only ever stopped or reported on when the command line names one of these (never a blanket kill).
 HOST_PROCESS_NAMES = ("cadswarm-host", "spacetime")
 

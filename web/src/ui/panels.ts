@@ -1,10 +1,11 @@
 import type { Brief, Member, Review, State, Store } from '../store';
 import type { Api } from '../api';
 import { memberColor } from '../color';
-import { mountAsk } from './ask';
+import { mountChat } from './chat-pane';
 import { mountHandoff } from './handoff';
 import { mountParams } from './params';
-import { freeHelper, helperNow, startInstruction } from './helpers';
+import { freeHelper, helperNow, helpers, startInstruction } from './helpers';
+import { chatThread } from './chat';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
 import { mountSizes } from './sizes';
@@ -17,7 +18,7 @@ import { parseRefusal, isRefusal } from './refusal';
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 // Seven tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
 const ICON = {
-  ask: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',
+  chat: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',
   model: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
   sizes: '<path d="M3 8h18M3 16h18"/><path d="M7 5v6M12 13v6M17 5v6M22 13v6"/>',
   library: '<path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="m15.5 5.2 3.9-1 3.1 14.9-3.9 1z"/>',
@@ -25,7 +26,7 @@ const ICON = {
   files: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h5l2 2h8A1.5 1.5 0 0 1 21 8.5v10A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/>',
   team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 20a6.5 6.5 0 0 0-3-5.5"/>',
 };
-const TABS = [['ask', 'Ask'], ['model', 'Model'], ['sizes', 'Sizes'], ['library', 'Library'],
+const TABS = [['chat', 'Chat'], ['model', 'Model'], ['sizes', 'Sizes'], ['library', 'Library'],
   ['tasks', 'Tasks'], ['files', 'Files'], ['team', 'Team']] as const;
 type Tab = typeof TABS[number][0];
 export const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
@@ -67,8 +68,12 @@ export function focusPart(name: string) { dispatchEvent(new CustomEvent('cadswar
 function loadTab(): Tab {
   const q = new URLSearchParams(location.search).get('tab');
   if (TABS.some(([id]) => id === q)) return q as Tab;
-  try { const t = localStorage.getItem('cadswarm:tab'); if (TABS.some(([id]) => id === t)) return t as Tab; } catch { /* no storage */ }
-  return 'ask';
+  try {
+    const t = localStorage.getItem('cadswarm:tab');
+    const old = t === 'ask' ? 'chat' : t; // the Ask tab became Chat
+    if (TABS.some(([id]) => id === old)) return old as Tab;
+  } catch { /* no storage */ }
+  return 'chat';
 }
 
 const TASK_GROUPS: [string, string[]][] = [['In progress', ['claimed', 'awaiting_takeover']], ['To do', ['open', 'blocked']], ['Done', ['done']], ['Cancelled', ['cancelled']]];
@@ -94,39 +99,35 @@ export function memberPill(s: Pick<State, 'tasks'>, m: Member): { word: string; 
   return { word: m.statusText && m.statusText !== 'idle' ? 'working' : 'ready', tone: 'live' };
 }
 
-export interface LogRow { at: number; member: number; who: string; text: string; tone: '' | 'refused' | 'steer' }
-
-/** Team chat: what agents did, and what you told them, oldest first. */
-export function teamLog(s: Pick<State, 'activity' | 'messages' | 'meId' | 'members'>, limit = 10): LogRow[] {
-  const name = (id: number) => s.members.find(m => m.id === id)?.name ?? '';
-  const to = (target: string) => target === 'all' ? 'all helpers'
-    : target.startsWith('member:') ? name(Number(target.slice(7))) : target.replace(/^@/, '');
-  const events: LogRow[] = s.activity.map(a => ({
-    at: a.atMs, member: a.member, who: name(a.member), text: a.summary,
-    tone: a.kind === 'refused' || isRefusal(a.summary) ? 'refused' : '' }));
-  const steers: LogRow[] = s.messages.filter(m => m.from === s.meId && m.kind === 'steer')
-    .map(m => ({ at: m.createdMs, member: m.from, who: name(m.from), text: `→ ${to(m.to)}: ${m.body}`, tone: 'steer' }));
-  return [...events, ...steers].sort((a, b) => a.at - b.at).slice(-limit);
-}
-
 /** 14:02, the way the panel writes times. */
 export function clock(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '') {
+export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '',
+                             topbar: HTMLElement | null = null) {
+  el.classList.remove('has-notice');
   el.innerHTML = `
-    <header class="sidebar-head">
-      <span class="brand">CADSwarm</span>
+    <div class="grabber" data-grabber aria-hidden="true"><span></span></div>
+    <header class="sheet-head">
+      <button type="button" class="sheet-title" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
+        <span class="sheet-kicker">CADSwarm</span>
+        <b data-project>this build</b>
+        <span class="sheet-last" data-sheet-last></span>
+      </button>
       <button type="button" class="debug-open" data-sponsors aria-haspopup="dialog" title="How CADSwarm uses its sponsors (Shift+D)">Sponsors</button>
       <span class="conn" data-conn></span>
+      <button type="button" class="sheet-toggle" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg>
+      </button>
     </header>
+    <div class="toast" role="status" aria-live="polite" hidden></div>
     <nav class="tabbar" role="tablist" aria-label="Sections">
       ${TABS.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}" aria-controls="tab-${id}">
         <svg viewBox="0 0 24 24" aria-hidden="true">${ICON[id]}</svg><span>${label}</span><span class="badge" data-count="${id}"></span></button>`).join('')}
     </nav>
-    <section class="tab ask-tab" id="tab-ask" data-tab="ask" role="tabpanel"></section>
+    <section class="tab chat-tab" id="tab-chat" data-tab="chat" role="tabpanel"></section>
     <section class="tab" id="tab-model" data-tab="model" role="tabpanel">
       <h1 class="large-title">Model</h1>
       <h2 class="group-title">Parts</h2><ul class="group" data-parts></ul>
@@ -163,7 +164,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <ul class="who-list" data-team></ul>
       </div>
       <div class="panel-sec">
-        <span class="section-label">Team chat</span>
+        <span class="section-label">Activity</span>
         <div class="log" data-log></div>
       </div>
       <div class="panel-sec"><div class="actions">
@@ -174,11 +175,16 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       </div></div>
       <div class="panel-sec"><div data-handoff></div>
         <span class="section-label">Precision settings</span><div data-settings></div></div>
-    </section>
-    <div class="toast" role="status" aria-live="polite" hidden></div>`;
+    </section>`;
+
+  if (topbar) topbar.innerHTML = `
+    <div class="topbar-title"><b data-project>this build</b></div>
+    <span class="conn" data-conn></span>
+    <div class="topbar-avatars" data-avatars></div>`;
+
 
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
-  mountAsk($('#tab-ask'), store, api, picked);
+  mountChat($('#tab-chat'), store, api, picked);
   mountParams($('[data-params]'), store, api);
   mountSizes($('[data-sizes]'), store, api);
   const files = mountFiles($('[data-files]'), store, api);
@@ -199,7 +205,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   }
   $('.tabbar').addEventListener('click', e => {
     const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[role=tab]');
-    if (b) select(b.dataset.tab as Tab);
+    if (!b) return;
+    select(b.dataset.tab as Tab);
+    dispatchEvent(new CustomEvent('cadswarm:tab', { detail: b.dataset.tab })); // the sheet expands to half on phones
   });
   select(loadTab());
 
@@ -253,9 +261,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       const task = store.state.tasks.find(x => x.id === start.dataset.start);
       const helper = freeHelper(store.state);
       if (!task) return;
-      if (!helper) { notice('No AI helper is online. Send it to “The team” in Ask instead.'); return; }
+      if (!helper) { notice('No AI helper is online. Send it to “The team” in Chat instead.'); return; }
       api.sendCommand(helper.name, startInstruction(task), task.id);
-      select('ask'); // the request shows up in the conversation
+      select('chat'); // the request shows up in the conversation
       return;
     }
     const part = t.closest<HTMLElement>('[data-focus]');
@@ -276,10 +284,10 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       if (which === 'clash') {
         if (!api) { notice('Not connected to a team yet.'); return; }
         api.sendCommand('all', 'Check the model for clashes and fix any in parts you own; ask the owner about the rest.');
-        select('ask');
+        select('chat');
         return;
       }
-      if (which === 'task') { select('ask'); el.querySelector<HTMLTextAreaElement>('.field textarea')?.focus(); return; }
+      if (which === 'task') { select('chat'); el.querySelector<HTMLTextAreaElement>('[data-text]')?.focus(); return; }
       if (which === 'size') { select('sizes'); el.querySelector<HTMLInputElement>('[data-sizes] .param input')?.focus(); return; }
     }
   });
@@ -292,7 +300,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   };
 
   function render(s: State) {
-    el.querySelectorAll('[data-conn]').forEach(c => {
+    el.ownerDocument.querySelectorAll('[data-conn]').forEach(c => {
       c.className = `conn${s.connected ? ' live' : ''}`;
       c.textContent = s.connected ? 'Live' : 'Reconnecting…';
     });
@@ -347,8 +355,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         </li>`).join('')}</ul>`;
     }).join('') || '<p class="empty-note">No tasks yet. When the team plans a build, its parts show up here.</p>';
 
-    // Team: the panel the site sells. Who's here, what the team said, what you can do about it.
-    $('[data-project]').textContent = project || 'this build';
+    // Team: the panel the site sells. Who's here, what happened, what you can do about it.
+    el.ownerDocument.querySelectorAll('[data-project]').forEach(n => { n.textContent = project || 'this build'; });
     const conn = $('[data-team-state]');
     conn.className = `state${s.connected ? ' live' : ''}`;
     conn.textContent = s.connected ? 'Connected' : 'Reconnecting…';
@@ -363,22 +371,40 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       </li>`;
     }).join('') || '<li class="log-empty">Nobody has joined this build yet.</li>';
 
-    $('[data-log]').innerHTML = teamLog(s).map(r => {
-      const refusal = r.tone === 'refused' ? parseRefusal(r.text) : null;
+    // Activity only: the chat is its own tab, so this reads as what the team did.
+    $('[data-log]').innerHTML = s.activity.slice(-20).map(a => {
+      const refused = a.kind === 'refused' || isRefusal(a.summary);
+      const name = store.member(a.member)?.name ?? '';
+      const refusal = refused ? parseRefusal(a.summary) : null;
       if (refusal) return `<div class="log-row refused">
-        <time>${clock(r.at)}</time>
-        <div class="refusal">
-          <span class="refusal-meta">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> · ` : ''}${esc(refusal.title)}</span>
-          <span class="refusal-detail">${esc(refusal.detail)}</span>
-        </div>
-      </div>`;
-      return `<div class="log-row${r.tone ? ` ${r.tone}` : ''}">
-        <time>${clock(r.at)}</time>
-        <span class="line">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> ` : ''}${esc(r.text)}</span>
-      </div>`;
-    }).join('') || '<p class="log-empty">Nothing said yet. Ask for something in Ask and it lands here.</p>';
+          <time>${clock(a.atMs)}</time>
+          <div class="refusal">
+            <span class="refusal-meta">${name ? `<b class="who" style="--c:${memberColor(a.member, dark())}">${esc(name)}</b> · ` : ''}${esc(refusal.title)}</span>
+            <span class="refusal-detail">${esc(refusal.detail)}</span>
+          </div>
+        </div>`;
+      const tone = refused ? ' refused' : '';
+      return `<div class="log-row${tone}">
+          <time>${clock(a.atMs)}</time>
+          <span class="line"><b class="who" style="--c:${memberColor(a.member, dark())}">${esc(store.member(a.member)?.name ?? '')}</b> ${esc(a.summary)}</span>
+        </div>`;
+    }).join('') || '<p class="log-empty">Nothing has happened yet. Start something in Chat.</p>';
 
-    const counts: Record<Tab, number> = { ask: 0, model: 0, sizes: 0, library: 0, files: 0,
+    // The sheet's one-line preview while it peeks, and the glass top bar's helper avatars.
+    const last = chatThread(s, 1)[0];
+    const sheetLast = $('[data-sheet-last]');
+    if (sheetLast) {
+      sheetLast.textContent = !last ? 'Type @ to give a helper a task'
+        : last.kind === 'build' ? `Building: ${last.brief.text}`
+        : `${last.mine ? 'You' : last.name}: ${last.body}`;
+    }
+    const avatars = el.ownerDocument.querySelector('[data-avatars]');
+    if (avatars) {
+      avatars.innerHTML = helpers(s).filter(m => m.status === 'active').slice(0, 4).map(m =>
+        `<span class="avatar" style="--c:${memberColor(m.id, dark())}" title="${esc(m.name)}">${esc(m.name.slice(0, 1).toUpperCase())}</span>`).join('');
+    }
+
+    const counts: Record<Tab, number> = { chat: 0, model: 0, sizes: 0, library: 0, files: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
       tasks: s.tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });
@@ -388,8 +414,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       const toast = $('.toast');
       toast.textContent = s.notice.text;
       toast.hidden = false;
+      el.classList.add('has-notice'); // at the peek, the hint gives its line to the notice
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { toast.hidden = true; }, 5000);
+      toastTimer = setTimeout(() => { toast.hidden = true; el.classList.remove('has-notice'); }, 5000);
     }
   }
 

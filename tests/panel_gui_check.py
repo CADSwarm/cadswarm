@@ -85,6 +85,11 @@ class FakeClient:
                     "older_versions": [{"version": 1, "size": 1500, "author": "bob-codex",
                                         "saved_at": now - 9000, "reason": "replaced"}]}
         raise panel.HubRequestError(404, {"code": "not_found", "error": path})
+    def create_invite(self, kind, role, ttl, project):
+        from cadswarm import invite, ticket
+        return invite.make_invite(ticket.decode(ticket.encode({
+            "v": 1, "uri": "https://maincloud.spacetimedb.com", "db": "team-db", "token": "ab" * 32,
+            "kind": kind, "role": role, "host_addr": ""})), project)
 
 
 s = panel.SESSION
@@ -268,8 +273,23 @@ panel.say("Created task “Lid”")
 QtGui.QApplication.processEvents()
 toast = p.toast.text() if p.toast.isVisible() else None
 p.grab().save(str(out / "panel-toast.png"))
+# The Remote tab is where a phone joins from: one code, its link, and the QR that link draws.
+p.resize(340, 640)
+p.show_remote()
+for _ in range(5):
+    QtGui.QApplication.processEvents()
+remote = {
+    "link": p.remote_link.text(),
+    "qr_pixmap": not p.remote_qr.pixmap().isNull(),
+    "qr_modules": len(panel.qr.rows(p.remote_url)),
+    "note": p.remote_note.text(),
+    "no_horizontal_overflow": p.widget().widget().width() <= p.widget().viewport().width() + 1,
+}
+p.grab().save(str(out / "panel-340x640-remote.png"))
+p.show_tab(p.team_page)
 result = {
     "layout": checks,
+    "remote": remote,
     "follows_window": {"at_1600": wide_w, "at_1000": narrow_w},
     "chat_has_reply": "lid still clears the posts" in chat and "✓ done" in chat,
     "offered_all": offered_all,

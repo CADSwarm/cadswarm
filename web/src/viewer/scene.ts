@@ -5,6 +5,8 @@ import { CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { Store, State } from '../store';
 import { memberColor } from '../color';
 import { Pointers } from './pointers';
+import { insetShift } from './inset';
+import { fitDistance } from './fit';
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
@@ -12,7 +14,14 @@ const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 interface Part { mesh: THREE.Mesh; outline: THREE.LineSegments; rev: number; fadeIn: number; flash: number; shake: number }
 
 export function mountViewer(el: HTMLElement, store: Store, onPick: (object: string, point: [number, number, number] | null) => void) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  let renderer: THREE.WebGLRenderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch {
+    // No WebGL (old browser, blocked GPU, private window that withholds it): say so instead of throwing.
+    el.innerHTML = '<p class="viewer-error">This browser can’t show 3D. Install or update it, then reload.</p>';
+    return;
+  }
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   el.appendChild(renderer.domElement);
   const labels = new CSS2DRenderer();
@@ -20,11 +29,21 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   el.appendChild(labels.domElement);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20000);
+  const FOV = 40;
+  const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 20000);
   camera.position.set(120, -160, 140);
   camera.up.set(0, 0, 1);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.addEventListener('start', () => { goal = null; });
+  // A tap picks a part; only an actual drag (or a zoom) means "this is my view now".
+  let moved = false;
+  let down: { x: number; y: number } | null = null;
+  renderer.domElement.addEventListener('pointerdown', e => { down = { x: e.clientX, y: e.clientY }; });
+  renderer.domElement.addEventListener('pointermove', e => {
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 3) { moved = true; down = null; }
+  });
+  renderer.domElement.addEventListener('pointercancel', () => { down = null; });
+  renderer.domElement.addEventListener('wheel', () => { moved = true; }, { passive: true });
   controls.enableDamping = !reduced();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -45,6 +64,7 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   const parts = new Map<string, Part>();
   const pointers = new Pointers(scene, store);
   let framed = false;
+  let inset = 0; // how much of the screen the chat sheet covers, in CSS pixels
 
   function material(state: State, name: string) {
     const holder = state.locks.find(l => l.object === name);
@@ -99,8 +119,13 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   let goal: { target: THREE.Vector3; position: THREE.Vector3 } | null = null;
   function aim(box: THREE.Box3) {
     if (box.isEmpty()) return;
-    const c = box.getCenter(new THREE.Vector3()), size = Math.max(box.getSize(new THREE.Vector3()).length(), 20);
-    goal = { target: c, position: c.clone().add(new THREE.Vector3(0.7, -0.9, 0.8).multiplyScalar(size * 1.2)) };
+    const c = box.getCenter(new THREE.Vector3());
+    const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 10);
+    // Fit the whole model in what the screen actually shows: a portrait phone has a narrow
+    // horizontal field of view, and the chat sheet covers the bottom, so both shrink the angle.
+    const distance = fitDistance(radius, FOV, el.clientWidth, el.clientHeight, inset) * 1.02;
+    const dir = new THREE.Vector3(0.7, -0.9, 0.8).normalize();
+    goal = { target: c, position: c.clone().add(dir.multiplyScalar(distance)) };
     if (reduced()) { controls.target.copy(goal.target); camera.position.copy(goal.position); goal = null; }
   }
   function frame() {
@@ -129,6 +154,12 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
 
   store.subscribe(sync);
 
+  // The phone's chat sheet covers the bottom of the screen; frame the model in what is left of it.
+  // Shifting the projection up by ~half the covered height keeps the model centred above the sheet.
+  addEventListener('cadswarm:inset', e => {
+    inset = Math.max(0, Number((e as CustomEvent<number>).detail) || 0);
+    resize();
+  });
   const ray = new THREE.Raycaster();
   renderer.domElement.addEventListener('pointerup', ev => {
     const r = renderer.domElement.getBoundingClientRect();
@@ -140,7 +171,13 @@ export function mountViewer(el: HTMLElement, store: Store, onPick: (object: stri
   function resize() {
     const w = el.clientWidth, h = el.clientHeight;
     renderer.setSize(w, h); labels.setSize(w, h);
-    camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+    camera.aspect = w / Math.max(h, 1);
+    if (inset > 0) camera.setViewOffset(w, h, 0, insetShift(inset), w, h);
+    else camera.clearViewOffset();
+    camera.updateProjectionMatrix();
+    // A turn of the phone, or the sheet opening, changes how much room the model has: re-fit it
+    // until the person takes over the view themselves.
+    if (framed && !moved) frame();
   }
   new ResizeObserver(resize).observe(el);
   resize();

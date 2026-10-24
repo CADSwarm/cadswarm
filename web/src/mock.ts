@@ -5,6 +5,7 @@ import type { Api, Printability } from './api';
 import type { Store, Obj, Task, Activity, Component } from './store';
 import { newId } from './ids';
 import { saveBytes } from './download';
+import { stripMentions } from './ui/mentions';
 
 function boxStl(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): Uint8Array {
   const v = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
@@ -180,7 +181,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
   const api: Api = {
     fence: () => 1,
     redeem: async () => {},
-    submitBrief: (text, board) => { newBrief(text, board); return briefId; },
+    submitBrief: (text, board) => { newBrief(stripMentions(text), board); return briefId; },
     lock: async names => {
       const taken = store.state.locks.find(l => names.includes(l.object) && l.holder !== 1);
       if (taken) { notice(`Already locked: ${taken.object} by ${store.member(taken.holder)?.name}. Message the holder.`); return; }
@@ -235,13 +236,15 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       return id;
     },
     cancelHandoff: id => store.set({ handoffs: store.state.handoffs.map(h => h.id === id ? { ...h, status: 'cancelled' } : h) }),
-    sendCommand: (to, body, taskId = '') => {
-      // A helper reads it, says how it will do it, then marks it done: the same receipts a real helper leaves.
+    sendCommand: (to, body, taskId = '') => api.sendMessage(to, body, 'command', taskId),
+    sendMessage: (to, body, kind, taskId = '') => {
+      // A helper reads a command, says how it will do it, then marks it done: the same receipts a real helper leaves.
       const id = newId('m_');
       const target = to === 'all' ? null : members.find(m => m.name === to);
+      store.set({ messages: [...store.state.messages, { id, from: 1, to: target ? `member:${target.id}` : 'all',
+        kind: kind === 'command' ? 'steer' : kind, body, taskId, createdMs: Date.now() }] });
+      if (kind !== 'command') return id;
       const helperIds = target ? [target.id] : members.filter(m => m.kind === 'agent').map(m => m.id);
-      store.set({ messages: [...store.state.messages, { id, from: 1, to: target ? `member:${target.id}` : 'all', kind: 'steer',
-        body, taskId, createdMs: Date.now() }] });
       const mark = (state: string) => store.set({ receipts: [
         ...store.state.receipts.filter(r => !(r.messageId === id && helperIds.includes(r.member))),
         ...helperIds.map(member => ({ messageId: id, member, state }))] });
@@ -252,6 +255,13 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
         store.set({ messages: [...store.state.messages, { id: newId('m_'), from: by, to: 'member:1', kind: 'message',
           body: `Done: ${body.length > 60 ? body.slice(0, 57) + '…' : body}`, taskId, createdMs: Date.now() }] });
       }, 4500);
+      return id;
+    },
+    sendChat: body => api.sendMessage('all', body, 'chat'),
+    createTask: async ({ title, detail: _detail, objects, assignee }) => {
+      const id = newId('t_');
+      store.set({ tasks: [...store.state.tasks, { id, title, status: 'open', owner: 0, assignee, brief: '', objects,
+        createdBy: store.state.meId ?? 0 }] });
       return id;
     },
     downloadArtifact: async (hash, filename) => {

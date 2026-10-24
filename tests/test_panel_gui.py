@@ -30,7 +30,7 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "teammate's computer" in r["away_tip"]
     # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
     assert [t.split(" ")[0] for t in r["tabs"]] == ["Team", "Tasks", "Activity", "Sizes", "Files", "Library",
-                                                     "Sponsors", "Tools"], r["tabs"]
+                                                     "Remote", "Sponsors", "Tools"], r["tabs"]
     assert r["sizes"] == [["Pcb l", "65 mm"], ["Wall", "3 mm"]], r["sizes"]
     # Values edit in place, like the site's size fields; files show their size like the site's rows.
     assert r["sizes_editable"] is True, r["sizes_editable"]
@@ -48,6 +48,11 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "Sponsors" in r["sponsors_tab"]
     assert "SpacetimeDB" in r["sponsors"] and "Factory.ai" in r["sponsors"] and "Elastic" in r["sponsors"]
     assert "team-db" in r["sponsors"] and "checked " in r["sponsors"]
+    # The Remote tab hands a phone one code: its link opens the public site, and the QR is that link.
+    assert r["remote"]["link"].startswith("https://cadswarm.design/app/#t="), r["remote"]
+    assert r["remote"]["no_horizontal_overflow"], r["remote"]
+    assert r["remote"]["qr_pixmap"] == (r["remote"]["qr_modules"] > 0), r["remote"]
+    assert "One code works once" in r["remote"]["note"], r["remote"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).
