@@ -54,8 +54,11 @@ impl HostConfig {
 /// Ask the Python package where FreeCAD and the worker script are, so both languages agree.
 pub fn python_says(python: &Path, expr: &str) -> Result<PathBuf> {
     let out = Command::new(python)
-        // -I: never import a cadswarm checkout that happens to be in the working directory.
-        .args(["-I", "-c", &format!("import cadswarm.config as c; print({expr})")])
+        // PYTHONSAFEPATH, not -I: inside FreeCAD the package lives in the add-on folder, which
+        // reaches Python through PYTHONPATH (set by the guide), and -I would drop it for every hosted
+        // team. PYTHONSAFEPATH still keeps a cadswarm checkout in the working directory off sys.path.
+        .env("PYTHONSAFEPATH", "1")
+        .args(["-c", &format!("import cadswarm.config as c; print({expr})")])
         .output()
         .with_context(|| format!("running {}", python.display()))?;
     if !out.status.success() {

@@ -9,6 +9,7 @@ import FreeCADGui as Gui
 import Part
 from PySide import QtCore, QtGui
 
+from ..config import freecad_import_dirs
 from ..paths import ROOT, app_dir, freecad_python
 from ..structural.collaboration import accepted_operation
 
@@ -127,7 +128,7 @@ class OptimizeDialog(QtGui.QDialog):
             python = freecad_python()
             self.process = QtCore.QProcess(self)
             env = QtCore.QProcessEnvironment.systemEnvironment()
-            env.insert("PYTHONPATH", ROOT + os.pathsep + str(Path(python).parent))
+            env.insert("PYTHONPATH", os.pathsep.join([ROOT, *freecad_import_dirs(python)]))
             env.insert("PYTHONUNBUFFERED", "1")
             self.process.setProcessEnvironment(env)
             self.process.setWorkingDirectory(ROOT)

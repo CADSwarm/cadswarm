@@ -5,8 +5,10 @@ configs launch `cadswarm_launch.py` by absolute path with an explicit Python —
 FreeCAD's bundled one for hobbyists — so nothing has to be on PATH or pip-installed
 into the agent's environment.
 """
+import glob
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,7 +29,7 @@ CLIENTS = {
 AGENT_DOC = """{begin}
 ## CadSwarm: you are part of a team building one shared FreeCAD model
 
-Your teammates' agents (Claude Code, Codex) are editing the same live model right now.
+Your teammates' agents (Claude Code, Codex, Droid) are editing the same live model right now.
 All CAD work goes through the `cadswarm` MCP tools — never edit .FCStd files directly.
 Your human may be new to CAD: explain what you build in plain words and keep dimensions in mm.
 
@@ -210,7 +212,7 @@ def setup_droid(project, python):
     path = os.path.join(project, ".factory", "mcp.json")
     cfg = _read_config(path)
     _dict_at(cfg, "mcpServers", path)["cadswarm"] = {
-        "type": "stdio", "command": python, "args": ["-m", "cadswarm.mcp_server"],
+        "type": "stdio", "command": python, "args": [LAUNCHER, "mcp"],
         "env": {"CADSWARM_PROJECT": project}}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -264,10 +266,25 @@ def find_agent_cli(client):
     if found:
         return found
     home = os.path.expanduser("~")
-    candidates = [os.path.join(home, ".local", "bin", exe + ".exe"), os.path.join(home, ".local", "bin", exe),
-                  os.path.join(os.environ.get("APPDATA", ""), "npm", exe + ".cmd"),
-                  os.path.join("/usr/local/bin", exe), os.path.join("/opt/homebrew/bin", exe)]
-    return next((c for c in candidates if os.path.exists(c)), None)
+    if os.name == "nt":
+        candidates = [os.path.join(home, ".local", "bin", exe + ".exe"),
+                      os.path.join(home, ".local", "bin", exe)]
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            candidates.append(os.path.join(appdata, "npm", exe + ".cmd"))
+    else:
+        # Apps started from Finder/the dock or a desktop launcher get a minimal PATH.
+        candidates = [os.path.join(home, ".local", "bin", exe)]
+        candidates += sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin", exe)), reverse=True)
+        candidates += [os.path.join(home, ".claude", "local", exe),
+                       os.path.join(home, ".npm-global", "bin", exe),
+                       os.path.join(home, ".volta", "bin", exe),
+                       os.path.join(home, ".bun", "bin", exe),
+                       os.path.join("/opt/homebrew/bin", exe),
+                       os.path.join("/usr/local/bin", exe),
+                       os.path.join("/usr/bin", exe)]
+    return next((c for c in candidates
+                 if os.path.isfile(c) and (os.name == "nt" or os.access(c, os.X_OK))), None)
 
 
 def open_agent_terminal(client, project):
@@ -278,11 +295,26 @@ def open_agent_terminal(client, project):
     if os.name == "nt":
         subprocess.Popen(["cmd.exe", "/k", exe], cwd=project, creationflags=subprocess.CREATE_NEW_CONSOLE)
     elif sys.platform == "darwin":
-        script = f'tell application "Terminal" to do script "cd {json.dumps(project)[1:-1]} && {exe}"'
+        cmd = f"cd {shlex.quote(project)} && {shlex.quote(exe)}"
+        as_str = cmd.replace("\\", "\\\\").replace('"', '\\"')
+        script = f'tell application "Terminal" to do script "{as_str}"'
         subprocess.Popen(["osascript", "-e", script, "-e", 'tell application "Terminal" to activate'])
     else:
-        term = shutil.which("x-terminal-emulator") or shutil.which("gnome-terminal") or shutil.which("konsole")
+        term = next((p for p in (shutil.which(t) for t in (
+            "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal",
+            "kitty", "alacritty", "xterm")) if p), None)
         if not term:
             raise FileNotFoundError("Couldn't find a terminal program to open.")
-        subprocess.Popen([term, "-e", exe] if "gnome" not in term else [term, "--", exe], cwd=project)
+        name = os.path.basename(os.path.realpath(term))
+        if name in ("gnome-terminal", "gnome-terminal.wrapper", "kgx"):
+            args = [term, "--", exe]
+        elif name == "konsole":
+            args = [term, "-e", exe]
+        elif name == "xfce4-terminal":
+            args = [term, "-x", exe]
+        elif name == "kitty":
+            args = [term, exe]
+        else:
+            args = [term, "-e", exe]
+        subprocess.Popen(args, cwd=project)
     return exe

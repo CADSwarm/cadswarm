@@ -170,6 +170,18 @@ def test_join_rejoins_and_takes_the_new_fence(world):
     assert ident["fence"] == 3 and hub.fence == 3 and ident["participant_id"] == 1
 
 
+def test_minting_an_invite_calls_the_reducer_and_decodes_back(world):
+    from cadswarm import ticket
+    from cadswarm.invite import read_invite
+
+    hub, fake = world
+    code = hub.create_invite("agent", "member", 3600, "Phone stand")
+    t = read_invite(code)
+    assert t["uri"] == "http://x" and t["db"] == "d" and t["project"] == "Phone stand"
+    assert t["kind"] == "agent" and t["role"] == "member" and len(t["token"]) == 64
+    assert fake.calls[-1] == ("create_invite", (2, ticket.hash_token(t["token"]), "agent", "member", 3600))
+
+
 def test_an_unknown_path_is_a_404(world):
     hub, _ = world
     with pytest.raises(HubRequestError) as e:

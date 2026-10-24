@@ -24,7 +24,16 @@ pub fn cli_candidates(exe: &str, env: Option<String>, path_var: &str, home: &Pat
         out.extend(names.iter().map(|n| dir.join(n)));
     }
     out.extend(names.iter().map(|n| home.join(".local").join("bin").join(n)));
-    out.push(appdata.join("npm").join(format!("{exe}.cmd")));
+    if !cfg!(windows) {
+        for dir in [home.join(".claude").join("local"), home.join(".npm-global").join("bin"),
+                    home.join(".volta").join("bin"), home.join(".bun").join("bin"),
+                    PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")] {
+            out.extend(names.iter().map(|n| dir.join(n)));
+        }
+    }
+    if cfg!(windows) && !appdata.as_os_str().is_empty() {
+        out.push(appdata.join("npm").join(format!("{exe}.cmd")));
+    }
     if exe == "claude" {
         let ext = home.join(".vscode").join("extensions");
         let mut bundled: Vec<PathBuf> = std::fs::read_dir(&ext)
@@ -50,6 +59,20 @@ pub fn cli_candidates(exe: &str, env: Option<String>, path_var: &str, home: &Pat
     out
 }
 
+/// A file we can start: on Unix it must also have an execute bit (a stray non-executable copy
+/// would otherwise win and fail with "permission denied").
+fn is_runnable(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        p.metadata().map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
 pub fn find_cli(exe: &str) -> Result<PathBuf> {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
     let appdata = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default();
@@ -57,7 +80,7 @@ pub fn find_cli(exe: &str) -> Result<PathBuf> {
     let env = std::env::var(format!("CADSWARM_{}", exe.to_uppercase())).ok();
     cli_candidates(exe, env, &path_var, &home, &appdata)
         .into_iter()
-        .find(|p| p.is_file())
+        .find(|p| is_runnable(p))
         .ok_or_else(|| anyhow!(format!("{exe} isn't installed (set CADSWARM_{} to its path)", exe.to_uppercase())))
 }
 
@@ -82,8 +105,11 @@ impl Agent {
     pub fn spawn(cfg: &HostConfig, name: &str, ticket: &str, prompt: &str) -> Result<Agent> {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
+        // PYTHONSAFEPATH, not -I: -I would also drop PYTHONPATH, which is how a guide-hosted team
+        // (FreeCAD's own Python) finds the package; both keep a checkout in the cwd from being imported.
         let setup = Command::new(&cfg.cadswarm_python)
-            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
+            .env("PYTHONSAFEPATH", "1")
+            .args(["-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;
@@ -106,6 +132,11 @@ impl Agent {
             .spawn()
             .with_context(|| format!("starting {program} for {name}"))?;
         Ok(Agent { name: name.into(), child, started: Instant::now() })
+    }
+
+    /// An already-spawned process (the reviewer runs `python -m cadswarm.reviewer`, not an agent CLI).
+    pub fn from_child(name: &str, child: Child) -> Agent {
+        Agent { name: name.into(), child, started: Instant::now() }
     }
 
     /// False once it exited or was killed for running past the timeout.
@@ -155,6 +186,25 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
     )
 }
 
+/// The first line is `accept_handoff` on purpose: it hands over the locks and tasks atomically,
+/// so the new agent owns the work before it reads anything else.
+pub fn handoff_prompt(handoff_id: &str, context_json: &str) -> String {
+    let ctx: serde_json::Value = serde_json::from_str(context_json).unwrap_or_default();
+    let from = ctx["from"].as_str().unwrap_or("a teammate");
+    let note = ctx["note"].as_str().filter(|n| !n.is_empty()).unwrap_or("(no note: infer it from their recent work)");
+    format!(
+        "You are picking up exactly where {from} left off in the shared CadSwarm FreeCAD model.\n\
+         FIRST call accept_handoff(handoff_id=\"{handoff_id}\"): it gives you their locked parts and tasks.\n\
+         Their note, which is your main instruction: {note}\n\
+         Where they left off (JSON: what they were pointing at, the parts they hold, their in-progress tasks, \
+         their last activity, ops and messages):\n{context_json}\n\n\
+         Continue their work, do not start over: read model_status and get_object for the parts they hold, use their \
+         recent ops to see what they were in the middle of, finish it binding dimensions to Params, run \
+         check_interference, report_result on each of their tasks, and send_message to {from} with a short summary \
+         of what you did. Stop when their tasks are done."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +249,13 @@ mod tests {
         let c = cli_candidates("codex", None, "", Path::new("H:/home"), Path::new("A:/appdata"));
         assert!(c.iter().all(|p| !p.display().to_string().contains("native-binary")));
         assert!(c.iter().any(|p| p.display().to_string().contains("codex")));
+    }
+
+    #[test]
+    fn the_handoff_prompt_leads_with_accepting_and_the_persons_note() {
+        let ctx = r#"{"from":"carol","note":"make the lip 1 mm thinner","pointer":{"object":"Lid"},"locks":["Lid"],"tasks":[]}"#;
+        let p = handoff_prompt("h_1", ctx);
+        assert!(p.find("accept_handoff").unwrap() < p.find("make the lip 1 mm thinner").unwrap());
+        assert!(p.contains("carol") && p.contains("Lid") && p.contains("h_1"));
     }
 }

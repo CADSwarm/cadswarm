@@ -116,7 +116,7 @@ def prune_storage(p, a):
 
 
 def lookup_board(p, a):
-    question = _need(a, "question")
+    question = a.get("question") or _need(a, "board")  # a board alone asks about that board
     filters = {"board_id": a["board"]} if a.get("board") else None
     hits = p.elastic.search("cadswarm-boards", question, 5, filters)
     return {"answers": [{"board_id": h["source"].get("board_id"), "title": h["source"].get("title"),
@@ -133,7 +133,7 @@ def board_spec(p, a):
 
 
 def recall_designs(p, a):
-    query = _need(a, "query")
+    query = a.get("query") or _need(a, "board")
     board = a.get("board")
     designs = p.elastic.search("cadswarm-designs", query, 3, {"board_id": board} if board else None)
     lessons = p.elastic.lessons(board, 5) if board else []

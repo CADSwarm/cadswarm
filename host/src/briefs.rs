@@ -5,9 +5,17 @@ use crate::boards::{load_boards, seed_params, Board};
 use crate::config::HostConfig;
 use crate::space::Space;
 use crate::worker::WorkerDriver;
+use anyhow::Context;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+/// A handoff whose agent failed to start waits this long before the next try (each try mints an invite).
+const HANDOFF_RETRY: Duration = Duration::from_secs(30);
+/// The reviewer's verdict reaches the host through the subscription, a moment after the reviewer exits.
+const VERDICT_GRACE: Duration = Duration::from_secs(10);
 
 pub const MAX_WORKERS: usize = 3;
 pub const MAX_REVIEW_ROUNDS: u32 = 3;
@@ -93,7 +101,9 @@ struct Runtime {
     workers: Vec<Agent>,
     export_op: Option<String>,
     reviewer: Option<Agent>,
+    review_round: u32,
     reviewed_round: u32,
+    reviewer_exited: Option<Instant>,
     spawned: usize,
 }
 
@@ -101,6 +111,8 @@ pub struct Orchestrator {
     cfg: HostConfig,
     boards: BTreeMap<String, Board>,
     runs: HashMap<String, Runtime>,
+    handoffs: HashMap<String, Agent>,
+    handoff_failed: HashMap<String, Instant>,
     reviewer_enabled: bool,
 }
 
@@ -198,10 +210,40 @@ impl Orchestrator {
                 eprintln!("[host] no board library found; briefs start without measured params");
                 BTreeMap::new()
             });
-        Orchestrator { cfg, boards, runs: HashMap::new(), reviewer_enabled: false }
+        // The reviewer only runs once someone has created its member folder (`init-reviewer`).
+        let reviewer_enabled =
+            cfg.data_dir.join("agents").join("reviewer").join(".cadswarm").join("config.json").exists();
+        Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), handoff_failed: HashMap::new(), reviewer_enabled }
     }
 
     pub fn tick(&mut self, space: &Space, mut helper: Option<&mut WorkerDriver>) {
+        // A person handed work to an agent: one agent per open handoff, until it accepts and finishes.
+        // An agent that dies before accepting leaves the handoff open; dropping it here makes the
+        // next tick spawn a fresh one.
+        for h in space.open_handoffs() {
+            if self.handoffs.contains_key(&h.id)
+                || self.handoff_failed.get(&h.id).is_some_and(|t| t.elapsed() < HANDOFF_RETRY)
+            {
+                continue;
+            }
+            let name = format!("handoff-{}", h.id.trim_start_matches("h_"));
+            let started = crate::mint_invite(space, &self.cfg, "agent", "member").and_then(|ticket| {
+                Agent::spawn(&self.cfg, &name, &ticket, &crate::agents::handoff_prompt(&h.id, &h.context_json))
+            });
+            match started {
+                Ok(agent) => {
+                    eprintln!("[host] handoff {}: started {name}", h.id);
+                    self.handoff_failed.remove(&h.id);
+                    self.handoffs.insert(h.id.clone(), agent);
+                }
+                Err(e) => {
+                    eprintln!("[host] handoff {}: {e:#} (trying again in {}s)", h.id, HANDOFF_RETRY.as_secs());
+                    self.handoff_failed.insert(h.id.clone(), Instant::now());
+                }
+            }
+        }
+        self.handoffs.retain(|_, a| a.alive());
+
         for b in space.briefs() {
             if b.status == "ready" || b.status == "failed" {
                 continue;
@@ -263,7 +305,25 @@ impl Orchestrator {
             reviewed_round: rt.reviewed_round,
         };
 
-        match next_action(&state) {
+        // A reviewer that exits without a verdict would leave the brief in `reviewing` forever.
+        let no_verdict = review.map(|(r, _)| r < rt.review_round).unwrap_or(true);
+        if b.status == "reviewing" && rt.review_round > 0 && !state.reviewer_alive && no_verdict
+            && rt.reviewer_exited.get_or_insert_with(Instant::now).elapsed() >= VERDICT_GRACE
+        {
+            eprintln!("[host] brief {}: reviewer round {} exited without a verdict", b.id, rt.review_round);
+            space.set_brief(&b.id, "failed", &json!({"error": "the reviewer exited without a verdict"}).to_string())?;
+            return Ok(());
+        }
+
+        // A host that restarted mid-review has no reviewer and no round of its own: review again.
+        let restarted_review = b.status == "reviewing" && rt.review_round == 0 && rt.reviewer.is_none()
+            && review.is_none() && !state.exporting;
+        let action = match next_action(&state) {
+            Action::Wait if restarted_review && self.reviewer_enabled => Action::Review,
+            Action::Wait if restarted_review => Action::Export,
+            other => other,
+        };
+        match action {
             Action::Wait => {}
             Action::Seed => {
                 let local = self.boards.get(&b.board).cloned();
@@ -329,7 +389,21 @@ impl Orchestrator {
                 space.set_brief(&b.id, "building", "")?;
             }
             Action::Review => {
-                // P1: the Droid reviewer is started here (python -m cadswarm.reviewer --brief <id>).
+                let round = review.map(|(r, _)| r + 1).unwrap_or(1);
+                let dir = self.cfg.data_dir.join("agents").join("reviewer");
+                std::fs::create_dir_all(&dir)?;
+                let log = std::fs::File::create(dir.join(format!("review-{}-{round}.log", b.id.trim_start_matches("b_"))))?;
+                eprintln!("[host] brief {}: starting reviewer round {round}", b.id);
+                let child = Command::new(&self.cfg.cadswarm_python)
+                    .args(["-m", "cadswarm.reviewer", "--brief", &b.id, "--round", &round.to_string(), "--dir"])
+                    .arg(&dir)
+                    .stdout(log.try_clone()?)
+                    .stderr(log)
+                    .spawn()
+                    .context("starting cadswarm.reviewer")?;
+                rt.reviewer = Some(Agent::from_child("reviewer", child));
+                rt.review_round = round;
+                rt.reviewer_exited = None;
                 space.set_brief(&b.id, "reviewing", "")?;
             }
             Action::Export => {

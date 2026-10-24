@@ -33,8 +33,24 @@ import traceback
 import sandbox  # noqa: E402  (next to this file; the worker runs as a plain script)
 
 FREECAD_BIN = os.environ.get("CADSWARM_FREECAD_BIN")
-if FREECAD_BIN and FREECAD_BIN not in sys.path:
-    sys.path.append(FREECAD_BIN)
+
+# Where `import FreeCAD` can come from: next to FreeCAD's Python (Windows), its sibling lib folder
+# (macOS .app, extracted AppImage), or a distro package's lib folder (Linux, system python3).
+FREECAD_LIB_DIRS = ("/usr/lib/freecad/lib", "/usr/lib/freecad-python3/lib", "/usr/lib64/freecad/lib",
+                    "/usr/local/lib/freecad/lib")
+
+
+def add_freecad_paths(bin_dir):
+    dirs = [os.environ.get("CADSWARM_FREECAD_LIB")]
+    if bin_dir:
+        dirs += [bin_dir, os.path.join(os.path.dirname(bin_dir), "lib")]
+    dirs += list(FREECAD_LIB_DIRS)
+    for d in dirs:
+        if d and os.path.isdir(d) and d not in sys.path:
+            sys.path.append(d)
+
+
+add_freecad_paths(FREECAD_BIN)
 
 import FreeCAD  # noqa: E402
 import Part  # noqa: E402

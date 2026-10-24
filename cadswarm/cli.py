@@ -20,7 +20,7 @@ import subprocess
 import sys
 
 from .agent_setup import write_agent_config
-from .config import find_freecad_python
+from .config import LINUX_FREECAD_LIBS, find_freecad_python
 from .paths import ROOT
 
 
@@ -66,10 +66,13 @@ ADDON_IGNORE = shutil.ignore_patterns(".git", ".venv", "*.egg-info", "__pycache_
 
 def freecad_mod_dir(fc_py=None):
     fc_py = fc_py or find_freecad_python()
+    # FreeCAD's module sits next to its Python (Windows), in the sibling lib folder (macOS .app),
+    # or in a distro lib folder (Linux, system python3).
+    dirs = [os.path.dirname(fc_py), os.path.join(os.path.dirname(os.path.dirname(fc_py)), "lib"),
+            *LINUX_FREECAD_LIBS]
     user_dir = subprocess.run(
-        [fc_py, "-c", "import sys,os; sys.path.append(os.path.dirname(sys.executable)); "
-                      "import FreeCAD; print(FreeCAD.getUserAppDataDir())"],
-        capture_output=True, text=True, check=True).stdout.strip().splitlines()[-1]
+        [fc_py, "-c", f"import sys; sys.path += {dirs!r}; import FreeCAD; print(FreeCAD.getUserAppDataDir())"],
+        capture_output=True, text=True, check=True, timeout=120).stdout.strip().splitlines()[-1]
     return os.path.join(user_dir, "Mod")
 
 

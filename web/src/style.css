@@ -69,6 +69,14 @@ button.mini { min-height: 32px; margin: 0; padding: 4px 10px; font-size: 13px; b
 .brief-box[open] summary::before { content: '–'; }
 .brief { padding-bottom: 4px; }
 
+/* ---- Hand off to an AI ---- */
+.handoff summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; list-style: none; }
+.handoff summary::-webkit-details-marker { display: none; }
+.handoff summary::before { content: '→'; margin-right: 8px; color: var(--accent); font-weight: 700; }
+.handoff .row { display: flex; align-items: center; gap: 10px; font-weight: 400; margin: 10px 0 0; }
+.handoff .row input { width: auto; margin: 0; }
+.handoff [data-state] { min-height: 18px; }
+
 /* ---- Status card ---- */
 .brief-text { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .steps { display: flex; gap: 4px; list-style: none; padding: 0; margin: 10px 0; }

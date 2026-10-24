@@ -11,8 +11,10 @@ Networking runs on background threads (event long-poll, heartbeats, BREP
 fetches) that only ever push into a queue; a QTimer drains it on the GUI
 thread, so FreeCAD's document and Qt widgets are touched from one thread only.
 """
+import json
 import os
 import queue
+import re
 import threading
 import time
 from urllib.parse import urlencode
@@ -22,7 +24,9 @@ import FreeCADGui as Gui
 import Part
 from PySide import QtCore, QtGui
 
-from ..client import HubClient, HubRequestError
+from ..client import HubRequestError, load_json, save_json
+from ..paths import app_dir
+from ..space_hub import SpaceHub
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -31,6 +35,31 @@ HEARTBEAT_SECONDS = 10
 
 def prefs():
     return App.ParamGet(PARAMS_PATH)
+
+
+def identity_path(db):
+    """This computer's sign-in for one team, kept outside every project folder (it is a secret)."""
+    return os.path.join(app_dir(), "gui", re.sub(r"[^A-Za-z0-9_.-]+", "_", db or "team") + ".json")
+
+
+def load_identity(db):
+    return load_json(identity_path(db), {}) or {}
+
+
+def save_identity(db, ident):
+    save_json(identity_path(db), ident)
+
+
+def host_dir_for(db):
+    """The folder this computer hosts for `db`, or "" when it hosts another team (or none)."""
+    folder = prefs().GetString("HostDataDir")
+    if not folder or not db:
+        return ""
+    try:
+        with open(os.path.join(folder, "host.json"), encoding="utf-8") as f:
+            return folder if (json.load(f) or {}).get("db") == db else ""
+    except (OSError, ValueError, TypeError):
+        return ""
 
 
 # Distinct, colorblind-friendlier hues (Tableau 10), handed out in join order so two
@@ -60,15 +89,22 @@ def friendly_error(e, hub=""):
     """What went wrong, in words a teammate can act on (never just 'not connected')."""
     code = getattr(e, "code", None)
     if code == "unreachable" or getattr(e, "status", None) == 0:
-        return (f"Couldn't reach your team's hub at {hub or 'that address'}.\n"
-                "Check that whoever is hosting has it running (cadswarm hub) and that the address is right.")
+        return (f"Couldn't reach your team's server at {hub or 'that address'}.\n"
+                "Check your internet connection, and that whoever is hosting the team has it running "
+                "(CadSwarm ▸ Get started ▸ Reconnect).")
     return {
-        "bad_workspace_token": "That team code doesn't match. Ask the person hosting the hub for the "
-                               "workspace token it printed when it started.",
+        "bad_invite": "That invite code has already been used or has expired. Ask your teammate for a new one.",
+        "not_member": "Your saved sign-in isn't part of this team any more. Join again with a new invite code.",
         "taken_over": "A teammate took over your session, so you were signed out. Join again to keep working.",
         "fence_stale": "You joined from another FreeCAD window, so this one was signed out.",
         "left": "You left the team session.",
         "bad_token": "Your saved sign-in is no longer valid. Join again.",
+        "name_in_use": "Someone with that name is already in the team. Join again with a different name "
+                       "(letters, numbers, - and _ only).",
+        "not_allowed": "Only whoever started the team can do that.",
+        "host_only": "Only the computer hosting the team can change its storage limits.",
+        "host_timeout": "The team's server didn't pick that up. Check that whoever is hosting the team has "
+                        "CadSwarm running, then try again.",
     }.get(code, str(e))
 
 
@@ -107,44 +143,41 @@ class Session:
         """Opening the workbench should just work: first time -> the setup guide; a host whose team
         server stopped (e.g. after a reboot) -> the guide restarts it; otherwise quietly rejoin."""
         p = prefs()
-        hub, token, name = p.GetString("HubUrl"), p.GetString("WorkspaceToken"), p.GetString("Name")
+        uri, db = p.GetString("Uri"), p.GetString("Db")
+        ident = load_identity(db) if db else {}
         if self.connected:
             return
         from .wizard import run_wizard
-        if not (hub and token and name):
+        if not (uri and db and ident.get("token")):
             QtCore.QTimer.singleShot(300, run_wizard)
             return
         if p.GetString("HostDataDir"):
             from .. import hosting
-            if not hosting.health(f"http://127.0.0.1:{p.GetString('HostPort')}", timeout=1.5):
+            if not hosting.team_ready(p.GetString("HostDataDir")):
                 QtCore.QTimer.singleShot(300, lambda: run_wizard(start="reconnect"))
                 return
         try:
-            self.connect(hub, token, name, timeout=3)
+            self.connect({"uri": uri, "db": db}, ident, p.GetString("Name"), timeout=3)
         except HubRequestError as e:
-            self.set_state("disconnected", friendly_error(e, hub))
+            self.set_state("disconnected", friendly_error(e, uri))
 
-    def connect(self, hub, token, name, timeout=30):
+    def connect(self, cfg, identity=None, name=None, timeout=30):
+        """Join (or rejoin) the team in `cfg` {"uri", "db"} with this person's SpacetimeDB `identity`.
+
+        The identity is saved under the app folder per team, so opening FreeCAD again just rejoins."""
         p = prefs()
-        resume = {"participant_id": p.GetString("ParticipantId"), "token": p.GetString("ParticipantToken")}
-        same_hub = p.GetString("HubUrl") == hub and p.GetString("Name") == name
+        name = name or (identity or {}).get("name") or p.GetString("Name")
         self._end_session()  # a previous session's threads must never act on this one
-        client = HubClient(hub, resume if same_hub and resume["participant_id"] else {}, timeout=timeout)
-        try:
-            self.ident = client.join(token, name, kind="human", client="freecad")
-        except HubRequestError as e:
-            if e.code not in ("bad_workspace_token", "unreachable") and client.identity:
-                client.identity = {}  # stored identity is no longer valid: join fresh
-                self.ident = client.join(token, name, kind="human", client="freecad")
-            else:
-                raise
-        client.timeout = 30
+        client = SpaceHub({"uri": cfg["uri"], "db": cfg["db"], "name": name,
+                           "host_dir": host_dir_for(cfg["db"])}, dict(identity or {}), timeout=timeout)
+        self.ident = client.join(client="freecad")  # a new fence: an older window can no longer act
+        client.timeout = client.space.timeout = 30  # the quick rejoin timeout is only for the first call
+        client.identity = self.ident
         self.client = client
-        p.SetString("HubUrl", hub)
-        p.SetString("WorkspaceToken", token)
-        p.SetString("Name", name)
-        p.SetString("ParticipantId", self.ident["participant_id"])
-        p.SetString("ParticipantToken", self.ident["token"])
+        p.SetString("Uri", cfg["uri"])
+        p.SetString("Db", cfg["db"])
+        p.SetString("Name", self.ident.get("name") or name)
+        save_identity(cfg["db"], self.ident)
         # Fresh stop flag and queue per connection: a worker still blocked in an old long-poll can
         # only ever signal its own (already stopped) session. Workers never touch Qt; they only queue.
         self.stop, self.events = threading.Event(), queue.Queue()
@@ -162,7 +195,7 @@ class Session:
             threading.Thread(target=loop, args=(self.stop, self.events, self._bg_client(), self.seq),
                              daemon=True).start()
         self.timer.start(250)
-        say(f"Joined the team at {hub} as {name}")
+        say(f"Joined the team in {cfg['db']} as {self.ident.get('name')}")
 
     def disconnect(self, reason=None):
         """Leave the session. `reason` set means it ended on us (takeover, other window)."""
@@ -185,7 +218,7 @@ class Session:
             self.timer.stop()
 
     def _bg_client(self):
-        return HubClient(self.client.hub, dict(self.client.identity), timeout=40)
+        return SpaceHub(dict(self.client.cfg), dict(self.client.identity), timeout=40)
 
     def _heartbeat_loop(self, stop, events, c, _seq):
         while not stop.wait(HEARTBEAT_SECONDS):
@@ -396,7 +429,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner_button = QtGui.QPushButton()
         self.banner_button.clicked.connect(self.banner_action)
         self.invite_button = QtGui.QPushButton("Invite")
-        self.invite_button.setToolTip("Copy the invite code for teammates")
+        self.invite_button.setToolTip("Copy a new single-use invite code for a teammate")
         self.invite_button.clicked.connect(invite_teammates)
         brow.addWidget(self.banner_text, 1)
         bcol = QtGui.QVBoxLayout()
@@ -516,7 +549,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner.setStyleSheet(f"QFrame {{ background: {bg}; border-radius: 6px; }} "
                                   f"QLabel {{ color: {fg}; background: transparent; }}")
         self.banner_button.setText(button)
-        self.invite_button.setVisible(s.state == "connected" and bool(prefs().GetString("InviteCode")))
+        self.invite_button.setVisible(s.state == "connected")
         connected = s.state in ("connected", "offline")
         self.msg.setPlaceholderText("Message your team's AI helpers — press Enter to send" if connected else
                                     "Type a message — you'll be asked to join your team first")
@@ -663,7 +696,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.session.act("POST", "/locks/release", {"names": ["Params"]})
 
 
-CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper"}
+CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper", "droid": "Droid helper"}
 STATUS_WORDS = {"active": "here", "stale": "away — may be stuck", "left": "left"}
 TASK_WORDS = {"open": "not started", "claimed": "in progress", "awaiting_takeover": "waiting for someone",
               "done": "done ✓", "blocked": "stuck"}
@@ -809,17 +842,20 @@ def add_helper():
 
 
 def invite_teammates():
-    code = prefs().GetString("InviteCode")
-    if not code:
-        QtGui.QMessageBox.information(Gui.getMainWindow(), "CadSwarm",
-                                      "Ask whoever started the team for the invite code.")
+    """Mint a fresh single-use code for one teammate (a used code can never be handed on)."""
+    if not SESSION.ensure_connected("invite teammates"):
+        return
+    try:
+        code = SESSION.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"))
+    except HubRequestError as e:
+        QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm", friendly_error(e, SESSION.client.hub))
         return
     QtGui.QApplication.clipboard().setText(code)
     QtGui.QMessageBox.information(
         Gui.getMainWindow(), "Invite teammates",
-        "The invite code is copied. Paste it to your teammates (email, Discord, text...).\n\n"
-        f"{code}\n\nThey open FreeCAD, pick CadSwarm, click Get started, then "
-        "\u201cJoin a teammate\u2019s project\u201d.")
+        "The invite code is copied. Paste it to one teammate (email, Discord, text...).\n\n"
+        f"{code}\n\nThis code works once. Make a new one for each teammate.\n\nThey open FreeCAD, pick "
+        "CadSwarm, click Get started, then \u201cJoin a teammate\u2019s project\u201d.")
 
 
 STOPPED_HOSTING = "You stopped hosting the team."
@@ -831,7 +867,8 @@ def stop_hosting():
 
 
 def hosted_project_folder():
-    folder = prefs().GetString("HostDataDir")
+    """The project folder this computer hosts for the team it is in now, or None."""
+    folder = host_dir_for(prefs().GetString("Db"))
     return folder if folder and os.path.isdir(folder) else None
 
 
@@ -1115,9 +1152,9 @@ def release_selected():
 def register_commands():
     Gui.addCommand("CadSwarm_Connect", Cmd("Get started…", "Start or join a team, step by step",
                                            lambda: connect_dialog(), False))
-    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect Claude Code or Codex to your team",
-                                             add_helper))
-    Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy the invite code for teammates", invite_teammates))
+    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect an AI helper (Claude Code, Codex or "
+                                                              "Droid) to your team", add_helper))
+    Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy a new invite code for a teammate", invite_teammates))
     Gui.addCommand("CadSwarm_StopHosting", Cmd("Stop hosting", "Stop the team server on this computer",
                                                stop_hosting, False))
     Gui.addCommand("CadSwarm_Panel", Cmd("Team panel", "Show presence, locks, tasks and chat", show_panel, False))

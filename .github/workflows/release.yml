@@ -1,0 +1,80 @@
+name: release
+
+# Tag `v*` and this builds the assets the FreeCAD guide downloads on first use, checksums them, and
+# publishes them as a GitHub release. The guide resolves `releases/latest/download`, so the release
+# must be published (not a draft). See scripts/package-release.ps1 and cadswarm/hosting.py.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  host:
+    name: host (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-15-intel, target: x86_64-apple-darwin }
+          - { os: macos-14, target: aarch64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # package-release.ps1 builds the host and the wasm together; both targets are needed here.
+          targets: ${{ matrix.target }},wasm32-unknown-unknown
+      - name: Build the team server
+        shell: pwsh
+        run: ./scripts/package-release.ps1 -Target ${{ matrix.target }} -Out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: host-${{ matrix.target }}
+          path: dist/cadswarm-host-*
+          if-no-files-found: error
+
+  module:
+    name: module (wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Build the database module
+        shell: pwsh
+        run: ./scripts/package-release.ps1 -ModuleOnly -Out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module
+          path: dist/cadswarm_module.wasm
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: [host, module]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem dist -File | Sort-Object Name
+          $assets | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Get-Content dist/SHA256SUMS.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${{ github.repository }}" --title "${GITHUB_REF_NAME}" --generate-notes
