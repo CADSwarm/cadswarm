@@ -19,10 +19,12 @@ Response: {"id": 1, "ok": true, "result": {...}, "created": [], "modified": [],
        or {"id": 1, "ok": false, "code": "lock_violation", "error": "..."}
 """
 import ast
+import base64
 import json
 import math
 import os
 import re
+import struct
 import sys
 import time
 import threading
@@ -566,9 +568,94 @@ def q_dependents(a):
     return {"dependents": sorted(seen)}
 
 
+def _solid_shape(o):
+    shape = getattr(o, "Shape", None) if o is not None else None
+    if shape is None or shape.isNull() or not shape.Faces:
+        return None
+    return shape
+
+
+def stl_bytes(shape, tolerance):
+    """Binary STL of a shape's tessellation (written by hand: no file round trip, no ASCII surprise)."""
+    verts, tris = shape.tessellate(tolerance)
+    out = bytearray(b"cadswarm preview".ljust(80, b"\0"))
+    out += struct.pack("<I", len(tris))
+    for a, b, c in tris:
+        p, q, r = verts[a], verts[b], verts[c]
+        n = (q - p).cross(r - p)
+        if n.Length > 0:
+            n.normalize()
+        out += struct.pack("<12fH", n.x, n.y, n.z, p.x, p.y, p.z, q.x, q.y, q.z, r.x, r.y, r.z, 0)
+    return bytes(out)
+
+
+def q_mesh(a):
+    """{"names", "tolerance", "max_bytes"} -> {"meshes": {name: base64 binary STL}}; shapeless names omitted."""
+    tol = float(a.get("tolerance") or 0.2)
+    budget = int(a.get("max_bytes") or 200_000)
+    out = {}
+    for name in a.get("names") or [o.Name for o in doc.Objects]:
+        shape = _solid_shape(doc.getObject(name))
+        if shape is None:
+            continue
+        t, data = tol, stl_bytes(shape, tol)
+        for _ in range(6):  # coarsen until it fits the preview budget
+            if len(data) <= budget:
+                break
+            t *= 2
+            data = stl_bytes(shape, t)
+        out[name] = base64.b64encode(data).decode()
+    return {"meshes": out}
+
+
+def face_normal(face):
+    u0, u1, v0, v1 = face.ParameterRange
+    return face.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+
+
+def thin_walls(shape, min_wall, limit=20):
+    """Best effort: pairs of opposite-facing planar faces closer than `min_wall`."""
+    planar = [(i, f) for i, f in enumerate(shape.Faces) if type(f.Surface).__name__ == "Plane"]
+    out = []
+    for x in range(len(planar)):
+        i, fi = planar[x]
+        ni = face_normal(fi)
+        for y in range(x + 1, len(planar)):
+            j, fj = planar[y]
+            if ni.dot(face_normal(fj)) > -0.99:
+                continue
+            d = fi.distToShape(fj)[0]
+            if 1e-6 < d < min_wall:
+                out.append({"face_a": i, "face_b": j, "distance": round(d, 3)})
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def q_printability(a):
+    """{"names" | null, "bed": [x, y, z], "min_wall"} -> {"ok", "objects": [...]} (plan 00 worker additions)."""
+    bed = [float(v) for v in (a.get("bed") or [180, 180, 180])]
+    min_wall = float(a.get("min_wall") or 1.2)
+    names = a.get("names") or [o.Name for o in doc.Objects if getattr(o, "Visibility", False)
+                               and _solid_shape(o) is not None and o.Shape.Solids]
+    objects = []
+    for n in names:
+        s = get_obj(n).Shape
+        bb = s.BoundBox
+        size = [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]
+        # The footprint may be rotated on the bed, so compare the sorted XY extents.
+        fits = all(x <= b for x, b in zip(sorted(size[:2]), sorted(bed[:2]))) and size[2] <= bed[2]
+        closed = bool(s.Solids) and all(sol.isClosed() for sol in s.Solids) and s.isValid()
+        objects.append({"name": n, "size": size, "fits_bed": fits, "closed_solid": closed,
+                        "thin_wall_suspects": thin_walls(s, min_wall) if s.Solids else []})
+    ok = all(o["fits_bed"] and o["closed_solid"] and not o["thin_wall_suspects"] for o in objects)
+    return {"ok": ok, "objects": objects}
+
+
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
+           "mesh": q_mesh, "printability": q_printability,
            "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],
                               "script_sandbox": sandbox.info(sys.executable)}}
 
