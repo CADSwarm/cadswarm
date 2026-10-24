@@ -12,6 +12,8 @@ export interface Preview { object: string; rev: number; mesh: Uint8Array }
 export interface Artifact { hash: string; name: string; mime: string; size: number }
 export interface Handoff { id: string; from: number; note: string; trigger: string; status: string; taker: number; createdMs: number }
 export interface Workspace { bedXMm: number; bedYMm: number; bedZMm: number }
+/** A short message for the person (a refused reducer, a failed download). `at` makes repeats distinct. */
+export interface Notice { text: string; at: number }
 export interface Op { id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string }
 
 export interface State {
@@ -19,11 +21,12 @@ export interface State {
   members: Member[]; locks: Lock[]; objects: Obj[]; params: Param[]; tasks: Task[]; ops: Op[];
   activity: Activity[]; pointers: Pointer[]; briefs: Brief[]; reviews: Review[];
   previews: Map<string, Preview>; artifacts: Artifact[]; handoffs: Handoff[];
+  notice: Notice | null;
 }
 
 export function emptyState(): State {
   return { connected: false, meId: null, workspace: null, members: [], locks: [], objects: [], params: [], tasks: [], ops: [],
-    activity: [], pointers: [], briefs: [], reviews: [], previews: new Map(), artifacts: [], handoffs: [] };
+    activity: [], pointers: [], briefs: [], reviews: [], previews: new Map(), artifacts: [], handoffs: [], notice: null };
 }
 
 export class Store {
