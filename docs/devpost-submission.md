@@ -5,24 +5,33 @@ Devpost's field limits (the sections below are sized for the "built with a story
 
 ## Before submitting
 
-- [ ] Public code link: make the repository public, or add the Devpost judges as collaborators.
-  The guide's `releases/latest/download` URLs and the release assets only work unauthenticated on a
-  public repository. The account running this session (Ilakkiyan) is a write collaborator on
-  `SachchitBalamurugan/cadswarm`, not an admin, so the owner has to flip it: Settings → General →
-  Danger Zone → Change visibility → Public.
-- [ ] Web link: the landing page (`website/` on `feat/fea-simulation`) now has an **Open the live
-  demo** button. It asks for the demo code and opens `app/?mock`, the panels app built from `web/`
-  and served from the same domain. It goes live when that branch merges to `main` and Vercel
-  redeploys production. Pull-request previews sit behind Vercel Authentication, so they are not
-  usable links for judges.
+- [x] Public code link: https://github.com/SachchitBalamurugan/cadswarm is public (checked 2026-10-24
+  with `gh repo view --json visibility`).
+- [ ] **Web link (blocker).** `https://cadswarm.vercel.app` (the repo's homepage link) answers 404:
+  that domain is not assigned to the Vercel project. The production deployment,
+  `https://cadswarm-sachchitbalamurugans-projects.vercel.app`, shows the Vercel login page, so judges
+  cannot open it. GitHub Pages is off since #26. The Vercel project owner fixes it: Settings →
+  Deployment Protection → Vercel Authentication → "Only Preview Deployments", then Settings → Domains →
+  add `cadswarm.vercel.app` (or use the production URL above). Done when `<url>/app/?mock` opens in a
+  private window without a login.
 - [ ] Video: record the 2:45 demo using the beats below and upload it; paste the URL under "Try it
   out".
-- [ ] Fill in the team list and the three `[TBD]` links.
-- [x] Verify the release: `v0.1.0` published by run 40078446476 with all five host platforms,
-  `cadswarm_module.wasm` and `SHA256SUMS.txt`. Checked on 2026-10-24: the downloaded assets match
-  the checksums, the release wasm publishes to Maincloud, and the released Windows host ran the
-  FreeCAD 1.1.4 worker through a human join, lock, box (1440 mm3), printability, STL export and
-  `model.FCStd` save.
+- [ ] M2 rehearsal (plan 06 T5): a phone brief that ends `ready` with an STL has not been run yet.
+  Record its brief-to-ready time here: [TBD — from T5].
+- [ ] Printed part (plan 06 T7d): photograph it for the Best Hardware write-up.
+- [ ] Fill in the team roles and the video link.
+- [x] Release: `v0.1.2` (2026-10-24 11:24 UTC) has all five host binaries, `cadswarm_module.wasm` and
+  `SHA256SUMS.txt`; on 2026-10-24 every downloaded asset matched its checksum (`sha256sum -c`). The
+  earlier `v0.1.0` check also ran the released Windows host through the FreeCAD 1.1.4 worker: a human
+  join, lock, box (1440 mm3), printability, STL export and `model.FCStd` save.
+- [x] Tests: CI run 40118091369 on `main` `95664cc`: Python 437 / 436 / 435 passed on Linux / Windows
+  / macOS (20–22 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed on all
+  three, web 36 passed; rules 22 passed locally.
+- [x] Live database: Maincloud `cadswarm-calhacks-ca8c` runs the module built from `main` `d5aa68a`
+  (published 2026-10-24 with `--delete-data=never`), and the team server shows `active` in `v_member`.
+- [x] Elastic, counted live on 2026-10-24: `cadswarm-boards` 6 datasheet documents for 5 boards
+  (raspberry-pi-4, arduino-uno-r3, esp32-s3-devkitc-1, raspberry-pi-pico, seeed-xiao-esp32c3),
+  `cadswarm-designs` 1, `cadswarm-lessons` 0 (no reviewer findings yet).
 
 ## Project name
 
@@ -72,6 +81,15 @@ CadSwarm turns FreeCAD into a shared workspace for a small team of people and th
   also distils its findings into per-board lessons that the planner reads.
 - **Files and output that are safe by default.** Sandboxed project files with history and no silent
   overwrites, snapshots, STEP/STL export, and a phone web app that shows the same live state.
+- **A components library and the team's precision.** Standard parts (ISO screws, nuts, washers,
+  heat-set inserts, 608 bearings, dowel pins, magnets) and the team's own uploaded parts; agents
+  recommend, place and size the mating holes from the team's fits. Only people change the settings;
+  an agent's suggestion waits for a person to accept it.
+- **A design style the team teaches by working.** Every change and every correction a person makes to
+  an agent's work feeds a learned style; strong rules go into every agent's prompt, and the reviewer
+  flags violations.
+- **See where each agent is working.** Live pointers rest on the vertex an agent is editing, and a
+  chat with `@helper` mentions gives any helper a task.
 
 ## How we built it
 
@@ -147,8 +165,9 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
   has nothing to write until a reviewer supplies findings.
 - The Droid reviewer runs from the host, shows its work in the activity feed, and has a safe failure
   mode; it is optional, and off on the demo host because Droid is not installed there.
-- Tests are part of the story: the Rust host suite, a Python suite covering the module adapter,
-  guide, hosting, Elastic and the reviewer, and a web suite for the store, panels and viewer math.
+- Tests are part of the story: on every push CI runs about 436 Python tests on Windows, macOS and Linux
+  (module adapter, guide, hosting, sandbox, library, style memory, Elastic, reviewer), 35 host tests,
+  36 web tests, and the coordination rules' own unit tests.
 
 ## What we learned
 
@@ -177,18 +196,35 @@ Actions · Windows
 
 ## Try it out
 
-- **Code:** [TBD — public GitHub repository URL]
-- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.0
-- **Web app:** [TBD — landing page URL once deployed] — press **Open the live demo** and enter the
+- **Code:** https://github.com/SachchitBalamurugan/cadswarm
+- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.2
+- **Web app:** [TBD — blocked, see "Web link" above] — press **Open the live demo** and enter the
   code `swarm-13`. That opens the panels app on a sample build, no host or account needed.
 - **Video:** [TBD — YouTube/Vimeo URL]
-- **Run it:** install FreeCAD, download the repository ZIP, double-click `Install CadSwarm.cmd`,
-  then follow the guide. The host needs an AI CLI (Claude Code, Codex, or Droid) that the user
-  already has; CadSwarm ships no model and no keys.
+- **Run it:** install FreeCAD, then run one line. Windows (PowerShell):
+  `irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex`;
+  macOS or Linux:
+  `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash`.
+  Then follow the guide in FreeCAD. The host needs an AI CLI (Claude Code, Codex, or Droid) that the
+  user already has; CadSwarm ships no model and no keys.
+
+## Prize tracks: what a judge can check
+
+| Track | Evidence in the repo | What to look at |
+|---|---|---|
+| Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-ca8c`. |
+| Anthropic | `cadswarm/mcp_server.py`; `host/src/agents.rs` (`planner_prompt`, `worker_prompt`, `handoff_prompt`); `host/src/briefs.rs` | Claude Code agents work only through the MCP server's tools and its 13 working rules. The host plans a brief with a planner agent and starts up to three workers, and adds the team's learned design style to each prompt. |
+| Factory | `cadswarm/reviewer.py`; README "Where Droid runs" | The Droid reviewer runs on `droid-sdk` with `restrict_tools` limited to inspection, joins as a `reviewer` member, and the module refuses any write op from that member kind. |
+| Elastic | `elastic/setup.json`, `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | JINA `semantic_text` hybrid search with the reranker over board datasheets; design memory written back by the host; Agent Builder agents; the `distil-lessons` Workflow. |
+| Best Hardware | The printed enclosure | [TBD — photo of the printed part, from T7d] |
+| Most Technically Complex | `rules/src/lib.rs` (fences, locks, stale sweep, `check_take_over`); `host/src/executor.rs` (`spill`: results over 32 KB become artifacts); `cadswarm/worker/sandbox.py`, `sandbox_win.py`, `script_runner.py` | Fenced leases, object locks and takeover enforced in reducers; handoff of locks and tasks; large results spilled out of the op table; agent part scripts run in a sandbox. |
 
 ## Team
 
-[TBD — names, roles, links]
+- Ilakkiyan ([@Ilakkiyan](https://github.com/Ilakkiyan)) — [TBD role]
+- Sachchit Balamurugan ([@SachchitBalamurugan](https://github.com/SachchitBalamurugan)) — [TBD role]
+- Swapnil Botu ([@swapnilbotu](https://github.com/swapnilbotu)) — [TBD role]
+- Anegs ([@r3donic](https://github.com/r3donic)) — [TBD role]
 
 ---
 
