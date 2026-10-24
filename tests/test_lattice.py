@@ -213,7 +213,15 @@ def test_auto_skin_thickens_the_skin_when_the_core_is_not_enough():
 
 # ----------------------------------------------------------------------- whole job
 
-def test_the_whole_job_writes_a_closed_lattice_and_an_honest_report(tmp_path):
+def test_the_whole_job_writes_a_closed_lattice_and_an_honest_report(tmp_path, monkeypatch):
+    calls = []
+    real_contour = mc.contour
+
+    def record(values, origin, pitch):
+        calls.append((np.asarray(values).shape, tuple(np.asarray(origin, float)), pitch))
+        return real_contour(values, origin, pitch)
+
+    monkeypatch.setattr(mc, "contour", record)
     v, f = box_mesh(24, 12, 12)
     recipe = build.normalize({"cell": "octet", "cell_size_mm": 6, "min_thickness_mm": 1.0, "skin_mm": 1.0,
                               "stiffness_target": 0.7, "voxel_mm": 0.5, "open_faces": ["+y", "-y"]})
@@ -223,6 +231,18 @@ def test_the_whole_job_writes_a_closed_lattice_and_an_honest_report(tmp_path):
     assert {"prepare", "simulate", "lighten", "lattice", "mesh", "done"} <= set(phases)
     assert r["mesh"]["closed"] and r["mesh"]["oriented"]
     assert np.allclose(r["mesh"]["bbox"], [0, 0, 0, 24, 12, 12], atol=0.6)
+    # The preview is F[::2] on a coarse grid: its origin must be shifted back by half a build voxel,
+    # or the whole preview sits one voxel (+h_b) away from result.stl.
+    preview = mc.read_stl(tmp_path / "preview.stl")
+    assert np.allclose(preview.bbox(), r["mesh"]["bbox"], atol=0.75 * r["mesh"]["voxel_mm"])
+    # Pin the grid convention too: a bbox alone can pass the wrong sign when the part's size makes
+    # the half-resolution quantisation cancel the shift (e.g. a 20x10x5 box at h_b = 0.5).
+    h_b = r["mesh"]["voxel_mm"]
+    assert len(calls) == 2
+    (full_shape, full_origin, full_pitch), (preview_shape, preview_origin, preview_pitch) = calls
+    assert full_pitch == pytest.approx(h_b) and preview_pitch == pytest.approx(2 * h_b)
+    assert preview_shape == tuple((np.asarray(full_shape) + 1) // 2)   # F[::2]'
+    assert np.allclose(preview_origin, np.asarray(full_origin) - h_b / 2)
     assert 0 < r["mass"]["weight_saving_pct"] < 100
     for name in ("result.stl", "result.3mf", "preview.stl", "report.json", "report.md"):
         assert (tmp_path / name).stat().st_size > 0
