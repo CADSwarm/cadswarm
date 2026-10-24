@@ -1181,7 +1181,7 @@ class FeaReportDialog(QtGui.QDialog):
         say(f"Saved the simulation report to {dest}")
 
     def export_html(self):
-        from ..hub.fea import standalone_html
+        from ..fea import standalone_html
         self._save("Export report as HTML", "html", "Web page (*.html)",
                    standalone_html(self.report, self.png).encode("utf-8"))
 

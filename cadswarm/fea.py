@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 
-from ..config import worker_script
+from .config import worker_script
 
 FEA_TIMEOUT = int(os.environ.get("CADSWARM_FEA_TIMEOUT", "900"))
 PUBLISH_GRACE = 300     # a finished, unpublished job is auto-published after this many seconds

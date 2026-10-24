@@ -1,4 +1,4 @@
-"""Connecting an AI helper (Claude Code or Codex) in a project folder to a team.
+"""Connecting an AI helper (Claude Code, Codex or Factory Droid) in a project folder to a team.
 
 Shared by `cadswarm setup` and the FreeCAD setup wizard, so stdlib only. Agent
 configs launch `cadswarm_launch.py` by absolute path with an explicit Python —
@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from .client import save_json, state_dir
+from .client import load_json, save_json, state_dir
 from .paths import LAUNCHER
 
 BEGIN, END = "<!-- cadswarm:begin -->", "<!-- cadswarm:end -->"
@@ -21,6 +21,7 @@ CLIENTS = {
     "claude": {"label": "Claude Code", "exe": "claude",
                "install_url": "https://code.claude.com/docs/en/setup"},
     "codex": {"label": "Codex", "exe": "codex", "install_url": "https://learn.chatgpt.com/docs/codex/cli"},
+    "droid": {"label": "Factory Droid", "exe": "droid", "install_url": "https://docs.factory.ai/cli/getting-started/quickstart"},
 }
 
 AGENT_DOC = """{begin}
@@ -212,21 +213,53 @@ def trust_in_codex(project):
     return True
 
 
-def write_agent_config(project, client, hub, token, name, role="member", python=None, fresh=False):
-    """Everything an AI helper in `project` needs to join the team. Returns the files written."""
+def setup_droid(project, python):
+    path = os.path.join(project, ".factory", "mcp.json")
+    cfg = _read_config(path)
+    _dict_at(cfg, "mcpServers", path)["cadswarm"] = {
+        "type": "stdio", "command": python, "args": ["-m", "cadswarm.mcp_server"],
+        "env": {"CADSWARM_PROJECT": project}}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    upsert_block(os.path.join(project, "AGENTS.md"), AGENT_DOC.format(begin=BEGIN, end=END))
+    return [path, os.path.join(project, "AGENTS.md")]
+
+
+def redeem(t, name, client):
+    """Create a SpacetimeDB identity and become a member with the invite (single use).
+    `t` is a decoded ticket. Returns the identity {token, participant_id, fence, name, role, kind}."""
+    from .space import SpaceClient
+    ident = SpaceClient.new_identity(t["uri"])
+    space = SpaceClient(t["uri"], t["db"], ident["token"])
+    space.call("redeem_invite", t["token"], name, client, "")
+    me = space.sql("SELECT * FROM v_me")[0]
+    return {"token": ident["token"], "identity": ident.get("identity", ""), "participant_id": me["id"],
+            "fence": me["fence"], "name": me["name"], "role": me["role"], "kind": me["kind"]}
+
+
+def write_agent_config(project, client, invite, name, python=None, fresh=False):
+    """Everything an AI helper in `project` needs to join the team. Returns the files written.
+    `invite` is a decoded ticket (see invite.read_invite). The invite is redeemed only when this
+    folder has no identity yet (invites work once), and only after the agent CLI's own config
+    files were validated and written, so a config file we refuse to touch never burns the invite."""
     if client not in CLIENTS:
         raise ValueError(f"client must be one of {sorted(CLIENTS)}")
     python = python or sys.executable
     project = os.path.abspath(project)
-    os.makedirs(project, exist_ok=True)
-    save_json(os.path.join(state_dir(project), "config.json"), {
-        "hub": hub.rstrip("/"), "workspace_token": token, "name": name, "client": client, "role": role})
-    ident = os.path.join(state_dir(project), "identity.json")
-    if fresh and os.path.exists(ident):
-        os.remove(ident)
+    os.makedirs(state_dir(project), exist_ok=True)
+    ident_path = os.path.join(state_dir(project), "identity.json")
+    if fresh and os.path.exists(ident_path):
+        os.remove(ident_path)
     with open(os.path.join(state_dir(project), ".gitignore"), "w") as f:
-        f.write("*\n")  # identity.json holds a bearer token
-    written = setup_claude(project, python) if client == "claude" else setup_codex(project, python)
+        f.write("*\n")  # identity.json holds a SpacetimeDB token
+    writers = {"claude": setup_claude, "codex": setup_codex, "droid": setup_droid}
+    written = writers[client](project, python)
+    if not load_json(ident_path):
+        save_json(ident_path, redeem(invite, name, client))
+    save_json(os.path.join(state_dir(project), "config.json"), {
+        "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
+        "role": invite.get("role") or "member"})
     return written
 
 

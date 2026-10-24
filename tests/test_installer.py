@@ -36,7 +36,7 @@ def test_installs_into_the_folder_freecad_reports_and_adds_a_shortcut(tmp_path):
     r = run(tmp_path, "--yes", CADSWARM_FREECAD=str(exe))
     assert r.returncode == 0, r.stdout + r.stderr
     dest = user_dir / "Mod" / "CadSwarm"
-    assert (dest / "InitGui.py").exists() and (dest / "cadswarm" / "hub" / "fea.py").exists()
+    assert (dest / "InitGui.py").exists() and (dest / "cadswarm" / "fea.py").exists()
     for skipped in (".git", ".venv", "__pycache__"):
         assert not list(dest.rglob(skipped))
     desktop = (tmp_path / "home" / ".local" / "share" / "applications" / "cadswarm.desktop").read_text()

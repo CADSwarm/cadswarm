@@ -1,11 +1,12 @@
 """CadSwarm MCP server: one per agent session (Claude Code or Codex).
 
-Started by the agent CLI from a project folder prepared by `cadswarm setup`.
-On start it joins the hub (resuming the folder's stored identity at a new
-fence), then heartbeats every 10s in the background so the team sees it as
-live and its locks stay protected. If the hub says this process has been
+Started by the agent CLI from a project folder prepared by `cadswarm setup --invite`.
+On start it rejoins the team on SpacetimeDB (resuming the folder's stored identity
+at a new fence), then heartbeats every 15s in the background so the team sees it as
+live and its locks stay protected. If SpacetimeDB says this process has been
 superseded (fence) or its work was taken over, every tool refuses to act
-— a stale agent must never keep editing the shared model.
+— a stale agent must never keep editing the shared model. Every tool call is
+logged as activity, which also moves this agent's pointer to its target object.
 """
 import os
 import sys
@@ -14,9 +15,10 @@ import time
 
 from mcp.server.mcpserver import MCPServer
 
-from .client import HubClient, HubRequestError, find_project_dir, load_json, save_json, state_dir
+from .client import HubRequestError, find_project_dir, load_json, save_json, state_dir
 from .config import HEARTBEAT_SECONDS
-from .hub.files import unique_path
+from .files import unique_path
+from .space_hub import SpaceHub
 
 INSTRUCTIONS = """You are one of several agents (each driven by a different person) building ONE shared
 FreeCAD model through the CadSwarm hub. Work like a careful teammate:
@@ -63,16 +65,15 @@ class Session:
             raise SystemExit("cadswarm: no .cadswarm/config.json here or above; run `cadswarm setup` first")
         self.cfg = load_json(os.path.join(state_dir(self.project), "config.json"))
         self.ident_path = os.path.join(state_dir(self.project), "identity.json")
-        self.client = HubClient(self.cfg["hub"], load_json(self.ident_path, {}))
+        self.client = SpaceHub(self.cfg, load_json(self.ident_path, {}))
         self.doing = "starting"
         self.dead = None  # set to an error message once this process must stop acting
         self.seq = None   # event cursor for wait_for_changes
         self.lock = threading.Lock()
 
     def connect(self):
-        ident = self.client.join(self.cfg["workspace_token"], self.cfg["name"], "agent",
-                                 self.cfg.get("client"), self.cfg.get("role", "member"))
-        save_json(self.ident_path, {**ident, "hub": self.cfg["hub"]})
+        ident = self.client.join(None, self.cfg["name"], "agent", self.cfg.get("client"), self.cfg.get("role", "member"))
+        save_json(self.ident_path, {**load_json(self.ident_path, {}), **ident})
         return ident
 
     def heartbeat_loop(self):
@@ -83,7 +84,7 @@ class Session:
                 self.client.post("/heartbeat", {"doing": self.doing})
                 backoff = HEARTBEAT_SECONDS
             except HubRequestError as e:
-                if e.code in ("fence_stale", "taken_over", "left", "bad_token"):
+                if e.code in ("fence_stale", "taken_over", "left", "not_member"):
                     self.dead = str(e)
                     return
                 backoff = min(backoff * 2, 60)  # hub unreachable: back off, never hammer
@@ -92,14 +93,13 @@ class Session:
 S = None
 
 
-def call(method, path, body=None, doing=None, timeout=None, **params):
+def call(method, path, body=None, doing=None, targets=None, **params):
     if S.dead:
         return {"error": f"This agent session can no longer act: {S.dead}", "code": "inactive"}
     if doing:
         S.doing = doing
+        S.client.log_activity("tool_call", doing, targets)
     try:
-        if timeout:
-            return S.client.request(method, path, body if method != "GET" else None, params or None, timeout=timeout)
         if method == "GET":
             return S.client.get(path, **params)
         return S.client.post(path, body)
@@ -110,8 +110,9 @@ def call(method, path, body=None, doing=None, timeout=None, **params):
 
 
 def op(name, args, doing, expected_revs=None):
+    targets = [args.get(k) for k in ("name", "base", "tool") if isinstance(args.get(k), str)]
     return call("POST", "/ops", {"op": name, "args": {k: v for k, v in args.items() if v is not None},
-                                 "expected_revs": expected_revs}, doing=doing)
+                                 "expected_revs": expected_revs}, doing=doing, targets=targets)
 
 
 # ----------------------------------------------------------------- awareness
@@ -156,7 +157,7 @@ def wait_for_changes(seconds: float = 20.0) -> dict:
 def lock_objects(names: list[str]) -> dict:
     """Lock objects (or names you are about to create) so only you may change them. All-or-nothing;
     a conflict names the holder."""
-    return call("POST", "/locks", {"names": names}, doing=f"locking {names}")
+    return call("POST", "/locks", {"names": names}, doing=f"locking {names}", targets=names)
 
 
 @mcp.tool()
@@ -236,7 +237,7 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
 @mcp.tool()
 def check_interference(names: list[str] | None = None) -> dict:
     """Pairwise solid overlaps among visible parts (or `names`). Clashes list overlap volume in mm^3."""
-    return call("POST", "/interference", {"names": names}, doing="checking interference")
+    return call("POST", "/interference", {"names": names}, doing="checking interference", targets=names)
 
 
 # ---------------------------------------------------------------------- FEA
@@ -278,13 +279,13 @@ def run_fea(target: str | list[str], analysis: str = "static", material: str | d
     fea_status. Then publish_fea_report."""
     body = {k: v for k, v in locals().items() if v is not None}
     return call("POST", "/fea/run", {**body, "wait": FEA_WAIT}, doing=f"running FEA on {target}",
-                timeout=FEA_WAIT + 30)
+                targets=[target] if isinstance(target, str) else target)
 
 
 @mcp.tool()
 def fea_status(job_id: str) -> dict:
     """Wait (up to ~45 s) for an FEA job and return its results, automatic review points and next step."""
-    return call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT, timeout=FEA_WAIT + 30)
+    return call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT)
 
 
 @mcp.tool()
@@ -403,9 +404,11 @@ def list_tasks() -> dict:
 
 @mcp.tool()
 def create_task(title: str, detail: str = "", objects: list[str] | None = None,
-                assignee: str | None = None) -> dict:
-    """Create scoped work (optionally assigned to a teammate by name, who is notified)."""
-    return call("POST", "/tasks", {"title": title, "detail": detail, "objects": objects, "assignee": assignee})
+                assignee: str | None = None, brief: str | None = None) -> dict:
+    """Create scoped work (optionally assigned to a teammate by name, who is notified). Pass `brief`
+    when the task belongs to a phone brief, so the host can track the brief's progress."""
+    return call("POST", "/tasks", {"title": title, "detail": detail, "objects": objects,
+                                   "assignee": assignee, "brief": brief}, doing=f"planning {title}")
 
 
 @mcp.tool()
@@ -445,13 +448,41 @@ def take_over(participant: str) -> dict:
     return call("POST", "/takeover", {"target": participant}, doing=f"taking over {participant}")
 
 
+@mcp.tool()
+def set_brief_plan(brief_id: str, plan_json: dict | str) -> dict:
+    """Record the plan for a brief: {"parts": [{"name", "task", "summary"}]}. Planners call this last."""
+    return call("POST", f"/briefs/{brief_id}/plan", {"plan_json": plan_json}, doing="writing the plan")
+
+
+@mcp.tool()
+def check_printability(names: list[str] | None = None, min_wall: float = 1.2) -> dict:
+    """Can these parts be 3D printed? Checks each part against the printer bed, that it is a closed
+    solid, and lists suspected walls thinner than `min_wall` mm."""
+    return call("POST", "/printability", {"names": names, "min_wall": min_wall},
+                doing="checking printability", targets=names)
+
+
+@mcp.tool()
+def accept_handoff(handoff_id: str) -> dict:
+    """Pick up a person's handed-off work: their locked parts and in-progress tasks become yours.
+    Call this first when your instructions name a handoff id."""
+    return call("POST", f"/handoffs/{handoff_id}/accept", {}, doing="picking up handed-off work")
+
+
+@mcp.tool()
+def report_review(brief_id: str, round: int, passed: bool, findings: list[dict]) -> dict:
+    """Reviewer only: record the review verdict for a brief. findings: [{"object", "problem", "task_id"}]."""
+    return call("POST", "/reviews", {"brief_id": brief_id, "round": round, "passed": passed,
+                                     "findings": findings}, doing="reporting the review")
+
+
 def main():
     global S
     S = Session()
     try:
         ident = S.connect()
     except HubRequestError as e:
-        print(f"cadswarm: could not join hub {S.cfg['hub']}: {e}", file=sys.stderr)
+        print(f"cadswarm: could not join the team at {S.cfg['uri']} / {S.cfg['db']}: {e}", file=sys.stderr)
         raise SystemExit(1)
     print(f"cadswarm: joined as {ident['name']} ({ident['participant_id']}, fence {ident['fence']})", file=sys.stderr)
     threading.Thread(target=S.heartbeat_loop, daemon=True).start()

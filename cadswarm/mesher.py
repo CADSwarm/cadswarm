@@ -21,7 +21,7 @@ import threading
 import urllib.request
 import zipfile
 
-from ..paths import app_dir
+from .paths import app_dir
 
 GMSH_VERSION = "4.15.2"
 _PYPI = "https://files.pythonhosted.org/packages/"

@@ -1,6 +1,6 @@
 """UserPromptSubmit hook for Claude Code and Codex.
 
-Prints the hub's team-context block (who holds which parts, open tasks, what
+Prints the team-context block (read from SpacetimeDB through SpaceHub) (who holds which parts, open tasks, what
 changed since this agent's last prompt, unread messages) to stdout, which both
 CLIs add to the model's context. Contract borrowed from Amoeba's prompt hooks:
 
@@ -48,17 +48,18 @@ def main():
         payload = {}
     start = payload.get("cwd") if isinstance(payload, dict) else None
     try:
-        from cadswarm.client import find_project_dir, project_client
+        from cadswarm.client import find_project_dir
+        from cadswarm.space_hub import project_hub
         project = find_project_dir(start or os.getcwd())
         if not project:
             return
-        client, _cfg = project_client(project)
-        if not client or not client.identity.get("participant_id"):
+        hub, _cfg = project_hub(project)
+        if not hub or not hub.identity.get("participant_id"):
             return  # the MCP server has not joined yet
-        if client.identity.get("fence") is None:
-            return  # never join here: that would bump the fence and supersede the live MCP server
-        client.timeout = 1.8
-        text = client.get("/context")["context"]
+        if hub.identity.get("fence") is None:
+            return  # never rejoin here: that would bump the fence and supersede the live MCP server
+        hub.space.timeout = 1.8
+        text = hub.get("/context")["context"]
         hint = fea_hint(payload.get("prompt") if isinstance(payload, dict) else None)
         text = text[:6000 - len(hint)] + hint
         # Windows pipes default to the ANSI codepage; the CLIs read hook output as UTF-8.

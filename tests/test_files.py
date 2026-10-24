@@ -5,10 +5,9 @@ import sqlite3
 
 import pytest
 
-from cadswarm.hub.core import Hub, HubError
-from cadswarm.hub.files import unique_path
+from cadswarm.files import unique_path
 from cadswarm.paths import project_layout, resolve_project_folder
-from test_core import Clock, FakeWorker
+from filehub import Clock, FileHub, HubError
 
 
 @pytest.fixture
@@ -16,7 +15,7 @@ def env(tmp_path):
     lay = project_layout(tmp_path / "Phone stand")
     os.makedirs(lay["internal"])
     clock = Clock()
-    hub = Hub(FakeWorker(), lay["db"], "secret", clock=clock, layout=lay)
+    hub = FileHub(lay, clock)
     a = hub.join("secret", "alice-claude")["participant_id"]
     b = hub.join("secret", "bob-codex")["participant_id"]
     return hub, lay, clock, a, b
@@ -89,7 +88,6 @@ def test_replace_needs_the_current_version_and_keeps_history(env):
     with pytest.raises(HubError):  # alice still thinks it's v1: refused, bob's work survives
         hub.save_file(a, "plan.md", text="alice v2", if_exists="replace", expected_version=1)
     assert hub.read_file("plan.md")["text"] == "v2"
-    assert any("replaced your file plan.md" in m["body"] for m in hub.inbox(a))
     hist = hub.file_history("plan.md")
     assert [h["version"] for h in hist["older_versions"]] == [1]
     clock.t += 1
@@ -152,8 +150,7 @@ def test_writes_are_atomic_no_temp_left_behind(env):
 
 def test_snapshots_and_unique_names_never_collide(env, tmp_path):
     hub, lay, _, a, _ = env
-    hub.worker.doc_path = str(tmp_path / "model.FCStd")
-    with open(hub.worker.doc_path, "w") as f:
+    with open(lay["model"], "w") as f:
         f.write("model")
     first, second = hub.snapshot(a, "before lid"), hub.snapshot(a, "before lid")
     assert first["file"] != second["file"] and first["file"].startswith("snapshots/")
@@ -162,12 +159,6 @@ def test_snapshots_and_unique_names_never_collide(env, tmp_path):
     p1 = unique_path(str(d), "model.step")
     open(p1, "w").close()
     assert unique_path(str(d), "model.step").endswith("model-2.step")
-
-
-def test_file_saves_show_in_team_context(env):
-    hub, _, _, a, b = env
-    hub.save_file(a, "parts/base/notes.md", text="hi")
-    assert "saved files/parts/base/notes.md (v1)" in hub.context(b)
 
 
 def test_resolve_project_folder_never_mixes_with_other_files(tmp_path):

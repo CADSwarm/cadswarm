@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from cadswarm import config
-from cadswarm.hub.worker_client import WorkerClient, WorkerError
+from cadswarm.worker_client import WorkerClient, WorkerError
 
 try:
     config.find_freecad_python()

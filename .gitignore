@@ -6,3 +6,5 @@ cadswarm-data/
 exports/
 .cadswarm/
 target/
+host-data/
+host/target/
