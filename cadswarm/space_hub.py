@@ -273,8 +273,12 @@ class SpaceHub(LibraryRoutes):
         return {"object": body.get("object") or "", "point": point, "mode": mode}
 
     def _point_after(self, kind, r):
-        """After an op, rest this member's pointer on the vertex the worker picked for it."""
-        target = r.get("pointer") if isinstance(r, dict) else None
+        """After an op, rest this member's pointer on the vertex the worker picked for it. The worker puts it in the
+        op's own result ({"result": {"pointer": ...}, "created": ...}); the module set the pointer idle when the op
+        finished, so without this an agent's arrow only shows for the second or so its op runs."""
+        inner = r.get("result") if isinstance(r, dict) else None
+        target = (inner.get("pointer") if isinstance(inner, dict) else None) or (
+            r.get("pointer") if isinstance(r, dict) else None)
         if isinstance(target, dict) and target.get("object") and len(target.get("point") or []) == 3:
             self.move_pointer(target["object"], target["point"], "pointing", kind.replace("_", " "))
 

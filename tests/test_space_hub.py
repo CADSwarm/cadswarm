@@ -589,3 +589,14 @@ def test_a_request_can_be_stopped_as_a_whole(world):
     r = hub.post("/briefs/b_1/cancel")
     assert fake.calls[-1] == ("cancel_brief", (2, "b_1")) and r == {"brief": "b_1", "status": "cancelled"}
 
+
+def test_after_an_op_the_pointer_rests_on_the_vertex_the_worker_picked(world):
+    hub, fake = world
+    # The worker's op result as the module stores it: the pointer sits inside the op's own result.
+    r = {"created": ["BBS_Wheel"], "modified": [], "revs": {"BBS_Wheel": 1},
+         "result": {"name": "BBS_Wheel", "pointer": {"object": "BBS_Wheel", "point": [228.6, 0.0, 215.9]}}}
+    hub._point_after("run_part_script", r)
+    assert fake.calls[-1] == ("move_pointer", (2, "BBS_Wheel", [228.6, 0.0, 215.9], "pointing", "run part script"))
+    fake.calls.clear()
+    hub._point_after("set_param", {"modified": ["Params"], "result": {"alias": "wall"}})  # nothing to point at
+    assert fake.calls == []
