@@ -91,7 +91,7 @@ def say(msg):
     if app is None or QtCore.QThread.currentThread() != app.thread():
         return
     try:
-        Gui.getMainWindow().statusBar().showMessage(f"CadSwarm: {msg}", TOAST_SECONDS * 1000)
+        Gui.getMainWindow().statusBar().showMessage(f"CADSwarm: {msg}", TOAST_SECONDS * 1000)
     except Exception:
         pass
     if SESSION.panel is not None:
