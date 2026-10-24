@@ -163,7 +163,21 @@ fn run(cfg: &HostConfig) -> Result<()> {
     // Ops this process already tried: never run one twice, even if it still reads `queued`
     // (start_op refused it, or the cache lags).
     let mut tried: HashSet<String> = HashSet::new();
+    // When the sweep retires this host (its laptop slept past the orphan window), every reducer
+    // call fails with `left:` until it rejoins; retry at most every 10s.
+    let mut last_revive: Option<std::time::Instant> = None;
     loop {
+        if space.retired() {
+            if last_revive.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
+                last_revive = Some(std::time::Instant::now());
+                match space.revive() {
+                    Ok(()) => println!("[host] rejoined after being retired (fence {})", space.fence()),
+                    Err(e) => eprintln!("[host] rejoin failed: {e:#}"),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         if let Some(op) = space.queued_ops().into_iter().find(|o| !tried.contains(&o.id)) {
             tried.insert(op.id.clone());
             if let Err(e) = executor::run_op(&space, &mut worker, helper.as_mut(), cfg, &op) {

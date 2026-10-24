@@ -69,6 +69,13 @@ const QUERIES: &[&str] = &[
     "SELECT * FROM v_param",
 ];
 
+/// Whether a host whose latest member row has this status should call `rejoin` by itself.
+/// Only "left": the sweep retired it (e.g. the laptop slept past the orphan window). Never
+/// "taken_over": a newer process replaced this one, and fighting it would flap the team.
+pub fn should_rejoin(status: Option<&str>) -> bool {
+    status == Some("left")
+}
+
 impl Space {
     /// Connect as the running host: rejoin at a new fence, superseding any older host process.
     pub fn connect(cfg: &HostConfig) -> Result<Space> {
@@ -101,14 +108,14 @@ impl Space {
             space.wait_for(Duration::from_secs(20), |s| s.me().is_some())?;
             return Ok(space);
         }
-        // Wait for the subscription so `before` is the real fence, but do not require it: a member
-        // row the sweep retired ("left") is invisible in `v_me`, and that must not stop a host from
-        // starting — `rejoin` recreates the row. Without this a host that has been offline long
-        // enough to be orphaned could never start again.
+        // Wait for the subscription so `before` is the real row, but do not require it: a fresh
+        // database may have no row yet, and `rejoin` creates one.
         let _ = space.wait_for(Duration::from_secs(10), |s| s.me().is_some());
-        let before = space.fence();
+        let before = space.row_key();
         space.rejoin("host")?;
-        space.wait_for(Duration::from_secs(20), |s| s.fence() > before)?;
+        // An active row comes back with a higher fence; a retired ("left") one comes back as a new
+        // row whose fence starts again at 1, so "fence went up" alone would never be seen.
+        space.wait_for(Duration::from_secs(20), |s| !s.retired() && s.row_key().is_some() && s.row_key() != before)?;
         Ok(space)
     }
 
@@ -129,6 +136,22 @@ impl Space {
 
     pub fn fence(&self) -> u32 {
         self.me().map(|m| m.fence).unwrap_or(0)
+    }
+
+    /// True when the sweep has retired this host's member row, so every reducer call would fail.
+    pub fn retired(&self) -> bool {
+        should_rejoin(self.me().as_ref().map(|m| m.status.as_str()))
+    }
+
+    /// Rejoin as host after being retired, and wait until the new row is visible.
+    pub fn revive(&self) -> Result<()> {
+        self.rejoin("host")?;
+        self.wait_for(Duration::from_secs(20), |s| !s.retired() && s.me().is_some())
+    }
+
+    /// This process's member row and fence; a rejoin always changes one of them.
+    fn row_key(&self) -> Option<(u64, u32)> {
+        self.me().map(|m| (m.id, m.fence))
     }
 
     pub fn bed(&self) -> [f64; 3] {
@@ -337,5 +360,19 @@ impl Space {
     /// The shared Params as `{alias: number}`, for the design index.
     pub fn params_map(&self) -> serde_json::Value {
         serde_json::Value::Object(self.conn.db.v_param().iter().map(|p| (p.alias, serde_json::json!(p.num))).collect())
+    }
+}
+
+#[cfg(test)]
+mod rejoin_tests {
+    use super::should_rejoin;
+
+    #[test]
+    fn only_a_retired_host_rejoins_by_itself() {
+        assert!(should_rejoin(Some("left")));
+        assert!(!should_rejoin(Some("taken_over")));
+        assert!(!should_rejoin(Some("active")));
+        assert!(!should_rejoin(Some("stale")));
+        assert!(!should_rejoin(None));
     }
 }
