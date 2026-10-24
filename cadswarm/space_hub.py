@@ -457,7 +457,7 @@ class SpaceHub:
         helper read it) or done (the helper said it handled it)."""
         names = self._names()
         members = [m for m in self._rows("v_member") if m["status"] not in ("left", "taken_over")]
-        agents = [m["id"] for m in members if m["kind"] != "human"]
+        agents = [m["id"] for m in members if m["kind"] not in ("human", "host")]  # the team server never reads them
         receipts = {(r["message_id"], r["member"]): r["state"] for r in self._rows("v_receipt")}
         mine = sorted((m for m in self._rows("v_message") if m["from"] == self.me_id and m["kind"] == "steer"),
                       key=lambda m: m["created_ms"], reverse=True)[:int(limit)]

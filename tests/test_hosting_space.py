@@ -207,7 +207,7 @@ def test_start_team_maincloud_starts_only_the_host(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hosting, "find_tool", lambda name, env: name)
     monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
-    monkeypatch.setattr(hosting, "publish", lambda db, mode: published.append((db, mode)))
+    monkeypatch.setattr(hosting, "publish", lambda db, mode, data_dir=None: published.append((db, mode)))
     monkeypatch.setattr(hosting, "_spawn", spawn)
     monkeypatch.setattr(hosting.subprocess, "run", lambda argv, **kw: (runs.append(argv), ok(argv))[1])
 
@@ -233,7 +233,7 @@ def test_start_team_local_starts_spacetime_only_when_nothing_listens(tmp_path, m
     spawns = []
     monkeypatch.setattr(hosting, "find_tool", lambda name, env: name)
     monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
-    monkeypatch.setattr(hosting, "publish", lambda db, mode: None)
+    monkeypatch.setattr(hosting, "publish", lambda db, mode, data_dir=None: None)
     monkeypatch.setattr(hosting, "port_open", lambda port, host="127.0.0.1", timeout=0.5: False)
     monkeypatch.setattr(hosting, "_wait_port", lambda *a, **k: True)
     monkeypatch.setattr(hosting.subprocess, "run", lambda argv, **kw: ok(argv))
@@ -308,3 +308,29 @@ def test_the_host_is_pointed_at_this_checkouts_board_library(monkeypatch):
     assert hosting.host_env()["CADSWARM_BOARDS"] == os.path.join(hosting.ROOT, "boards", "boards.json")
     monkeypatch.setenv("CADSWARM_BOARDS", "/mine.json")  # an explicit library wins
     assert hosting.host_env()["CADSWARM_BOARDS"] == "/mine.json"
+
+
+def test_an_existing_team_is_republished_as_its_own_host_identity(tmp_path, monkeypatch):
+    """Only the database's owner may update it; the CLI's sign-in may be someone else by now."""
+    wasm = tmp_path / "m.wasm"
+    wasm.write_bytes(b"\0asm")
+    (tmp_path / "host.json").write_text(json.dumps({"db": "cadswarm-x-1", "token": "owner-token",
+                                                    "uri": "http://127.0.0.1:3000"}))
+    monkeypatch.setattr(hosting, "module_wasm", lambda: str(wasm))
+    monkeypatch.setattr(hosting.subprocess, "run", lambda *a, **k: pytest.fail("must not use the CLI's sign-in"))
+    sent = []
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"{}"
+    monkeypatch.setattr(hosting.urllib.request, "urlopen",
+                        lambda req, timeout=None: sent.append((req.get_method(), req.full_url,
+                                                               req.get_header("Authorization"))) or Reply())
+    hosting.publish("cadswarm-x-1", "local", str(tmp_path))
+    assert sent == [("PUT", "http://127.0.0.1:3000/v1/database/cadswarm-x-1", "Bearer owner-token")]

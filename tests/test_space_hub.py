@@ -339,3 +339,13 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     assert (briefs[0]["tasks"], briefs[0]["done"], briefs[0]["by"]) == (2, 1, "carol")
     r = hub.post("/briefs", {"text": "a lid"})
     assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]
+
+
+def test_the_team_server_is_not_one_of_all_helpers(world):
+    hub, fake = world
+    fake.tables["v_member"].append(member(9, "host", kind="host"))
+    fake.tables["v_message"] = [{"id": "m_9", "from": 1, "to": "all", "kind": "steer", "body": "check clashes",
+                                 "task_id": "", "created_ms": 1}]
+    fake.tables["v_receipt"] = [{"message_id": "m_9", "member": 2, "state": "consumed"}]
+    cmd = hub.get("/commands")["commands"][0]
+    assert set(cmd["by_helper"]) == {"alice-claude", "bob-codex"}  # every AI helper, never the host

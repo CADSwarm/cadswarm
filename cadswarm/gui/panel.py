@@ -773,7 +773,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.to.clear()
         self.to.addItem("Everyone", "all")
         self.cmd_to.clear()
-        helpers = [p for p in s.model["participants"] if p.get("kind") != "human" and p["name"] != me]
+        helpers = [p for p in s.model["participants"] if takes_instructions(p) and p["name"] != me]
         for p in s.model["participants"]:
             state, text = helper_state(p)
             name = f"{p['name']}{' (you)' if p['name'] == me else ''}"
@@ -988,7 +988,7 @@ class TeamPanel(QtGui.QDockWidget):
         while item.parent() is not None:
             item = item.parent()
         p = self.session.participant(item.data(0, QtCore.Qt.UserRole))
-        if p and p.get("kind") != "human":
+        if p and takes_instructions(p):
             idx = self.cmd_to.findData(p["name"])
             if idx >= 0:
                 self.cmd_to.setCurrentIndex(idx)
@@ -1064,7 +1064,7 @@ class TeamPanel(QtGui.QDockWidget):
         helper = t.get("assignee") or t.get("owner_name")
         p = self.session.participant(helper) if helper else None
         if not p or p.get("kind") == "human":
-            helpers = [x["name"] for x in self.session.model["participants"] if x.get("kind") != "human"]
+            helpers = [x["name"] for x in self.session.model["participants"] if takes_instructions(x)]
             if not helpers:
                 hint("No AI helper has joined yet. Add one with Team tools ▸ Add an AI helper.")
                 return
@@ -1155,6 +1155,11 @@ PANEL_STYLE = """
 #cadswarmPanel QGroupBox { font-size: 11pt; font-weight: bold; padding-top: 14px; }
 """
 TEAM_REQUEST = "__team_request__"
+
+
+def takes_instructions(p):
+    """AI helpers and the reviewer take instructions; people and the team server itself never do."""
+    return p.get("kind") not in ("human", "host")
 BRIEF_WORDS = {"new": "⏳ waiting for the team server", "planning": "🧠 planning the parts",
                "building": "🔨 building", "reviewing": "🔍 checking the result", "ready": "✓ done",
                "failed": "✗ stopped (see Activity)"}
@@ -1215,7 +1220,7 @@ class NewTaskDialog(QtGui.QDialog):
             form.addRow("Parts involved (optional)", self.parts)
         self.who = QtGui.QComboBox()
         me = session.ident["name"] if session.ident else None
-        helpers = [p for p in session.model.get("participants", []) if p.get("kind") != "human"]
+        helpers = [p for p in session.model.get("participants", []) if takes_instructions(p)]
         ready = sorted(helpers, key=lambda p: {"ready": 0, "working": 1, "away": 2}[helper_state(p)[0]])
         for p in ready:
             self.who.addItem(f"🤖 {p['name']} — {helper_state(p)[1]}", ("helper", p["name"]))
