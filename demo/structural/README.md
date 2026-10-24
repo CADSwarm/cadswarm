@@ -1,5 +1,7 @@
 # Recorded structural optimization demonstration
 
+For the installed FreeCAD application, see the later [visible desktop verification](desktop-verification.md), including mouse-driven CalculiX runs, reject/accept, saved geometry checks and the latest regression results.
+
 Actual execution on Windows with FreeCAD 1.1.4, bundled Python 3.11, NumPy 1.26.4, SciPy 1.16.3 and CalculiX 2.22. The official portable FreeCAD archive was SHA-256 checked before use. Executables and generated CAD files are not vendored. Reproduce with `python -m cadswarm.structural.demo --freecad --solver calculix --output <new-directory>` using FreeCAD's Python and the environment described in [setup](../../docs/structural-optimization.md).
 
 The model is an exact 72 × 24 × 24 mm rectangular cantilever, 3 mm grid pitch (1,536 original C3D8 elements), fully fixed on x-min and carrying a uniform total force of -200 N along z on x-max. Illustrative aluminum properties: E = 70,000 MPa, ν = 0.33, yield = 240 MPa, density = 2.7e-6 kg/mm³. Limits: 80 MPa, 0.05 mm, factor of safety 2, maximum stress ratio 1.25 and displacement ratio 1.15. Target removal: 10%.

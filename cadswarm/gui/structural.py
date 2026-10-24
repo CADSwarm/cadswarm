@@ -32,6 +32,7 @@ class OptimizeDialog(QtGui.QDialog):
         self.source_doc, self.source_name = obj.Document.Name, obj.Name
         self.source_brep = obj.Shape.exportBrepToString()
         self.preview_doc = None
+        self.preview_shapes = None
         self.process = None
         self.result = None
         self.cancelling = False
@@ -47,11 +48,14 @@ class OptimizeDialog(QtGui.QDialog):
             if before != self.revision:
                 raise ValueError("Source changed while reading it; select it again")
         layout = QtGui.QVBoxLayout(self)
+        self.inputs = QtGui.QWidget()
+        inputs_layout = QtGui.QVBoxLayout(self.inputs)
+        inputs_layout.setContentsMargins(0, 0, 0, 0)
         note = QtGui.QLabel("Exact grid-aligned solids only. Fixed/loaded sides are whole extreme faces in world coordinates.\n"
                            "All existing surfaces, holes and one cell of skin are retained. Curved boundaries are rejected.\n"
                            "Enter explicit engineering inputs below, or load the clearly labeled cantilever demo assumptions.")
         note.setWordWrap(True)
-        layout.addWidget(note)
+        inputs_layout.addWidget(note)
         form = QtGui.QFormLayout()
         self.fields = {}
         labels = [("name", "Material name"), ("young_mpa", "Young's modulus (MPa)"), ("poisson", "Poisson ratio"),
@@ -75,7 +79,7 @@ class OptimizeDialog(QtGui.QDialog):
         self.preserve = QtGui.QLineEdit("[]")
         self.preserve.setToolTip("JSON: [[[xmin,ymin,zmin],[xmax,ymax,zmax]], ...] in mm; retain every intersecting solid cell")
         form.addRow("Preserve boxes (world mm, JSON)", self.preserve)
-        layout.addLayout(form)
+        inputs_layout.addLayout(form)
         row = QtGui.QHBoxLayout()
         demo = QtGui.QPushButton("Load demo assumptions")
         demo.clicked.connect(self.load_demo)
@@ -83,10 +87,20 @@ class OptimizeDialog(QtGui.QDialog):
         self.start_button.clicked.connect(self.start)
         row.addWidget(demo)
         row.addWidget(self.start_button)
-        layout.addLayout(row)
+        inputs_layout.addLayout(row)
+        layout.addWidget(self.inputs)
+        self.inputs_button = QtGui.QPushButton("Hide inputs")
+        self.inputs_button.clicked.connect(lambda: self.set_inputs_visible(self.inputs.isHidden()))
+        layout.addWidget(self.inputs_button)
         self.log = QtGui.QPlainTextEdit()
         self.log.setReadOnly(True)
         layout.addWidget(self.log)
+        self.section_button = QtGui.QPushButton("Show section view (display only)")
+        self.section_button.setCheckable(True)
+        self.section_button.setEnabled(False)
+        self.section_button.setToolTip("Expose the internal cavity in preview copies. Analysis, acceptance and exports use the full solid.")
+        self.section_button.toggled.connect(self.show_section)
+        layout.addWidget(self.section_button)
         row = QtGui.QHBoxLayout()
         self.accept_button = QtGui.QPushButton("Accept as new part" + (" and share" if self.client else ""))
         self.accept_button.setEnabled(False)
@@ -99,6 +113,12 @@ class OptimizeDialog(QtGui.QDialog):
         for button in (self.accept_button, self.files_button, reject):
             row.addWidget(button)
         layout.addLayout(row)
+
+    def set_inputs_visible(self, visible):
+        self.inputs.setVisible(visible)
+        self.inputs_button.setText("Hide inputs" if visible else "Show inputs / run again")
+        self.layout().activate()
+        self.resize(760, 820 if visible else 350)
 
     def load_demo(self):
         for key, value in {**DEMO["material"], **DEMO["constraints"], "pitch_mm": 3, "force": "[0, 0, -200]"}.items():
@@ -166,6 +186,7 @@ class OptimizeDialog(QtGui.QDialog):
         try:
             report = json.loads((self.output / "report.json").read_text(encoding="utf-8"))
             self.log.setPlainText((self.output / "report.md").read_text(encoding="utf-8"))
+            self.set_inputs_visible(False)
             self.files_button.setEnabled(True)
             if report["status"] != "improved":
                 return
@@ -174,6 +195,7 @@ class OptimizeDialog(QtGui.QDialog):
             if not shape.isValid() or len(shape.Solids) != 1:
                 raise ValueError("Invalid reconstructed output")
             self.result = (report, shape.exportBrepToString())
+            self.preview_shapes = (self.source_brep, self.result[1])
             self.preview_doc = App.newDocument("CADSwarmOptimizationPreview").Name
             doc = App.getDocument(self.preview_doc)
             original = doc.addObject("Part::Feature", "Original")
@@ -189,10 +211,37 @@ class OptimizeDialog(QtGui.QDialog):
             doc.recompute()
             Gui.activeDocument().activeView().viewIsometric()
             Gui.activeDocument().activeView().fitAll()
+            self.section_button.setEnabled(True)
             self.accept_button.setEnabled(True)
         except Exception as exc:
             self.log.appendPlainText("Preview failed: " + str(exc))
             self.result = None
+
+    def show_section(self, enabled):
+        if not self.preview_doc or not self.preview_shapes:
+            return
+        try:
+            doc = App.getDocument(self.preview_doc)
+            source, candidate = Part.Shape(), Part.Shape()
+            source.importBrepFromString(self.preview_shapes[0])
+            candidate.importBrepFromString(self.preview_shapes[1])
+            bb = source.BoundBox
+            offset = bb.XLength * 1.2
+            if enabled:
+                margin = max(bb.XLength, bb.YLength, bb.ZLength) * .01
+                cutter = Part.makeBox(bb.XLength + 2*margin, bb.YLength + 2*margin,
+                                      bb.ZLength/2 + margin,
+                                      App.Vector(bb.XMin-margin, bb.YMin-margin, bb.ZMin+bb.ZLength/2))
+                source = source.cut(cutter)
+                candidate = candidate.cut(cutter)
+            candidate.translate(App.Vector(offset, 0, 0))
+            doc.Original.Shape, doc.Optimized.Shape = source, candidate
+            suffix = " — section display" if enabled else ""
+            doc.Original.Label, doc.Optimized.Label = "Original" + suffix, "Optimized" + suffix
+            doc.recompute()
+            self.section_button.setText("Show whole models" if enabled else "Show section view (display only)")
+        except Exception as exc:
+            self.log.appendPlainText("Section preview failed: " + str(exc))
 
     def accept_design(self):
         if not self.result:
@@ -243,6 +292,9 @@ class OptimizeDialog(QtGui.QDialog):
         if self.preview_doc and App.getDocument(self.preview_doc):
             App.closeDocument(self.preview_doc)
         self.preview_doc = None
+        self.preview_shapes = None
+        self.section_button.setEnabled(False)
+        self.section_button.setChecked(False)
 
     def reject(self):
         if self.process and self.process.state() != QtCore.QProcess.NotRunning:
@@ -281,3 +333,24 @@ class OptimizeCommand:
 
 def register_command():
     Gui.addCommand("CadSwarm_OptimizePart", OptimizeCommand())
+    Gui.addCommand("CadSwarm_OptimizationDemo", OptimizationDemoCommand())
+
+
+class OptimizationDemoCommand:
+    def GetResources(self):
+        return {"MenuText": "New optimization demo", "ToolTip": "Create a new 72 × 24 × 24 mm cantilever; use Load demo assumptions in Optimize Part"}
+
+    def IsActive(self):
+        return True
+
+    def Activated(self):
+        doc = App.newDocument("StructuralOptimizationDemo")
+        doc.Label = "Structural optimization demo"
+        obj = doc.addObject("Part::Box", "Original")
+        obj.Label = "Original — select to optimize"
+        obj.Length, obj.Width, obj.Height = 72, 24, 24
+        doc.recompute()
+        Gui.Selection.clearSelection()
+        Gui.Selection.addSelection(obj)
+        Gui.activeDocument().activeView().viewIsometric()
+        Gui.activeDocument().activeView().fitAll()

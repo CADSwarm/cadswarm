@@ -11,6 +11,17 @@ Gui.showMainWindow()
 from PySide import QtCore, QtGui
 from cadswarm.gui import structural
 
+# FreeCAD executes add-on InitGui files with separate globals and locals.
+# Exercise that loader rather than only importing the dialog directly.
+for workbench in ("CadSwarmWorkbench", "CadSwarmOptimizationWorkbench"):
+    if workbench in Gui.listWorkbenches():
+        Gui.removeWorkbench(workbench)
+exec((Path(__file__).resolve().parents[1] / "InitGui.py").read_text(encoding="utf-8"),
+     {"__name__": "__main__"}, {})
+assert "CadSwarmOptimizationWorkbench" in Gui.listWorkbenches()
+structural.register_command()
+assert "CadSwarm_OptimizePart" in Gui.listCommands()
+
 root = Path(sys.argv[1])
 def mark(stage):
     with (root / "gui-stages.log").open("a", encoding="utf-8") as out:
@@ -38,6 +49,10 @@ def run_dialog():
             break
         time.sleep(.02)
     assert dlg.result is not None, dlg.log.toPlainText()
+    assert dlg.inputs.isHidden()
+    dlg.set_inputs_visible(True)
+    assert not dlg.inputs.isHidden()
+    dlg.set_inputs_visible(False)
     assert dlg.accept_button.isEnabled()
     assert len(App.getDocument(dlg.preview_doc).Objects) == 2
     return dlg
@@ -46,6 +61,14 @@ def run_dialog():
 dlg = run_dialog()
 mark("preview complete")
 assert len(doc.Objects) == 1  # preview never changes source document
+full_brep = dlg.result[1]
+full_preview_volume = App.getDocument(dlg.preview_doc).Optimized.Shape.Volume
+dlg.section_button.setChecked(True)
+assert App.getDocument(dlg.preview_doc).Optimized.Shape.Volume < full_preview_volume
+assert dlg.result[1] == full_brep and obj.Shape.Volume == original_volume
+dlg.section_button.setChecked(False)
+assert abs(App.getDocument(dlg.preview_doc).Optimized.Shape.Volume - full_preview_volume) < 1e-6
+dlg.section_button.setChecked(True)  # accepting while sectioned must still create the full analyzed solid
 dlg.accept_design()
 mark("accept complete")
 assert not dlg.accept_button.isEnabled(), dlg.log.toPlainText()
@@ -53,6 +76,7 @@ assert len(doc.Objects) == 2
 assert obj.Shape.Volume == original_volume
 optimized = next(o for o in doc.Objects if o.Name != "Source")
 assert optimized.Shape.isValid() and optimized.Shape.Volume < original_volume
+assert abs(optimized.Shape.Volume - full_preview_volume) < 1e-6
 assert json.loads(optimized.StructuralReport)["status"] == "improved"
 dlg.reject()
 mark("accepted dialog closed")
@@ -86,3 +110,9 @@ mark("saved accepted document")
     "cancelled": True, "original_preserved": True, "original_volume_mm3": original_volume,
     "optimized_volume_mm3": optimized.Shape.Volume}), encoding="utf-8")
 App.closeDocument(doc.Name)
+
+structural.OptimizationDemoCommand().Activated()
+demo = App.ActiveDocument
+assert demo.Original.Shape.Volume == 41472
+assert Gui.Selection.getSelection() == [demo.Original]
+App.closeDocument(demo.Name)

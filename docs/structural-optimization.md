@@ -14,7 +14,9 @@ All original surfaces, hole walls, load/support cells and at least one cell of s
 
 ## Installation
 
-Install CADSwarm normally in FreeCAD 1.x. The workbench registers the command without importing numerical packages into the collaboration panel. FreeCAD's Python must have NumPy and SciPy; the official Windows FreeCAD 1.1.4 portable distribution tested here includes both.
+Install CADSwarm normally in FreeCAD 1.x: close FreeCAD, double-click **Install CadSwarm.cmd** in the checkout, then reopen FreeCAD. On Windows FreeCAD 1.1 the add-on normally lives in `%APPDATA%\FreeCAD\v1-1\Mod\CadSwarm`. The installed copy must contain `InitGui.py` and the `cadswarm` directory directly inside it. Restart after updating the copy. Installation registers **CADSwarm Optimization** in the workbench dropdown on every launch; no Python console, macro, team session or AI connection is needed for local optimization. The separate **CadSwarm** workbench retains the collaboration workflow.
+
+The workbench registers the command without importing numerical packages into the collaboration panel. FreeCAD's Python must have NumPy and SciPy; both the official portable and installed Windows FreeCAD 1.1.4 runtimes tested here include them, along with `bin\ccx.exe` (CalculiX 2.22). The installed runtime was found at `C:\Program Files\FreeCAD 1.1\bin`; no extra solver installation or environment variables were needed for its GUI.
 
 Check dependencies using FreeCAD's **bundled Python**, not an unrelated system Python:
 
@@ -41,16 +43,27 @@ Restart FreeCAD after setting environment variables so its analysis subprocess i
 
 ## FreeCAD workflow
 
-1. Select one solid, either in an ordinary document or CADSwarm's live mirror.
-2. Choose **CadSwarm → Optimize Part…**.
+1. Choose **CADSwarm Optimization** in FreeCAD's workbench dropdown. Select one solid in an ordinary document. For a ready-to-run example, click **Optimization → New optimization demo** (also in the toolbar); this creates and selects a 72 × 24 × 24 mm box in a new document.
+2. Choose **Optimization → Optimize Part…** or the **Optimize Part…** toolbar button. In a collaboration session, select a solid in CADSwarm's live mirror and use **CadSwarm → Optimize Part…** instead.
 3. Supply the material, force vector, whole extreme support/load faces, grid pitch, maximum stress/displacement, factor of safety, target removal fraction, and allowed stress/displacement ratios. Enter extra preserve boxes as JSON, e.g. `[[[0,0,0],[12,24,24]]]`.
 4. Click **Analyze and optimize**. Progress and errors are shown while the UI and team session remain responsive. Cancel requests are honored at the next solver/geometry checkpoint; a running CalculiX call has a 90-second timeout.
-5. Review the original and translated candidate in a separate preview document, plus the numerical report. The candidate's actual placement is preserved; translation is for comparison only. Open the output folder to inspect the stress SVG, fields, STEP and STL.
+5. Review the original and translated candidate in a separate preview document, plus the numerical report. Completed runs collapse the input form to leave more room for the model; **Show inputs / run again** restores it. Click **Show section view (display only)** to expose the enclosed cavity, and **Show whole models** to restore the full preview. Only preview copies are sectioned; analysis, acceptance and exports always use the complete solid. The candidate's actual placement is preserved; translation is for comparison only. **Open report, stress plot and exports** opens the output folder containing `report.md`, `report.json`, `stress.svg`, fields, STEP and STL.
 6. **Accept as new part** creates a new independent `Part::Feature`. Save the original document to persist local acceptance. For a live mirror, **Accept as new part and share** sends the accepted BREP through the existing `/ops` → `run_part_script` transaction. Reject closes the preview without changing the source or team model.
 
 Output folders live under `%APPDATA%\CadSwarm\structural\<run-id>` on Windows (the existing CADSwarm application-data location elsewhere). Each run is unique. Rejected/cancelled evidence is retained locally for inspection; it is not shared. An `acceptance.json` receipt records a successful user acceptance separately from the immutable analysis report.
 
 If the baseline violates absolute limits, the result is `baseline_infeasible`. If no candidate passes, it is `no_improvement`, displayed as **No verified improvement found**. Neither outcome enables acceptance. A passing candidate may miss or exceed the requested target because removal is discrete; `target_reached` and the actual percentage are reported independently.
+
+### Repeat the desktop demonstration
+
+1. Launch FreeCAD normally and select **CADSwarm Optimization**.
+2. Click **New optimization demo**, then **Optimize Part…**, then **Load demo assumptions**.
+3. Keep **calculix**, `x_min` fixed and the `x_max` force `[0, 0, -200]` N. The demo uses aluminum properties, a 3 mm grid, an 80 MPa stress limit, a 0.05 mm displacement limit, and a 10% removal target.
+4. Click **Analyze and optimize** and wait for the numerical report and preview.
+5. Click **Show section view (display only)**. The gray original and blue candidate now reveal the removed interior material. Drag the results window aside if it obscures the models.
+6. Click **Reject / cancel** to close the preview with no source changes, or **Accept as new part** to add the full candidate to the source document. After acceptance, closing the dialog only closes the preview; it does not undo acceptance. Switch to the source document tab and use **File → Save as…**. The accepted object includes a `Structural Report` property. Hide the original with the Space key if the overlapping solids obscure the accepted part.
+
+The enclosed cavity is intentional: the current engine preserves all original outer surfaces. The section is a viewing aid, not an opening cut into the manufactured design. No structural conclusion is inferred from its appearance.
 
 ## API
 

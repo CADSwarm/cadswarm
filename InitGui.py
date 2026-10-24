@@ -37,3 +37,23 @@ static char * icon_xpm[] = {
 
 
 Gui.addWorkbench(CadSwarmWorkbench())
+
+
+class CadSwarmOptimizationWorkbench(Gui.Workbench):
+    """Local structural workflow, available without starting a collaboration session."""
+    MenuText = "CADSwarm Optimization"
+    ToolTip = "Analyze and optimize a solid locally with CalculiX"
+    Icon = ""
+
+    def Initialize(self):
+        from cadswarm.gui.structural import register_command
+        register_command()
+        commands = ["CadSwarm_OptimizationDemo", "CadSwarm_OptimizePart"]
+        self.appendToolbar("Structural optimization", commands)
+        self.appendMenu("Optimization", commands)
+
+    def GetClassName(self):
+        return "Gui::PythonWorkbench"
+
+
+Gui.addWorkbench(CadSwarmOptimizationWorkbench())
