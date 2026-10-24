@@ -100,15 +100,18 @@ def test_guard_reports_line(worker_mod):
 # FreeCAD discovery
 # --------------------------------------------------------------------------
 
-def _install(root, name, exe="python.exe"):
-    bin_dir = Path(root) / name / "bin"
+def _install(root, name, exe="python.exe", sub=("bin",)):
+    bin_dir = Path(root, name, *sub)
     bin_dir.mkdir(parents=True)
     (bin_dir / exe).write_text("")
+    os.chmod(bin_dir / exe, 0o755)  # POSIX only accepts an executable Python
     return str((bin_dir / exe))
 
 
 @pytest.fixture
 def clean_env(monkeypatch, tmp_path):
+    """Windows layouts unless a test says otherwise: ProgramFiles and LOCALAPPDATA only count there."""
+    monkeypatch.setattr(config, "_platform", lambda: "win32")
     monkeypatch.delenv("CADSWARM_FREECAD_PYTHON", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nolocal"))
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "nopf"))
@@ -159,6 +162,24 @@ def test_registry_version_beats_folder_ranking(clean_env, monkeypatch):
     reg = _install(clean_env / "other", "FC")
     monkeypatch.setattr(config, "_registry_installs", lambda: [(str(clean_env / "other" / "FC"), "1.1.4")])
     assert config.find_freecad_python() == os.path.normpath(reg)
+
+
+def test_macos_app_bundles_in_home_applications(clean_env, monkeypatch):
+    monkeypatch.setattr(config, "_platform", lambda: "darwin")
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(clean_env))
+    _install(clean_env / "Applications", "FreeCAD 1.0.app", "python", ("Contents", "Resources", "bin"))
+    new = _install(clean_env / "Applications", "FreeCAD 1.1.app", "python", ("Contents", "Resources", "bin"))
+    assert config.find_freecad_python() == os.path.normpath(new)
+
+
+def test_linux_extracted_appimage_or_tarball(clean_env, monkeypatch):
+    monkeypatch.setattr(config, "_platform", lambda: "linux")
+    monkeypatch.setattr(config, "LINUX_FREECAD_LIBS", ())
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(clean_env))
+    py = _install(clean_env / "Applications", "FreeCAD-1.1", "python3")
+    assert config.find_freecad_python() == os.path.normpath(py)
 
 
 def test_explicit_env_wins_and_missing_raises(clean_env, monkeypatch):

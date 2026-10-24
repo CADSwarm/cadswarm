@@ -9,6 +9,7 @@ Stdlib only: imported by FreeCAD's GUI, the launcher and the CLI alike.
 """
 import os
 import re
+import shutil
 import site
 import sys
 
@@ -20,7 +21,14 @@ DEPENDENCIES = ["mcp>=2.3"]
 
 
 def app_dir():
-    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".local", "share")
+    """Private per-user app folder: %APPDATA% on Windows, ~/Library/Application Support on macOS, XDG data dir on Linux."""
+    if os.environ.get("APPDATA"):
+        base = os.environ["APPDATA"]
+    elif sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = xdg if xdg and os.path.isabs(xdg) else os.path.join(os.path.expanduser("~"), ".local", "share")
     return os.path.join(base, "CadSwarm")
 
 
@@ -109,8 +117,13 @@ def freecad_python():
         home = FreeCAD.getHomePath()
         for cand in (os.path.join(home, "bin", "python.exe"), os.path.join(home, "bin", "python3"),
                      os.path.join(home, "bin", "python")):
-            if os.path.exists(cand):
+            if os.path.isfile(cand) and (os.name == "nt" or os.access(cand, os.X_OK)):
                 return os.path.normpath(cand)
+        if os.name != "nt":
+            # A distro FreeCAD embeds the system Python: the same version on PATH can import it.
+            same = shutil.which(f"python{sys.version_info.major}.{sys.version_info.minor}")
+            if same:
+                return same
     except ImportError:
         pass
     from .config import find_freecad_python
