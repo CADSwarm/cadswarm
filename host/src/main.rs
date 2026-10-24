@@ -77,7 +77,7 @@ fn main() -> Result<()> {
         }
         Cmd::Invite { kind, role } => {
             let cfg = HostConfig::load(&cli.data)?;
-            let space = space::Space::connect(&cfg)?;
+            let space = space::Space::attach(&cfg)?;
             let t = mint_invite(&space, &cfg, &kind, &role)?;
             let url = ticket::phone_url(&cfg.web_url, &t);
             println!("ticket: {t}\nphone:  {url}\n");
