@@ -21,12 +21,20 @@ You watch the parts appear in FreeCAD and chat with the helpers to steer them.
      message to paste, and tells you when it has joined the team.
 
 That's it. Next time, open the **CadSwarm** shortcut (or pick *CadSwarm* in FreeCAD's workbench
-list) and you're back with your team. If you hosted the team, its server starts again by itself.
+list) and you're back with your team. If you hosted the team, its server starts again when you open CadSwarm (it doesn't start on its
+own after a reboot until you do).
 
 **Good to know**
-- You need an AI helper installed: [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup)
-  or [Codex](https://github.com/openai/codex). The guide detects which ones you have and links to
+- You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup)
+  or [Codex](https://learn.chatgpt.com/docs/codex/cli). The guide detects which ones you have and links to
   install instructions.
+- The first time you open Claude Code in a helper's folder it will ask whether you trust the folder
+  and may ask to approve the "cadswarm" tools. Say yes to both.
+- The first time a team starts on Windows, a firewall window may ask to let Python/FreeCAD talk on
+  your network. Click **Allow access** or your teammates won't be able to join.
+- Venue or guest Wi-Fi (hackathons, cafes, schools) often stops computers from reaching each other.
+  If a teammate can't join, put everyone on a phone hotspot, or use [Tailscale](https://tailscale.com)
+  and pick the Tailscale address on the invite page.
 - Teammates must be on the same Wi-Fi or network as the person who started the team, and that
   computer needs to stay on while you work. For remote teams, see *Hosting for remote teams* below.
 - The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`. Nothing is
@@ -43,10 +51,10 @@ Phone stand/
   files/               notes, plans, BOMs and scripts the AI helpers saved, in subfolders that
     parts/base/notes.md  grow as the project does
     docs/bom.csv
-  exports/             3D files (STEP/STL), each with a new name, never overwritten
-  snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd")
+  exports/             3D files (STEP/STL), each with a new name, never overwritten or auto-deleted
+  snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd"), never auto-deleted
   AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
-  .cadswarm-team/      the team server's data, plus every older version of every file
+  .cadswarm-team/      the team server's data, plus older versions of files (the last 20 of each)
   README.txt           explains the above to anyone browsing the folder
 ```
 
@@ -59,17 +67,53 @@ The team server enforces these rules; it doesn't just ask the AI helpers to foll
 
 - **Sandboxed.** Helpers can only write inside `files/`. Paths with `..`, absolute or drive paths,
   hidden or Windows-reserved names, and symlinks or junctions that point outside are refused. File
-  types are on an allow-list, with size limits of 5 MB per file and 500 MB per project.
+  types are on an allow-list, with size limits per file: 5 MB for text (notes, scripts, CSV), 100 MB
+  for binary CAD and media files (STEP, STL, 3MF, FCStd, DXF, PDF, images).
 - **No silent overwrites.** Saving onto an existing file is refused unless the helper asks for
   `new_name` (saves as `notes-2.md`) or `replace` with the version it last read. If someone changed
   the file since then, including a person editing it by hand, the save is refused.
-- **Nothing is lost.** Replaced, moved and deleted files are kept in history and can be restored.
-  If your file is replaced by a teammate, you're told.
+- **Old versions are kept, within limits.** Replaced, moved and deleted files go to history and can be
+  restored: the last 20 versions of each file are kept (and everything from the last day). A deleted
+  file always keeps its latest version. Older versions beyond that are removed for good. If your file is
+  replaced by a teammate, you're told.
 - **Atomic writes.** A crash never leaves half a file.
-- **Model scripts can't write files.** `run_part_script` can't `open()` files, can't import
-  `os`/`shutil`/`subprocess`, and can't call `doc.saveAs`, `shape.exportStep` and the like. This
-  guards against accidents and naive misuse; in-process Python can't be fully sandboxed, so only
-  team up with people you trust.
+- **Model scripts run in a sandbox.** When a helper runs a `run_part_script`, CadSwarm starts a separate,
+  throw-away FreeCAD process for it, never the live model's own process. The script works on a read-only
+  copy of the model and can hand back only a shape and some data. Anything else it does to the copy is
+  discarded, so it can't change other people's parts. How tightly that process is locked down depends on
+  your computer (the model server shows the active level at `/health`, under `script_sandbox`):
+  - **Windows 10/11, normal case (`appcontainer`):** the script process runs in a Windows AppContainer, the
+    same mechanism browsers use for web pages. It has no network, can't read or write your documents or
+    profile, can't start other programs, and can only write inside a scratch folder that is deleted
+    afterwards. It is also capped at about 2 GB of memory and 60 seconds. The first start gives that
+    container read access to your FreeCAD folder, which can take a few seconds.
+  - **Windows fallback (`lowintegrity`):** if AppContainers can't be created, scripts run with a
+    low-privilege copy of your account. They still can't write anywhere but the scratch folder or start
+    programs, but they **can** read your files and use the network. Use this only with people you trust.
+  - **macOS / Linux (`process-limits`):** scripts run in their own process with memory, time and
+    open-file limits, but with **no** file or network isolation, so they run as you. Use this only with
+    people you trust.
+  - **`CADSWARM_SCRIPT_SANDBOX=off`** switches all of this off for debugging and prints a loud warning.
+  Settings: `CADSWARM_SCRIPT_TIMEOUT` (seconds) and `CADSWARM_SCRIPT_MEMORY_MB`. A script that runs
+  too long or uses too much memory is stopped and reports an error; the model server keeps going.
+
+### Disk space and the project limit
+
+Big projects are welcome, but the host's computer is protected and a project can't get stuck:
+
+- **Disk guard.** Before anything that adds data (saving a file, a snapshot, an export), the team server
+  checks free space on the drive. It refuses if less than 2 GB would be left (or 10% of the drive, if
+  that is smaller) and says so in plain words (`disk_full`).
+- **Project limit: 20 GB by default**, counting files, older versions, snapshots and exports together.
+  The host can change it in **Team tools > Storage and free up space...** (0 means no project limit; the
+  disk guard still applies), or with the environment variable `CADSWARM_PROJECT_LIMIT_GB` when starting the
+  hub. History retention (20 versions, 24 hours) is changed in the same place.
+- **Free up space.** The same dialog shows what is using the room and lets a person trim older versions,
+  delete old snapshots (always keeping the newest few) and old exports. Snapshots and exports are never
+  deleted automatically, and AI helpers can look (`storage_status`) but can't delete: they're told to ask
+  a person.
+- Binary files up to 100 MB are accepted over HTTP; a 100 MB save briefly needs about 500 MB of RAM on the
+  host while it is decoded.
 
 ---
 
@@ -117,7 +161,7 @@ python -m venv .venv; .venv\Scripts\pip install -e ".[test]"
 # 2. Each person wires their own agent in their own folder
 .venv\Scripts\cadswarm setup --client claude --hub http://HOST:8765 --token TOKEN --name alice-claude --role lead --dir ..\alice
 .venv\Scripts\cadswarm setup --client codex  --hub http://HOST:8765 --token TOKEN --name bob-codex --dir ..\bob
-#    then run `claude` / `codex` in that folder. (Codex: trust the project so .codex/config.toml loads.)
+#    then run `claude` / `codex` in that folder. (Codex: trust the project so .codex/config.toml loads, then type `/hooks` in Codex and trust the CadSwarm hook.)
 
 # 3. Install this checkout into FreeCAD as the CadSwarm add-on (same as the double-click installer)
 .venv\Scripts\cadswarm install-workbench
@@ -135,7 +179,7 @@ the same Wi-Fi. For teammates elsewhere, put everyone on a private network such 
 Then make an invite code with an address they can reach:
 
 ```powershell
-python cadswarm_launch.py hub --data .	eam-model --token MY-TEAM-CODE        # on the host
+python cadswarm_launch.py hub --data .\team-model --token MY-TEAM-CODE        # on the host
 python cadswarm_launch.py invite --hub http://100.64.1.5:8765 --token MY-TEAM-CODE --project "Phone stand"
 ```
 
@@ -146,7 +190,7 @@ Teammates paste that code into the guide's **Join a teammate's project** page as
 | Client | Files |
 |---|---|
 | Claude Code | `.mcp.json` (cadswarm server), `.claude/settings.json` (UserPromptSubmit hook, `enabledMcpjsonServers`, `mcp__cadswarm` allowed), `CLAUDE.md` section |
-| Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section |
+| Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CadSwarm hook (again after updating CadSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
 | both | `.cadswarm/config.json` (hub, token, name, role), and after first run `.cadswarm/identity.json` (bearer token, git-ignored) |
 
 The prompt hook injects a team block before every prompt: who holds which parts, open tasks,
@@ -159,7 +203,7 @@ the prompt goes through without it.
 - **Locks:** `lock_objects`, `release_objects`
 - **Modelling:** `create_primitive`, `create_extrusion`, `boolean`, `set_props`, `set_placement`,
   `delete_object`, `set_param`, `run_part_script`
-- **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`
+- **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
 - **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
   `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
@@ -186,7 +230,7 @@ the prompt goes through without it.
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m pytest        # 19 tests; the integration test drives real FreeCAD
+.venv\Scripts\python -m pytest        # 213 tests; the integration and sandbox tests drive real FreeCAD
 ```
 
 See [demo/README.md](demo/README.md) for a three-agent demo script.
@@ -195,8 +239,11 @@ See [demo/README.md](demo/README.md) for a three-agent demo script.
 
 - The FreeCAD mirror is read-only. Human geometry edits go through the panel (lock, param,
   takeover) or an agent, not direct GUI modelling.
-- `run_part_script` runs agent Python in the worker with no sandbox. Use it only with trusted
-  teammates; a timeout kills the worker and the hub restarts it from the last save.
+- `run_part_script` is sandboxed (see "Model scripts run in a sandbox"), but how well depends on the
+  platform: strong on Windows with AppContainers, much weaker on macOS/Linux and in the Windows fallback.
+  Each script also pays about half a second to start its own FreeCAD process. The sandbox protects your
+  files and network, not the model: a script can still return any shape, so review what teammates' helpers
+  add. Scripts can't edit other objects; they can only create or replace one shape.
 - Locks are per object. Editing a shared upstream object (e.g. a sketch used by two features)
   requires its lock; there is no sub-object locking.
 - Single hub, no TLS, shared workspace token. Put it behind a VPN or tunnel for remote teams.

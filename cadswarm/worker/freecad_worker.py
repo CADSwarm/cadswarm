@@ -18,12 +18,17 @@ Response: {"id": 1, "ok": true, "result": {...}, "created": [], "modified": [],
            "deleted": [], "recomputed": []}
        or {"id": 1, "ok": false, "code": "lock_violation", "error": "..."}
 """
+import ast
 import json
 import math
 import os
 import re
 import sys
+import time
+import threading
 import traceback
+
+import sandbox  # noqa: E402  (next to this file; the worker runs as a plain script)
 
 FREECAD_BIN = os.environ.get("CADSWARM_FREECAD_BIN")
 if FREECAD_BIN and FREECAD_BIN not in sys.path:
@@ -84,11 +89,29 @@ def open_document(path):
         save()
 
 
+SAVE_ATTEMPTS = 6
+SAVE_BACKOFF = 0.15  # seconds, growing: ~2s in all before giving up
+
+
 def save():
     # saveCopy + replace keeps the on-disk model whole even if we die mid-write.
     tmp = DOC_PATH + ".tmp.FCStd"
     doc.saveCopy(tmp)
-    os.replace(tmp, DOC_PATH)
+    # On Windows the replace fails while anything (OneDrive, antivirus, a download of the model) holds
+    # the target open; those holds are brief, so wait them out before giving up.
+    for attempt in range(SAVE_ATTEMPTS):
+        try:
+            os.replace(tmp, DOC_PATH)
+            return
+        except PermissionError as e:
+            if attempt == SAVE_ATTEMPTS - 1:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise OpError("save_failed", f"Could not write {os.path.basename(DOC_PATH)} ({e}); another "
+                              "program probably has it open. Your change was rolled back — try again.")
+            time.sleep(SAVE_BACKOFF * (attempt + 1))
 
 
 # --------------------------------------------------------------------------
@@ -335,49 +358,24 @@ def op_set_param(a):
     return {"alias": alias, "cell": f"B{row}"}
 
 
-# Modules a part script may import: geometry and maths only. No os, shutil, subprocess,
-# pathlib, socket, ctypes… — scripts build shapes; saving files goes through save_file,
-# which never overwrites. This is a guard against accidents and naive misuse, not a
-# security boundary (Python cannot be fully sandboxed in-process): only work with
-# teammates you trust.
-SCRIPT_MODULES = {"math", "cmath", "random", "itertools", "functools", "collections", "statistics",
-                  "fractions", "decimal", "json", "re", "string", "dataclasses", "typing", "copy", "numbers",
-                  "FreeCAD", "App", "Part", "Sketcher", "PartDesign", "Mesh", "MeshPart", "numpy", "BOPTools"}
-# FreeCAD/OCC objects can write files themselves (shape.exportStep(path), doc.saveAs(path)…).
-SCRIPT_FILE_WRITE = re.compile(r"\.\s*(save|saveAs|saveCopy|write|writeInventor|export\w*)\s*\(")
-SCRIPT_BLOCKED_BUILTINS = {"open", "exec", "eval", "compile", "input", "breakpoint", "help", "exit", "quit",
-                           "globals", "vars", "memoryview", "__loader__", "__spec__"}
-
-
-def _script_import(name, globals=None, locals=None, fromlist=(), level=0):
-    root = name.split(".")[0]
-    if level or root not in SCRIPT_MODULES:
-        raise ImportError(f"Part scripts can't import {name!r}. Allowed: {', '.join(sorted(SCRIPT_MODULES))}. "
-                          "To save a file, use the save_file tool instead.")
-    return __import__(name, globals, locals, fromlist, level)
-
-
-def script_builtins():
-    import builtins
-    safe = {k: v for k, v in vars(builtins).items() if k not in SCRIPT_BLOCKED_BUILTINS}
-    safe["__import__"] = _script_import
-    return safe
-
-
 def op_run_part_script(a):
-    """Run agent Python against the doc. Set `shape` to build/replace Part::Feature `name`."""
-    ns = {"__builtins__": script_builtins(), "App": App, "FreeCAD": FreeCAD, "Part": Part, "doc": doc,
-          "Vector": Vector, "Placement": Placement, "Rotation": Rotation, "math": math, "params": params_dict()}
+    """Run agent Python in a confined child against a snapshot of the doc; its `shape` becomes the
+    Part::Feature `name` here. The child can't touch the live doc: only the BREP and `result` come back."""
     code = a.get("code", "")
-    writer = SCRIPT_FILE_WRITE.search(code)
-    if writer:
-        raise OpError("not_allowed", f"Part scripts can't write files ({writer.group(1)}). "
-                      "Use save_file for notes and export_model for 3D files; both never overwrite.")
-    exec(compile(code, "<part_script>", "exec"), ns)
-    shape = ns.get("shape")
+    try:
+        reply = sandbox.run_script(sys.executable, doc.saveCopy, {
+            "code": code, "params": params_dict(),
+            # test hook: prove the OS boundary on its own, with the in-script guards off
+            "guards": not os.environ.get("CADSWARM_TEST_NO_AST_GUARD")})
+    except sandbox.SandboxError as e:
+        raise OpError(e.code, str(e))
+    if not reply.get("ok"):
+        raise OpError(reply.get("code") or "script_error", reply.get("error") or "script failed")
     out = {}
-    if shape is not None:
-        if not isinstance(shape, Part.Shape) or shape.isNull():
+    if reply.get("brep"):
+        shape = Part.Shape()
+        shape.importBrepFromString(reply["brep"])
+        if shape.isNull():
             raise OpError("bad_args", "`shape` must be a non-null Part.Shape")
         name = a.get("name")
         obj = doc.getObject(name) if name else None
@@ -389,8 +387,8 @@ def op_run_part_script(a):
         if a.get("label"):
             obj.Label = a["label"]
         out = {"name": obj.Name, "volume": shape.Volume if shape.Solids else 0.0}
-    if "result" in ns:
-        out["result"] = json.loads(json.dumps(ns["result"], default=str))
+    if reply.get("result") is not None:
+        out["result"] = reply["result"]
     return out
 
 
@@ -429,12 +427,14 @@ def mutate(op, args, allowed):
         broken = [n for n in created + modified if is_broken(doc.getObject(n))]
         if broken:
             raise OpError("recompute_error", f"Objects failed to recompute: {broken}")
+        # Persist while the transaction is still open: if the file can't be written the abort below
+        # puts memory back to match the disk (and the hub, which records nothing for a failed op).
+        save()
         doc.commitTransaction()
     except Exception:
         doc.abortTransaction()
         doc.recompute()
         raise
-    save()
     return {"result": result, "created": created, "modified": modified,
             "deleted": deleted, "recomputed": recomputed,
             "broken": [o.Name for o in doc.Objects if is_broken(o)]}
@@ -569,7 +569,8 @@ def q_dependents(a):
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
-           "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3]}}
+           "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],
+                              "script_sandbox": sandbox.info(sys.executable)}}
 
 
 def handle(req):
@@ -582,9 +583,12 @@ def handle(req):
 
 
 def main():
+    threading.Thread(target=sandbox.prepare, args=(sys.executable,), daemon=True).start()
     open_document(sys.argv[1] if len(sys.argv) > 1 else "model.FCStd")
-    out = sys.stdout
-    # FreeCAD and OCC occasionally print to stdout; keep the protocol channel clean.
+    # FreeCAD and OCC occasionally print to stdout from C++, past sys.stdout. Keep the protocol on a
+    # private duplicate of fd 1 and point fd 1 itself (and Python's stdout) at stderr.
+    out = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
+    os.dup2(2, 1)
     sys.stdout = sys.stderr
     out.write(json.dumps({"ready": True, "doc": DOC_PATH}) + "\n")
     out.flush()

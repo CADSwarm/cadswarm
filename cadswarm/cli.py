@@ -38,6 +38,8 @@ def cmd_setup(a):
         print("Next: run `codex` here. Codex only loads .codex/config.toml for TRUSTED projects: accept the "
               "trust prompt, or add to ~/.codex/config.toml:\n"
               f"  [projects.{json.dumps(project)}]\n  trust_level = \"trusted\"")
+        print("Then, in Codex, type /hooks and trust the CadSwarm hook. Codex skips new or changed hooks until "
+              "you do, so without this your helper won't see its team's updates. Do it again after updating CadSwarm.")
 
 
 PROJECT_README = """This folder is a CadSwarm team project.
@@ -47,7 +49,7 @@ PROJECT_README = """This folder is a CadSwarm team project.
   exports/      3D files (STEP/STL) saved with "Save as 3D file"; never overwritten
   snapshots/    saved versions of the model
   AI helpers/   workspace folders for the AI helpers on this computer (they hold sign-ins: don't share)
-  .cadswarm-team/  the team server's own data and every older version of every file. Don't edit it.
+  .cadswarm-team/  the team server's own data and older versions of files (the last 20 of each). Don't edit it.
 
 Please don't edit model.FCStd directly while the team is working: your changes would be lost
 the next time an AI helper changes the model. Copy it first, or work through CadSwarm.

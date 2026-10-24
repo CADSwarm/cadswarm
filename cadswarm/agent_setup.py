@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 
-from .client import load_json, save_json, state_dir
+from .client import save_json, state_dir
 from .paths import LAUNCHER
 
 BEGIN, END = "<!-- cadswarm:begin -->", "<!-- cadswarm:end -->"
@@ -19,8 +19,8 @@ TOML_BEGIN, TOML_END = "# >>> cadswarm (managed by `cadswarm setup`)", "# <<< ca
 
 CLIENTS = {
     "claude": {"label": "Claude Code", "exe": "claude",
-               "install_url": "https://docs.anthropic.com/en/docs/claude-code/setup"},
-    "codex": {"label": "Codex", "exe": "codex", "install_url": "https://github.com/openai/codex"},
+               "install_url": "https://code.claude.com/docs/en/setup"},
+    "codex": {"label": "Codex", "exe": "codex", "install_url": "https://learn.chatgpt.com/docs/codex/cli"},
 }
 
 AGENT_DOC = """{begin}
@@ -42,7 +42,9 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
   save with `if_exists="replace"` and its `expected_version`. `save_snapshot` before risky changes.
   Never write files any other way; your own working folder is not shared with the team.
 - Finish with `report_result` (evidence: object names, volumes, interference) and release locks.
-- Team context (who holds what, what changed) is injected before each of your prompts.
+- Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
+  team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
+  `model_status` and `get_inbox` yourself first.
 {end}
 """
 
@@ -73,27 +75,70 @@ def _ours(command):
     return "cadswarm_launch" in command or "cadswarm.prompt_hook" in command
 
 
+class ConfigFileError(ValueError, RuntimeError):
+    """A config file of the user's we can't safely edit. ValueError for the CLI, RuntimeError so the
+    wizard shows the message as-is."""
+
+
+def _read_config(path):
+    """The user's own JSON config as a dict ({} if absent). Never guesses: a file we can't parse
+    (comments, trailing comma, wrong shape) is left untouched and reported, because overwriting it
+    would silently delete their settings. We stop rather than keep a .bak and carry on: the person
+    can fix or move the file and re-run, and nothing they own changes behind their back."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8-sig") as f:  # utf-8-sig: Notepad likes to add a BOM
+            text = f.read()
+        data = json.loads(text) if text.strip() else {}
+        if not isinstance(data, dict):
+            raise ValueError("top level isn't an object")
+    except (OSError, ValueError) as e:
+        raise ConfigFileError(
+            f"CadSwarm didn't change {path} because it couldn't read it ({e}). Your settings are untouched. "
+            "Fix the file (check for stray commas or comments), or rename it, then run setup again.") from None
+    return data
+
+
+def _dict_at(parent, key, path):
+    """parent[key] as a dict, creating it; refuses (rather than crashes on) a value of the wrong type."""
+    v = parent.setdefault(key, {})
+    if not isinstance(v, dict):
+        raise ConfigFileError(f"CadSwarm didn't change {path} because \"{key}\" in it isn't the kind of "
+                              "entry it expected. Your settings are untouched; fix or remove that entry and retry.")
+    return v
+
+
+def _list_at(parent, key, path):
+    v = parent.setdefault(key, [])
+    if not isinstance(v, list):
+        raise ConfigFileError(f"CadSwarm didn't change {path} because \"{key}\" in it isn't a list. "
+                              "Your settings are untouched; fix or remove that entry and retry.")
+    return v
+
+
 def setup_claude(project, python):
     mcp_path = os.path.join(project, ".mcp.json")
-    mcp_cfg = load_json(mcp_path, {}) or {}
-    mcp_cfg.setdefault("mcpServers", {})["cadswarm"] = {
-        "command": python, "args": [LAUNCHER, "mcp"], "env": {"CADSWARM_PROJECT": project}}
-    with open(mcp_path, "w", encoding="utf-8") as f:
-        json.dump(mcp_cfg, f, indent=2)
-
+    mcp_cfg = _read_config(mcp_path)
     settings_path = os.path.join(project, ".claude", "settings.json")
-    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-    settings = load_json(settings_path, {}) or {}
-    groups = settings.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+    settings = _read_config(settings_path)
+    # Validate both files before writing either, so a refusal never leaves a half-done setup.
+    _dict_at(mcp_cfg, "mcpServers", mcp_path)["cadswarm"] = {
+        "command": python, "args": [LAUNCHER, "mcp"], "env": {"CADSWARM_PROJECT": project}}
+    groups = _list_at(_dict_at(settings, "hooks", settings_path), "UserPromptSubmit", settings_path)
     # Idempotent: drop any earlier cadswarm entry, keep everyone else's hooks.
-    groups[:] = [g for g in groups if not any(_ours(h.get("command", "")) for h in g.get("hooks", []))]
+    groups[:] = [g for g in groups if not (isinstance(g, dict) and isinstance(g.get("hooks"), list) and any(
+        isinstance(h, dict) and _ours(str(h.get("command", ""))) for h in g["hooks"]))]
     groups.append({"hooks": [{"type": "command", "command": hook_command(python), "timeout": 5}]})
-    enabled = settings.setdefault("enabledMcpjsonServers", [])
+    enabled = _list_at(settings, "enabledMcpjsonServers", settings_path)
     if "cadswarm" not in enabled:
         enabled.append("cadswarm")
-    allow = settings.setdefault("permissions", {}).setdefault("allow", [])
+    allow = _list_at(_dict_at(settings, "permissions", settings_path), "allow", settings_path)
     if "mcp__cadswarm" not in allow:
         allow.append("mcp__cadswarm")
+    with open(mcp_path, "w", encoding="utf-8") as f:
+        json.dump(mcp_cfg, f, indent=2)
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
     with open(settings_path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=2)
     upsert_block(os.path.join(project, "CLAUDE.md"), AGENT_DOC.format(begin=BEGIN, end=END))

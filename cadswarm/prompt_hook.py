@@ -8,8 +8,8 @@ CLIs add to the model's context. Contract borrowed from Amoeba's prompt hooks:
   coordination context must never block a prompt.
 * Bounded: one request with a ~1.8s budget, output capped well under Codex's
   ~2,500-token hook limit.
-* Project folder: Claude's stdin carries `cwd`; Codex's UserPromptSubmit stdin
-  does not, so fall back to the process cwd (Codex runs hooks from the project).
+* Project folder: both CLIs' stdin carries `cwd` (a common hook input field, in Codex's docs too);
+  fall back to the process cwd if it is missing (both run hooks from the project).
 """
 import json
 import os
@@ -38,6 +38,8 @@ def main():
         client, _cfg = project_client(project)
         if not client or not client.identity.get("participant_id"):
             return  # the MCP server has not joined yet
+        if client.identity.get("fence") is None:
+            return  # never join here: that would bump the fence and supersede the live MCP server
         client.timeout = 1.8
         text = client.get("/context")["context"]
         # Windows pipes default to the ANSI codepage; the CLIs read hook output as UTF-8.

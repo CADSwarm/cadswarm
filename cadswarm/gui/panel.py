@@ -128,101 +128,110 @@ class Session:
         p = prefs()
         resume = {"participant_id": p.GetString("ParticipantId"), "token": p.GetString("ParticipantToken")}
         same_hub = p.GetString("HubUrl") == hub and p.GetString("Name") == name
-        self.client = HubClient(hub, resume if same_hub and resume["participant_id"] else {}, timeout=timeout)
+        self._end_session()  # a previous session's threads must never act on this one
+        client = HubClient(hub, resume if same_hub and resume["participant_id"] else {}, timeout=timeout)
         try:
-            self.ident = self.client.join(token, name, kind="human", client="freecad")
+            self.ident = client.join(token, name, kind="human", client="freecad")
         except HubRequestError as e:
-            if e.code not in ("bad_workspace_token", "unreachable") and self.client.identity:
-                self.client.identity = {}  # stored identity is no longer valid: join fresh
-                try:
-                    self.ident = self.client.join(token, name, kind="human", client="freecad")
-                except HubRequestError:
-                    self.client = None
-                    raise
+            if e.code not in ("bad_workspace_token", "unreachable") and client.identity:
+                client.identity = {}  # stored identity is no longer valid: join fresh
+                self.ident = client.join(token, name, kind="human", client="freecad")
             else:
-                self.client = None
                 raise
-        self.client.timeout = 30
+        client.timeout = 30
+        self.client = client
         p.SetString("HubUrl", hub)
         p.SetString("WorkspaceToken", token)
         p.SetString("Name", name)
         p.SetString("ParticipantId", self.ident["participant_id"])
         p.SetString("ParticipantToken", self.ident["token"])
-        self.stop.clear()
+        # Fresh stop flag and queue per connection: a worker still blocked in an old long-poll can
+        # only ever signal its own (already stopped) session. Workers never touch Qt; they only queue.
+        self.stop, self.events = threading.Event(), queue.Queue()
         self.seq = self.ident.get("seq", 0)
-        threading.Thread(target=self._poll_loop, daemon=True).start()
-        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         if self.timer is None:
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self.drain)
+        try:
+            self.set_state("connected")
+            self.full_refresh()
+        except Exception:
+            self.disconnect()  # don't stay "connected" to a session that failed to load
+            raise
+        for loop in (self._poll_loop, self._heartbeat_loop):
+            threading.Thread(target=loop, args=(self.stop, self.events, self._bg_client(), self.seq),
+                             daemon=True).start()
         self.timer.start(250)
-        self.set_state("connected")
-        self.full_refresh()
         say(f"Joined the team at {hub} as {name}")
 
     def disconnect(self, reason=None):
         """Leave the session. `reason` set means it ended on us (takeover, other window)."""
         if not self.client:
             return
-        self.stop.set()
+        client = self.client
+        self._end_session()
         if reason is None:
             try:
-                self.client.post("/leave")
+                client.post("/leave")
             except HubRequestError:
                 pass
+        self.set_state("ended" if reason else "disconnected", reason or "You left the team session.")
+
+    def _end_session(self):
+        """Stop this session's workers (they exit on their own stop flag) and forget its client."""
+        self.stop.set()
         self.client = None
         if self.timer:
             self.timer.stop()
-        self.set_state("ended" if reason else "disconnected", reason or "You left the team session.")
 
     def _bg_client(self):
         return HubClient(self.client.hub, dict(self.client.identity), timeout=40)
 
-    def _heartbeat_loop(self):
-        c = self._bg_client()
-        while not self.stop.wait(HEARTBEAT_SECONDS):
+    def _heartbeat_loop(self, stop, events, c, _seq):
+        while not stop.wait(HEARTBEAT_SECONDS):
             try:
                 c.post("/heartbeat", {"doing": "watching in FreeCAD"})
             except HubRequestError as e:
                 if e.code in ("taken_over", "fence_stale", "left", "bad_token"):
-                    self.events.put(("fatal", friendly_error(e)))
+                    events.put(("fatal", friendly_error(e)))
                     return
 
-    def _poll_loop(self):
-        c = self._bg_client()
+    def _poll_loop(self, stop, events, c, seq):
         offline = False
-        while not self.stop.is_set():
+        while not stop.is_set():
             try:
-                r = c.get("/events", since=self.seq, wait=20)
+                r = c.get("/events", since=seq, wait=20)
             except HubRequestError as e:
                 if e.code in ("taken_over", "fence_stale", "left", "bad_token"):
-                    self.events.put(("fatal", friendly_error(e)))
+                    events.put(("fatal", friendly_error(e)))
                     return
                 if not offline:
                     offline = True
-                    self.events.put(("offline", friendly_error(e, c.hub)))
+                    events.put(("offline", friendly_error(e, c.hub)))
                 time.sleep(3)
                 continue
             if offline:
                 offline = False
-                self.events.put(("online", None))
+                events.put(("online", None))
+            if stop.is_set():
+                return  # session ended while we waited: never report into a newer one
             if not r["events"]:
                 continue
-            self.seq = r["seq"]
+            seq = r["seq"]
             changed, deleted = set(), set()
             for ev in r["events"]:
                 if ev["kind"] == "op":
                     changed |= set(ev["created"] + ev["modified"] + ev["recomputed"])
                     deleted |= set(ev["deleted"])
-                self.events.put(("event", ev))
+                events.put(("event", ev))
             if changed:
                 try:
-                    self.events.put(("brep", c.post("/brep", {"names": sorted(changed)})["objects"]))
+                    events.put(("brep", c.post("/brep", {"names": sorted(changed)})["objects"]))
                 except HubRequestError as e:
-                    self.events.put(("offline", str(e)))
+                    events.put(("offline", str(e)))
             if deleted:
-                self.events.put(("deleted", sorted(deleted)))
-            self.events.put(("refresh", None))
+                events.put(("deleted", sorted(deleted)))
+            events.put(("refresh", None))
 
     # ------------------------------------------------------- GUI-thread work
 
@@ -422,6 +431,8 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addWidget(self.chat, 3)
         row = QtGui.QHBoxLayout()
         self.to = QtGui.QComboBox()
+        self.to.setSizeAdjustPolicy(QtGui.QComboBox.AdjustToContents)  # show whole names, not "te:"
+        self.to.setMinimumContentsLength(8)
         self.to.addItem("all")
         self.msg = QtGui.QLineEdit()
         self.msg.setPlaceholderText("Message / steer an agent…")
@@ -450,6 +461,7 @@ class TeamPanel(QtGui.QDockWidget):
         menu = QtGui.QMenu(more)
         for label, fn in (("Project files…", show_project_files), ("Open project folder", open_project_folder),
                           ("Save a snapshot of the model", save_snapshot),
+                          ("Storage and free up space…", show_storage),
                           (None, None),
                           ("Add an AI helper…", add_helper), ("Invite teammates…", invite_teammates),
                           (None, None),
@@ -486,9 +498,14 @@ class TeamPanel(QtGui.QDockWidget):
         detail = ""
         if s.state == "disconnected":
             left = s.state_detail == "You left the team session."
+            stopped = s.state_detail == STOPPED_HOSTING
             if left:
                 headline = "You left the team session. Your locks were released."
+            elif stopped:
+                headline = "You stopped hosting the team. Your project is saved."
             detail = ("Join again to keep working with your team." if left else
+                      "Your team's AI helpers are offline until you start it again "
+                      "(Get started ▸ Reconnect)." if stopped else
                       "Start or join a team to watch the shared model being built and chat with your "
                       "team's AI helpers."
                       + (f"<br><i>{s.state_detail}</i>".replace("\n", " ") if s.state_detail else ""))
@@ -805,6 +822,9 @@ def invite_teammates():
         "\u201cJoin a teammate\u2019s project\u201d.")
 
 
+STOPPED_HOSTING = "You stopped hosting the team."
+
+
 def stop_hosting():
     from .wizard import stop_hosting as stop
     stop()
@@ -844,7 +864,7 @@ class ProjectFilesDialog(QtGui.QDialog):
         lay = QtGui.QVBoxLayout(self)
         where = hosted_project_folder()
         lay.addWidget(QtGui.QLabel(
-            "Notes, plans and scripts your team's AI helpers saved. Older versions are always kept."
+            "Notes, plans and scripts your team's AI helpers saved. The last 20 versions of each file are kept."
             + (f"<br><small>On this computer: {where}\\files</small>" if where else
                "<br><small>They live on the computer of the teammate who started the team.</small>")))
         self.tree = QtGui.QTreeWidget()
@@ -916,6 +936,169 @@ def show_project_files():
     if not SESSION.ensure_connected("see the project's files"):
         return
     dlg = ProjectFilesDialog()
+    (getattr(dlg, "exec", None) or dlg.exec_)()
+
+
+def size_text(n):
+    """Bytes the way people say them: '320 MB', '1.5 GB'."""
+    for unit, size in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if n >= size:
+            v = n / size
+            return f"{v:.1f} {unit}" if v < 10 else f"{v:.0f} {unit}"
+    return f"{n} bytes"
+
+
+class StorageDialog(QtGui.QDialog):
+    """What is using the project's room, and a careful way to free some. Everything runs on the GUI
+    thread through the same blocking client calls the other dialogs use (they are quick)."""
+
+    def __init__(self):
+        super().__init__(Gui.getMainWindow())
+        self.setWindowTitle("CadSwarm — storage")
+        self.resize(560, 520)
+        self.is_host = hosted_project_folder() is not None
+        lay = QtGui.QVBoxLayout(self)
+        self.summary = QtGui.QLabel()
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(QtCore.Qt.RichText)
+        lay.addWidget(self.summary)
+
+        box = QtGui.QGroupBox("Free up space (this deletes things for good)")
+        form = QtGui.QFormLayout(box)
+        self.versions = self.spin(1, 1000, 5, " newest")
+        self.snap_days = self.spin(1, 3650, 30, " days")
+        self.snap_keep = self.spin(0, 1000, 3, " newest")
+        self.exp_days = self.spin(1, 3650, 30, " days")
+        self.do_versions = QtGui.QCheckBox("Trim older versions of files, keeping only the")
+        self.do_snaps = QtGui.QCheckBox("Delete model snapshots older than")
+        self.do_exports = QtGui.QCheckBox("Delete exported 3D files older than")
+        for check in (self.do_versions, self.do_snaps, self.do_exports):
+            check.setChecked(True)
+        form.addRow(self.do_versions, self.versions)
+        form.addRow(self.do_snaps, self.snap_days)
+        form.addRow("   …but always keep the", self.snap_keep)
+        form.addRow(self.do_exports, self.exp_days)
+        free = QtGui.QPushButton("Free up space…")
+        free.clicked.connect(self.free_up)
+        form.addRow(free)
+        lay.addWidget(box)
+
+        if self.is_host:  # only the person running the team server sets its limits
+            sbox = QtGui.QGroupBox("Limits (host only)")
+            sform = QtGui.QFormLayout(sbox)
+            self.limit = QtGui.QDoubleSpinBox()
+            self.limit.setRange(0, 100000)
+            self.limit.setDecimals(1)
+            self.limit.setSuffix(" GB")
+            self.limit.setSpecialValueText("No project limit")
+            self.keep = self.spin(1, 1000, 20, " versions per file")
+            self.hours = self.spin(0, 24 * 365, 24, " hours")
+            sform.addRow("Project size limit", self.limit)
+            sform.addRow("Keep older versions of each file:", self.keep)
+            sform.addRow("…and everything saved in the last", self.hours)
+            save = QtGui.QPushButton("Save limits")
+            save.clicked.connect(self.save_limits)
+            sform.addRow(save)
+            lay.addWidget(sbox)
+        row = QtGui.QHBoxLayout()
+        row.addStretch(1)
+        close = QtGui.QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.load()
+
+    @staticmethod
+    def spin(low, high, value, suffix):
+        box = QtGui.QSpinBox()
+        box.setRange(low, high)
+        box.setValue(value)
+        box.setSuffix(suffix)
+        return box
+
+    def load(self):
+        try:
+            st = SESSION.client.get("/project/storage")
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        u, s = st["usage"], st["settings"]
+        limit, free = st["limit_bytes"], st["free_disk_bytes"]
+        lines = [f"<b>The project uses {size_text(u['total'])}</b>"
+                 + (f" of its {size_text(limit)} limit" if limit else " (no project limit set)"),
+                 f"&bull; Your team's files: {size_text(u['files'])}",
+                 f"&bull; Older versions of those files: {size_text(u['old_versions'])}",
+                 f"&bull; Model snapshots: {size_text(u['snapshots'])}",
+                 f"&bull; Exported 3D files: {size_text(u['exports'])}",
+                 f"&bull; The live model: {size_text(u['model'])} (not counted)"]
+        if free is not None:
+            lines.append(f"<br>The host's drive has {size_text(free)} free; CadSwarm stops saving when less than "
+                         f"{size_text(st['reserve_bytes'])} would be left.")
+        lines.append(f"<small>Older versions: the newest {s['history_keep']} of each file are kept, plus everything from "
+                     f"the last {s['history_hours']} hours. Snapshots and exports are only deleted here, by a person.</small>")
+        self.summary.setText("<br>".join(lines))
+        if self.is_host:
+            self.limit.setValue(s["project_limit_gb"])
+            self.keep.setValue(s["history_keep"])
+            self.hours.setValue(int(s["history_hours"]))
+            if st.get("limit_source") == "env":
+                self.limit.setEnabled(False)
+                self.limit.setToolTip("Set by the CADSWARM_PROJECT_LIMIT_GB environment variable.")
+
+    def options(self):
+        o = {}
+        if self.do_versions.isChecked():
+            o["keep_versions"] = self.versions.value()
+        if self.do_snaps.isChecked():
+            o["snapshots_older_than_days"] = self.snap_days.value()
+            o["keep_newest_snapshots"] = self.snap_keep.value()
+        if self.do_exports.isChecked():
+            o["exports_older_than_days"] = self.exp_days.value()
+        return o
+
+    def free_up(self):
+        o = self.options()
+        if not o:
+            hint("Tick at least one thing to clean up.")
+            return
+        will = []
+        if "keep_versions" in o:
+            will.append(f"- older versions of files: all but the newest {o['keep_versions']} of each file")
+        if "snapshots_older_than_days" in o:
+            will.append(f"- model snapshots older than {o['snapshots_older_than_days']} days "
+                        f"(the newest {o['keep_newest_snapshots']} stay)")
+        if "exports_older_than_days" in o:
+            will.append(f"- exported 3D files older than {o['exports_older_than_days']} days")
+        if not confirm("This will delete, for good:\n\n" + "\n".join(will) +
+                       "\n\nYour current files and the live model are not touched. Continue?"):
+            return
+        try:
+            r = SESSION.client.post("/project/storage/prune", o)
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        f = r["freed"]
+        say(f"Freed {size_text(f['total'])} of project storage")
+        hint(f"Freed {size_text(f['total'])}: older versions {size_text(f['old_versions'])}, "
+             f"snapshots {size_text(f['snapshots'])}, exports {size_text(f['exports'])}.")
+        self.load()
+
+    def save_limits(self):
+        try:
+            SESSION.client.post("/project/storage/settings", {
+                "project_limit_gb": self.limit.value(), "history_keep": self.keep.value(),
+                "history_hours": self.hours.value()})
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        hint("Saved. The new limits apply to the next save.")
+        self.load()
+
+
+def show_storage():
+    if not SESSION.ensure_connected("see the project's storage"):
+        return
+    dlg = StorageDialog()
     (getattr(dlg, "exec", None) or dlg.exec_)()
 
 

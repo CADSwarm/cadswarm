@@ -184,3 +184,144 @@ def test_resolve_project_folder_never_mixes_with_other_files(tmp_path):
     sqlite3.connect(lay["db"]).close()
     assert resolve_project_folder(str(busy), "Phone stand") == (folder, "existing")
     assert resolve_project_folder(folder, "anything") == (folder, "existing")
+
+
+# ---- hardening: case-insensitive names, quota, error mapping, reserved names, restore guard, trash
+
+def disk_names(lay):
+    return sorted(os.listdir(lay["files"]))
+
+
+def test_other_casing_cannot_bypass_the_version_check(env):
+    hub, lay, clock, a, b = env
+    hub.save_file(a, "notes.md", text="v1")
+    for v in (1, 2):
+        hub.save_file(a, "notes.md", text=f"v{v + 1}", if_exists="replace", expected_version=v)
+    with pytest.raises(HubError) as e:  # bob read v1 long ago and uses another casing
+        hub.save_file(b, "NOTES.md", text="clobber", if_exists="replace", expected_version=1)
+    assert e.value.code == "stale_version" and e.value.data["currentVersion"] == 3
+    with pytest.raises(HubError) as e:
+        hub.save_file(b, "Notes.md", text="clobber")
+    assert e.value.code == "file_exists"
+    assert hub.read_file("NOTES.MD")["text"] == "v3" and disk_names(lay) == ["notes.md"]
+    hub.save_file(b, "NOTES.md", text="ok", if_exists="replace", expected_version=3)  # right version: fine, one row
+    assert [(f["path"], f["version"]) for f in hub.list_files()["files"]] == [("notes.md", 4)]
+    assert disk_names(lay) == ["notes.md"]
+
+
+def test_casing_is_folded_for_folders_move_history_and_delete(env):
+    hub, lay, _, a, _ = env
+    hub.save_file(a, "Parts/Base.md", text="x")
+    hub.save_file(a, "parts/base.md", text="y", if_exists="new_name")
+    assert [f["path"] for f in hub.list_files()["files"]] == ["Parts/Base-2.md", "Parts/Base.md"]
+    with pytest.raises(HubError) as e:
+        hub.move_file(a, "parts/BASE.md", "PARTS/base-2.MD")
+    assert e.value.code == "file_exists"
+    assert hub.file_history("PARTS/BASE.MD")["current"]["version"] == 1
+    hub.delete_file(a, "parts/base.MD")
+    assert [f["path"] for f in hub.list_files()["files"]] == ["Parts/Base-2.md"]
+
+
+def test_short_8dot3_names_are_refused(env):
+    hub, _, _, a, _ = env
+    hub.save_file(a, "draft~2.md", text="x")  # a tilde name that isn't an alias of anything is fine
+    hub.save_file(a, "longfilename.md", text="long")
+    if os.name != "nt":
+        pytest.skip("8.3 aliases are an NTFS thing")
+    import ctypes
+    long_path = hub.files.full("longfilename.md")
+    buf = ctypes.create_unicode_buffer(1024)
+    ctypes.windll.kernel32.GetShortPathNameW(long_path, buf, len(buf))
+    short = os.path.basename(buf.value)
+    if not short or short.lower() == "longfilename.md":
+        pytest.skip("8.3 name generation is off on this volume")
+    with pytest.raises(HubError) as e:
+        hub.save_file(a, short, text="x", if_exists="replace", expected_version=1)
+    assert e.value.code == "bad_path"
+
+
+def test_history_and_trash_count_toward_the_quota(env):
+    hub, _, _, a, _ = env
+    hub.files.storage.update({"project_limit_gb": 100 / 1024 ** 3})
+    hub.save_file(a, "big.md", text="x" * 40)
+    hub.save_file(a, "big.md", text="y" * 40, if_exists="replace", expected_version=1)  # 40 live + 40 history
+    with pytest.raises(HubError) as e:  # live size alone (40+40) would fit; history makes it 120
+        hub.save_file(a, "big.md", text="z" * 40, if_exists="replace", expected_version=2)
+    assert e.value.code == "quota" and hub.read_file("big.md")["text"] == "y" * 40
+    assert [h["version"] for h in hub.file_history("big.md")["older_versions"]] == [1]  # no orphan history row
+    with pytest.raises(HubError) as e:  # restore can't sneak past the quota either
+        hub.restore_file(a, "big.md", 1)
+    assert e.value.code == "quota"
+
+
+def test_odd_filesystem_states_are_clean_errors(env):
+    hub, lay, _, a, _ = env
+    hub.make_folder(a, "x.md")
+    for call in (lambda: hub.read_file("x.md"), lambda: hub.save_file(a, "x.md", text="t"),
+                 lambda: hub.delete_file(a, "x.md")):
+        with pytest.raises(HubError) as e:
+            call()
+        assert e.value.status == 409 and e.value.code == "is_folder"
+    hub.save_file(a, "f.md", text="file")
+    hub.save_file(a, "g.md", text="g")
+    for call in (lambda: hub.save_file(a, "f.md/b.md", text="t"), lambda: hub.move_file(a, "g.md", "f.md/g.md"),
+                 lambda: hub.make_folder(a, "f.md")):
+        with pytest.raises(HubError) as e:
+            call()
+        assert e.value.status == 409 and e.value.code == "not_a_folder"
+    assert hub.read_file("g.md")["text"] == "g" and hub.file_history("g.md")["older_versions"] == []  # no orphan row
+    for call in (lambda: hub.save_file(a, "bad\ud800.md", text="t"), lambda: hub.save_file(a, "ok.md", text="\ud800")):
+        with pytest.raises(HubError) as e:
+            call()
+        assert e.value.status == 400
+
+
+@pytest.mark.parametrize("bad", ["abc", True, -1, 1.5, [1]])
+def test_expected_version_must_be_a_real_number(env, bad):
+    hub, _, _, a, _ = env
+    hub.save_file(a, "v.md", text="1")
+    with pytest.raises(HubError) as e:
+        hub.save_file(a, "v.md", text="2", if_exists="replace", expected_version=bad)
+    assert e.value.status == 400 and e.value.code == "bad_args"
+
+
+@pytest.mark.parametrize("bad", ["CON .txt", "aux .md", "conin$.txt", "CONOUT$.md", "COM\u00b9.txt", "lpt\u00b3.md",
+                                 "Nul..txt", "parts/prn .md"])
+def test_more_reserved_names_are_refused(env, bad):
+    hub, _, _, a, _ = env
+    with pytest.raises(HubError) as e:
+        hub.save_file(a, bad, text="x")
+    assert e.value.code == "bad_path"
+
+
+def test_restore_can_require_the_version_you_last_saw(env):
+    hub, _, clock, a, b = env
+    hub.save_file(a, "plan.md", text="one")
+    hub.save_file(a, "plan.md", text="two", if_exists="replace", expected_version=1)
+    files = hub._files()
+    with pytest.raises(HubError):
+        hub._file_call(files.restore, "plan.md", 1, "bob-codex", expected_version=1)  # it is at v2 now
+    assert hub.read_file("plan.md")["text"] == "two"
+    r = hub._file_call(files.restore, "plan.md", 1, "bob-codex", expected_version=2)
+    assert r["version"] == 3 and hub.read_file("plan.md")["text"] == "one"
+
+
+def test_trash_and_history_names_never_collide(env):
+    hub, lay, _, a, _ = env
+    hub.save_file(a, "a/b.md", text="slash")
+    hub.save_file(a, "a__b.md", text="underscores")
+    hub.delete_file(a, "a/b.md")
+    hub.delete_file(a, "a__b.md")  # same clock tick, same flattened trash name
+    hub.restore_file(a, "a/b.md", 1)
+    hub.delete_file(a, "a/b.md")  # same path, same second, same version number again
+    trashed = sorted(open(os.path.join(lay["trash"], n)).read() for n in os.listdir(lay["trash"]))
+    assert trashed == ["slash", "slash", "underscores"]
+    stored = [h for h in hub._files().db.execute("SELECT stored_as FROM file_history WHERE path='a/b.md'")]
+    assert len({r["stored_as"] for r in stored}) == len(stored) == 2
+
+
+def test_only_one_leading_files_prefix_is_stripped(env):
+    hub, lay, _, a, _ = env
+    assert hub.save_file(a, "files/x.md", text="1")["path"] == "x.md"
+    assert hub.save_file(a, "files/files/x.md", text="2")["path"] == "files/x.md"
+    assert os.path.exists(os.path.join(lay["files"], "files", "x.md"))

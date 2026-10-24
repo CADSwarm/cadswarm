@@ -29,7 +29,7 @@ def main():
         mcp_main()
     elif cmd == "check":
         try:
-            import fastapi, uvicorn, httpx  # noqa: F401
+            import fastapi, uvicorn  # noqa: F401
             from mcp.server.mcpserver import MCPServer  # noqa: F401
         except Exception as e:
             print(f"missing: {e}")

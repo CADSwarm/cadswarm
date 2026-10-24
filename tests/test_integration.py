@@ -56,11 +56,13 @@ def test_two_agents_build_one_model(hub_env):
               expressions={".Placement.Base.x": "Params.hole_pitch", ".Placement.Base.z": "5 mm"})
     assert s == 200, r
 
-    # Bob cannot touch Alice's plate — neither directly nor sneakily from a script.
+    # Bob cannot touch Alice's plate: not directly, and not from a script (which runs on a read-only snapshot).
     s, r = op(bob, "set_props", name="Plate", props={"Length": 10})
     assert s == 409 and r["code"] == "not_locked" and r["heldBy"]["Plate"]["name"] == "alice-claude"
     s, r = op(bob, "run_part_script", code="doc.getObject('Plate').Height = 50")
-    assert s == 409 and r["code"] == "lock_violation"
+    assert s == 200 and r["modified"] == [] and r["created"] == []  # scripts only see a snapshot: edits vanish
+    s, r = op(bob, "run_part_script", name="Plate", code="shape = Part.makeBox(1, 1, 1)")
+    assert s == 409 and r["code"] == "not_locked"  # nor can a script swap out someone else's part
     s, model = lead("GET", "/model")
     plate = next(o for o in model["objects"] if o["name"] == "Plate")
     assert plate["bbox"][5] == 5.0 and plate["locked_by"] == "alice-claude"  # rolled back
@@ -120,11 +122,14 @@ def test_part_scripts_cannot_touch_files(hub_env, tmp_path):
         f"shape = Part.makeBox(1,1,1)\nshape.exportStep(r'{tmp_path / 'x.step'}')",
         f"doc.saveAs(r'{tmp_path / 'x.FCStd'}')",
         "__import__('os').system('echo hi')",
+        f"import random\nrandom._os.makedirs(r'{tmp_path / 'made'}')",
+        f"f = doc.saveAs\nf(r'{tmp_path / 'y.FCStd'}')",
     ]
     for code in attempts:
         s, r = op(a, "run_part_script", name="Evil", code=code)
         assert s >= 400, (code, r)
     assert target.read_text() == "precious" and not (tmp_path / "x.step").exists()
+    assert not (tmp_path / "made").exists() and not (tmp_path / "y.FCStd").exists()
     s, r = op(a, "run_part_script", name="Gear",  # ordinary geometry scripts still work
               code="import math\nshape = Part.makeCylinder(10, 5)\nresult = {'pi': round(math.pi, 2)}")
     assert s == 200 and r["result"]["result"] == {"pi": 3.14}

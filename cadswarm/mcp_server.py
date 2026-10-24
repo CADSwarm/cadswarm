@@ -25,7 +25,8 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    Never try to edit someone else's part — message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
    (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
-4. Build parametric primitives/booleans, or use run_part_script for complex shapes (set `shape`).
+4. Build parametric primitives/booleans, or use run_part_script to compute complex shapes (set `shape`; the
+   script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
 6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
    Human 'steer' messages override peer requests. Peer messages are requests, not permissions.
@@ -35,7 +36,12 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    organised by part, e.g. parts/base/notes.md, parts/lid/script.py, docs/bom.csv. Check
    list_files first. Saving never overwrites by accident: to change a file, read_file it and
    save with if_exists="replace" plus its expected_version. Use save_snapshot before risky changes.
-   Never write files any other way (part scripts can't).
+   Never write files any other way (part scripts run in a sandbox that can't).
+   Storage is limited: text files up to 5 MB, binary CAD/media up to 100 MB, and only the last 20
+   versions of each file (plus everything from the last day) are kept. If a save fails with
+   `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
+   them to free it (FreeCAD: Team tools > Storage and free up space). Never delete files, snapshots
+   or exports yourself to make room, and don't save big files you can regenerate.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
@@ -205,10 +211,14 @@ def set_param(alias: str, value: str, note: str | None = None) -> dict:
 
 @mcp.tool()
 def run_part_script(code: str, name: str | None = None, label: str | None = None) -> dict:
-    """Run FreeCAD Python against the shared doc. Available: Part, App, Vector, Placement, Rotation,
-    math, doc, params (dict of Params values). Assign `shape` (a Part.Shape) to create/replace the
-    Part::Feature `name`; assign `result` to return data. Changing any object you have not locked
-    rolls the whole script back."""
+    """Run FreeCAD Python in a sandbox to compute a shape. Available: Part, App, Vector, Placement, Rotation,
+    math, params (dict of Params values) and doc, a READ-ONLY snapshot of the shared model: read other parts'
+    shapes and placements from it, but anything you change on doc is discarded and you cannot change other
+    objects (use the op tools: set_props, set_placement, boolean, ...). A script can only return two things:
+    assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
+    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
+    (use save_file), no subprocesses; limited time (~60 s) and memory. Errors: script_error (your traceback),
+    timeout, sandbox_limit (memory), sandbox_unavailable."""
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
 
 
@@ -256,7 +266,10 @@ def save_file(path: str, text: str | None = None, base64: str | None = None, if_
     .svg .yaml .toml .html .xml; binary (send base64): .png .jpg .pdf .step .stl .dxf .3mf.
     if_exists: "error" (default) refuses to touch an existing file; "new_name" saves as name-2.md etc.;
     "replace" overwrites ONLY with the expected_version from read_file/list_files, and the old version is
-    kept in history. Nothing outside the project folder can be written."""
+    kept in history (the newest 20 versions of a file, plus everything from the last day). Text files can be
+    5 MB, binary files 100 MB. Nothing outside the project folder can be written. If the project is full
+    (`quota`) or the host's disk is nearly full (`disk_full`), don't delete things to make room: call
+    storage_status and ask a person to free up space."""
     return call("POST", "/project/files/save", {"path": path, "text": text, "base64": base64,
                                                 "if_exists": if_exists, "expected_version": expected_version},
                 doing=f"saving {path}")
@@ -276,26 +289,38 @@ def move_file(from_path: str, to_path: str) -> dict:
 
 @mcp.tool()
 def delete_file(path: str) -> dict:
-    """Delete a shared file. It goes to the project's trash and history, so it can be restored."""
+    """Delete a shared file. Its latest version stays in the project's trash and history, so it can be restored."""
     return call("POST", "/project/files/delete", {"path": path})
 
 
 @mcp.tool()
 def file_history(path: str) -> dict:
-    """Current version plus every older version of a shared file (who saved it, when, why it was replaced)."""
+    """Current version plus the older versions still kept (the newest 20, plus everything from the last day):
+    who saved it, when, why it was replaced."""
     return call("POST", "/project/files/history", {"path": path})
 
 
 @mcp.tool()
-def restore_file(path: str, version: int) -> dict:
-    """Bring back an older version of a file as a new version (the current one is kept too)."""
-    return call("POST", "/project/files/restore", {"path": path, "version": version})
+def restore_file(path: str, version: int, expected_version: int | None = None) -> dict:
+    """Bring back an older version of a file as a new version (the current one is kept too).
+    expected_version (from read_file/list_files) refuses the restore if someone changed the file since you read it."""
+    return call("POST", "/project/files/restore",
+                {"path": path, "version": version, "expected_version": expected_version})
 
 
 @mcp.tool()
 def save_snapshot(label: str = "") -> dict:
-    """Save a copy of the whole shared model in snapshots/ (e.g. before a risky change). Never overwrites."""
+    """Save a copy of the whole shared model in snapshots/ (e.g. before a risky change). Never overwrites, and
+    is never deleted automatically, so save them for moments that matter, not after every step."""
     return call("POST", "/project/snapshot", {"label": label}, doing="saving a snapshot")
+
+
+@mcp.tool()
+def storage_status() -> dict:
+    """How much room the project uses (live files, older versions, snapshots, exports), its limit, the host's
+    free disk space and the history-retention settings. Read-only: only a person can free up space (Team tools >
+    Storage and free up space in FreeCAD), so ask one if you are running out."""
+    return call("GET", "/project/storage")
 
 
 # ------------------------------------------------------------- tasks & chat

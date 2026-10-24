@@ -448,7 +448,12 @@ class SetupWizard(QtGui.QDialog):
         url = f"http://127.0.0.1:{port}"
         log(f"Starting the team server on port {port} (model saved in {data_dir})")
         pid = hosting.start_hub(self.python, data_dir, self.token, port)
-        hosting.wait_healthy(url, timeout=120, pid=pid, data_dir=data_dir)
+        self.p.SetString("HostPid", str(pid))  # saved at once, so "Stop hosting" finds it whatever happens next
+        try:
+            hosting.wait_healthy(url, timeout=120, pid=pid, data_dir=data_dir)
+        except Exception:
+            hosting.stop_hub(pid)  # else "Try again" would start a second server on the same project folder
+            raise
         self.hub_for_agent = url
         self.host_info = {"HostDataDir": data_dir, "HostToken": self.token, "HostPort": str(port),
                           "HostPid": str(pid)}
@@ -472,8 +477,22 @@ class SetupWizard(QtGui.QDialog):
         box.setMaximumHeight(80)
         lay.addWidget(box)
         copy = QtGui.QPushButton("Copy invite code")
-        copy.clicked.connect(lambda: copy_to_clipboard(code, copy))
+        copy.clicked.connect(lambda: copy_to_clipboard(box.toPlainText(), copy))
         lay.addWidget(copy, 0, QtCore.Qt.AlignLeft)
+        ips = hosting.local_ips() if self.p.GetString("HostPort") else []
+        if len(ips) > 1:
+            lay.addWidget(label("This computer has more than one network address. If teammates can't join, "
+                                "pick the one on the network you share (for example your Tailscale one):", "hint"))
+            pick = QtGui.QComboBox()
+            pick.addItems(ips)
+            lay.addWidget(pick, 0, QtCore.Qt.AlignLeft)
+
+            def use_address(ip):
+                new = make_invite(f"http://{ip}:{self.p.GetString('HostPort')}", self.p.GetString("HostToken"),
+                                  self.p.GetString("ProjectName") or self.project)
+                self.p.SetString("InviteCode", new)
+                box.setPlainText(new)
+            pick.currentTextChanged.connect(use_address)
         folder = self.p.GetString("HostDataDir")
         if folder:
             row = QtGui.QHBoxLayout()
@@ -483,7 +502,10 @@ class SetupWizard(QtGui.QDialog):
             row.addWidget(show)
             lay.addLayout(row)
         lay.addWidget(label("<b>Good to know</b><br>"
-                            "• Teammates need to be on the same Wi-Fi or network as this computer.<br>"
+                            "• Teammates need to be on the same Wi-Fi or network as this computer. Venue or guest "
+                            "Wi-Fi may block that; a phone hotspot everyone joins works.<br>"
+                            "• The first time, Windows may ask to allow access through its firewall. Click "
+                            "<b>Allow access</b>, or teammates can't connect.<br>"
                             "• Keep this computer on while your team works. Your project is saved as you go.<br>"
                             "• You can copy the code again any time from the team panel (“Invite”).", "hint"))
         lay.addStretch(1)
@@ -543,16 +565,28 @@ class SetupWizard(QtGui.QDialog):
                 self.join_error.setText("Couldn't reach your teammate's computer. Check that:<br>"
                                         "• you're on the same Wi-Fi or network,<br>"
                                         "• their computer is on and CadSwarm is running there,<br>"
-                                        "• the invite code is their latest one.")
+                                        "• the invite code is their latest one.<br>"
+                                        "Venue or guest Wi-Fi often stops computers from reaching each other. "
+                                        "Try a phone hotspot that you both join, or "
+                                        "<a href='https://tailscale.com'>Tailscale</a>.")
             else:
                 self.join_error.setText(panel.friendly_error(e, inv["hub"]))
+            return
+        except Exception as e:  # never leave the dialog stuck on "Joining…"
+            App.Console.PrintError(f"[CadSwarm] Join failed: {e!r}\n")
+            self.join_error.setText("Something went wrong while joining. Please try again; if it keeps "
+                                    "happening, ask your teammate to send a fresh invite code.")
             return
         self.name, self.project, self.token = name, inv["project"] or "Team project", inv["token"]
         self.hub_for_agent = inv["hub"]
         self.p.SetString("InviteCode", self.code_edit.toPlainText().strip())
         self.p.SetString("ProjectName", self.project)
-        for k in ("HostDataDir", "HostToken", "HostPort", "HostPid"):
-            self.p.SetString(k, "")  # this computer is not the host
+        # Forget this computer's hosting only if its own team server is gone: someone who hosts and then joins
+        # (their own invite, or another team) must still be able to "Stop hosting" the server they started.
+        port = self.p.GetString("HostPort")
+        if not (port and hosting.health(f"http://127.0.0.1:{port}")):
+            for k in ("HostDataDir", "HostToken", "HostPort", "HostPid"):
+                self.p.SetString(k, "")  # this computer is not the host
         self.show_page("agent")
 
     # ----------------------------------------------------------------- agent
@@ -621,7 +655,8 @@ class SetupWizard(QtGui.QDialog):
 
     def default_folder(self):
         # The helper's own workspace (it holds its sign-in), next to — never inside — the shared files/.
-        base = self.p.GetString("HostDataDir") if self.mode == "host" else ""
+        own_team = self.p.GetString("HostToken") and self.p.GetString("HostToken") == getattr(self, "token", None)
+        base = self.p.GetString("HostDataDir") if self.mode == "host" or own_team else ""
         base = base or os.path.join(projects_dir(), self.project or "Team project")
         return os.path.join(base, "AI helpers", f"{slug(self.name)}-{self.client}")
 
@@ -687,7 +722,7 @@ class SetupWizard(QtGui.QDialog):
 
     def page_launch(self):
         label_ = CLIENTS[self.client]["label"]
-        w, lay = self.page(f"Start {label_}", "Three quick steps and your helper is on the team.")
+        w, lay = self.page(f"Start {label_}", "A few quick steps and your helper is on the team.")
         lay.addWidget(label("<b>1.</b> Open your helper in its workspace folder:"))
         open_btn = QtGui.QPushButton(f"Open {label_}")
         open_btn.setObjectName("primary")
@@ -695,12 +730,18 @@ class SetupWizard(QtGui.QDialog):
         open_btn.clicked.connect(self.open_helper)
         lay.addWidget(open_btn, 0, QtCore.Qt.AlignLeft)
         lay.addWidget(self.open_status)
-        trust = ("If it asks whether you trust this folder, choose <b>Yes</b>."
-                 if self.client == "claude" else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
+        trust = ("Claude Code will ask whether you trust this folder and may ask to approve the “cadswarm” "
+                 "tools — say <b>Yes</b>." if self.client == "claude"
+                 else "If it asks to trust or approve this folder, choose <b>Yes</b>.")
         lay.addWidget(label(f"<b>2.</b> A window opens. {trust} If it asks you to sign in, follow its steps."))
         role = "lead" if self.mode == "host" else "member"
         prompt = FIRST_PROMPT[role].format(project=self.project)
-        lay.addWidget(label("<b>3.</b> Paste this as your first message and press Enter:"))
+        if self.client == "codex":
+            lay.addWidget(label("<b>3.</b> Type <code>/hooks</code> and trust the <b>CadSwarm</b> hook. Codex skips "
+                                "hooks you haven't approved, so without this it won't see its team's updates. "
+                                "Do it again after updating CadSwarm."))
+        n = 4 if self.client == "codex" else 3
+        lay.addWidget(label(f"<b>{n}.</b> Paste this as your first message and press Enter:"))
         box = QtGui.QPlainTextEdit(prompt)
         box.setReadOnly(True)
         box.setMaximumHeight(70)
@@ -764,6 +805,9 @@ class SetupWizard(QtGui.QDialog):
         url = f"http://127.0.0.1:{port}"
         if hosting.health(url):
             log("Team server is already running.")
+            pid = hosting.pid_on_port(port)
+            if pid:
+                self.p.SetString("HostPid", str(pid))  # a stale PID would make "Stop hosting" do nothing
             return
         data_dir, token = self.p.GetString("HostDataDir"), self.p.GetString("HostToken")
         try:
@@ -810,6 +854,7 @@ def stop_hosting():
                          "start it again (CadSwarm ▸ Get started ▸ Reconnect). Your project is saved."):
         return
     panel.SESSION.disconnect()
-    hosting.stop_hub(int(pid) if pid else None)
+    hosting.stop_hub(pid)
+    panel.SESSION.set_state("disconnected", panel.STOPPED_HOSTING)
     App.Console.PrintMessage("[CadSwarm] Stopped hosting. Your project is saved.\n")
 

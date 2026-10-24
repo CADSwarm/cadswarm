@@ -52,7 +52,9 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
 
     @app.get("/health")
     def health():
-        return {"ok": True, "seq": hub.seq(), "freecad": hub.query("ping")["freecad"]}
+        ping = hub.query("ping")
+        return {"ok": True, "seq": hub.seq(), "freecad": ping["freecad"],
+                "script_sandbox": ping.get("script_sandbox")}  # {level, detail, timeout_s, memory_mb}
 
     @app.post("/join")
     def join(body: dict = Body(...)):
@@ -163,7 +165,22 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
 
     @app.post("/project/files/restore")
     def restore(body: dict = Body(...), p=Depends(me)):
-        return hub.restore_file(p["id"], body.get("path"), body.get("version"))
+        return hub.restore_file(p["id"], body.get("path"), body.get("version"), body.get("expected_version"))
+
+    @app.get("/project/storage")
+    def storage(p=Depends(me)):
+        return hub.storage_status()
+
+    @app.post("/project/storage/prune")
+    def storage_prune(body: dict = Body(default={}), p=Depends(me)):
+        return hub.prune_storage(p["id"], body)
+
+    @app.post("/project/storage/settings")
+    def storage_settings(request: Request, body: dict = Body(...), p=Depends(me)):
+        # The host's own FreeCAD talks to its hub over loopback; teammates come in over the network.
+        if not request.client or request.client.host not in ("127.0.0.1", "::1", "localhost"):
+            raise HubError(403, "host_only", "Only the computer hosting the team can change its storage limits.")
+        return hub.set_storage_settings(p["id"], body)
 
     @app.post("/project/snapshot")
     def save_snapshot(body: dict = Body(default={}), p=Depends(me)):
@@ -171,7 +188,11 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
 
     @app.get("/snapshot.FCStd")
     def snapshot(p=Depends(me)):
-        return FileResponse(hub.worker.doc_path, filename="model.FCStd")
+        with hub.lock:  # the worker replaces this file on save; never hand out (or hold open) the live one
+            with open(hub.worker.doc_path, "rb") as f:
+                data = f.read()
+        return Response(data, media_type="application/octet-stream",
+                        headers={"content-disposition": 'attachment; filename="model.FCStd"'})
 
     @app.get("/participants")
     def participants(p=Depends(me)):
