@@ -48,6 +48,12 @@ export interface Api {
   setParam(alias: string, value: string): Promise<void>;
   /** The printer bed the team builds for, in millimetres. */
   setBed(xMm: number, yMm: number, zMm: number): Promise<void>;
+  /** Stop a task (a person may stop any; a helper only one it asked for or claimed). */
+  cancelTask(id: string, reason: string): Promise<void>;
+  /** Remove a leftover open task; a claimed one must be cancelled instead. */
+  deleteTask(id: string): Promise<void>;
+  /** Stop a whole request; its unstarted tasks are cancelled with it. */
+  cancelBrief(id: string): Promise<void>;
   movePointer(object: string, point: number[], mode: string, label: string): void;
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
@@ -272,6 +278,9 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       lock: names => quiet(r.lockObjects({ fence: fence(), names })),
       release: names => quiet(r.releaseObjects({ fence: fence(), names, force: false })),
       setBed: (xMm, yMm, zMm) => quiet(r.setBed({ fence: fence(), xMm, yMm, zMm })),
+      cancelTask: (id, reason) => quiet(r.cancelTask({ fence: fence(), taskId: id, reason })),
+      deleteTask: id => quiet(r.deleteTask({ fence: fence(), taskId: id })),
+      cancelBrief: id => quiet(r.cancelBrief({ fence: fence(), briefId: id })),
       setParam: async (alias, value) => {
         // set_param needs the `Params` lock (rules::needed_locks). Hold it only until the host finishes the op.
         let locked = false;

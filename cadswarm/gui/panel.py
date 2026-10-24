@@ -773,8 +773,15 @@ class TeamPanel(QtGui.QDockWidget):
         self.task_mine = action_button("I'll do it", "Take this task yourself and change the parts by hand",
                                        self.task_take)
         self.task_done = action_button("Mark done", "Say you've finished this task", self.task_finish)
+        self.task_cancel = action_button("Cancel…", "Stop this task or request; the team stops working on it",
+                                         self.task_cancel_selected)
+        self.task_delete = action_button("Delete", "Remove a leftover task nobody has started",
+                                         self.task_delete_selected)
+        self.task_stl = action_button("Save STL…", "Save this request's finished model as an STL file",
+                                      self.brief_save_stl)
         details = action_button("Details", "Everything about this task, and its result", self.task_details)
-        for i, b in enumerate((self.task_start, self.task_mine, self.task_done, details)):
+        for i, b in enumerate((self.task_start, self.task_mine, self.task_done, details,
+                               self.task_cancel, self.task_delete, self.task_stl)):
             grid.addWidget(b, i // 2, i % 2)
         tl.addLayout(grid)
         self.task_hint = QtGui.QLabel("")
@@ -1098,7 +1105,7 @@ class TeamPanel(QtGui.QDockWidget):
             colour = "#2da44e" if passed else "#d9822b"
             word = "passed" if passed else "asks for changes"
             findings = [f for f in (r.get("findings") or []) if f]
-            lines.append(f"<b style='color:{colour}'>Review round {int(r.get('round') or 0)} {word}</b>")
+            lines.append(f"<b style='color:{colour}'>Round {int(r.get('round') or 0)} {word}</b>")
             lines.extend("· " + html.escape(str(f)) for f in findings[:3])
             if len(findings) > 3:
                 lines.append(f"<span style='color:#8b949e'>and {len(findings) - 3} more</span>")
@@ -1180,8 +1187,8 @@ class TeamPanel(QtGui.QDockWidget):
     def render_tasks(self, s):
         key = (tuple((t["id"], t["status"], t.get("owner_name"), t.get("assignee"), t["title"], t.get("brief"))
                      for t in s.tasks),
-               tuple((b["id"], b["status"], b["done"], b["tasks"]) for b in s.briefs))
-        open_ = sum(1 for t in s.tasks if t["status"] != "done")
+               tuple((b["id"], b["status"], b["done"], b["tasks"], b.get("stl")) for b in s.briefs))
+        open_ = sum(1 for t in s.tasks if t["status"] not in ("done", "cancelled"))
         self.tabs.setTabText(self.tabs.indexOf(self.tasks_page), f"Tasks · {open_}" if open_ else "Tasks")
         if not self.changed("tasks", key):
             for item, word in getattr(self, "task_busy", []):
@@ -1199,10 +1206,11 @@ class TeamPanel(QtGui.QDockWidget):
             item = QtGui.QTreeWidgetItem([f"🧠 {b['text']}", word])
             item.setToolTip(0, f"{b['text']}\n(asked by {b['by']})")
             item.setForeground(1, QtGui.QBrush(QtGui.QColor(
-                {"ready": "#1a7f37", "failed": "#cf222e"}.get(b["status"], "#d9822b"))))
+                {"ready": "#1a7f37", "failed": "#cf222e", "cancelled": "#8b949e"}.get(b["status"], "#d9822b"))))
             item.setData(0, QtCore.Qt.UserRole, None)
+            item.setData(0, QtCore.Qt.UserRole + 1, b["id"])
             self.task_list.addTopLevelItem(item)
-            item.setExpanded(b["status"] != "ready")
+            item.setExpanded(b["status"] not in ("ready", "cancelled"))
             groups[b["id"]] = item
         if not s.tasks and not s.briefs:
             empty = QtGui.QTreeWidgetItem(["No tasks yet. Type @ and a helper's name in the chat to give it one.",
@@ -1219,7 +1227,7 @@ class TeamPanel(QtGui.QDockWidget):
             item.setToolTip(0, (t.get("detail") or t["title"])[:600])
             item.setToolTip(1, f"{word}, {who}")
             colour = {"claimed": "#d9822b", "done": "#1a7f37", "blocked": "#cf222e",
-                      "awaiting_takeover": "#9a6700"}.get(t["status"])
+                      "awaiting_takeover": "#9a6700", "cancelled": "#8b949e"}.get(t["status"])
             if colour:
                 item.setForeground(1, QtGui.QBrush(QtGui.QColor(colour)))
             if parent is not None:
@@ -1597,18 +1605,34 @@ class TeamPanel(QtGui.QDockWidget):
         tid = self.selected_task_id()
         return next((t for t in self.session.tasks if t["id"] == tid), None)
 
+    def selected_brief(self):
+        items = self.task_list.selectedItems()
+        bid = items[0].data(0, QtCore.Qt.UserRole + 1) if items else None
+        return next((b for b in self.session.briefs if b["id"] == bid), None) if bid else None
+
     def task_selected(self):
         t = self.selected_task() if hasattr(self, "task_list") else None
+        b = self.selected_brief() if hasattr(self, "task_list") else None
         me = self.session.ident["name"] if self.session.ident else None
         self.task_start.setEnabled(bool(t and t["status"] in ("open", "awaiting_takeover", "blocked")))
         self.task_mine.setEnabled(bool(t and t["status"] in ("open", "awaiting_takeover")))
         self.task_done.setEnabled(bool(t and t["status"] == "claimed" and t.get("owner_name") == me))
-        if not t:
+        self.task_cancel.setEnabled(bool((t and t["status"] not in ("done", "cancelled"))
+                                         or (b and b["status"] not in ("ready", "failed", "cancelled"))))
+        self.task_delete.setEnabled(bool(t and t["status"] == "open"))
+        self.task_stl.setEnabled(bool(b and b.get("stl")))
+        if not t and b:
+            text = ("This request is cancelled." if b["status"] == "cancelled"
+                    else "This request is ready. Save its STL." if b["status"] == "ready"
+                    else "Cancel the whole request, or click one of its tasks.")
+        elif not t:
             text = "Click a task to start it, take it yourself or see its details."
         elif t["status"] == "claimed" and t.get("owner_name") != me:
             text = f"{t.get('owner_name')} is working on it."
         elif t["status"] == "done":
             text = "This task is done. Double-click it to see the result."
+        elif t["status"] == "cancelled":
+            text = "This task was cancelled. Delete it if it was never started."
         else:
             text = ""
         self.task_hint.setText(f"<small style='color:#8b949e'>{text}</small>" if text else "")
@@ -1659,8 +1683,64 @@ class TeamPanel(QtGui.QDockWidget):
             self.session.act_async("POST", f"/tasks/{t['id']}/result", {"status": "done", "summary": summary or "Done"},
                                    done=f"Marked “{t['title']}” done", purpose="finish a task")
 
+    def task_cancel_selected(self):
+        """Cancel a task, or the whole request when a request row is selected."""
+        t, b = self.selected_task(), self.selected_brief()
+        if t:
+            if not confirm(f"Cancel “{t['title']}”? The team stops working on it."):
+                return
+            reason, ok = QtGui.QInputDialog.getText(self, "Cancel a task", "Why? (optional, the team sees it)")
+            if not ok:
+                return
+            self.session.act_async("POST", f"/tasks/{t['id']}/cancel", {"reason": reason.strip()},
+                                   done=f"Cancelled “{t['title']}”", purpose="cancel a task")
+        elif b:
+            if not confirm(f"Cancel “{b['text']}”? Its unstarted tasks are cancelled too."):
+                return
+            self.session.act_async("POST", f"/briefs/{b['id']}/cancel", {},
+                                   done=f"Cancelled “{b['text']}”", purpose="cancel the request")
+
+    def task_delete_selected(self):
+        t = self.selected_task()
+        if not t or not confirm(f"Delete “{t['title']}”? It was never started."):
+            return
+        self.session.act_async("POST", f"/tasks/{t['id']}/delete", {},
+                               done=f"Deleted “{t['title']}”", purpose="delete a task")
+
+    def brief_save_stl(self):
+        """An older request keeps its finished model reachable from the Tasks tab."""
+        b = self.selected_brief()
+        if not b or not b.get("stl"):
+            hint("That request has no finished model yet.")
+            return
+        path, _ = QtGui.QFileDialog.getSaveFileName(Gui.getMainWindow(), "Save STL",
+                                                    f"cadswarm-{b['id']}.stl", "STL (*.stl)")
+        if not path:
+            return
+
+        def got(data):
+            with open(path, "wb") as f:
+                f.write(data)
+            say(f"Saved {path}")
+
+        self.session.run_async(lambda c: c.request("GET", f"/artifacts/{b['stl']}", raw=True), got,
+                               purpose="save the model")
+
     def task_details(self):
         t = self.selected_task()
+        b = self.selected_brief()
+        if not t and b:
+            lines = [f"<b>{html.escape(b['text'])}</b>",
+                     f"Status: {BRIEF_WORDS.get(b['status'], b['status'])}",
+                     f"Asked by: {html.escape(b.get('by') or '?')}",
+                     f"Parts: {b.get('done', 0)} of {b.get('tasks', 0)} done"]
+            if b.get("stl"):
+                lines.append("A finished model is ready. Save it from Save STL…")
+            box = QtGui.QMessageBox(QtGui.QMessageBox.Information, "Request", "<br>".join(lines),
+                                    parent=Gui.getMainWindow())
+            box.setTextFormat(QtCore.Qt.RichText)
+            (getattr(box, "exec", None) or box.exec_)()
+            return
         if not t:
             hint("Click a task first.")
             return
@@ -1916,9 +1996,9 @@ def takes_instructions(p):
 
 BRIEF_WORDS = {"new": "⏳ waiting for the team server", "planning": "🧠 planning the parts",
                "building": "🔨 building", "reviewing": "🔍 checking the result", "ready": "✓ done",
-               "failed": "✗ stopped (see Activity)"}
+               "failed": "✗ stopped (see Activity)", "cancelled": "⊘ cancelled"}
 COMMAND_WORDS = {"sent": "⏳ not read yet", "seen": "👀 read, working on it", "done": "✓ done"}
-TASK_ORDER = {"claimed": 0, "open": 1, "awaiting_takeover": 2, "blocked": 3, "done": 4}
+TASK_ORDER = {"claimed": 0, "open": 1, "awaiting_takeover": 2, "blocked": 3, "done": 4, "cancelled": 5}
 TASK_KINDS = [
     ("Build a new part", "Describe the part: what it is, rough size, what it attaches to.\n"
                          "e.g. A lid for the enclosure, 3 mm walls, that sits on the four posts"),
@@ -2609,7 +2689,7 @@ def edit_part():
 
 STATUS_WORDS = {"active": "here", "stale": "away", "left": "left"}
 TASK_WORDS = {"open": "not started", "claimed": "in progress", "awaiting_takeover": "needs someone",
-              "done": "done ✓", "blocked": "stuck"}
+              "done": "done ✓", "blocked": "stuck", "cancelled": "cancelled"}
 
 
 def who_is(p):

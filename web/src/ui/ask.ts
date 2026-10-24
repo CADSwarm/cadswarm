@@ -22,12 +22,13 @@ function buildBubble(s: State, b: Extract<ThreadItem, { type: 'build' }>['brief'
   const review = s.reviews.filter(r => r.brief === b.id).sort((x, y) => y.round - x.round)[0];
   const art = b.stlHash ? s.artifacts.find(a => a.hash === b.stlHash) : undefined;
   const findings = review && !review.passed ? findingLines(review.findingsJson) : [];
-  return `<div class="bubble build${b.status === 'failed' ? ' failed' : ''}">
+  return `<div class="bubble build${b.status === 'failed' ? ' failed' : b.status === 'cancelled' ? ' cancelled' : ''}">
       <p class="bubble-text">${esc(b.text)}</p>
       <ol class="steps" aria-label="Build progress">
         ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''}>${STEP_LABEL[st]}</li>`).join('')}
       </ol>
       <p class="meta">${b.status === 'failed' ? '<span class="err">Stopped: see Team ▸ Activity</span>'
+        : b.status === 'cancelled' ? 'Cancelled: nobody works on it now'
         : tasks.length ? `${done} of ${tasks.length} parts done` : 'The team is planning it'}${review ? ` · review ${review.passed ? 'passed' : 'asks for changes'}` : ''}</p>
       ${findings.length ? `<ul class="findings">${findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
       ${b.stlHash && !(art && art.size === 0)

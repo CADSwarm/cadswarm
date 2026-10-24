@@ -18,6 +18,13 @@ pub fn create_task(ctx: &ReducerContext, fence: u32, task_id: String, title: Str
     if title.trim().is_empty() {
         return Err("bad_args: title is empty".into());
     }
+    if !brief.is_empty() {
+        if let Some(b) = ctx.db.brief().id().find(&brief).filter(|b| b.ws == m.ws) {
+            if b.status == "cancelled" {
+                return Err(format!("cancelled: Brief {brief} was stopped; no new tasks"));
+            }
+        }
+    }
     let now = now_ms(ctx);
     ctx.db.task().insert(Task {
         id: task_id.clone(),
@@ -127,7 +134,7 @@ pub fn pick_up_task(ctx: &ReducerContext, fence: u32, task_id: String) -> Result
 pub fn report_task(ctx: &ReducerContext, fence: u32, task_id: String, status: String, summary: String, evidence: Vec<String>) -> Result<(), String> {
     let m = me(ctx, fence)?;
     let t = task_by_id(ctx, m.ws, &task_id)?;
-    rules::check_report(&task_id, t.owner, &name_of(ctx, t.owner), m.id, &status)?;
+    rules::check_report(&task_id, &t.status, t.owner, &name_of(ctx, t.owner), m.id, &status)?;
     let now = now_ms(ctx);
     let result = json!({"summary": summary, "evidence": evidence, "by": m.name, "at": now});
     let (creator, rev) = (t.created_by, t.rev + 1);
@@ -141,6 +148,68 @@ pub fn report_task(ctx: &ReducerContext, fence: u32, task_id: String, status: St
         &task_id,
     );
     emit(ctx, m.ws, "task_reported", m.id, json!({"task": task_id, "status": status, "name": m.name}));
+    Ok(())
+}
+
+/// Stop a task. The person who asked for it, the helper that claimed it, or any person on the team may.
+/// Its result is kept (a cancelled task never becomes done again).
+#[reducer]
+pub fn cancel_task(ctx: &ReducerContext, fence: u32, task_id: String, reason: String) -> Result<(), String> {
+    let m = me(ctx, fence)?;
+    let t = task_by_id(ctx, m.ws, &task_id)?;
+    rules::check_cancel_task(&task_id, &rules::Closing {
+        status: &t.status,
+        owner: t.owner,
+        created_by: t.created_by,
+        caller: m.id,
+        caller_kind: &m.kind,
+    })?;
+    let now = now_ms(ctx);
+    let reason: String = reason.trim().chars().take(500).collect();
+    let why = if reason.is_empty() { String::new() } else { format!(": {reason}") };
+    let result = json!({"summary": reason, "by": m.name, "at": now, "cancelled": true});
+    let (creator, owner, assignee, rev, title) = (t.created_by, t.owner, t.assignee.clone(), t.rev + 1, t.title.clone());
+    ctx.db.task().id().update(Task {
+        status: "cancelled".into(), result_json: result.to_string(), rev, updated_ms: now, ..t
+    });
+    let said = format!("{} stopped task {task_id} ({title}){why}", m.name);
+    if creator != m.id {
+        system_message(ctx, m.ws, &format!("member:{creator}"), said.clone(), "notice", &task_id);
+    }
+    if owner != 0 && owner != m.id && owner != creator {
+        system_message(ctx, m.ws, &format!("member:{owner}"), format!("{said}. Drop it."), "notice", &task_id);
+    } else if owner == 0 && !assignee.is_empty() && !assignee.eq_ignore_ascii_case(&m.name) {
+        let to = rules::address(&assignee, live_by_name(ctx, m.ws, &assignee).map(|x| x.id));
+        if to != "all" {
+            system_message(ctx, m.ws, &to, format!("{said}. You can skip it."), "notice", &task_id);
+        }
+    }
+    emit(ctx, m.ws, "task_cancelled", m.id, json!({"task": task_id, "name": m.name, "reason": reason}));
+    Ok(())
+}
+
+/// Remove a leftover open task. Nothing was started, so nothing is lost; a claimed task is stopped instead.
+#[reducer]
+pub fn delete_task(ctx: &ReducerContext, fence: u32, task_id: String) -> Result<(), String> {
+    let m = me(ctx, fence)?;
+    let t = task_by_id(ctx, m.ws, &task_id)?;
+    rules::check_delete_task(&task_id, &rules::Closing {
+        status: &t.status,
+        owner: t.owner,
+        created_by: t.created_by,
+        caller: m.id,
+        caller_kind: &m.kind,
+    })?;
+    let (title, assignee) = (t.title.clone(), t.assignee.clone());
+    ctx.db.task().id().delete(&task_id);
+    if !assignee.is_empty() && !assignee.eq_ignore_ascii_case(&m.name) {
+        let to = rules::address(&assignee, live_by_name(ctx, m.ws, &assignee).map(|x| x.id));
+        if to != "all" {
+            system_message(ctx, m.ws, &to,
+                format!("{} removed task {task_id} ({title}). Skip it if you see it.", m.name), "notice", &task_id);
+        }
+    }
+    emit(ctx, m.ws, "task_deleted", m.id, json!({"task": task_id, "title": title, "name": m.name}));
     Ok(())
 }
 

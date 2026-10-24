@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadBoards, parseBoards } from '../src/ui/brief';
 import { datasheetLinks, parseMm } from '../src/ui/params';
-import { currentBrief, findingLines, latestReview } from '../src/ui/panels';
+import { currentBrief, findingLines, latestReview, modelBrief } from '../src/ui/panels';
 import { bedError, reviewFindings, reviewHeadline, shownReview } from '../src/ui/review';
 import { mergeStl, startMockSwarm } from '../src/mock';
 import { Store } from '../src/store';
@@ -46,6 +46,16 @@ describe('panel helpers', () => {
     expect(currentBrief({ briefs })?.id).toBe('b_2');
     const reviews = [{ brief: 'b_2', round: 1 }, { brief: 'b_2', round: 2 }, { brief: 'b_1', round: 9 }] as never[];
     expect(latestReview({ reviews }, 'b_2')?.round).toBe(2);
+  });
+  it('keeps an older finished model reachable when a newer request is unfinished', () => {
+    const briefs = [
+      { id: 'b_1', updatedMs: 1, stlHash: 'aa'.repeat(32) },
+      { id: 'b_2', updatedMs: 2, stlHash: 'bb'.repeat(32) },
+      { id: 'b_3', updatedMs: 9, stlHash: '' },
+    ] as never[];
+    expect(currentBrief({ briefs })?.id).toBe('b_3');
+    expect(modelBrief({ briefs })?.id).toBe('b_2');
+    expect(modelBrief({ briefs: [{ id: 'b_4', updatedMs: 1, stlHash: '' }] as never })).toBeUndefined();
   });
   it('reads findings whatever shape the reviewer sends', () => {
     expect(findingLines('[{"message":"hole too small"},"lid loose"]')).toEqual(['hole too small', 'lid loose']);
@@ -109,6 +119,29 @@ describe('mock swarm', () => {
     const held = store.state.locks.find(l => l.holder !== 1)!;
     await api.lock([held.object]);
     expect(store.state.notice?.text).toMatch(/Already locked/);
+    stop();
+  });
+  it('stops a task or a whole request and leaves finished work alone', async () => {
+    vi.useFakeTimers();
+    const store = new Store();
+    const { stop, api } = startMockSwarm(store);
+    const briefId = store.state.briefs[0].id;
+    const claimed = store.state.tasks.find(t => t.status === 'claimed')!;
+    const open = store.state.tasks.find(t => t.status === 'open')!;
+    await api.cancelTask(claimed.id, 'not needed');
+    expect(store.state.tasks.find(t => t.id === claimed.id)?.status).toBe('cancelled');
+    await api.deleteTask(open.id);
+    expect(store.state.tasks.some(t => t.id === open.id)).toBe(false);
+
+    await api.cancelBrief(briefId);
+    expect(store.state.briefs[0].status).toBe('cancelled');
+    // Unstarted parts go with the request; the task already cancelled stays cancelled.
+    expect(store.state.tasks.filter(t => t.brief === briefId)
+      .every(t => t.status === 'done' || t.status === 'cancelled')).toBe(true);
+    // The scripted build does not resurrect a stopped request.
+    vi.advanceTimersByTime(1800 * 10);
+    expect(store.state.briefs[0].status).toBe('cancelled');
+    expect(store.state.tasks.find(t => t.id === claimed.id)?.status).toBe('cancelled');
     stop();
   });
 });

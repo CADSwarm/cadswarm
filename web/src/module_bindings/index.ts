@@ -36,17 +36,21 @@ import {
 // Import all reducer arg schemas
 import AcceptHandoffReducer from "./accept_handoff_reducer";
 import AckMessagesReducer from "./ack_messages_reducer";
+import CancelBriefReducer from "./cancel_brief_reducer";
 import CancelHandoffReducer from "./cancel_handoff_reducer";
+import CancelTaskReducer from "./cancel_task_reducer";
 import ClaimTaskReducer from "./claim_task_reducer";
 import CompleteOpReducer from "./complete_op_reducer";
 import CreateInviteReducer from "./create_invite_reducer";
 import CreateTaskReducer from "./create_task_reducer";
+import DeleteTaskReducer from "./delete_task_reducer";
 import HeartbeatReducer from "./heartbeat_reducer";
 import LeaveReducer from "./leave_reducer";
 import LockObjectsReducer from "./lock_objects_reducer";
 import LogActivityReducer from "./log_activity_reducer";
 import MarkDeliveredReducer from "./mark_delivered_reducer";
 import MovePointerReducer from "./move_pointer_reducer";
+import PickUpTaskReducer from "./pick_up_task_reducer";
 import PutArtifactReducer from "./put_artifact_reducer";
 import PutComponentPreviewReducer from "./put_component_preview_reducer";
 import PutPreviewReducer from "./put_preview_reducer";
@@ -271,17 +275,21 @@ const tablesSchema = __schema({
 const reducersSchema = __reducers(
   __reducerSchema("accept_handoff", AcceptHandoffReducer),
   __reducerSchema("ack_messages", AckMessagesReducer),
+  __reducerSchema("cancel_brief", CancelBriefReducer),
   __reducerSchema("cancel_handoff", CancelHandoffReducer),
+  __reducerSchema("cancel_task", CancelTaskReducer),
   __reducerSchema("claim_task", ClaimTaskReducer),
   __reducerSchema("complete_op", CompleteOpReducer),
   __reducerSchema("create_invite", CreateInviteReducer),
   __reducerSchema("create_task", CreateTaskReducer),
+  __reducerSchema("delete_task", DeleteTaskReducer),
   __reducerSchema("heartbeat", HeartbeatReducer),
   __reducerSchema("leave", LeaveReducer),
   __reducerSchema("lock_objects", LockObjectsReducer),
   __reducerSchema("log_activity", LogActivityReducer),
   __reducerSchema("mark_delivered", MarkDeliveredReducer),
   __reducerSchema("move_pointer", MovePointerReducer),
+  __reducerSchema("pick_up_task", PickUpTaskReducer),
   __reducerSchema("put_artifact", PutArtifactReducer),
   __reducerSchema("put_component_preview", PutComponentPreviewReducer),
   __reducerSchema("put_preview", PutPreviewReducer),

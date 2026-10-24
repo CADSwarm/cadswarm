@@ -278,7 +278,7 @@ impl Orchestrator {
         self.handoffs.retain(|_, a| a.alive());
 
         for b in space.briefs() {
-            if b.status == "ready" || b.status == "failed" {
+            if b.status == "ready" || b.status == "failed" || b.status == "cancelled" {
                 continue;
             }
             if let Err(e) = self.step(space, &b, helper.as_deref_mut()) {

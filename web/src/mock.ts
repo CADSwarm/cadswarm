@@ -87,7 +87,8 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     const previews = new Map(store.state.previews);
     previews.set(name, { object: name, rev, mesh: boxStl(...(b as [number, number, number, number, number, number])) });
     const tasks: Task[] = store.state.tasks.map((t, k) =>
-      k < i ? { ...t, status: 'done' } : k === i ? { ...t, status: 'claimed', owner: builder } : t);
+      t.status === 'cancelled' ? t
+        : k < i ? { ...t, status: 'done' } : k === i ? { ...t, status: 'claimed', owner: builder } : t);
     store.set({
       objects, previews, tasks,
       locks: [...store.state.locks.filter(l => l.object !== name), { object: name, holder: builder }],
@@ -100,6 +101,11 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
 
   function tick() {
     const n = parts.length;
+    // A stopped request stays stopped: the scripted build does not resurrect it.
+    if (store.state.briefs.find(b => b.id === briefId)?.status === 'cancelled') {
+      store.set({ pointers: store.state.pointers.map(p => ({ ...p, mode: 'idle' })) });
+      return;
+    }
     if (step === 0) {
       store.set({
         briefs: brief('planning'),
@@ -167,6 +173,24 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     setBed: async (xMm, yMm, zMm) => {
       store.set({ workspace: { bedXMm: xMm, bedYMm: yMm, bedZMm: zMm },
         activity: say(1, `set the printer bed to ${xMm} x ${yMm} x ${zMm} mm`, 'status') });
+    },
+    cancelTask: async (id, reason) => {
+      const t = store.state.tasks.find(x => x.id === id);
+      store.set({ tasks: store.state.tasks.map(x => x.id === id ? { ...x, status: 'cancelled' } : x),
+        activity: say(1, `cancelled ${t?.title ?? id}${reason ? `: ${reason}` : ''}`, 'status') });
+    },
+    deleteTask: async id => {
+      const t = store.state.tasks.find(x => x.id === id);
+      store.set({ tasks: store.state.tasks.filter(x => x.id !== id),
+        activity: say(1, `deleted ${t?.title ?? id}`, 'status') });
+    },
+    cancelBrief: async id => {
+      const b = store.state.briefs.find(x => x.id === id);
+      store.set({ briefs: store.state.briefs.map(x => x.id === id ? { ...x, status: 'cancelled', updatedMs: Date.now() } : x),
+        tasks: store.state.tasks.map(t => t.brief === id
+          && (t.status === 'open' || t.status === 'blocked' || t.status === 'awaiting_takeover')
+          ? { ...t, status: 'cancelled' } : t),
+        activity: say(1, `cancelled “${b?.text ?? id}”`, 'status') });
     },
     movePointer: (object, point, mode, label) => store.set({
       pointers: [...store.state.pointers.filter(p => p.member !== 1), { member: 1, object, point, mode, label, op: '', seq: seq++, atMs: Date.now() }] }),

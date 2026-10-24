@@ -329,7 +329,7 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     hub, fake = world
     fake.tables["v_brief"] = [
         {"id": "b_old", "by": 3, "text": "a phone stand", "board": "", "status": "ready", "plan_json": "",
-         "stl_hash": "", "created_ms": 1, "updated_ms": 2},
+         "stl_hash": "ab" * 32, "created_ms": 1, "updated_ms": 2},
         {"id": "b_new", "by": 3, "text": "an enclosure for the pico", "board": "", "status": "building", "plan_json": "",
          "stl_hash": "", "created_ms": 5, "updated_ms": 6}]
     fake.tables["v_task"] = [dict(fake.tables["v_task"][0], id="t_a", brief="b_new", status="done"),
@@ -337,6 +337,7 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     briefs = hub.get("/briefs")["briefs"]
     assert [b["id"] for b in briefs] == ["b_new", "b_old"]  # newest first
     assert (briefs[0]["tasks"], briefs[0]["done"], briefs[0]["by"]) == (2, 1, "carol")
+    assert briefs[1]["stl"] == "ab" * 32  # an older brief keeps its finished model reachable
     r = hub.post("/briefs", {"text": "a lid"})
     assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]
 
@@ -519,4 +520,27 @@ def test_panel_snapshot_carries_reviews_and_the_printer_bed(world):
     snap = hub.panel_snapshot()
     assert snap["workspace"]["bed"] == [220.0, 220.0, 250.0]
     assert snap["reviews"][0]["findings"] == ["thin wall"]
+
+
+# ---- stopping and removing work
+
+
+def test_a_task_can_be_stopped_or_deleted_through_the_hub(world):
+    hub, fake = world
+    t = hub.post("/tasks/t_1/cancel", {"reason": "duplicate"})
+    assert fake.calls[-1] == ("cancel_task", (2, "t_1", "duplicate")) and t["id"] == "t_1"
+    r = hub.post("/tasks/t_1/delete")
+    assert fake.calls[-1] == ("delete_task", (2, "t_1")) and r == {"task": "t_1", "title": "lid", "deleted": True}
+    before = len(fake.calls)
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/tasks/t_missing/delete")
+    assert e.value.status == 404 and e.value.code == "unknown_task" and len(fake.calls) == before
+
+
+def test_a_request_can_be_stopped_as_a_whole(world):
+    hub, fake = world
+    fake.tables["v_brief"] = [{"id": "b_1", "by": 3, "text": "a phone stand", "board": "", "status": "building",
+                               "plan_json": "", "stl_hash": "", "created_ms": 1, "updated_ms": 2}]
+    r = hub.post("/briefs/b_1/cancel")
+    assert fake.calls[-1] == ("cancel_brief", (2, "b_1")) and r == {"brief": "b_1", "status": "cancelled"}
 

@@ -90,11 +90,14 @@ class SpaceHub(LibraryRoutes):
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/cancel", self.cancel_task),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/delete", self.delete_task),
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
             ("POST", r"/reviews", self.report_review),
+            ("POST", r"/briefs/(?P<bid>[^/]+)/cancel", self.cancel_brief),
             ("GET", r"/workspace", self.workspace), ("POST", r"/bed", self.set_bed),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
             # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
@@ -524,6 +527,17 @@ class SpaceHub(LibraryRoutes):
         self._f("report_task", tid, body.get("status", "done"), body.get("summary", ""), body.get("evidence") or [])
         return self.task(tid)
 
+    def cancel_task(self, body, tid):
+        """Stop a task. A person may stop any; a helper only one it asked for or claimed."""
+        self._f("cancel_task", tid, body.get("reason") or "")
+        return self.task(tid)
+
+    def delete_task(self, body, tid):
+        """Remove a leftover open task. A claimed one is stopped instead, so no work disappears."""
+        t = self.task(tid)  # 404 before the call, so a bad id reads as unknown_task
+        self._f("delete_task", tid)
+        return {"task": tid, "title": t["title"], "deleted": True}
+
     # ----------------------------------------------------------------- messages
 
     def send(self, body):
@@ -725,13 +739,19 @@ class SpaceHub(LibraryRoutes):
             mine = [t for t in tasks if t.get("brief") == b["id"]]
             out.append({"id": b["id"], "text": b["text"], "status": b["status"], "by": names.get(b["by"], "?"),
                         "at": b["created_ms"] / 1000, "tasks": len(mine),
-                        "done": sum(1 for t in mine if t["status"] == "done")})
+                        "done": sum(1 for t in mine if t["status"] == "done"),
+                        "stl": b["stl_hash"]})
         return {"briefs": out}
 
     def submit_brief(self, body):
         bid = ticket.new_id("b_")
         self._f("submit_brief", bid, body.get("text", ""), body.get("board") or "")
         return {"brief": bid}
+
+    def cancel_brief(self, body, bid):
+        """Stop a whole request; unstarted tasks go with it and the host no longer works on it."""
+        self._f("cancel_brief", bid)
+        return {"brief": bid, "status": "cancelled"}
 
     def workspace(self):
         """The team's printer bed, in millimetres. The reviewer and the printability check both use it."""
