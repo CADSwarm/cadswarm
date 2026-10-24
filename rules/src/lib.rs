@@ -233,6 +233,7 @@ pub struct SweepPlan {
 }
 
 /// Connected WebSocket clients (phone, host) never go stale; HTTP-only agents rely on heartbeats.
+/// A connected member is never retired, however long ago it went quiet.
 pub fn plan_sweep(now: u64, members: &[Presence]) -> SweepPlan {
     SweepPlan {
         to_stale: members
@@ -242,7 +243,7 @@ pub fn plan_sweep(now: u64, members: &[Presence]) -> SweepPlan {
             .collect(),
         to_orphan: members
             .iter()
-            .filter(|m| m.status == "stale" && now.saturating_sub(m.stale_since_ms) > ORPHAN_AFTER_MS)
+            .filter(|m| m.status == "stale" && !m.online && now.saturating_sub(m.stale_since_ms) > ORPHAN_AFTER_MS)
             .map(|m| m.id)
             .collect(),
     }
@@ -412,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn quiet_members_go_stale_unless_connected_and_long_stale_ones_are_orphaned() {
+    fn quiet_members_go_stale_unless_connected_and_long_stale_offline_ones_are_orphaned() {
         let now = 1_000_000;
         let m = |id, status: &str, last_seen_ms, stale_since_ms, online| Presence {
             id, status: status.into(), last_seen_ms, stale_since_ms, online,
@@ -423,6 +424,7 @@ mod tests {
             m(3, "active", now - 1_000, 0, false),
             m(4, "stale", 0, now - ORPHAN_AFTER_MS - 1, false),
             m(5, "stale", 0, now - 1_000, false),
+            m(6, "stale", 0, now - ORPHAN_AFTER_MS - 1, true), // connected again: never retired
         ]);
         assert_eq!(plan.to_stale, vec![1]);
         assert_eq!(plan.to_orphan, vec![4]);

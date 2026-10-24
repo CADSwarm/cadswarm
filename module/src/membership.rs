@@ -48,7 +48,10 @@ fn new_member(ws: u64, identity: Identity, name: &str, kind: &str, client: &str,
 #[reducer(client_connected)]
 pub fn on_connect(ctx: &ReducerContext) {
     if let Some(m) = latest_member(ctx, ctx.sender()) {
-        ctx.db.member().id().update(Member { online: true, last_seen_ms: now_ms(ctx), ..m });
+        // Reconnecting is a sign of life: a quiet (stale) member is active again. Members who left
+        // or were taken over stay retired; they must rejoin.
+        let (status, stale_since_ms) = if m.status == "stale" { ("active".to_string(), 0) } else { (m.status.clone(), m.stale_since_ms) };
+        ctx.db.member().id().update(Member { online: true, last_seen_ms: now_ms(ctx), status, stale_since_ms, ..m });
     }
 }
 
