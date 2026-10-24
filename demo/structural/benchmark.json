@@ -1,0 +1,34 @@
+{
+  "python": "3.13.13",
+  "numpy": "2.5.4",
+  "scipy": "1.18.1",
+  "reference": "Timoshenko beam, delta=FL^3/(3EI)+FL/(kGA), k=5/6; L=48, b=h=8 mm, F=100 N",
+  "reference_displacement_mm": 0.15762857142857142,
+  "meshes": [
+    {
+      "pitch_mm": 4,
+      "elements": 48,
+      "max_displacement_mm": 0.13668751869308943,
+      "relative_error_percent": 13.285061550514232,
+      "max_stress_mpa": 36.103068891535656,
+      "residual": 9.285711629678145e-13
+    },
+    {
+      "pitch_mm": 2,
+      "elements": 384,
+      "max_displacement_mm": 0.15101558309404703,
+      "relative_error_percent": 4.195298019002247,
+      "max_stress_mpa": 45.22173847740369,
+      "residual": 4.50388956799248e-12
+    },
+    {
+      "pitch_mm": 1,
+      "elements": 3072,
+      "max_displacement_mm": 0.15538604144152113,
+      "relative_error_percent": 1.4226672022251252,
+      "max_stress_mpa": 53.182899351304506,
+      "residual": 1.9938802499128683e-11
+    }
+  ],
+  "note": "Notch/clamp stress maxima need local refinement; this study checks global bending deflection only."
+}
