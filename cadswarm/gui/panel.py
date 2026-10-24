@@ -659,6 +659,21 @@ class TeamPanel(QtGui.QDockWidget):
         self.chat.setOpenLinks(False)
         self.chat.setMinimumHeight(220)
         tl.addWidget(self.chat, 1)
+        # Scrolled up (reading back, or away for a while)? A button in the corner jumps to the newest message.
+        self.chat_count = 0
+        self.unseen = 0
+        self.chat_rendering = False
+        self.chat_follow = True  # pinned to the newest message (until the person scrolls up)
+        self.jump = QtGui.QPushButton("↓", self.chat)
+        self.jump.setObjectName("jump")
+        self.jump.setToolTip("Jump to the newest message")
+        self.jump.setCursor(QtCore.Qt.PointingHandCursor)
+        self.jump.clicked.connect(self.jump_to_bottom)
+        self.jump.hide()
+        self.chat.installEventFilter(self)  # keeps the button in the bottom-right corner as the chat resizes
+        self.chat.verticalScrollBar().actionTriggered.connect(lambda _a: self.chat_user_scroll())
+        self.chat.verticalScrollBar().valueChanged.connect(lambda _v: self.chat_scrolled())
+        self.chat.verticalScrollBar().rangeChanged.connect(lambda *_: self.chat_grew())
         row = QtGui.QHBoxLayout()
         self.msg = QtGui.QLineEdit()
         self.msg.setPlaceholderText("@helper what to do, or a message for your team")
@@ -892,7 +907,66 @@ class TeamPanel(QtGui.QDockWidget):
             self.team.setColumnWidth(2, max(70, self.team.sizeHintForColumn(2)))
         if obj is getattr(self, "task_list", None) and ev.type() == QtCore.QEvent.Resize:
             self.task_list.setColumnWidth(1, max(110, int(ev.size().width() * 0.4)))
+        if obj is getattr(self, "chat", None) and ev.type() == QtCore.QEvent.Resize:
+            self.place_jump()
         return super().eventFilter(obj, ev)
+
+    # --------------------------------------------------------------- jump to the newest message
+
+    def chat_at_bottom(self):
+        bar = self.chat.verticalScrollBar()
+        return bar.value() >= bar.maximum() - 4
+
+    def place_jump(self):
+        bar = self.chat.verticalScrollBar()
+        right = self.chat.width() - (bar.width() if bar.isVisible() else 0) - 12
+        self.jump.move(right - self.jump.width(), self.chat.height() - self.jump.height() - 12)
+
+    def chat_user_scroll(self):
+        """The person scrolled (wheel, drag, keys): stop following until they're back at the bottom. Only this
+        decides it, because Qt also moves the scroll position itself when the chat is resized or redrawn."""
+        self.chat_follow = False
+        QtCore.QTimer.singleShot(0, self.chat_user_scrolled)  # the action is applied after this signal
+
+    def chat_user_scrolled(self):
+        self.chat_follow = self.chat_at_bottom()
+        self.update_jump()
+
+    def chat_scrolled(self):
+        if self.chat_rendering:  # mid-redraw the chat is briefly empty, which would look like "at the bottom"
+            return
+        if self.chat_follow and not self.chat_at_bottom():  # Qt moved it (a resize): back to the newest
+            bar = self.chat.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        self.update_jump()
+
+    def chat_grew(self):
+        """Qt lays a long chat out a bit at a time, so the bottom keeps moving: stay pinned to it."""
+        if self.chat_follow and not self.chat_rendering:
+            bar = self.chat.verticalScrollBar()
+            bar.setValue(bar.maximum())
+        self.update_jump()
+
+    def update_jump(self):
+        """Show the button only while scrolled up, with how many messages came in meanwhile."""
+        if self.chat_rendering:
+            return
+        if self.chat_follow or self.chat_at_bottom():
+            self.unseen = 0
+            self.jump.hide()
+            return
+        self.jump.setText(f"↓  {self.unseen} new" if self.unseen else "↓")
+        self.jump.adjustSize()
+        self.jump.resize(max(self.jump.width(), self.jump.height()), self.jump.height())
+        self.place_jump()
+        self.jump.show()
+        self.jump.raise_()
+
+    def jump_to_bottom(self):
+        self.chat_follow = True
+        bar = self.chat.verticalScrollBar()
+        bar.setValue(bar.maximum())
+        self.update_jump()
 
     # ------------------------------------------------------------------ state
 
@@ -1115,7 +1189,10 @@ class TeamPanel(QtGui.QDockWidget):
         if not self.changed("chat", key):
             return
         bar = self.chat.verticalScrollBar()
-        at_bottom = bar.value() >= bar.maximum() - 4
+        at_bottom, was = self.chat_follow, bar.value()
+        if not at_bottom:
+            self.unseen += max(0, len(shown) - self.chat_count)
+        self.chat_count = len(shown)
         lines = []
         for m in shown:
             mine = m["from"] == me
@@ -1139,9 +1216,14 @@ class TeamPanel(QtGui.QDockWidget):
         if not lines:
             lines.append("<p style='color:#8b949e'>No messages yet. Type <b>@</b> and pick a helper to give it "
                          "something to build. It answers here as it works.</p>")
-        self.chat.setHtml("".join(lines))
-        if at_bottom or len(lines) <= 1:
-            bar.setValue(bar.maximum())
+        self.chat_rendering = True
+        try:
+            self.chat.setHtml("".join(lines))
+            # setHtml scrolls to the top: follow the newest message, or stay where the person was reading.
+            bar.setValue(bar.maximum() if at_bottom or len(lines) <= 1 else was)
+        finally:
+            self.chat_rendering = False
+        self.update_jump()
 
     def spin(self):
         if not self.busy_rows:
@@ -1605,6 +1687,9 @@ PANEL_STYLE = """
     color: #d9822b; font-weight: bold; padding: 3px 4px; }
 #cadswarmPanel QPushButton#danger { color: #cf222e; font-weight: normal; text-align: left; }
 #cadswarmPanel QPushButton#quiet:hover, #cadswarmPanel QPushButton#danger:hover { text-decoration: underline; }
+#cadswarmPanel QPushButton#jump { background: #d9822b; border: none; border-radius: 14px; color: white;
+    font-weight: bold; padding: 4px 10px; min-height: 20px; }
+#cadswarmPanel QPushButton#jump:hover { background: #e8913a; }
 #cadswarmPanel QPushButton#tool { text-align: left; padding: 4px 10px; border: none; background: transparent; }
 #cadswarmPanel QPushButton#tool:hover { background: palette(window); color: #d9822b; }
 #cadswarmPanel QToolButton { padding: 6px 10px; }
