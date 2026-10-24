@@ -249,6 +249,17 @@ Join markup follows the approved mockup: brand, headline, scan button, divider, 
 - [ ] **Step 5: Run the full test suites listed in README (`pytest`, `cargo test`, `npm test`) or the relevant subset.**
 - [ ] **Step 6: Commit** `chore(website): rebuild the live build app`.
 
+## Decisions made while executing
+
+- **The QR is shown by the host, not by the web app.** The phone is what scans, so a scannable code
+  only ever belongs next to the computer hosting the team: the FreeCAD panel's **Remote** tab mints
+  one single-use invite, draws it (via `cadswarm-host qr --text`, painted in Qt so FreeCAD's Python
+  needs no QR or image package), and shows the same link as text with **Copy link** / **New code**.
+  "Invite a teammate" opens that tab.
+- **The web app has no Remote surface of its own, on phone or desktop.** A desktop browser showing a
+  code to be scanned by the same phone that would rather just tap the link adds nothing; the phone
+  joins from the panel's code or the pasted invite. This is deliberate, not a gap.
+
 ## Self-review
 
 - Spec coverage: entry (Tasks 9, 10, 11), mobile shell (6, 7, 8), chat parity and @ (1, 2, 4, 5), viewer (8), QR (9), errors (5, 8, 9), deployment (10, 11, 12), tests (1, 2, 3, 4, 12).
