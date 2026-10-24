@@ -1,39 +1,46 @@
 """`cadswarm` command line.
 
-  cadswarm hub [--data DIR] [--port 8765] [--host 0.0.0.0] [--token SECRET]
-      Run the shared hub + FreeCAD worker (one per team / model).
+  cadswarm setup --client claude|codex|droid --invite CODE --name NAME [--dir .] [--fresh]
+      Join the team with an invite (a cadswarm-2: code, a base32 ticket from `cadswarm-host invite`,
+      or a phone link with #t=) and wire an agent CLI in a folder: MCP server, prompt hook, instructions.
 
-  cadswarm setup --client claude|codex --hub URL --token SECRET --name NAME [--role lead] [--dir .]
-      Wire an agent CLI in a project folder to the hub: MCP server, prompt hook, instructions.
+  cadswarm brief [--dir .] [--board ID] TEXT
+      Submit a design brief from a set-up folder.
 
   cadswarm install-workbench
       Install the CadSwarm workbench into the local FreeCAD for humans to watch and steer.
+
+The team server is `cadswarm-host` (Rust) on SpacetimeDB; `cadswarm-host invite` mints invites.
 """
 import argparse
 import json
 import os
-import secrets
 import shutil
 import subprocess
 import sys
 
 from .agent_setup import write_agent_config
-from .config import DEFAULT_PORT, find_freecad_python
-from .hosting import lan_ip
+from .config import find_freecad_python
 from .paths import ROOT
 
 
 def cmd_setup(a):
+    from .invite import InviteError, read_invite
     project = os.path.abspath(a.dir)
     try:
-        written = write_agent_config(project, a.client, a.hub, a.token, a.name, a.role, sys.executable, a.fresh)
-    except ValueError as e:
-        raise SystemExit(str(e))
-    print(f"CadSwarm set up for {a.client} as '{a.name}' ({a.role}) in {project}")
+        t = read_invite(a.invite)
+        written = write_agent_config(project, a.client, t, a.name, sys.executable, a.fresh)
+    except (InviteError, ValueError) as e:
+        raise SystemExit(f"cadswarm: {e}")
+    except Exception as e:  # SpaceError from redeeming: used, expired or unreachable
+        raise SystemExit(f"cadswarm: could not join with this invite: {e}")
+    print(f"CadSwarm set up for {a.client} as '{a.name}' in {project}")
     for p in written:
         print(f"  wrote {p}")
     if a.client == "claude":
-        print("Next: open this folder and run `claude`; the cadswarm MCP server joins the hub on start.")
+        print("Next: open this folder and run `claude`; the cadswarm MCP server joins the team on start.")
+    elif a.client == "droid":
+        print("Next: run `droid` here; it loads .factory/mcp.json and joins the team on start.")
     else:
         print("Next: run `codex` here. Codex only loads .codex/config.toml for TRUSTED projects: accept the "
               "trust prompt, or add to ~/.codex/config.toml:\n"
@@ -42,49 +49,15 @@ def cmd_setup(a):
               "you do, so without this your helper won't see its team's updates. Do it again after updating CadSwarm.")
 
 
-PROJECT_README = """This folder is a CadSwarm team project.
-
-  model.FCStd   the shared 3D model everyone's AI helpers are building (open a copy in FreeCAD any time)
-  files/        notes, plans and scripts the team saved; subfolders appear as the project grows
-  exports/      3D files (STEP/STL) saved with "Save as 3D file"; never overwritten
-  snapshots/    saved versions of the model
-  AI helpers/   workspace folders for the AI helpers on this computer (they hold sign-ins: don't share)
-  .cadswarm-team/  the team server's own data and older versions of files (the last 20 of each). Don't edit it.
-
-Please don't edit model.FCStd directly while the team is working: your changes would be lost
-the next time an AI helper changes the model. Copy it first, or work through CadSwarm.
-"""
-
-
-def cmd_hub(a):
-    import uvicorn
-
-    from .hub.app import create_app
-    from .hub.core import Hub
-    from .hub.worker_client import WorkerClient
-    from .paths import project_layout
-
-    lay = project_layout(a.data)
-    for key in ("internal", "files", "exports", "snapshots"):
-        os.makedirs(lay[key], exist_ok=True)
-    readme = os.path.join(lay["root"], "README.txt")
-    if not os.path.exists(readme):
-        with open(readme, "w", encoding="utf-8") as f:
-            f.write(PROJECT_README)
-    token = a.token or (open(lay["token"]).read().strip() if os.path.exists(lay["token"]) else secrets.token_urlsafe(12))
-    with open(lay["token"], "w") as f:
-        f.write(token)
-    worker = WorkerClient(lay["model"])
-    worker.start()
-    hub = Hub(worker, lay["db"], token, layout=lay)
-    url = f"http://{lan_ip() if a.host == '0.0.0.0' else a.host}:{a.port}"
-    print(f"CadSwarm hub on {url}  (FreeCAD worker: {worker.python})", flush=True)
-    print(f"Project folder: {lay['root']}")
-    print(f"Workspace token: {token}")
-    print("Teammates connect an agent with:")
-    print(f"  cadswarm setup --client claude --hub {url} --token {token} --name <you>-claude")
-    print(f"  cadswarm setup --client codex  --hub {url} --token {token} --name <you>-codex", flush=True)
-    uvicorn.run(create_app(hub, lay["root"]), host=a.host, port=a.port, log_level="warning")
+def cmd_brief(a):
+    from .space_hub import project_hub
+    hub, _cfg = project_hub(os.path.abspath(a.dir))
+    if not hub:
+        raise SystemExit("cadswarm: run `cadswarm setup --invite ...` in that folder first")
+    # Reuse the stored fence: a rejoin here would supersede that folder's live MCP server (plan 00).
+    if not hub.identity.get("fence"):
+        hub.join()
+    print(hub.post("/briefs", {"text": a.text, "board": a.board or ""})["brief"])
 
 
 ADDON_IGNORE = shutil.ignore_patterns(".git", ".venv", "*.egg-info", "__pycache__", ".pytest_cache",
@@ -115,34 +88,21 @@ def cmd_install_workbench(a):
     print("Restart FreeCAD and pick 'CadSwarm' from the workbench list; a setup guide opens.")
 
 
-def cmd_invite(a):
-    from .invite import make_invite
-    print(make_invite(a.hub, a.token, a.project))
-
-
 def main(argv=None):
     p = argparse.ArgumentParser(prog="cadswarm")
     sub = p.add_subparsers(dest="cmd", required=True)
-    h = sub.add_parser("hub", help="run the shared hub")
-    h.add_argument("--data", default="cadswarm-data", help="the project folder (created if missing)")
-    h.add_argument("--port", type=int, default=DEFAULT_PORT)
-    h.add_argument("--host", default="0.0.0.0")
-    h.add_argument("--token")
-    h.set_defaults(fn=cmd_hub)
-    s = sub.add_parser("setup", help="connect an agent CLI in a project folder")
-    s.add_argument("--client", choices=["claude", "codex"], required=True)
-    s.add_argument("--hub", required=True)
-    s.add_argument("--token", required=True)
+    s = sub.add_parser("setup", help="join with an invite and connect an agent CLI in a folder")
+    s.add_argument("--client", choices=["claude", "codex", "droid"], required=True)
+    s.add_argument("--invite", required=True, help="a cadswarm-2: code, a ticket, or a phone link")
     s.add_argument("--name", required=True)
-    s.add_argument("--role", choices=["lead", "member"], default="member")
     s.add_argument("--dir", default=".")
-    s.add_argument("--fresh", action="store_true", help="forget the stored identity and join as a new participant")
+    s.add_argument("--fresh", action="store_true", help="forget the stored identity and join as a new member")
     s.set_defaults(fn=cmd_setup)
-    i = sub.add_parser("invite", help="print an invite code teammates can paste into the FreeCAD guide")
-    i.add_argument("--hub", required=True, help="address teammates can reach, e.g. http://100.64.1.5:8765")
-    i.add_argument("--token", required=True)
-    i.add_argument("--project", default="")
-    i.set_defaults(fn=cmd_invite)
+    b = sub.add_parser("brief", help="submit a brief")
+    b.add_argument("--dir", default=".")
+    b.add_argument("--board")
+    b.add_argument("text")
+    b.set_defaults(fn=cmd_brief)
     w = sub.add_parser("install-workbench", help="install the FreeCAD workbench")
     w.set_defaults(fn=cmd_install_workbench)
     a = p.parse_args(argv)

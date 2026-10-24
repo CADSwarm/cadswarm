@@ -6,9 +6,10 @@ from collections import namedtuple
 
 import pytest
 
-from cadswarm.hub.core import Hub, HubError
+from cadswarm.client import HubRequestError
 from cadswarm.paths import project_layout
-from test_core import Clock, FakeWorker
+from cadswarm.space_hub import SpaceHub
+from filehub import Clock, FileHub, HubError
 
 GB, MB = 1024 ** 3, 1024 ** 2
 Usage = namedtuple("Usage", "total used free")
@@ -21,11 +22,9 @@ def env(tmp_path, monkeypatch):
     for k in ("internal", "snapshots", "exports"):  # a real project has these from the start
         os.makedirs(lay[k])
     clock = Clock()
-    worker = FakeWorker()
-    worker.doc_path = lay["model"]
     with open(lay["model"], "wb") as f:
         f.write(b"m" * 1000)
-    hub = Hub(worker, lay["db"], "secret", clock=clock, layout=lay)
+    hub = FileHub(lay, clock)
     a = hub.join("secret", "alice-claude")["participant_id"]
     b = hub.join("secret", "bob-human", kind="human")["participant_id"]
     return hub, lay, clock, a, b
@@ -76,9 +75,6 @@ def test_disk_guard_covers_snapshots_exports_restore_and_move(env, monkeypatch):
         hub.snapshot(a, "big")  # the model is 1000 bytes
     assert e.value.code == "disk_full" and os.listdir(lay["snapshots"]) == []
     with pytest.raises(HubError) as e:
-        hub.export_path("step")
-    assert e.value.code == "disk_full"
-    with pytest.raises(HubError) as e:
         hub.restore_file(a, "a.md", 1)
     assert e.value.code == "disk_full"
     with pytest.raises(HubError) as e:
@@ -107,9 +103,6 @@ def test_budget_counts_files_old_versions_snapshots_and_exports(env):
         hub.save_file(a, "other.md", text="z" * 600)
     assert e.value.code == "quota"
     hub.save_file(a, "other.md", text="z" * 400)  # 2900: fits
-    with pytest.raises(HubError) as e:
-        hub.export_path("step")  # estimate = model size
-    assert e.value.code == "quota"
 
 
 def test_snapshots_count_after_they_are_taken(env):
@@ -145,7 +138,7 @@ def test_env_overrides_the_saved_limit(env, monkeypatch):
 def test_settings_persist_in_the_team_folder_and_are_validated(env):
     hub, lay, _, _, _ = env
     hub.files.storage.update({"project_limit_gb": 7, "history_keep": 5, "history_hours": 2})
-    again = Hub(FakeWorker(), lay["db"] + "2", "secret", layout=lay)
+    again = FileHub(lay, db_path=lay["db"] + "2")
     s = again.storage_status()["settings"]
     assert (s["project_limit_gb"], s["history_keep"], s["history_hours"]) == (7, 5, 2)
     for bad in ({"project_limit_gb": -1}, {"history_keep": 0}, {"history_keep": "x"}, {"history_hours": -3},
@@ -287,7 +280,6 @@ def test_prune_trims_versions_and_old_snapshots_and_exports(env):
     assert os.listdir(lay["exports"]) == ["e-new.step"]
     assert r["freed"] == {"old_versions": 3 * 2, "snapshots": 300, "exports": 10, "total": 6 + 300 + 10}
     assert r["files_removed"] == {"old_versions": 3, "snapshots": 3, "exports": 1}
-    assert hub.events(0)["events"][-1]["kind"] == "storage_pruned"
 
 
 def test_prune_keeps_the_newest_snapshots_even_when_old(env):
@@ -332,45 +324,16 @@ def test_freeing_space_unsticks_a_full_project(env):
     hub.save_file(a, "p.md", text="v5", if_exists="replace", expected_version=4)
 
 
-# ------------------------------------------------------------------- HTTP routes
+# ------------------------------------------------- limits change on the hosting computer only
 
-def http_env(tmp_path):
-    from fastapi.testclient import TestClient
-    from cadswarm.hub.app import create_app
-    worker = FakeWorker()
-    worker.doc_path = str(tmp_path / "model.FCStd")
-    (tmp_path / "model.FCStd").write_bytes(b"model-bytes")
-    hub = Hub(worker, str(tmp_path / "hub.sqlite"), "secret")
-    http = TestClient(create_app(hub, str(tmp_path), sweep_seconds=3600))
-
-    def who(name, kind):
-        i = http.post("/join", json={"workspace_token": "secret", "name": name, "kind": kind}).json()
-        return {"x-participant": i["participant_id"], "authorization": f"Bearer {i['token']}", "x-fence": str(i["fence"])}
-    return hub, http, who("agent", "agent"), who("person", "human")
-
-
-def test_storage_routes_and_permissions(tmp_path):
-    hub, http, agent, human = http_env(tmp_path)
-    r = http.get("/project/storage", headers=agent)
-    assert r.status_code == 200 and r.json()["limit_bytes"] == 20 * GB and "usage" in r.json()
-    assert http.post("/project/storage/prune", json={"keep_versions": 1}, headers=agent).status_code == 403
-    assert http.post("/project/storage/settings", json={"project_limit_gb": 1}, headers=agent).status_code == 403
-    ok = http.post("/project/storage/prune", json={"keep_versions": 1}, headers=human)
-    assert ok.status_code == 200 and ok.json()["freed"]["total"] == 0
-    # limits belong to the computer hosting the team: a person joining from elsewhere can't change them
-    away = http.post("/project/storage/settings", json={"project_limit_gb": 0}, headers=human)
-    assert away.status_code == 403 and away.json()["code"] == "host_only"
-    from fastapi.testclient import TestClient
-    on_host = TestClient(http.app, client=("127.0.0.1", 50000))
-    s = on_host.post("/project/storage/settings", json={"project_limit_gb": 3}, headers=human)
-    assert s.status_code == 200 and s.json()["limit_bytes"] == 3 * GB
-    assert http.post("/project/storage/prune", json={"keep_versions": 0}, headers=human).status_code == 400
-
-
-def test_http_refuses_a_snapshot_when_over_budget(tmp_path):
-    hub, http, agent, human = http_env(tmp_path)
-    hub.files.storage.update({"project_limit_gb": 5 / GB})
-    r = http.post("/project/snapshot", json={}, headers=agent)
-    assert r.status_code == 413 and r.json()["code"] == "quota"
-    r = http.post("/export", json={"format": "step"}, headers=agent)
-    assert r.status_code == 413 and r.json()["code"] == "quota"
+def test_the_hosting_computer_changes_limits_through_spacehub(tmp_path):
+    host = SpaceHub({"uri": "http://x", "db": "d", "host_dir": str(tmp_path / "team")}, {}, space=object())
+    s = host.post("/project/storage/settings", {"project_limit_gb": 3})
+    assert s["limit_bytes"] == 3 * GB
+    with pytest.raises(HubRequestError) as e:
+        host.post("/project/storage/settings", {"project_limit_gb": -1})
+    assert e.value.status == 400 and e.value.code == "bad_args"
+    away = SpaceHub({"uri": "http://x", "db": "d"}, {}, space=object())
+    with pytest.raises(HubRequestError) as e:
+        away.post("/project/storage/settings", {"project_limit_gb": 0})
+    assert e.value.status == 403 and e.value.code == "host_only"

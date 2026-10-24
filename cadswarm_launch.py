@@ -2,8 +2,7 @@
 
     python cadswarm_launch.py mcp            # an AI helper's MCP server (Claude Code / Codex start this)
     python cadswarm_launch.py hook           # UserPromptSubmit hook (stdlib only, fast)
-    python cadswarm_launch.py hub ...        # the team server
-    python cadswarm_launch.py check          # are the server-side packages importable?
+    python cadswarm_launch.py check          # is the MCP package importable?
     python cadswarm_launch.py <cli args>     # anything else goes to the `cadswarm` CLI
 
 Agent configs point at this file by absolute path, so they work whether CadSwarm
@@ -29,7 +28,6 @@ def main():
         mcp_main()
     elif cmd == "check":
         try:
-            import fastapi, uvicorn  # noqa: F401
             from mcp.server.mcpserver import MCPServer  # noqa: F401
         except Exception as e:
             print(f"missing: {e}")

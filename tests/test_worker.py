@@ -12,7 +12,7 @@ from unittest import mock
 import pytest
 
 from cadswarm import config
-from cadswarm.hub.worker_client import WorkerClient, WorkerError
+from cadswarm.worker_client import WorkerClient, WorkerError
 
 WORKER_PY = Path(config.__file__).parent / "worker" / "freecad_worker.py"
 RUNNER_PY = WORKER_PY.parent / "script_runner.py"
