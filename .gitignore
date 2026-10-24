@@ -9,3 +9,4 @@ target/
 host-data/
 host/target/
 dist/
+.env

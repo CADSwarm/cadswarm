@@ -233,6 +233,25 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
                                          transactions · lock-checked rollback
 ```
 
+## Where Droid runs
+
+CadSwarm uses the Factory Droid SDK (`cadswarm/reviewer.py`) as the swarm's design reviewer.
+
+- **What starts it:** `cadswarm-host`, when every task of a brief is done (SpacetimeDB subscription), and again after the owners fix what it found. Nobody prompts it.
+- **What it checks:** collisions between parts, that the board actually fits (measured board dimensions, mounting holes, port cutouts), and printability (print bed size, closed solids, walls under 1.2 mm).
+- **What it can touch:** only inspection and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
+- **Where you see its work:** every tool call and finding is written to the `activity` table and shown live in the app, and its verdict is stored in `review` and shown as a review card on the brief.
+
+Setup, once per team (needs `pip install droid-sdk` or `pip install -e ".[reviewer]"`, the `droid` CLI, and `FACTORY_API_KEY`):
+
+```powershell
+host\target\release\cadswarm-host --data .\team-model init-reviewer
+```
+
+That mints a reviewer invite and writes the reviewer's folder under `team-model\agents\reviewer`. Until that folder exists briefs skip review and export directly, so a team without Droid still works. If the reviewer exits without a verdict (for example Droid is not logged in) the brief fails with that message instead of waiting forever, and its log is `team-model\agents\reviewer\review-<brief>-<round>.log`.
+
+People can also hand work to an agent mid-design: while holding a part, "Hand off now" with a note spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks and tasks), reads their note and recent ops, and continues instead of starting over.
+
 ## For developers: command line
 
 The guide wraps these commands; they still work for scripting and CI.
@@ -243,6 +262,22 @@ Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to i
 `%APPDATA%\CadSwarm` on first use; from a checkout you can also build them yourself with
 `cargo build --release` in `host/` and `cargo build --release --target wasm32-unknown-unknown` in
 `module/`.
+
+Optional services read keys from the environment, never from the repo. Copy `.env.example` to
+`cadswarm.env` next to the checkout (for example `Projects\cadswarm.env`, shared by every worktree) or
+to a git-ignored `.env` inside one checkout, and run commands through the loader, which sets the
+variables for that process only:
+
+```powershell
+powershell -File scripts\with-env.ps1 python -m pytest -q
+powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --data .\team run
+```
+
+`-EnvFile <path>` or `CADSWARM_ENV_FILE` picks a specific file. `.env.example` lists every variable:
+Elastic (`ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` for board knowledge and design memory),
+Factory's reviewer (`FACTORY_API_KEY`), the optional Cartesia voice key, agent API-key fallbacks, and
+developer overrides. SpacetimeDB publishing uses the CLI's stored login (`spacetime login`), not an
+environment variable.
 
 ```powershell
 cd cadswarm

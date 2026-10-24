@@ -47,6 +47,12 @@ pub struct ReviewRow {
     pub passed: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct HandoffRow {
+    pub id: String,
+    pub context_json: String,
+}
+
 pub struct Space {
     conn: DbConnection,
 }
@@ -60,6 +66,7 @@ const QUERIES: &[&str] = &[
     "SELECT * FROM v_review",
     "SELECT * FROM v_member",
     "SELECT * FROM v_param",
+    "SELECT * FROM v_handoff",
 ];
 
 impl Space {
@@ -183,6 +190,18 @@ impl Space {
             .filter(|r| r.brief == brief)
             .max_by_key(|r| r.round)
             .map(|r| ReviewRow { round: r.round, passed: r.passed })
+    }
+
+    /// Handoffs a person made and nobody picked up yet. An agent that dies before accepting
+    /// leaves its handoff here, so the next tick spawns a fresh one.
+    pub fn open_handoffs(&self) -> Vec<HandoffRow> {
+        self.conn
+            .db
+            .v_handoff()
+            .iter()
+            .filter(|h| h.status == "open")
+            .map(|h| HandoffRow { id: h.id, context_json: h.context_json })
+            .collect()
     }
 
     /// Every reducer call waits for the module's answer (the SDK applies the transaction to the
