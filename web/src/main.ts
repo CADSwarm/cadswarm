@@ -12,8 +12,13 @@ import { esc } from './ui/esc';
 
 const store = new Store();
 const app = document.querySelector<HTMLDivElement>('#app')!;
-app.innerHTML = `<main class="layout"><section id="viewer" class="viewer" aria-label="3D view"></section><aside id="panels" class="panels"></aside></main>`;
+app.innerHTML = `<main class="layout">
+  <section id="viewer" class="viewer" aria-label="3D view"></section>
+  <header id="topbar" class="topbar"></header>
+  <aside id="panels" class="panels sheet" data-stop="peek"></aside>
+</main>`;
 const panels = document.getElementById('panels')!;
+const topbar = document.getElementById('topbar');
 
 // Human pointers: at most 5 move_pointer calls a second, only when the pick changed.
 let apiRef: Api | null = null;
@@ -58,7 +63,7 @@ async function boot() {
   if (new URLSearchParams(location.search).has('mock')) {
     const { api } = startMockSwarm(store); // exercises every panel without a server
     apiRef = api;
-    mountPanels(panels, store, api, () => (picked ? [picked] : []), 'Enclosure');
+    mountPanels(panels, store, api, () => (picked ? [picked] : []), 'Enclosure', topbar);
     return;
   }
   const frag = new URLSearchParams(location.hash.slice(1)).get('t');
@@ -100,7 +105,7 @@ async function start(t: Ticket | null) {
     await new Promise<void>(done => mountPair(panels, ticket, async name => { await api.redeem(ticket.token, name); done(); }));
   }
   apiRef = api;
-  mountPanels(panels, store, api, () => (picked ? [picked] : []), target.db);
+  mountPanels(panels, store, api, () => (picked ? [picked] : []), target.db, topbar);
 }
 
 boot().catch(e => message(`<p class="err">${esc((e as Error).message ?? String(e))}</p>`));

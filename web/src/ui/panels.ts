@@ -4,7 +4,8 @@ import { memberColor } from '../color';
 import { mountChat } from './chat-pane';
 import { mountHandoff } from './handoff';
 import { mountParams } from './params';
-import { freeHelper, helperNow, startInstruction } from './helpers';
+import { freeHelper, helperNow, helpers, startInstruction } from './helpers';
+import { chatThread } from './chat';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
 import { esc } from './esc';
@@ -76,32 +77,26 @@ export function memberPill(s: Pick<State, 'tasks'>, m: Member): { word: string; 
   return { word: m.statusText && m.statusText !== 'idle' ? 'working' : 'ready', tone: 'live' };
 }
 
-export interface LogRow { at: number; member: number; who: string; text: string; tone: '' | 'refused' | 'steer' }
-
-/** Team chat: what agents did, and what you told them, oldest first. */
-export function teamLog(s: Pick<State, 'activity' | 'messages' | 'meId' | 'members'>, limit = 10): LogRow[] {
-  const name = (id: number) => s.members.find(m => m.id === id)?.name ?? '';
-  const to = (target: string) => target === 'all' ? 'all helpers'
-    : target.startsWith('member:') ? name(Number(target.slice(7))) : target.replace(/^@/, '');
-  const events: LogRow[] = s.activity.map(a => ({
-    at: a.atMs, member: a.member, who: name(a.member), text: a.summary,
-    tone: a.kind === 'refused' || /refus|blocked by|held by/i.test(a.summary) ? 'refused' : '' }));
-  const steers: LogRow[] = s.messages.filter(m => m.from === s.meId && m.kind === 'steer')
-    .map(m => ({ at: m.createdMs, member: m.from, who: name(m.from), text: `→ ${to(m.to)}: ${m.body}`, tone: 'steer' }));
-  return [...events, ...steers].sort((a, b) => a.at - b.at).slice(-limit);
-}
-
 /** 14:02, the way the panel writes times. */
 export function clock(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '') {
+export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '',
+                             topbar: HTMLElement | null = null) {
   el.innerHTML = `
-    <header class="sidebar-head">
-      <span class="brand">CadSwarm</span>
+    <div class="grabber" data-grabber aria-hidden="true"><span></span></div>
+    <header class="sheet-head">
+      <div class="sheet-title">
+        <span class="sheet-kicker">CadSwarm</span>
+        <b data-project>this build</b>
+        <span class="sheet-last" data-sheet-last></span>
+      </div>
       <span class="conn" data-conn></span>
+      <button type="button" class="sheet-toggle" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg>
+      </button>
     </header>
     <nav class="tabbar" role="tablist" aria-label="Sections">
       ${TABS.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}" aria-controls="tab-${id}">
@@ -130,7 +125,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <ul class="who-list" data-team></ul>
       </div>
       <div class="panel-sec">
-        <span class="section-label">Team chat</span>
+        <span class="section-label">Activity</span>
         <div class="log" data-log></div>
       </div>
       <div class="panel-sec"><div class="actions">
@@ -143,6 +138,12 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <span class="section-label">Precision settings</span><div data-settings></div></div>
     </section>
     <div class="toast" role="status" aria-live="polite" hidden></div>`;
+
+  if (topbar) topbar.innerHTML = `
+    <div class="topbar-title"><b data-project>this build</b></div>
+    <span class="conn" data-conn></span>
+    <div class="topbar-avatars" data-avatars></div>`;
+
 
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   mountChat($('#tab-chat'), store, api, picked);
@@ -158,7 +159,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   }
   $('.tabbar').addEventListener('click', e => {
     const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[role=tab]');
-    if (b) select(b.dataset.tab as Tab);
+    if (!b) return;
+    select(b.dataset.tab as Tab);
+    dispatchEvent(new CustomEvent('cadswarm:tab', { detail: b.dataset.tab })); // the sheet expands to half on phones
   });
   select(loadTab());
 
@@ -223,7 +226,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   };
 
   function render(s: State) {
-    el.querySelectorAll('[data-conn]').forEach(c => {
+    el.ownerDocument.querySelectorAll('[data-conn]').forEach(c => {
       c.className = `conn${s.connected ? ' live' : ''}`;
       c.textContent = s.connected ? 'Live' : 'Reconnecting…';
     });
@@ -258,8 +261,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         </li>`).join('')}</ul>`;
     }).join('') || '<p class="empty-note">No tasks yet. When the team plans a build, its parts show up here.</p>';
 
-    // Team: the panel the site sells. Who's here, what the team said, what you can do about it.
-    $('[data-project]').textContent = project || 'this build';
+    // Team: the panel the site sells. Who's here, what happened, what you can do about it.
+    el.ownerDocument.querySelectorAll('[data-project]').forEach(n => { n.textContent = project || 'this build'; });
     const conn = $('[data-team-state]');
     conn.className = `state${s.connected ? ' live' : ''}`;
     conn.textContent = s.connected ? 'Connected' : 'Reconnecting…';
@@ -274,10 +277,28 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       </li>`;
     }).join('') || '<li class="log-empty">Nobody has joined this build yet.</li>';
 
-    $('[data-log]').innerHTML = teamLog(s).map(r => `<div class="log-row${r.tone ? ` ${r.tone}` : ''}">
-        <time>${clock(r.at)}</time>
-        <span class="line">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> ` : ''}${esc(r.text)}</span>
-      </div>`).join('') || '<p class="log-empty">Nothing said yet. Ask for something in Ask and it lands here.</p>';
+    // Activity only: the chat is its own tab, so this reads as what the team did.
+    $('[data-log]').innerHTML = s.activity.slice(-20).map(a => {
+      const tone = a.kind === 'refused' || /refus|blocked by|held by/i.test(a.summary) ? ' refused' : '';
+      return `<div class="log-row${tone}">
+          <time>${clock(a.atMs)}</time>
+          <span class="line"><b class="who" style="--c:${memberColor(a.member, dark())}">${esc(store.member(a.member)?.name ?? '')}</b> ${esc(a.summary)}</span>
+        </div>`;
+    }).join('') || '<p class="log-empty">Nothing has happened yet. Start something in Chat.</p>';
+
+    // The sheet's one-line preview while it peeks, and the glass top bar's helper avatars.
+    const last = chatThread(s, 1)[0];
+    const sheetLast = $('[data-sheet-last]');
+    if (sheetLast) {
+      sheetLast.textContent = !last ? 'Type @ to give a helper a task'
+        : last.kind === 'build' ? `Building: ${last.brief.text}`
+        : `${last.mine ? 'You' : last.name}: ${last.body}`;
+    }
+    const avatars = el.ownerDocument.querySelector('[data-avatars]');
+    if (avatars) {
+      avatars.innerHTML = helpers(s).filter(m => m.status === 'active').slice(0, 4).map(m =>
+        `<span class="avatar" style="--c:${memberColor(m.id, dark())}" title="${esc(m.name)}">${esc(m.name.slice(0, 1).toUpperCase())}</span>`).join('');
+    }
 
     const counts: Record<Tab, number> = { chat: 0, model: 0, library: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
