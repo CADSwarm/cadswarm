@@ -142,13 +142,11 @@ Expected: `ModuleNotFoundError: No module named 'cadswarm.space'`.
 
 - [ ] **Step 3: Implement `cadswarm/space.py`**
 
-The `/sql` body shape (`[{"schema": {"elements": [...]}, "rows": [...]}]`) and the refusal body (a non-2xx response carrying the reducer's `Err` text) come from the docs and were not yet checked against a running server when M0 landed. Before relying on them, check both against the local server from plan 01 Task 8:
-
-```powershell
-curl.exe -s -X POST http://127.0.0.1:3000/v1/database/cadswarm/sql -H "content-type: text/plain" -d "SELECT * FROM v_member"
-curl.exe -s -i -X POST http://127.0.0.1:3000/v1/database/cadswarm/call/heartbeat -H "content-type: application/json" -d "[999]"
-```
-The second call has no token, so the caller is not a member: it should come back non-2xx with a body starting `not_member:` (from `module/src/util.rs` `me`). If either shape differs, change `decode_sql` / `SpaceError` and the fake server in Step 1 to match, and note it in plan 00's contract changes log.
+Verified live on 2.13.0 by 3d-cad-08 at M0:
+- `/sql` returns 200 with one envelope per statement: `[{"schema":{"elements":[{"name":{"some":"id"},...}]},"rows":[[...],...],"total_duration_micros":...}]`. Rows are arrays in column order, and `u64` values are plain JSON numbers. A view queried by a non-member returns 200 with `rows: []`.
+- A reducer `Err` returns **530** with a plain-text body that is exactly the Err string, for example `fence_stale: This process was superseded…`. An anonymous call returns 530 `not_member: …`, not 401, because the server mints an identity.
+- A reducer success returns 200 with an empty body.
+The fake server in Step 1 and the code below already match these.
 
 ```python
 """Stdlib-only client for SpacetimeDB's HTTP API.
