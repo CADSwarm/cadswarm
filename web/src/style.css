@@ -1,10 +1,10 @@
-/* CadSwarm web: the team panel from the site, made real. Dark, flat, monospace for names and numbers.
+/* CADSwarm web: the team panel from the site, made real. Dark, flat, monospace for names and numbers.
    Same tokens as website/index.html so a screenshot of either reads as the same product. */
 :root {
   --bg: #0a0a0a; --surface: #121212; --surface-2: #181818;
   --line: rgba(244, 243, 241, .10); --line-strong: rgba(244, 243, 241, .18);
   --text: #f4f3f1; --body: #d4d2cd; --muted: #8f8d88; --bone: #e8e2d4; --ink-on-light: #0a0a0a;
-  /* owner colours: the same order CadSwarm hands them out in FreeCAD */
+  /* owner colours: the same order CADSwarm hands them out in FreeCAD */
   --own-1: #4c9be0; --own-2: #f0913a; --own-3: #4fb35a; --own-4: #e5534b;
   --ok: #4fb35a; --warn: #e3b341; --err: #e5534b; --refused: #f0a29d;
 
@@ -49,7 +49,11 @@ a { color: var(--accent); }
 /* ---- Sidebar chrome: a title bar, then quiet underline tabs ---- */
 .sidebar-head { display: flex; align-items: center; padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .brand { font: 600 14px/1.2 var(--font-body); letter-spacing: -0.01em; color: var(--text); }
-.conn { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--font-mono); color: var(--muted); }
+.debug-open { margin-left: auto; margin-right: 12px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: none; color: var(--muted); font: 600 11px/1.6 var(--font-mono); letter-spacing: .04em; cursor: pointer; }
+.debug-open:hover { color: var(--text); border-color: var(--line-strong); }
+.debug-open:focus-visible { outline: 2px solid var(--bone); outline-offset: 2px; }
+.conn { margin-left: 0; display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--font-mono); color: var(--muted); }
 .conn::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
 .conn.live { color: var(--ok); }
 .conn.live::before { background: currentColor; }
@@ -189,6 +193,30 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .refusal-meta { color: var(--refused); font: 600 13px/1.35 var(--font-body); overflow-wrap: anywhere; }
 .refusal-detail { color: var(--body); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
 
+/* ---- Printer bed and the reviewer's last round ---- */
+.card-empty { margin: 0; padding: 12px 16px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: 10px; color: var(--muted); font-size: 14px; }
+.printer-card { display: grid; gap: 12px; padding: 12px 16px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px; }
+.bed-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.bed-field { display: grid; gap: 5px; margin: 0; color: var(--muted); font: 400 12px/1.2 var(--font-body); }
+.bed-field .unit { color: var(--muted); }
+.bed-field input { width: 100%; min-height: 38px; margin: 0; padding: 7px 8px; border: 0; border-radius: 8px;
+  background: var(--fill); color: var(--fg); font: 400 16px/1.2 var(--font-mono); }
+.bed-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.bed-presets { display: flex; gap: 6px; flex-wrap: wrap; }
+.printer-card .print-check { justify-self: start; padding-left: 0; }
+.printer-card + [data-print-result] { margin-top: 10px; }
+.review-card { padding: 12px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.review-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.review-verdict { font: 600 15px/1.3 var(--font-body); }
+.review-card.ok .review-verdict { color: var(--ok); }
+.review-card.warn .review-verdict { color: var(--warn); }
+.review-round { color: var(--muted); font: 400 12px/1.3 var(--font-mono); }
+.review-card .findings { margin: 10px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.45; }
+.review-card .findings li { overflow-wrap: anywhere; }
+.review-none, .review-more { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+
 /* Activity feed reads as a plain list */
 .feed .row-item { min-height: 0; }
 
@@ -215,8 +243,8 @@ input[role=switch]:checked::after { transform: translateX(20px); }
 .bubble.build .findings { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
 .bubble.build .text-button { margin-top: 6px; padding-left: 0; }
 .steps { display: flex; gap: 4px; list-style: none; padding: 0; margin: 0; }
-.steps li { flex: 1; min-width: 0; font: 500 10.5px/1.2 var(--font); color: var(--muted); padding-top: 6px; border-top: 3px solid var(--fill);
-  border-radius: 2px; white-space: normal; overflow-wrap: anywhere; }
+.steps li { flex: 1; min-width: 0; font: 500 10.5px/1.2 var(--font); letter-spacing: .02em; color: var(--muted); padding-top: 6px; border-top: 3px solid var(--fill);
+  border-radius: 2px; overflow-wrap: anywhere; white-space: normal; }
 .steps li.done { border-color: color-mix(in srgb, var(--accent) 50%, var(--fill)); }
 .steps li.now { border-color: var(--accent); color: var(--fg); font-weight: 600; }
 .build.failed .steps li.now { border-color: var(--err); }
@@ -301,3 +329,36 @@ textarea:focus-visible, input:focus-visible, select:focus-visible, button:focus-
 .setting select { min-width: 0; }
 .setting.bad input { outline: 2px solid var(--err, #cf222e); }
 button.ghost { background: none; color: var(--muted); border: 1px solid var(--line); }
+
+/* ---- Sponsors panel (`?debug`, Shift+D, or the sidebar's "Sponsors" button) ---- */
+.sponsors { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px;
+  background: rgb(10 10 10 / .84); backdrop-filter: blur(3px); }
+.sponsors-sheet { width: min(1080px, 100%); max-height: 100%; overflow: auto; padding: 20px 22px 14px;
+  background: var(--surface); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: var(--shadow); }
+.sponsors-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
+  padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.sponsors-head h2 { margin: 0 0 4px; font: 600 20px/1.2 var(--font-body); letter-spacing: -0.01em; }
+.sponsors-head p { margin: 0; }
+.sponsors-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 16px 0 6px; }
+.sponsor { display: flex; flex-direction: column; gap: 12px; padding: 14px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--bg); }
+.sponsor header h3 { margin: 0; font: 600 15px/1.3 var(--font-body); }
+.sponsor header p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+.sponsor dl { display: flex; flex-direction: column; gap: 6px; margin: 0; }
+.sponsor dl div { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.sponsor dt { color: var(--muted); font: 500 10.5px/1.5 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.sponsor dd { margin: 0; color: var(--body); font: 500 12.5px/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.sponsor-list ul, .sponsor-trace ol { display: flex; flex-direction: column; gap: 5px; margin: 4px 0 0; padding: 0; list-style: none; }
+.sponsor-list li { color: var(--body); font-size: 12.5px; line-height: 1.4; padding-left: 12px; text-indent: -12px; }
+.sponsor-list li::before { content: '\00B7 '; color: var(--muted); }
+.sponsor-trace li { color: var(--bone); font: 500 12px/1.5 var(--font-mono); }
+.sponsor-trace li::before { content: '\2192 '; color: var(--muted); }
+.sponsor-code { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); color: var(--muted);
+  font: 500 11px/1.6 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sponsors-foot { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted);
+  font: 500 11.5px/1.5 var(--font-mono); }
+@media (max-width: 900px) {
+  .sponsors { padding: 0; }
+  .sponsors-sheet { max-height: 100%; border-radius: 0; }
+  .sponsors-grid { grid-template-columns: 1fr; }
+}

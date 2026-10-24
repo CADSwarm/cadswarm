@@ -9,6 +9,9 @@ import { findingLines } from './panels';
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
 const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 const STEP_LABEL: Record<string, string> = { new: 'Sent', planning: 'Plan', building: 'Build', reviewing: 'Review', ready: 'Ready' };
+/** The short label is for the row; this is what a title or screen reader says in full. */
+const STEP_FULL: Record<string, string> = { new: 'Request sent', planning: 'Planning the parts',
+  building: 'Building the parts', reviewing: 'Reviewer checking the model', ready: 'Ready to download' };
 
 function time(ms: number) {
   const d = new Date(ms);
@@ -22,12 +25,13 @@ function buildBubble(s: State, b: Extract<ThreadItem, { type: 'build' }>['brief'
   const review = s.reviews.filter(r => r.brief === b.id).sort((x, y) => y.round - x.round)[0];
   const art = b.stlHash ? s.artifacts.find(a => a.hash === b.stlHash) : undefined;
   const findings = review && !review.passed ? findingLines(review.findingsJson) : [];
-  return `<div class="bubble build${b.status === 'failed' ? ' failed' : ''}">
+  return `<div class="bubble build${b.status === 'failed' ? ' failed' : b.status === 'cancelled' ? ' cancelled' : ''}">
       <p class="bubble-text">${esc(b.text)}</p>
       <ol class="steps" aria-label="Build progress">
-        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}" title="${st}" aria-label="${st}"${i === at ? ' aria-current="step"' : ''}>${STEP_LABEL[st]}</li>`).join('')}
+        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''} title="${STEP_FULL[st]}" aria-label="${STEP_FULL[st]}">${STEP_LABEL[st]}</li>`).join('')}
       </ol>
-      <p class="meta">${b.status === 'failed' ? '<span class="err">Stopped — see Team ▸ Activity</span>'
+      <p class="meta">${b.status === 'failed' ? '<span class="err">Stopped: see Team ▸ Activity</span>'
+        : b.status === 'cancelled' ? 'Cancelled: nobody works on it now'
         : tasks.length ? `${done} of ${tasks.length} parts done` : 'The team is planning it'}${review ? ` · review ${review.passed ? 'passed' : 'asks for changes'}` : ''}</p>
       ${findings.length ? `<ul class="findings">${findings.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
       ${b.stlHash && !(art && art.size === 0)
@@ -36,8 +40,8 @@ function buildBubble(s: State, b: Extract<ThreadItem, { type: 'build' }>['brief'
 }
 
 /**
- * Ask: the one place to tell an agent what to do. A text box, a Send button, and — only when there is more than
- * one place it could go — a "To" menu: a helper by name, all helpers, or the team (planned and built for you).
+ * Ask: the one place to tell an agent what to do. A text box, a Send button, and, only when there is more than
+ * one place it could go, a "To" menu: a helper by name, all helpers, or the team (planned and built for you).
  * Everything you asked and everything helpers answered reads as one conversation.
  */
 export function mountAsk(el: HTMLElement, store: Store, api: Api | null, picked: () => string[]) {
@@ -110,16 +114,24 @@ export function mountAsk(el: HTMLElement, store: Store, api: Api | null, picked:
     if (destKey !== lastDest) { // rebuild only when it changed, keeping the person's choice
       lastDest = destKey;
       const keep = to.value;
-      to.innerHTML = dest.map(d => `<option value="${esc(d.value)}">${esc(d.label)} — ${esc(d.detail)}</option>`).join('');
+      to.innerHTML = dest.map(d => `<option value="${esc(d.value)}">${esc(d.label)}: ${esc(d.detail)}</option>`).join('');
       if (dest.some(d => d.value === keep)) to.value = keep;
       const single = dest.length === 1;
       to.hidden = single;                                       // the menu only when there's a real choice
-      $('[data-to-fixed]').textContent = single ? `${dest[0].label} — ${dest[0].detail}` : '';
+      $('[data-to-fixed]').textContent = single ? `${dest[0].label}: ${dest[0].detail}` : '';
       syncBoard();
     }
     const items = conversation(s);
-    const key = JSON.stringify(items.map(i => [i.id, i.at, i.type === 'request' ? i.state : i.type === 'build'
-      ? [i.brief.status, i.brief.stlHash, s.tasks.filter(t => t.brief === i.brief.id && t.status === 'done').length] : 0]));
+    const key = JSON.stringify(items.map(i => {
+      if (i.type === 'request') return [i.id, i.at, i.state];
+      if (i.type === 'build') {
+        const review = s.reviews.filter(r => r.brief === i.brief.id).sort((a, b) => b.round - a.round)[0];
+        return [i.id, i.at, i.brief.status, i.brief.stlHash,
+          s.tasks.filter(t => t.brief === i.brief.id && t.status === 'done').length,
+          review ? `${review.id}:${review.round}:${review.passed}:${review.findingsJson}` : ''];
+      }
+      return [i.id, i.at, i.type];
+    }));
     if (key === lastThread) return;
     lastThread = key;
     thread.innerHTML = items.length ? items.map(i => {

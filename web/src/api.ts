@@ -48,6 +48,32 @@ export interface ProjectListing { files: ProjectFile[]; folders: string[] }
 export interface FileVersion { version: number; size: number; author: string; saved_at: number; reason: string }
 export interface FileHistory { path: string; current: ProjectFile | null; older_versions: FileVersion[] }
 
+/** One part as the worker measured it. */
+export interface PrintPart {
+  name: string; size: number[]; fitsBed: boolean; closedSolid: boolean;
+  /** Distances (mm) of walls that look too thin to print. */
+  thinWalls: number[];
+}
+export interface Printability { ok: boolean; objects: PrintPart[] }
+
+/** The worker answers in snake_case; take whatever fields arrive and name them for the UI. */
+export function toPrintability(v: Record<string, unknown> | null): Printability {
+  const list = Array.isArray(v?.objects) ? v.objects : [];
+  const objects = list.filter(o => o && typeof o === 'object').map(o => {
+    const r = o as Record<string, unknown>;
+    const thin = Array.isArray(r.thin_wall_suspects) ? r.thin_wall_suspects : [];
+    return {
+      name: String(r.name ?? 'part'),
+      size: Array.isArray(r.size) ? r.size.map(Number).filter(Number.isFinite) : [],
+      fitsBed: r.fits_bed !== false,
+      closedSolid: r.closed_solid !== false,
+      thinWalls: thin.map(w => Number(w && typeof w === 'object' ? (w as Record<string, unknown>).distance : w))
+        .filter(Number.isFinite),
+    };
+  });
+  return { ok: v?.ok === true, objects };
+}
+
 export interface Api {
   fence(): number;
   redeem(token: string, name: string): Promise<void>;
@@ -55,6 +81,16 @@ export interface Api {
   lock(names: string[]): Promise<void>;
   release(names: string[]): Promise<void>;
   setParam(alias: string, value: string): Promise<void>;
+  /** The printer bed the team builds for, in millimetres. */
+  setBed(xMm: number, yMm: number, zMm: number): Promise<void>;
+  /** Stop a task (a person may stop any; a helper only one it asked for or claimed). */
+  cancelTask(id: string, reason: string): Promise<void>;
+  /** Remove a leftover open task; a claimed one must be cancelled instead. */
+  deleteTask(id: string): Promise<void>;
+  /** Stop a whole request; its unstarted tasks are cancelled with it. */
+  cancelBrief(id: string): Promise<void>;
+  /** Ask the host whether the parts fit the bed, are closed solids and have printable walls. */
+  checkPrintability(): Promise<Printability | null>;
   movePointer(object: string, point: number[], mode: string, label: string): void;
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
@@ -103,7 +139,7 @@ export const toBrief = (r: Infer<typeof VBriefRow>): Brief => ({
   id: r.id, by: num(r.by), text: r.text, board: r.board, status: r.status, planJson: r.planJson, stlHash: r.stlHash, updatedMs: num(r.updatedMs),
 });
 export const toReview = (r: Infer<typeof VReviewRow>): Review => ({
-  id: r.id, brief: r.brief, round: r.round, passed: r.passed, findingsJson: r.findingsJson,
+  id: r.id, brief: r.brief, round: r.round, passed: r.passed, findingsJson: r.findingsJson, atMs: num(r.atMs),
 });
 export const toArtifact = (r: Infer<typeof VArtifactRow>): Artifact => ({ hash: r.hash, name: r.name, mime: r.mime, size: num(r.size) });
 export const toHandoff = (r: Infer<typeof VHandoffRow>): Handoff => ({
@@ -271,10 +307,19 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       return { ok: true, resultJson: op.resultJson };
     }
 
-    /** Queue a host op and wait for it; reports a failure as a notice and resolves false. */
-    async function runOp(kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> {
-      return (await runOpOutcome(kind, args, ms)).ok;
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves its parsed result (null on failure). */
+    async function runOpResult(kind: string, args: Record<string, unknown>, ms = 60000): Promise<Record<string, unknown> | null> {
+      const { ok, resultJson } = await runOpOutcome(kind, args, ms);
+      if (!ok) return null;
+      try {
+        const v = JSON.parse(resultJson || '{}');
+        return v && typeof v === 'object' ? v as Record<string, unknown> : {};
+      } catch { return {}; }
     }
+
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves whether it worked. */
+    const runOp = async (kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> =>
+      (await runOpOutcome(kind, args, ms)).ok;
 
     /** A read-only host query whose result carries the answer (list_files, file_history, …). */
     async function queryOp<T>(kind: string, args: Record<string, unknown>): Promise<T | null> {
@@ -299,6 +344,14 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       },
       lock: names => quiet(r.lockObjects({ fence: fence(), names })),
       release: names => quiet(r.releaseObjects({ fence: fence(), names, force: false })),
+      setBed: (xMm, yMm, zMm) => quiet(r.setBed({ fence: fence(), xMm, yMm, zMm })),
+      cancelTask: (id, reason) => quiet(r.cancelTask({ fence: fence(), taskId: id, reason })),
+      deleteTask: id => quiet(r.deleteTask({ fence: fence(), taskId: id })),
+      cancelBrief: id => quiet(r.cancelBrief({ fence: fence(), briefId: id })),
+      checkPrintability: async () => {
+        const v = await runOpResult('printability', {}, 120000);
+        return v === null ? null : toPrintability(v);
+      },
       setParam: async (alias, value) => {
         // set_param needs the `Params` lock (rules::needed_locks). Hold it only until the host finishes the op.
         let locked = false;

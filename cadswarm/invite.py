@@ -89,11 +89,11 @@ def read_invite(text):
     if i >= 0:
         data, found = _longest(_chunks(s[i + len(PREFIX):], _B64_RUN), _decode_v2), True
     elif any(p in s for p in OLD_PREFIXES):
-        raise InviteError("This invite is from an older CadSwarm. Ask your teammate for a new one.")
+        raise InviteError("This invite is from an older CADSwarm. Ask your teammate for a new one.")
     else:
         data, found = _find_base32(s)
     if not found:
-        raise InviteError(f"That doesn't look like a CadSwarm invite code. It should start with “{PREFIX}”. "
+        raise InviteError(f"That doesn't look like a CADSwarm invite code. It should start with “{PREFIX}”. "
                           "Ask your teammate to copy it again with the Copy button.")
     if data is None:
         raise InviteError("That invite code is incomplete: part of it may have been cut off. "

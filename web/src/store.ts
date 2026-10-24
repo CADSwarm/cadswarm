@@ -7,7 +7,7 @@ export interface Task { id: string; title: string; status: string; owner: number
 export interface Activity { id: number; member: number; kind: string; summary: string; atMs: number }
 export interface Pointer { member: number; object: string; point: number[]; mode: string; label: string; op: string; seq: number; atMs: number }
 export interface Brief { id: string; by: number; text: string; board: string; status: string; planJson: string; stlHash: string; updatedMs: number }
-export interface Review { id: string; brief: string; round: number; passed: boolean; findingsJson: string }
+export interface Review { id: string; brief: string; round: number; passed: boolean; findingsJson: string; atMs: number }
 export interface Preview { object: string; rev: number; mesh: Uint8Array }
 export interface Artifact { hash: string; name: string; mime: string; size: number }
 export interface Handoff { id: string; from: number; note: string; trigger: string; status: string; taker: number; createdMs: number }

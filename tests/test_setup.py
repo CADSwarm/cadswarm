@@ -32,9 +32,9 @@ def test_invite_round_trip_survives_chat_app_mangling():
 
 @pytest.mark.parametrize("text, fragment", [
     ("", "Paste the invite code"),
-    ("http://192.168.1.20:8765", "doesn't look like a CadSwarm invite"),
+    ("http://192.168.1.20:8765", "doesn't look like a CADSwarm invite"),
     ("cadswarm-2:eyJ1cmkiOiJodHR0", "cut off"),
-    ("cadswarm-1:eyJoIjoiaHR0", "older CadSwarm"),
+    ("cadswarm-1:eyJoIjoiaHR0", "older CADSwarm"),
 ])
 def test_invite_errors_are_plain_language(text, fragment):
     with pytest.raises(InviteError) as e:

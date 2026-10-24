@@ -1,7 +1,7 @@
 // A scripted swarm so the viewer, animation and panels can be built and demoed without a server.
 // `?mock` runs it: a brief is planned, five parts are built by agents, the reviewer sends one round back,
 // then the STL is ready. The mock Api answers the panels (brief, lock, params, download) locally.
-import type { Api } from './api';
+import type { Api, Printability } from './api';
 import type { Store, Obj, Task, Activity, Component } from './store';
 import { newId } from './ids';
 import { saveBytes } from './download';
@@ -87,19 +87,25 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     const previews = new Map(store.state.previews);
     previews.set(name, { object: name, rev, mesh: boxStl(...(b as [number, number, number, number, number, number])) });
     const tasks: Task[] = store.state.tasks.map((t, k) =>
-      k < i ? { ...t, status: 'done' } : k === i ? { ...t, status: 'claimed', owner: builder } : t);
+      t.status === 'cancelled' ? t
+        : k < i ? { ...t, status: 'done' } : k === i ? { ...t, status: 'claimed', owner: builder } : t);
     store.set({
       objects, previews, tasks,
       locks: [...store.state.locks.filter(l => l.object !== name), { object: name, holder: builder }],
       pointers: [...store.state.pointers.filter(p => p.member !== builder && p.member !== 2),
         { member: builder, object: name, point: [], mode: 'editing', label: `building ${name}`, op: `o_${step}`, seq: seq++, atMs: Date.now() }],
-      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }), resultJson: '' }],
+      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }), resultJson: '{}' }],
       activity: say(builder, `create_primitive ${name}`),
     });
   }
 
   function tick() {
     const n = parts.length;
+    // A stopped request stays stopped: the scripted build does not resurrect it.
+    if (store.state.briefs.find(b => b.id === briefId)?.status === 'cancelled') {
+      store.set({ pointers: store.state.pointers.map(p => ({ ...p, mode: 'idle' })) });
+      return;
+    }
     if (step === 0) {
       store.set({
         briefs: brief('planning'),
@@ -121,16 +127,22 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
         tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
         pointers: [...store.state.pointers.map(p => ({ ...p, mode: 'idle' })),
           { member: 5, object: 'Standoff1', point: [], mode: 'inspecting', label: 'checking holes', op: '', seq: seq++, atMs: Date.now() }],
-        reviews: [{ id: 'r_mock0001', brief: briefId, round: 1, passed: false,
+        reviews: [{ id: 'r_mock0001', brief: briefId, round: 1, passed: false, atMs: Date.now(),
           findingsJson: JSON.stringify([{ message: 'Standoff1 hole is 2.4 mm; M2.5 screws need 2.7 mm.' }, { message: 'USB-C cutout sits 0.6 mm too low.' }]) }],
         activity: say(5, 'review round 1: 2 findings', 'say'),
       });
     } else if (step === n + 2) {
       build(3, 2);
-      store.set({ tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })) });
+      store.set({
+        tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
+        // The reviewer keeps its own arrow and moves it to whatever it re-checks.
+        pointers: [...store.state.pointers.filter(p => p.member !== 5),
+          { member: 5, object: 'Lid', point: [], mode: 'inspecting', label: 're-checking the lid', op: '', seq: seq++, atMs: Date.now() }],
+      });
     } else if (step === n + 3) {
       store.set({
-        reviews: [...store.state.reviews, { id: 'r_mock0002', brief: briefId, round: 2, passed: true, findingsJson: '[]' }],
+        reviews: [...store.state.reviews, { id: 'r_mock0002', brief: briefId, round: 2, passed: true, findingsJson: '[]',
+          atMs: Date.now() }],
         activity: say(5, 'review round 2: passed', 'say'),
       });
     } else if (step === n + 4) {
@@ -173,6 +185,40 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     release: async names => store.set({ locks: store.state.locks.filter(l => !(names.includes(l.object) && l.holder === 1)) }),
     setParam: async (alias, value) => {
       store.set({ params: store.state.params.map(p => p.alias === alias ? { ...p, value, num: parseFloat(value) } : p) });
+    },
+    setBed: async (xMm, yMm, zMm) => {
+      store.set({ workspace: { bedXMm: xMm, bedYMm: yMm, bedZMm: zMm },
+        activity: say(1, `set the printer bed to ${xMm} x ${yMm} x ${zMm} mm`, 'status') });
+    },
+    cancelTask: async (id, reason) => {
+      const t = store.state.tasks.find(x => x.id === id);
+      store.set({ tasks: store.state.tasks.map(x => x.id === id ? { ...x, status: 'cancelled' } : x),
+        activity: say(1, `cancelled ${t?.title ?? id}${reason ? `: ${reason}` : ''}`, 'status') });
+    },
+    deleteTask: async id => {
+      const t = store.state.tasks.find(x => x.id === id);
+      store.set({ tasks: store.state.tasks.filter(x => x.id !== id),
+        activity: say(1, `deleted ${t?.title ?? id}`, 'status') });
+    },
+    cancelBrief: async id => {
+      const b = store.state.briefs.find(x => x.id === id);
+      store.set({ briefs: store.state.briefs.map(x => x.id === id ? { ...x, status: 'cancelled', updatedMs: Date.now() } : x),
+        tasks: store.state.tasks.map(t => t.brief === id
+          && (t.status === 'open' || t.status === 'blocked' || t.status === 'awaiting_takeover')
+          ? { ...t, status: 'cancelled' } : t),
+        activity: say(1, `cancelled “${b?.text ?? id}”`, 'status') });
+    },
+    checkPrintability: async (): Promise<Printability> => {
+      const bed = store.state.workspace ?? { bedXMm: 180, bedYMm: 180, bedZMm: 180 };
+      const across = (a: number, b: number) => [Math.min(a, b), Math.max(a, b)] as const;
+      const [bx, by] = across(bed.bedXMm, bed.bedYMm);
+      const objects = store.state.objects.map(o => {
+        const size = [o.bbox[3] - o.bbox[0], o.bbox[4] - o.bbox[1], o.bbox[5] - o.bbox[2]];
+        const [sx, sy] = across(size[0], size[1]);
+        return { name: o.name, size, fitsBed: sx <= bx && sy <= by && size[2] <= bed.bedZMm,
+          closedSolid: o.volume > 0, thinWalls: [] };
+      });
+      return { ok: objects.length > 0 && objects.every(o => o.fitsBed && o.closedSolid), objects };
     },
     movePointer: (object, point, mode, label) => store.set({
       pointers: [...store.state.pointers.filter(p => p.member !== 1), { member: 1, object, point, mode, label, op: '', seq: seq++, atMs: Date.now() }] }),

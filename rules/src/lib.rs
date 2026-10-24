@@ -327,12 +327,61 @@ pub fn check_pickup(task_id: &str, p: &Pickup) -> Result<(), String> {
     Ok(())
 }
 
-pub fn check_report(task_id: &str, owner: u64, owner_name: &str, caller: u64, status: &str) -> Result<(), String> {
+pub fn check_report(task_id: &str, current: &str, owner: u64, owner_name: &str, caller: u64, status: &str) -> Result<(), String> {
     if status != "done" && status != "blocked" {
         return Err("bad_args: status must be done or blocked".into());
     }
+    if current == "cancelled" {
+        return Err(format!("cancelled: Task {task_id} was cancelled; drop it"));
+    }
     if owner != caller {
         return Err(format!("not_owner: Task {task_id} is owned by {owner_name}, not you"));
+    }
+    Ok(())
+}
+
+/// What `check_cancel_task` needs to know about a task a member wants to stop or remove.
+#[derive(Clone, Copy)]
+pub struct Closing<'a> {
+    pub status: &'a str,
+    pub owner: u64,
+    pub created_by: u64,
+    pub caller: u64,
+    pub caller_kind: &'a str,
+}
+
+/// A person may stop any task; a helper only one it created or claimed. A finished task keeps its result.
+pub fn check_cancel_task(task_id: &str, t: &Closing) -> Result<(), String> {
+    if t.status == "done" {
+        return Err(format!("already_done: Task {task_id} is done; its result is kept"));
+    }
+    if t.status == "cancelled" {
+        return Err(format!("already_cancelled: Task {task_id} was already cancelled"));
+    }
+    if t.caller_kind != "human" && t.caller != t.created_by && t.caller != t.owner {
+        return Err(format!("not_yours: Task {task_id} is not yours to stop"));
+    }
+    Ok(())
+}
+
+/// Deleting is for leftovers only: an open task nobody has started, so no work disappears.
+pub fn check_delete_task(task_id: &str, t: &Closing) -> Result<(), String> {
+    if t.status != "open" {
+        return Err(format!("not_deletable: Task {task_id} is {}; stop it instead", t.status));
+    }
+    check_cancel_task(task_id, t)
+}
+
+/// Statuses a brief never leaves: its result (or its failure) is kept.
+pub const CLOSED_BRIEFS: &[&str] = &["ready", "failed", "cancelled"];
+
+/// A person may stop any brief; a helper only one it asked for. A closed brief stays closed.
+pub fn check_cancel_brief(brief_id: &str, status: &str, author: u64, caller: u64, caller_kind: &str) -> Result<(), String> {
+    if CLOSED_BRIEFS.contains(&status) {
+        return Err(format!("already_closed: Brief {brief_id} is {status}"));
+    }
+    if caller_kind != "human" && caller != author {
+        return Err(format!("not_yours: Brief {brief_id} was asked for by someone else"));
     }
     Ok(())
 }
@@ -656,9 +705,36 @@ mod tests {
         assert!(check_claim("t_1", "open", 1, "", 1).is_ok());
         assert!(check_claim("t_1", "open", 1, "", 0).is_ok());
         assert!(check_claim("t_1", "claimed", 2, "bob", 0).unwrap_err().starts_with("not_claimable:"));
-        assert!(check_report("t_1", 2, "bob", 1, "done").unwrap_err().starts_with("not_owner:"));
-        assert!(check_report("t_1", 2, "bob", 2, "finished").unwrap_err().starts_with("bad_args:"));
-        assert!(check_report("t_1", 2, "bob", 2, "done").is_ok());
+        assert!(check_report("t_1", "claimed", 2, "bob", 1, "done").unwrap_err().starts_with("not_owner:"));
+        assert!(check_report("t_1", "claimed", 2, "bob", 2, "finished").unwrap_err().starts_with("bad_args:"));
+        assert!(check_report("t_1", "claimed", 2, "bob", 2, "done").is_ok());
+        assert!(check_report("t_1", "cancelled", 2, "bob", 2, "done").unwrap_err().starts_with("cancelled:"));
+    }
+
+    #[test]
+    fn a_person_stops_any_task_and_a_helper_only_its_own_and_only_open_ones_are_deleted() {
+        let open = Closing { status: "open", owner: 0, created_by: 7, caller: 3, caller_kind: "human" };
+        assert!(check_cancel_task("t_1", &open).is_ok());
+        // A helper that neither asked for it nor claimed it may not stop it.
+        let stranger = Closing { caller: 9, caller_kind: "agent", ..open };
+        assert!(check_cancel_task("t_1", &stranger).unwrap_err().starts_with("not_yours:"));
+        assert!(check_cancel_task("t_1", &Closing { caller: 7, caller_kind: "agent", ..open }).is_ok());
+        assert!(check_cancel_task("t_1", &Closing { caller: 9, caller_kind: "agent", owner: 9, ..open }).is_ok());
+        // A finished task is history, not something to stop again.
+        assert!(check_cancel_task("t_1", &Closing { status: "done", ..open }).unwrap_err().starts_with("already_done:"));
+        assert!(check_cancel_task("t_1", &Closing { status: "cancelled", ..open })
+            .unwrap_err().starts_with("already_cancelled:"));
+        // Deleting only takes back work nobody started.
+        assert!(check_delete_task("t_1", &open).is_ok());
+        assert!(check_delete_task("t_1", &Closing { status: "claimed", owner: 3, ..open })
+            .unwrap_err().starts_with("not_deletable:"));
+        assert!(check_delete_task("t_1", &stranger).unwrap_err().starts_with("not_yours:"));
+        // A brief can be stopped until it is closed; anyone on the team may stop a person's build.
+        assert!(check_cancel_brief("b_1", "building", 2, 3, "human").is_ok());
+        assert!(check_cancel_brief("b_1", "building", 2, 2, "agent").is_ok());
+        assert!(check_cancel_brief("b_1", "building", 2, 3, "agent").unwrap_err().starts_with("not_yours:"));
+        assert!(check_cancel_brief("b_1", "ready", 2, 3, "human").unwrap_err().starts_with("already_closed:"));
+        assert!(check_cancel_brief("b_1", "cancelled", 2, 3, "human").unwrap_err().starts_with("already_closed:"));
     }
 
     #[test]

@@ -349,7 +349,7 @@ class LibraryTab(QtGui.QWidget):
                       "tools ▸ Project files (Save a copy), then use Import a pack in another project.")
 
     def import_pack(self):
-        path, _ = QtGui.QFileDialog.getOpenFileName(self, "Import a library pack", "", "CadSwarm library packs (*.zip)")
+        path, _ = QtGui.QFileDialog.getOpenFileName(self, "Import a library pack", "", "CADSwarm library packs (*.zip)")
         if not path:
             return
         r = self.session.act("POST", "/library/import-pack", {"local_path": path}, purpose="import a library pack")
@@ -424,7 +424,7 @@ class RecommendDialog(QtGui.QDialog):
         self.list = QtGui.QListWidget()
         for r in self.recs:
             hole = r.get("hole") or {}
-            text = (r.get("label") or r.get("name")) + f"  —  {r.get('why')}"
+            text = (r.get("label") or r.get("name")) + f"  ·  {r.get('why')}"
             if hole.get("diameter"):
                 text += f"\n    hole for it: Ø{hole['diameter']:g} mm ({hole.get('why')})"
             for s in r.get("suggest") or []:
@@ -483,7 +483,7 @@ class SettingsDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm — precision settings")
+        self.setWindowTitle("CADSwarm: precision settings")
         self.resize(640, 640)
         self.widgets = {}
         self.specs = {}
@@ -579,7 +579,7 @@ class SettingsDialog(QtGui.QDialog):
             text = QtGui.QLabel(
                 f"<b>{html.escape(g['label'])}</b>: {html.escape(setting_value_text(spec, g['current']))} → "
                 f"<b>{html.escape(setting_value_text(spec, g['value']))}</b><br><small>{html.escape(g['reason'])} "
-                f"— {html.escape(g['by'])}" + (f", for {html.escape(g['component_name'])}" if g.get("component") else "")
+                f"by {html.escape(g['by'])}" + (f", for {html.escape(g['component_name'])}" if g.get("component") else "")
                 + "</small>")
             text.setWordWrap(True)
             text.setTextFormat(QtCore.Qt.RichText)

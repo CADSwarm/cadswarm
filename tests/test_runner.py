@@ -180,7 +180,7 @@ def test_panel_snapshot_reads_each_view_once():
     h = SpaceHub({"uri": "http://x", "db": "d", "name": "ann-claude"},
                  {"participant_id": 1, "fence": 2, "name": "ann-claude"}, space=space)
     snap = h.panel_snapshot()
-    assert set(snap) == {"model", "tasks", "commands", "briefs", "messages"}
+    assert set(snap) == {"model", "tasks", "commands", "briefs", "messages", "reviews", "workspace"}
     assert len(seen) == len(set(seen))  # no view read twice in one refresh
     assert [m["id"] for m in snap["messages"]] == ["m_steer", "m_ask", "m_chat", "m_bob"]
     h.tasks()

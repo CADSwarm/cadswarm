@@ -104,11 +104,11 @@ def test_edits_made_outside_cadswarm_are_detected_and_preserved(env):
         f.write("part,qty\nbase,1\nscrew,4\n")  # a human edited it in Excel
     with pytest.raises(HubError) as e:
         hub.save_file(a, "bom.csv", text="part,qty\n", if_exists="replace", expected_version=1)
-    assert e.value.code == "stale_version" and e.value.data["author"] == "outside CadSwarm"
+    assert e.value.code == "stale_version" and e.value.data["author"] == "outside CADSwarm"
     clock.t += 1
     hub.save_file(a, "bom.csv", text="part,qty\nbase,2\n", if_exists="replace", expected_version=2)
     hist = hub.file_history("bom.csv")["older_versions"]
-    assert hist[-1]["author"] == "outside CadSwarm"  # the human's edit is in history, not lost
+    assert hist[-1]["author"] == "outside CADSwarm"  # the human's edit is in history, not lost
 
 
 def test_move_and_delete_are_reversible(env):

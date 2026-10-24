@@ -1,4 +1,4 @@
-"""CadSwarm MCP server: one per agent session (Claude Code or Codex).
+"""CADSwarm MCP server: one per agent session (Claude Code or Codex).
 
 Started by the agent CLI from a project folder prepared by `cadswarm setup --invite`.
 On start it rejoins the team on SpacetimeDB (resuming the folder's stored identity
@@ -21,7 +21,7 @@ from .files import unique_path
 from .space_hub import SpaceHub
 
 INSTRUCTIONS = """You are one of several agents (each driven by a different person) building ONE shared
-FreeCAD model through the CadSwarm hub. Talk briefly. People watch the model change live in FreeCAD and the
+FreeCAD model through the CADSwarm hub. Talk briefly. People watch the model change live in FreeCAD and the
 web app, so don't narrate: no running commentary, no restating tool calls or their results, no lists of what
 you're about to do. Reply in one or two short sentences; when you finish something, say what changed in at
 most three lines (part names and key sizes). Ask questions only when you truly need an answer, all in one
@@ -56,7 +56,7 @@ Work like a careful teammate:
    Storage is limited: text files up to 5 MB, binary CAD/media up to 100 MB, and only the last 20
    versions of each file (plus everything from the last day) are kept. If a save fails with
    `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
-   them to free it (FreeCAD: the CadSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
+   them to free it (FreeCAD: the CADSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
    or exports yourself to make room, and don't save big files you can regenerate.
 9. FEA (strength, stiffness, vibration or heat questions: "will it hold / break / bend", stress, load, safety
    factor, natural frequency, temperature). Before running anything, ask your person in ONE message:
@@ -83,7 +83,7 @@ Work like a careful teammate:
    Fits are also Params (Params.tol_clearance etc.): bind gaps to them instead of hard-coding numbers.
    Only people change settings. When a part you add implies a different value (a press-fit bearing, small
    holes that need a finer mesh), call suggest_setting with a one-line reason; a person accepts it.
-13. Team design style. CadSwarm learns how this team designs (the values people use, the corrections they keep
+13. Team design style. CADSwarm learns how this team designs (the values people use, the corrections they keep
    making to agent work, preferred parts, problems reviews keep finding) and shows it as "Team design style" in
    your context. Follow it. Before modelling a new kind of part, call team_style(topic=...) for the rules that
    apply. A [confirmed] rule is the team's decision: never go against it without asking your person. When your
@@ -490,7 +490,7 @@ def save_snapshot(label: str = "") -> dict:
 @mcp.tool()
 def storage_status() -> dict:
     """How much room the project uses (live files, older versions, snapshots, exports), its limit, the host's
-    free disk space and the history-retention settings. Read-only: only a person can free up space (the CadSwarm panel's Tools tab >
+    free disk space and the history-retention settings. Read-only: only a person can free up space (the CADSwarm panel's Tools tab >
     Storage and free up space in FreeCAD), so ask one if you are running out."""
     return call("GET", "/project/storage")
 
@@ -505,14 +505,14 @@ def lookup_board(question: str, board: str | None = None) -> dict:
 
 @mcp.tool()
 def recall_designs(query: str, board: str | None = None) -> dict:
-    """Similar past CadSwarm designs and the lessons learned from their reviews, so you avoid repeating
+    """Similar past CADSwarm designs and the lessons learned from their reviews, so you avoid repeating
     a problem (e.g. a lid that clipped the USB plug)."""
     return call("POST", "/knowledge/designs", {"query": query, "board": board}, doing="recalling past designs")
 
 
 @mcp.tool()
 def team_style(topic: str | None = None, board: str | None = None) -> dict:
-    """The design-style rules this team follows, learned from how its people and agents work in CadSwarm
+    """The design-style rules this team follows, learned from how its people and agents work in CADSwarm
     (e.g. wall thickness, fits, preferred inserts, what people keep correcting). `topic` ranks rules for the part
     you are about to make; `board` adds that board's rules. [confirmed] rules are the team's decisions."""
     return call("GET", "/style", doing=f"checking team style{' for ' + topic if topic else ''}",
@@ -522,14 +522,14 @@ def team_style(topic: str | None = None, board: str | None = None) -> dict:
 @mcp.tool()
 def teach_style(statement: str) -> dict:
     """Propose a lasting design rule your person stated, e.g. "Lids use 4 M3 heat-set inserts". It waits as a
-    candidate until a person confirms it in the CadSwarm panel (Learned style); then every agent follows it."""
+    candidate until a person confirms it in the CADSwarm panel (Learned style); then every agent follows it."""
     return call("POST", "/style/teach", {"statement": statement}, doing="saving a team style rule")
 
 
 @mcp.tool()
 def style_rules() -> dict:
     """Every learned style rule with its evidence and status (confirmed, active, or a candidate awaiting a person).
-    A person can confirm or dismiss candidates in the CadSwarm panel (Learned style)."""
+    A person can confirm or dismiss candidates in the CADSwarm panel (Learned style)."""
     return call("POST", "/style/rules", {})
 
 
@@ -667,7 +667,7 @@ def hole_size(family: str, size: str, purpose: str | None = None) -> dict:
 @mcp.tool()
 def import_component_from_url(url: str, name: str | None = None, category: str = "other",
                               tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
-    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CadSwarm .zip pack) to the
+    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CADSwarm .zip pack) to the
     team's library, e.g. a vendor's CAD download or a model in a GitHub repo. The host downloads it (public
     internet only, up to 50 MB), FreeCAD measures it, and the team sees it. Always pass the license you saw
     on the source page. Then place it with insert_component."""

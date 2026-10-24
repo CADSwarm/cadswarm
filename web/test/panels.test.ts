@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadBoards, parseBoards } from '../src/ui/brief';
 import { datasheetLinks, parseMm } from '../src/ui/params';
-import { currentBrief, findingLines, latestReview } from '../src/ui/panels';
+import { currentBrief, findingLines, latestReview, modelBrief } from '../src/ui/panels';
+import { bedError, printHeadline, printLines, reviewFindings, reviewHeadline, shownReview } from '../src/ui/review';
+import { toPrintability } from '../src/api';
 import { mergeStl, startMockSwarm } from '../src/mock';
 import { Store } from '../src/store';
 import { esc } from '../src/ui/esc';
@@ -46,11 +48,57 @@ describe('panel helpers', () => {
     const reviews = [{ brief: 'b_2', round: 1 }, { brief: 'b_2', round: 2 }, { brief: 'b_1', round: 9 }] as never[];
     expect(latestReview({ reviews }, 'b_2')?.round).toBe(2);
   });
+  it('keeps an older finished model reachable when a newer request is unfinished', () => {
+    const briefs = [
+      { id: 'b_1', updatedMs: 1, stlHash: 'aa'.repeat(32) },
+      { id: 'b_2', updatedMs: 2, stlHash: 'bb'.repeat(32) },
+      { id: 'b_3', updatedMs: 9, stlHash: '' },
+    ] as never[];
+    expect(currentBrief({ briefs })?.id).toBe('b_3');
+    expect(modelBrief({ briefs })?.id).toBe('b_2');
+    expect(modelBrief({ briefs: [{ id: 'b_4', updatedMs: 1, stlHash: '' }] as never })).toBeUndefined();
+  });
   it('reads findings whatever shape the reviewer sends', () => {
     expect(findingLines('[{"message":"hole too small"},"lid loose"]')).toEqual(['hole too small', 'lid loose']);
     expect(findingLines('{"findings":[{"text":"thin wall"}]}')).toEqual(['thin wall']);
+    expect(findingLines('[{"object":"Base","problem":"the wall is 1.1 mm","task_id":"t_1"}]'))
+      .toEqual(['Base: the wall is 1.1 mm']);
     expect(findingLines('plain words')).toEqual(['plain words']);
     expect(findingLines('')).toEqual([]);
+  });
+  it('names the newest review round and caps its findings', () => {
+    expect(reviewHeadline({ round: 2, passed: true })).toBe('Round 2 passed');
+    expect(reviewHeadline({ round: 3, passed: false })).toBe('Round 3 asks for changes');
+    expect(reviewFindings('[{"detail":"thin wall"},{"summary":"hole small"},"lid loose","extra"]', 3))
+      .toEqual(['thin wall', 'hole small', 'lid loose']);
+    expect(reviewFindings('[{"object":"Base","problem":"the wall is 1.1 mm"}]')).toEqual(['Base: the wall is 1.1 mm']);
+    expect(reviewFindings('not json')).toEqual(['not json']);
+    const said = shownReview({
+      briefs: [{ id: 'b_1', updatedMs: 1 }, { id: 'b_2', updatedMs: 5 }],
+      reviews: [{ brief: 'b_2', round: 1, atMs: 1 }, { brief: 'b_2', round: 2, atMs: 3 }, { brief: 'b_1', round: 9, atMs: 9 }],
+    } as never);
+    expect(said?.round).toBe(2);
+  });
+  it('keeps the printer bed between 20 and 2000 mm on each side', () => {
+    expect(bedError(256, 256, 256)).toBe('');
+    expect(bedError(20, 2000, 180)).toBe('');
+    expect(bedError(19, 180, 180)).toMatch(/between 20 and 2000/);
+    expect(bedError(180, 2001, 180)).toMatch(/between 20 and 2000/);
+    expect(bedError(Number.NaN, 180, 180)).toMatch(/millimetres/);
+  });
+  it('turns the worker printability answer into plain lines', () => {
+    const p = toPrintability({ ok: false, objects: [
+      { name: 'Base', size: [70, 32, 2], fits_bed: true, closed_solid: true, thin_wall_suspects: [] },
+      { name: 'Lid', size: [300, 32.25, 3], fits_bed: false, closed_solid: false,
+        thin_wall_suspects: [{ distance: 0.8 }, { distance: 0.6 }] },
+    ] });
+    expect(printHeadline(p)).toBe('Not printable yet');
+    expect(printLines(p)).toEqual(['Base: 70 x 32 x 2 mm - fits',
+      'Lid: 300 x 32.3 x 3 mm - too big for the bed; not a closed solid; 2 thin walls (closest 0.6 mm)']);
+    expect(toPrintability({ ok: true })).toEqual({ ok: true, objects: [] });
+    expect(toPrintability(null)).toEqual({ ok: false, objects: [] });
+    expect(printLines({ ok: true, objects: [] })).toEqual([]);
+    expect(printHeadline({ ok: true, objects: [] })).toBe('Fits the printer');
   });
   it('escapes markup from members and tickets', () => {
     expect(esc('<img src=x onerror="a">\'')).toBe('&lt;img src=x onerror=&quot;a&quot;&gt;&#39;');
@@ -84,12 +132,41 @@ describe('mock swarm', () => {
 
     await api.setParam('wall', '3 mm');
     expect(store.state.params.find(p => p.alias === 'wall')?.num).toBe(3);
+    await api.setBed(256, 256, 300);
+    expect(store.state.workspace).toEqual({ bedXMm: 256, bedYMm: 256, bedZMm: 300 });
+    const printed = await api.checkPrintability();
+    expect(printed?.objects.map(o => o.name)).toEqual(store.state.objects.map(o => o.name));
+    expect(printed?.ok).toBe(true);
+    expect(printed?.objects.every(o => o.fitsBed && o.closedSolid)).toBe(true);
     const id = api.submitBrief('a lid', 'rpi4');
     expect(store.state.briefs).toMatchObject([{ id, text: 'a lid', board: 'rpi4', status: 'new' }]);
     vi.advanceTimersByTime(1800 * 2);
     const held = store.state.locks.find(l => l.holder !== 1)!;
     await api.lock([held.object]);
     expect(store.state.notice?.text).toMatch(/Already locked/);
+    stop();
+  });
+  it('stops a task or a whole request and leaves finished work alone', async () => {
+    vi.useFakeTimers();
+    const store = new Store();
+    const { stop, api } = startMockSwarm(store);
+    const briefId = store.state.briefs[0].id;
+    const claimed = store.state.tasks.find(t => t.status === 'claimed')!;
+    const open = store.state.tasks.find(t => t.status === 'open')!;
+    await api.cancelTask(claimed.id, 'not needed');
+    expect(store.state.tasks.find(t => t.id === claimed.id)?.status).toBe('cancelled');
+    await api.deleteTask(open.id);
+    expect(store.state.tasks.some(t => t.id === open.id)).toBe(false);
+
+    await api.cancelBrief(briefId);
+    expect(store.state.briefs[0].status).toBe('cancelled');
+    // Unstarted parts go with the request; the task already cancelled stays cancelled.
+    expect(store.state.tasks.filter(t => t.brief === briefId)
+      .every(t => t.status === 'done' || t.status === 'cancelled')).toBe(true);
+    // The scripted build does not resurrect a stopped request.
+    vi.advanceTimersByTime(1800 * 10);
+    expect(store.state.briefs[0].status).toBe('cancelled');
+    expect(store.state.tasks.find(t => t.id === claimed.id)?.status).toBe('cancelled');
     stop();
   });
 });

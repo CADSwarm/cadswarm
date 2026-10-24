@@ -201,7 +201,7 @@ def runner_script():
 
 def run_job(python, job, model_path, timeout=FEA_TIMEOUT, progress=None):
     """Solve `job["target"]` from a saved model with FreeCAD's python; installs Gmsh first if neither FreeCAD
-    nor CadSwarm has one. Returns (result dict, plot PNG bytes or None). `progress(text)` hears about a
+    nor CADSwarm has one. Returns (result dict, plot PNG bytes or None). `progress(text)` hears about a
     mesher install.
     """
     from . import mesher

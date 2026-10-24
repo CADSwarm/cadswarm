@@ -8,7 +8,7 @@
       Submit a design brief from a set-up folder.
 
   cadswarm install-workbench
-      Install the CadSwarm workbench into the local FreeCAD for humans to watch and steer.
+      Install the CADSwarm workbench into the local FreeCAD for humans to watch and steer.
 
 The team server is `cadswarm-host` (Rust) on SpacetimeDB; `cadswarm-host invite` mints invites.
 """
@@ -34,7 +34,7 @@ def cmd_setup(a):
         raise SystemExit(f"cadswarm: {e}")
     except Exception as e:  # SpaceError from redeeming: used, expired or unreachable
         raise SystemExit(f"cadswarm: could not join with this invite: {e}")
-    print(f"CadSwarm set up for {a.client} as '{a.name}' in {project}")
+    print(f"CADSwarm set up for {a.client} as '{a.name}' in {project}")
     for p in written:
         print(f"  wrote {p}")
     if a.client == "claude":
@@ -45,8 +45,8 @@ def cmd_setup(a):
         print("Next: run `codex` here. Codex only loads .codex/config.toml for TRUSTED projects: accept the "
               "trust prompt, or add to ~/.codex/config.toml:\n"
               f"  [projects.{json.dumps(project)}]\n  trust_level = \"trusted\"")
-        print("Then, in Codex, type /hooks and trust the CadSwarm hook. Codex skips new or changed hooks until "
-              "you do, so without this your helper won't see its team's updates. Do it again after updating CadSwarm.")
+        print("Then, in Codex, type /hooks and trust the CADSwarm hook. Codex skips new or changed hooks until "
+              "you do, so without this your helper won't see its team's updates. Do it again after updating CADSwarm.")
 
 
 def cmd_brief(a):
@@ -77,21 +77,23 @@ def freecad_mod_dir(fc_py=None):
 
 
 def install_addon(dest_mod_dir):
-    """Copy this checkout into FreeCAD's Mod folder as the 'CadSwarm' add-on."""
+    """Copy this checkout into FreeCAD's Mod folder as the 'CADSwarm' add-on."""
     dest = os.path.join(dest_mod_dir, "CadSwarm")
     if os.path.exists(dest):
         shutil.rmtree(dest)
     shutil.copytree(ROOT, dest, ignore=ADDON_IGNORE)
     wasm = os.path.join(ROOT, "module", "target", "wasm32-unknown-unknown", "release", "cadswarm_module.wasm")
-    if os.path.isfile(wasm):  # the team server's database module (build folders aren't copied)
+    if not os.path.isfile(wasm):  # a local build wins; else the module shipped beside the code
+        wasm = os.path.join(ROOT, "module", "cadswarm_module.wasm")
+    if os.path.isfile(wasm):  # build folders aren't copied, so put the module in the installed add-on
         shutil.copy2(wasm, os.path.join(dest, "module", "cadswarm_module.wasm"))
     return dest
 
 
 def cmd_install_workbench(a):
     dest = install_addon(freecad_mod_dir())
-    print(f"Installed CadSwarm into FreeCAD at {dest}.")
-    print("Restart FreeCAD and pick 'CadSwarm' from the workbench list; a setup guide opens.")
+    print(f"Installed CADSwarm into FreeCAD at {dest}.")
+    print("Restart FreeCAD and pick 'CADSwarm' from the workbench list; a setup guide opens.")
 
 
 def main(argv=None):
