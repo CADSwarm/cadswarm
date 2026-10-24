@@ -56,7 +56,7 @@ git switch -c feat/web
 npm create vite@latest web -- --template vanilla-ts
 cd web
 npm install
-npm install three spacetimedb@~2.11.0
+npm install three spacetimedb@~2.13.0
 npm install -D vitest @types/three
 cd ..
 ```

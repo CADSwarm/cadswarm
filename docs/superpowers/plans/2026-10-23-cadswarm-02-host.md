@@ -725,9 +725,9 @@ git commit -m "feat(host): worker reply mapping and board params seeding"
 ```powershell
 git fetch origin; git rebase origin/main
 spacetime --version
-cargo add --manifest-path host/Cargo.toml spacetimedb-sdk@=2.11.0
+cargo add --manifest-path host/Cargo.toml spacetimedb-sdk@=2.13.0
 ```
-`spacetime --version` must print 2.11.x (plan 00 Global Constraints: SpacetimeDB is pinned to 2.11 everywhere, because 2.12+ needs rustc 1.97). If it prints something else, run `spacetime version install 2.11.0; spacetime version use 2.11.0` and regenerate the bindings before going on.
+`spacetime --version` must print 2.13.x and `rustc --version` 1.97 or later (plan 00 Global Constraints: SpacetimeDB is pinned to 2.13.0 everywhere). If the CLI prints something else, run `spacetime version install 2.13.0; spacetime version use 2.13.0` and regenerate the bindings before going on; if rustc is older, run `rustup update`.
 
 - [ ] **Step 2: Read the generated API before writing code**
 
