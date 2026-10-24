@@ -1,0 +1,174 @@
+// A scripted swarm so the viewer, animation and panels can be built and demoed without a server.
+// `?mock` runs it: a brief is planned, five parts are built by agents, the reviewer sends one round back,
+// then the STL is ready. The mock Api answers the panels (brief, lock, params, download) locally.
+import type { Api } from './api';
+import type { Store, Obj, Task, Activity } from './store';
+import { newId } from './ids';
+import { saveBytes } from './download';
+
+function boxStl(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number): Uint8Array {
+  const v = [[x0,y0,z0],[x1,y0,z0],[x1,y1,z0],[x0,y1,z0],[x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1]];
+  const f = [[0,2,1],[0,3,2],[4,5,6],[4,6,7],[0,1,5],[0,5,4],[1,2,6],[1,6,5],[2,3,7],[2,7,6],[3,0,4],[3,4,7]];
+  const buf = new ArrayBuffer(84 + 50 * f.length);
+  const dv = new DataView(buf);
+  dv.setUint32(80, f.length, true);
+  f.forEach((tri, i) => {
+    let o = 84 + 50 * i + 12; // normals left zero; STLLoader recomputes
+    for (const k of tri) for (const c of v[k]) { dv.setFloat32(o, c, true); o += 4; }
+  });
+  return new Uint8Array(buf);
+}
+
+/** Concatenate binary STLs into one (the mock's "export"). */
+export function mergeStl(meshes: Uint8Array[]): Uint8Array {
+  const tris = meshes.reduce((n, m) => n + (m.length - 84) / 50, 0);
+  const out = new Uint8Array(84 + 50 * tris);
+  new DataView(out.buffer).setUint32(80, tris, true);
+  let o = 84;
+  for (const m of meshes) { out.set(m.subarray(84), o); o += m.length - 84; }
+  return out;
+}
+
+const DEMO_TEXT = 'A case for my ESP32-S3 DevKitC with a USB-C cutout, four standoffs and a snap-on lid';
+const STL_HASH = 'c0ffee'.repeat(10) + 'f00d';
+type PartDef = [string, number, number, number, number, number, number];
+
+export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
+  const members = [
+    { id: 1, name: 'you', kind: 'human', client: 'phone', role: 'member', status: 'active', statusText: '', fence: 1, online: true },
+    { id: 2, name: 'planner', kind: 'agent', client: 'claude', role: 'lead', status: 'active', statusText: '', fence: 1, online: false },
+    { id: 3, name: 'worker1', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
+    { id: 4, name: 'worker2', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
+    { id: 5, name: 'reviewer', kind: 'reviewer', client: 'droid', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
+  ];
+  const parts: PartDef[] = [
+    ['Base', 0, 0, 0, 70, 32, 2], ['WallN', 0, 30, 2, 70, 32, 14], ['WallS', 0, 0, 2, 70, 2, 14],
+    ['Standoff1', 10, 10, 2, 13, 13, 6], ['Lid', 0, 0, 16, 70, 32, 18],
+  ];
+  store.set({ connected: true, meId: 1, members, workspace: { bedXMm: 180, bedYMm: 180, bedZMm: 180 },
+    params: [{ alias: 'wall', value: '2 mm', num: 2 }, { alias: 'gap', value: '0.5 mm', num: 0.5 },
+      { alias: 'standoff_h', value: '4 mm', num: 4 }, { alias: 'clear_top', value: '17 mm', num: 17 }] });
+
+  let step = 0, briefId = '', seq = 100, actId = 0;
+  const say = (member: number, summary: string, kind = 'tool_call'): Activity[] =>
+    [...store.state.activity.slice(-60), { id: actId++, member, kind, summary, atMs: Date.now() }];
+  const workerOf = (i: number) => 3 + (i % 2);
+
+  function newBrief(text: string, board: string) {
+    briefId = newId('b_');
+    step = 0;
+    store.set({
+      briefs: [{ id: briefId, by: 1, text, board, status: 'new', planJson: '', stlHash: '', updatedMs: Date.now() }],
+      objects: [], previews: new Map(), locks: [], tasks: [], reviews: [], artifacts: [], ops: [], pointers: [],
+      activity: say(1, 'submitted a brief', 'say'),
+    });
+  }
+  const brief = (status: string, extra: Partial<{ stlHash: string; planJson: string }> = {}) =>
+    store.state.briefs.map(b => b.id === briefId ? { ...b, status, updatedMs: Date.now(), ...extra } : b);
+
+  function build(i: number, rev: number) {
+    const [name, ...b] = parts[i];
+    const builder = workerOf(i);
+    const objects: Obj[] = [...store.state.objects.filter(o => o.name !== name),
+      { name, label: name, typeId: 'Part::Box', rev, bbox: b, volume: 1, visible: true, broken: false, usedBy: [], lastActor: builder }];
+    const previews = new Map(store.state.previews);
+    previews.set(name, { object: name, rev, mesh: boxStl(...(b as [number, number, number, number, number, number])) });
+    const tasks: Task[] = store.state.tasks.map((t, k) =>
+      k < i ? { ...t, status: 'done' } : k === i ? { ...t, status: 'claimed', owner: builder } : t);
+    store.set({
+      objects, previews, tasks,
+      locks: [...store.state.locks.filter(l => l.object !== name), { object: name, holder: builder }],
+      pointers: [...store.state.pointers.filter(p => p.member !== builder && p.member !== 2),
+        { member: builder, object: name, point: [], mode: 'editing', label: `building ${name}`, op: `o_${step}`, seq: seq++, atMs: Date.now() }],
+      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }) }],
+      activity: say(builder, `create_primitive ${name}`),
+    });
+  }
+
+  function tick() {
+    const n = parts.length;
+    if (step === 0) {
+      store.set({
+        briefs: brief('planning'),
+        tasks: parts.map(([name], i) => ({ id: `t_mock000${i}`, title: `Model the ${name}`, status: 'open', owner: 0,
+          assignee: members[workerOf(i) - 1].name, brief: briefId, objects: [name] })),
+        pointers: [{ member: 2, object: '', point: [35, 16, 30], mode: 'pointing', label: 'planning', op: '', seq: seq++, atMs: Date.now() }],
+        activity: say(2, `planned ${n} tasks`, 'say'),
+      });
+    } else if (step <= n) {
+      build(step - 1, 1);
+      store.set({ briefs: brief('building') });
+    } else if (step === n + 1) {
+      store.set({
+        briefs: brief('reviewing'),
+        tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })),
+        pointers: [...store.state.pointers.map(p => ({ ...p, mode: 'idle' })),
+          { member: 5, object: 'Standoff1', point: [], mode: 'inspecting', label: 'checking holes', op: '', seq: seq++, atMs: Date.now() }],
+        reviews: [{ id: 'r_mock0001', brief: briefId, round: 1, passed: false,
+          findingsJson: JSON.stringify([{ message: 'Standoff1 hole is 2.4 mm; M2.5 screws need 2.7 mm.' }, { message: 'USB-C cutout sits 0.6 mm too low.' }]) }],
+        activity: say(5, 'review round 1: 2 findings', 'say'),
+      });
+    } else if (step === n + 2) {
+      build(3, 2);
+      store.set({ tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })) });
+    } else if (step === n + 3) {
+      store.set({
+        reviews: [...store.state.reviews, { id: 'r_mock0002', brief: briefId, round: 2, passed: true, findingsJson: '[]' }],
+        activity: say(5, 'review round 2: passed', 'say'),
+      });
+    } else if (step === n + 4) {
+      const bytes = mergeStl([...store.state.previews.values()].map(p => p.mesh));
+      store.set({
+        briefs: brief('ready', { stlHash: STL_HASH }),
+        artifacts: [{ hash: STL_HASH, name: 'model-12.stl', mime: 'model/stl', size: bytes.length }],
+        locks: [], pointers: store.state.pointers.map(p => ({ ...p, mode: 'idle' })),
+        activity: say(2, 'exported model-12.stl', 'tool_result'),
+      });
+    } else {
+      // Keep the scene alive: agents polish parts in turn.
+      const i = (step - n - 5) % n;
+      build(i, (store.state.objects.find(o => o.name === parts[i][0])?.rev ?? 1) + 1);
+      store.set({ tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })) });
+    }
+    step++;
+  }
+
+  newBrief(DEMO_TEXT, 'esp32-s3-devkitc-1');
+  for (let i = 0; i < 4; i++) tick(); // start mid-build so the first screen is not empty
+  const timer = setInterval(tick, 1800);
+
+  const notice = (text: string) => store.set({ notice: { text, at: Date.now() } });
+  const api: Api = {
+    fence: () => 1,
+    redeem: async () => {},
+    submitBrief: (text, board) => { newBrief(text, board); return briefId; },
+    lock: async names => {
+      const taken = store.state.locks.find(l => names.includes(l.object) && l.holder !== 1);
+      if (taken) { notice(`Already locked: ${taken.object} by ${store.member(taken.holder)?.name}. Message the holder.`); return; }
+      store.set({ locks: [...store.state.locks.filter(l => !names.includes(l.object)), ...names.map(object => ({ object, holder: 1 }))],
+        activity: say(1, `locked ${names.join(', ')}`, 'status') });
+    },
+    release: async names => store.set({ locks: store.state.locks.filter(l => !(names.includes(l.object) && l.holder === 1)) }),
+    setParam: async (alias, value) => {
+      store.set({ params: store.state.params.map(p => p.alias === alias ? { ...p, value, num: parseFloat(value) } : p) });
+    },
+    movePointer: (object, point, mode, label) => store.set({
+      pointers: [...store.state.pointers.filter(p => p.member !== 1), { member: 1, object, point, mode, label, op: '', seq: seq++, atMs: Date.now() }] }),
+    logActivity: (kind, summary) => store.set({ activity: say(1, summary, kind) }),
+    requestHandoff: (note, trigger) => {
+      const id = newId('h_');
+      store.set({ handoffs: [...store.state.handoffs, { id, from: 1, note, trigger, status: trigger === 'now' ? 'open' : 'waiting', taker: 0, createdMs: Date.now() }] });
+      return id;
+    },
+    cancelHandoff: id => store.set({ handoffs: store.state.handoffs.map(h => h.id === id ? { ...h, status: 'cancelled' } : h) }),
+    downloadArtifact: async (hash, filename) => {
+      if (hash !== STL_HASH) throw new Error('Unknown export.');
+      saveBytes(mergeStl([...store.state.previews.values()].map(p => p.mesh)), 'model/stl', filename);
+    },
+  };
+  return { stop: () => clearInterval(timer), api };
+}
+
+export function startMock(store: Store): () => void {
+  return startMockSwarm(store).stop;
+}
