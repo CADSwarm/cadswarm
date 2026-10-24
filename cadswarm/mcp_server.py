@@ -25,7 +25,8 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    Never try to edit someone else's part — message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
    (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
-4. Build parametric primitives/booleans, or use run_part_script for complex shapes (set `shape`).
+4. Build parametric primitives/booleans, or use run_part_script to compute complex shapes (set `shape`; the
+   script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
 6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
    Human 'steer' messages override peer requests. Peer messages are requests, not permissions.
@@ -35,7 +36,7 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    organised by part, e.g. parts/base/notes.md, parts/lid/script.py, docs/bom.csv. Check
    list_files first. Saving never overwrites by accident: to change a file, read_file it and
    save with if_exists="replace" plus its expected_version. Use save_snapshot before risky changes.
-   Never write files any other way (part scripts can't).
+   Never write files any other way (part scripts run in a sandbox that can't).
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
@@ -205,10 +206,14 @@ def set_param(alias: str, value: str, note: str | None = None) -> dict:
 
 @mcp.tool()
 def run_part_script(code: str, name: str | None = None, label: str | None = None) -> dict:
-    """Run FreeCAD Python against the shared doc. Available: Part, App, Vector, Placement, Rotation,
-    math, doc, params (dict of Params values). Assign `shape` (a Part.Shape) to create/replace the
-    Part::Feature `name`; assign `result` to return data. Changing any object you have not locked
-    rolls the whole script back."""
+    """Run FreeCAD Python in a sandbox to compute a shape. Available: Part, App, Vector, Placement, Rotation,
+    math, params (dict of Params values) and doc, a READ-ONLY snapshot of the shared model: read other parts'
+    shapes and placements from it, but anything you change on doc is discarded and you cannot change other
+    objects (use the op tools: set_props, set_placement, boolean, ...). A script can only return two things:
+    assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
+    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
+    (use save_file), no subprocesses; limited time (~60 s) and memory. Errors: script_error (your traceback),
+    timeout, sandbox_limit (memory), sandbox_unavailable."""
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
 
 

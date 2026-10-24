@@ -11,7 +11,7 @@ Isolation levels, strongest first (the active one is reported in the worker's pi
   lowintegrity    Windows low-integrity token: can't WRITE outside the scratch folder, but can still read
                   the user's files and use the network. Plus a Job object. Fallback when AppContainers
                   are unavailable.
-  process-limits  macOS/Linux: plain child process with rlimits (memory, CPU, no forking), new session,
+  process-limits  macOS/Linux: plain child process with rlimits (memory, CPU, open files), new session,
                   working in the scratch folder. No filesystem or network isolation: much weaker.
   off             CADSWARM_SCRIPT_SANDBOX=off, debugging only: a plain child process, no confinement.
 
@@ -77,8 +77,12 @@ def install_root(python):
 
 
 def _ensure_container_grants(win, sid, root):
-    """Read+execute on FreeCAD for the container, granted once (a per-user install such as
-    %LOCALAPPDATA%\Programs\FreeCAD doesn't allow AppContainers by default; Program Files does)."""
+    """Read+execute on FreeCAD for the container, granted once (a per-user install under AppData doesn't
+    allow AppContainers by default; Program Files does).
+
+    Known quirk: once a file carries an AppContainer ACE, the low-integrity fallback can no longer read it
+    (Access denied, reproduced on Windows 11). The two levels are therefore alternatives, not layers: the
+    fallback is only meaningful where AppContainers never worked, and no ACE was ever added."""
     if win.has_access(root, sid):
         return
     log.info("granting the script sandbox read access to %s (one time, can take a few seconds)", root)
@@ -184,7 +188,9 @@ class Outcome:
         self.timed_out, self.peak_memory = timed_out, peak_memory
 
 
-def _run_posix(argv, env, scratch, payload, timeout, memory_mb, confined):
+def _run_plain(argv, env, scratch, payload, timeout, memory_mb, confined):
+    """Child process without the Windows machinery: rlimits + new session on POSIX (`confined`), or just a
+    bare child (CADSWARM_SCRIPT_SANDBOX=off, or no confinement available)."""
     import signal
 
     def child_setup():
@@ -192,22 +198,23 @@ def _run_posix(argv, env, scratch, payload, timeout, memory_mb, confined):
         if not confined:
             return
         import resource
+        # No RLIMIT_NPROC=0 to forbid forking: on Linux threads count against it, and FreeCAD/OCC use threads.
         for name, soft in (("RLIMIT_AS", memory_mb << 20), ("RLIMIT_CPU", int(timeout) + 5),
-                           ("RLIMIT_NPROC", 0), ("RLIMIT_NOFILE", 256), ("RLIMIT_CORE", 0)):
+                           ("RLIMIT_NOFILE", 256), ("RLIMIT_CORE", 0)):
             try:
                 resource.setrlimit(getattr(resource, name), (soft, soft))
             except (ValueError, OSError, AttributeError):
                 pass  # not every OS supports every limit (macOS ignores RLIMIT_AS, for one)
 
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            cwd=scratch, env=env, preexec_fn=child_setup)
+                            cwd=scratch, env=env, **({} if WINDOWS else {"preexec_fn": child_setup}))
     timed_out = False
     try:
         out, err = proc.communicate(payload, timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGKILL) if not WINDOWS else proc.kill()
         except OSError:
             proc.kill()
         out, err = proc.communicate()
@@ -305,7 +312,7 @@ def run_script(python, save_copy, request):
             if level in ("appcontainer", "lowintegrity"):
                 out = _run_windows(level, argv, env, scratch, payload, timeout, memory_mb)
             else:
-                out = _run_posix(argv, env, scratch, payload, timeout, memory_mb, level != "off")
+                out = _run_plain(argv, env, scratch, payload, timeout, memory_mb, level != "off")
         except (OSError, _win_error()) as e:  # this level can't start here: try the next one down
             problems.append(f"{level}: {e}")
             log.warning("script sandbox level %s failed to start (%s)", level, e)

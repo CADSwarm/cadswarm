@@ -52,7 +52,9 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
 
     @app.get("/health")
     def health():
-        return {"ok": True, "seq": hub.seq(), "freecad": hub.query("ping")["freecad"]}
+        ping = hub.query("ping")
+        return {"ok": True, "seq": hub.seq(), "freecad": ping["freecad"],
+                "script_sandbox": ping.get("script_sandbox")}  # {level, detail, timeout_s, memory_mb}
 
     @app.post("/join")
     def join(body: dict = Body(...)):
