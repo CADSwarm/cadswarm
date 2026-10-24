@@ -315,7 +315,15 @@ impl Orchestrator {
             return Ok(());
         }
 
-        match next_action(&state) {
+        // A host that restarted mid-review has no reviewer and no round of its own: review again.
+        let restarted_review = b.status == "reviewing" && rt.review_round == 0 && rt.reviewer.is_none()
+            && review.is_none() && !state.exporting;
+        let action = match next_action(&state) {
+            Action::Wait if restarted_review && self.reviewer_enabled => Action::Review,
+            Action::Wait if restarted_review => Action::Export,
+            other => other,
+        };
+        match action {
             Action::Wait => {}
             Action::Seed => {
                 let local = self.boards.get(&b.board).cloned();

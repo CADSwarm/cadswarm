@@ -123,6 +123,12 @@ def test_unsourced_or_implausible_specs_are_refused():
     bad = good(); bad["holes"] = [[80, 4]]
     with pytest.raises(ValueError, match="hole"):
         validate_spec(bad)
+    bad = good(); bad["hole_d"] = 0  # holes without a bore would seed solid standoffs
+    with pytest.raises(ValueError, match="hole_d"):
+        validate_spec(bad)
+    bad = good(); bad["ports"] = [{"side": "-x"}]  # a malformed port is a refusal, not a crash
+    with pytest.raises(ValueError, match="port"):
+        validate_spec(bad)
 
 
 def test_lessons_are_a_term_query_on_the_board_sorted_by_count(url):
