@@ -77,6 +77,25 @@ The team server enforces these rules; it doesn't just ask the AI helpers to foll
   file always keeps its latest version. Older versions beyond that are removed for good. If your file is
   replaced by a teammate, you're told.
 - **Atomic writes.** A crash never leaves half a file.
+- **Model scripts run in a sandbox.** When a helper runs a `run_part_script`, CadSwarm starts a separate,
+  throw-away FreeCAD process for it, never the live model's own process. The script works on a read-only
+  copy of the model and can hand back only a shape and some data. Anything else it does to the copy is
+  discarded, so it can't change other people's parts. How tightly that process is locked down depends on
+  your computer (the model server shows the active level at `/health`, under `script_sandbox`):
+  - **Windows 10/11, normal case (`appcontainer`):** the script process runs in a Windows AppContainer, the
+    same mechanism browsers use for web pages. It has no network, can't read or write your documents or
+    profile, can't start other programs, and can only write inside a scratch folder that is deleted
+    afterwards. It is also capped at about 2 GB of memory and 60 seconds. The first start gives that
+    container read access to your FreeCAD folder, which can take a few seconds.
+  - **Windows fallback (`lowintegrity`):** if AppContainers can't be created, scripts run with a
+    low-privilege copy of your account. They still can't write anywhere but the scratch folder or start
+    programs, but they **can** read your files and use the network. Use this only with people you trust.
+  - **macOS / Linux (`process-limits`):** scripts run in their own process with memory, time and
+    open-file limits, but with **no** file or network isolation, so they run as you. Use this only with
+    people you trust.
+  - **`CADSWARM_SCRIPT_SANDBOX=off`** switches all of this off for debugging and prints a loud warning.
+  Settings: `CADSWARM_SCRIPT_TIMEOUT` (seconds) and `CADSWARM_SCRIPT_MEMORY_MB`. A script that runs
+  too long or uses too much memory is stopped and reports an error; the model server keeps going.
 
 ### Disk space and the project limit
 
@@ -95,10 +114,6 @@ Big projects are welcome, but the host's computer is protected and a project can
   a person.
 - Binary files up to 100 MB are accepted over HTTP; a 100 MB save briefly needs about 500 MB of RAM on the
   host while it is decoded.
-- **Model scripts can't write files.** `run_part_script` can't `open()` files, can't import
-  `os`/`shutil`/`subprocess`, and can't call `doc.saveAs`, `shape.exportStep` and the like. This
-  guards against accidents and naive misuse; in-process Python can't be fully sandboxed, so only
-  team up with people you trust.
 
 ---
 
@@ -215,7 +230,7 @@ the prompt goes through without it.
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m pytest        # 169 tests; the integration test drives real FreeCAD
+.venv\Scripts\python -m pytest        # 213 tests; the integration and sandbox tests drive real FreeCAD
 ```
 
 See [demo/README.md](demo/README.md) for a three-agent demo script.
@@ -224,9 +239,11 @@ See [demo/README.md](demo/README.md) for a three-agent demo script.
 
 - The FreeCAD mirror is read-only. Human geometry edits go through the panel (lock, param,
   takeover) or an agent, not direct GUI modelling.
-- `run_part_script` runs agent Python inside the worker. Its file-write guard (see "Model scripts can't
-  write files") only stops accidents, not a determined script, so use it only with trusted teammates;
-  a timeout kills the worker and the hub restarts it from the last save.
+- `run_part_script` is sandboxed (see "Model scripts run in a sandbox"), but how well depends on the
+  platform: strong on Windows with AppContainers, much weaker on macOS/Linux and in the Windows fallback.
+  Each script also pays about half a second to start its own FreeCAD process. The sandbox protects your
+  files and network, not the model: a script can still return any shape, so review what teammates' helpers
+  add. Scripts can't edit other objects; they can only create or replace one shape.
 - Locks are per object. Editing a shared upstream object (e.g. a sketch used by two features)
   requires its lock; there is no sub-object locking.
 - Single hub, no TLS, shared workspace token. Put it behind a VPN or tunnel for remote teams.

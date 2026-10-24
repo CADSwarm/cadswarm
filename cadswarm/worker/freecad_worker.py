@@ -25,7 +25,10 @@ import os
 import re
 import sys
 import time
+import threading
 import traceback
+
+import sandbox  # noqa: E402  (next to this file; the worker runs as a plain script)
 
 FREECAD_BIN = os.environ.get("CADSWARM_FREECAD_BIN")
 if FREECAD_BIN and FREECAD_BIN not in sys.path:
@@ -355,116 +358,24 @@ def op_set_param(a):
     return {"alias": alias, "cell": f"B{row}"}
 
 
-# Modules a part script may import: geometry and maths only. No os, shutil, subprocess,
-# pathlib, socket, ctypes… — scripts build shapes; saving files goes through save_file,
-# which never overwrites. This is a guard against accidents and naive misuse, not a
-# security boundary (Python cannot be fully sandboxed in-process): only work with
-# teammates you trust.
-SCRIPT_MODULES = {"math", "cmath", "random", "itertools", "functools", "collections", "statistics",
-                  "fractions", "decimal", "json", "re", "string", "dataclasses", "typing", "copy", "numbers",
-                  "FreeCAD", "App", "Part", "Sketcher", "PartDesign", "Mesh", "MeshPart", "numpy", "BOPTools"}
-# FreeCAD/OCC/numpy objects can write files themselves (shape.exportStep(path), doc.saveAs(path),
-# arr.tofile(path)…), and allowed modules re-export dangerous ones (random._os, re.enum.sys…). So the
-# guard walks the script's AST: it bans these names as *attributes* (comments and strings are inert),
-# private/dunder attribute access, and the reflection builtins that would build a banned name at runtime.
-SCRIPT_BANNED_ATTRS = {
-    # writing files
-    "save", "saveAs", "saveCopy", "write", "writelines", "writeInventor", "write_text", "write_bytes",
-    "tofile", "savetxt", "savez", "savez_compressed", "memmap", "open_memmap", "DataSource", "dump",
-    # escaping to the interpreter, the OS or other modules an allowed module happens to import
-    "sys", "os", "modules", "builtins", "importlib", "import_module", "inspect", "subprocess", "shutil",
-    "pathlib", "io", "ctypes", "ctypeslib", "socket", "f2py", "distutils", "system", "popen",
-    "closeDocument", "setActiveDocument",
-}
-SCRIPT_DUNDER_OK = {"__init__", "__name__"}  # everything else dunder is how sandboxes get escaped
-SCRIPT_BANNED_NAMES = {"getattr", "setattr", "delattr", "locals", "__import__", "__builtins__"}
-
-
-def script_violation(code):
-    """First thing in `code` the guard refuses, as 'line N: why'; None if it looks fine.
-
-    Not a security boundary (see above). SyntaxErrors are left for compile() to report.
-    """
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return None
-    for node in ast.walk(tree):
-        line = getattr(node, "lineno", 0)
-        if isinstance(node, ast.Attribute):
-            attr = node.attr
-            if attr in SCRIPT_BANNED_ATTRS or (attr.startswith("export") and not attr.endswith("ToString")):
-                return f"line {line}: '.{attr}' (writes files or reaches outside the part)"
-            if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and not (
-                    isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
-                return f"line {line}: private/dunder attribute '.{attr}'"
-        elif isinstance(node, ast.Name):
-            if node.id in SCRIPT_BANNED_NAMES or (node.id.startswith("__") and node.id not in SCRIPT_DUNDER_OK):
-                return f"line {line}: '{node.id}'"
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                if alias.name in SCRIPT_BANNED_ATTRS or alias.name.startswith(("_", "export")):
-                    return f"line {line}: importing '{alias.name}'"
-    return None
-
-
-SCRIPT_BLOCKED_BUILTINS = {"open", "exec", "eval", "compile", "input", "breakpoint", "help", "exit", "quit",
-                           "globals", "vars", "memoryview", "__loader__", "__spec__"}
-
-
-SCRIPT_RUNNING = []  # non-empty while agent code is executing
-SCRIPT_AUDIT_BLOCKED = ("os.remove", "os.rename", "os.rmdir", "os.mkdir", "os.truncate", "os.chmod",
-                        "os.system", "os.exec", "os.spawn", "os.posix_spawn", "os.startfile", "shutil.",
-                        "subprocess.", "ctypes.", "socket.connect", "socket.bind")
-_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
-
-
-def _script_audit(event, args):
-    """Backstop for what the AST check can't see: Python-level file/process access while a script runs."""
-    if not SCRIPT_RUNNING:
-        return
-    if event == "open":
-        mode, flags = (args[1], args[2]) if len(args) > 2 else (None, 0)
-        if (isinstance(mode, str) and set(mode) & set("wax+")) or (flags or 0) & _WRITE_FLAGS:
-            raise PermissionError("Part scripts can't write files")
-    elif event.startswith(SCRIPT_AUDIT_BLOCKED):
-        raise PermissionError(f"Part scripts can't use {event}")
-
-
-def _script_import(name, globals=None, locals=None, fromlist=(), level=0):
-    root = name.split(".")[0]
-    if level or root not in SCRIPT_MODULES:
-        raise ImportError(f"Part scripts can't import {name!r}. Allowed: {', '.join(sorted(SCRIPT_MODULES))}. "
-                          "To save a file, use the save_file tool instead.")
-    return __import__(name, globals, locals, fromlist, level)
-
-
-def script_builtins():
-    import builtins
-    safe = {k: v for k, v in vars(builtins).items() if k not in SCRIPT_BLOCKED_BUILTINS}
-    safe["__import__"] = _script_import
-    return safe
-
-
 def op_run_part_script(a):
-    """Run agent Python against the doc. Set `shape` to build/replace Part::Feature `name`."""
-    ns = {"__builtins__": script_builtins(), "App": App, "FreeCAD": FreeCAD, "Part": Part, "doc": doc,
-          "Vector": Vector, "Placement": Placement, "Rotation": Rotation, "math": math, "params": params_dict()}
+    """Run agent Python in a confined child against a snapshot of the doc; its `shape` becomes the
+    Part::Feature `name` here. The child can't touch the live doc: only the BREP and `result` come back."""
     code = a.get("code", "")
-    bad = script_violation(code)
-    if bad:
-        raise OpError("not_allowed", f"Part scripts can't do that ({bad}). Scripts build shapes; "
-                      "use save_file for notes and export_model for 3D files; both never overwrite.")
-    compiled = compile(code, "<part_script>", "exec")
-    SCRIPT_RUNNING.append(True)
     try:
-        exec(compiled, ns)
-    finally:
-        SCRIPT_RUNNING.pop()
-    shape = ns.get("shape")
+        reply = sandbox.run_script(sys.executable, doc.saveCopy, {
+            "code": code, "params": params_dict(),
+            # test hook: prove the OS boundary on its own, with the in-script guards off
+            "guards": not os.environ.get("CADSWARM_TEST_NO_AST_GUARD")})
+    except sandbox.SandboxError as e:
+        raise OpError(e.code, str(e))
+    if not reply.get("ok"):
+        raise OpError(reply.get("code") or "script_error", reply.get("error") or "script failed")
     out = {}
-    if shape is not None:
-        if not isinstance(shape, Part.Shape) or shape.isNull():
+    if reply.get("brep"):
+        shape = Part.Shape()
+        shape.importBrepFromString(reply["brep"])
+        if shape.isNull():
             raise OpError("bad_args", "`shape` must be a non-null Part.Shape")
         name = a.get("name")
         obj = doc.getObject(name) if name else None
@@ -476,8 +387,8 @@ def op_run_part_script(a):
         if a.get("label"):
             obj.Label = a["label"]
         out = {"name": obj.Name, "volume": shape.Volume if shape.Solids else 0.0}
-    if "result" in ns:
-        out["result"] = json.loads(json.dumps(ns["result"], default=str))
+    if reply.get("result") is not None:
+        out["result"] = reply["result"]
     return out
 
 
@@ -658,7 +569,8 @@ def q_dependents(a):
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
-           "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3]}}
+           "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],
+                              "script_sandbox": sandbox.info(sys.executable)}}
 
 
 def handle(req):
@@ -671,7 +583,7 @@ def handle(req):
 
 
 def main():
-    sys.addaudithook(_script_audit)
+    threading.Thread(target=sandbox.prepare, args=(sys.executable,), daemon=True).start()
     open_document(sys.argv[1] if len(sys.argv) > 1 else "model.FCStd")
     # FreeCAD and OCC occasionally print to stdout from C++, past sys.stdout. Keep the protocol on a
     # private duplicate of fd 1 and point fd 1 itself (and Python's stdout) at stderr.
