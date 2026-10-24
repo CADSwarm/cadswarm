@@ -224,6 +224,7 @@ def test_a_lighten_job_runs_publishes_its_files_and_announces_itself(tmp_path, m
         "loads": [{"type": "force", "faces": ["xmax"], "newtons": 100}], "material": "pla", "_actor": AGENT}})
     assert r["ok"] and r["result"]["status"] in ("queued", "preparing") and r["result"]["recipe"]["stiffness_target"] == 0.9
     assert r["result"]["_events"][0]["kind"] == "lattice_started"
+    EVENTS.extend(e["kind"] for e in r["result"]["_events"])  # a fast job may already have progressed
     done = _wait(p, r["result"]["job_id"])
     assert done["status"] == "done" and done["weight_saving_pct"] == 40.0 and done["verdict"] == "passed"
     assert done["warnings"] == ["A closed skin traps powder"] and "lattice_apply" in done["next_step"]
