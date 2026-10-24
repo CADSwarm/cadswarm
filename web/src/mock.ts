@@ -41,6 +41,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
     { id: 3, name: 'worker1', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
     { id: 4, name: 'worker2', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
     { id: 5, name: 'reviewer', kind: 'reviewer', client: 'droid', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
+    { id: 6, name: 'creao-helper', kind: 'agent', client: 'creao', role: 'member', status: 'active', statusText: '', fence: 1, online: false },
   ];
   const parts: PartDef[] = [
     ['Base', 0, 0, 0, 70, 32, 2], ['WallN', 0, 30, 2, 70, 32, 14], ['WallS', 0, 0, 2, 70, 2, 14],

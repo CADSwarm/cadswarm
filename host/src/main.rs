@@ -43,7 +43,7 @@ enum Cmd {
         /// Python with the cadswarm package installed.
         #[arg(long, default_value = "python")]
         python: PathBuf,
-        /// The agent CLI that builds briefs: claude, codex or droid.
+        /// The agent CLI that builds briefs: claude, codex, droid, opencode or creao.
         #[arg(long, default_value = "claude")]
         agent: String,
     },
