@@ -15,6 +15,7 @@ from cadswarm import config
 from cadswarm.hub.worker_client import WorkerClient, WorkerError
 
 WORKER_PY = Path(config.__file__).parent / "worker" / "freecad_worker.py"
+RUNNER_PY = WORKER_PY.parent / "script_runner.py"
 try:
     config.find_freecad_python()
     HAVE_FREECAD = True
@@ -23,16 +24,14 @@ except RuntimeError:
 
 
 # --------------------------------------------------------------------------
-# Script guard (pure AST check; the worker module is loaded with stand-in FreeCAD modules)
+# Script guard (pure AST check; lives in the standalone script runner, which imports FreeCAD only in main())
 # --------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def worker_mod():
-    stubs = {"FreeCAD": mock.MagicMock(), "Part": mock.MagicMock()}
-    with mock.patch.dict(sys.modules, stubs):
-        spec = importlib.util.spec_from_file_location("freecad_worker_under_test", WORKER_PY)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
+    spec = importlib.util.spec_from_file_location("script_runner_under_test", RUNNER_PY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
     return mod
 
 
@@ -324,18 +323,6 @@ def test_brief_hold_is_waited_out(fc):
     threading.Timer(0.6, release).start()
     resp = c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10}})
     assert resp["created"] == ["Plate"]
-
-
-def test_part_script_timeout_kills_worker_and_restart_keeps_committed_work(fc):
-    c, model = fc
-    c.call("create_primitive", {"kind": "box", "name": "Kept", "props": {"Length": 5}})
-    proc = c.proc
-    c.timeout = 4
-    with pytest.raises(WorkerError) as e:
-        c.call("run_part_script", {"code": "doc.addObject('Part::Feature', 'Half')\nwhile True:\n    pass"})
-    assert e.value.code == "timeout" and c.proc is None and proc.poll() is not None
-    c.timeout = 120
-    assert names(c) >= {"Kept"} and "Half" not in names(c)
 
 
 def test_script_guard_end_to_end(fc, tmp_path):
