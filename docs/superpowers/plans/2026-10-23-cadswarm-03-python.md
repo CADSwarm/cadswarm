@@ -148,7 +148,7 @@ The `/sql` body shape (`[{"schema": {"elements": [...]}, "rows": [...]}]`) and t
 curl.exe -s -X POST http://127.0.0.1:3000/v1/database/cadswarm/sql -H "content-type: text/plain" -d "SELECT * FROM v_member"
 curl.exe -s -i -X POST http://127.0.0.1:3000/v1/database/cadswarm/call/heartbeat -H "content-type: application/json" -d "[999]"
 ```
-The second call uses a stale fence and should come back non-2xx with a body starting `stale_fence:` (or whichever code `heartbeat` returns for a stale fence). If either shape differs, change `decode_sql` / `SpaceError` and the fake server in Step 1 to match, and note it in plan 00's contract changes log.
+The second call has no token, so the caller is not a member: it should come back non-2xx with a body starting `not_member:` (from `module/src/util.rs` `me`). If either shape differs, change `decode_sql` / `SpaceError` and the fake server in Step 1 to match, and note it in plan 00's contract changes log.
 
 ```python
 """Stdlib-only client for SpacetimeDB's HTTP API.
