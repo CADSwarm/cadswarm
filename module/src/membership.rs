@@ -50,8 +50,15 @@ pub fn on_connect(ctx: &ReducerContext) {
     if let Some(m) = latest_member(ctx, ctx.sender()) {
         // Reconnecting is a sign of life: a quiet (stale) member is active again. Members who left
         // or were taken over stay retired; they must rejoin.
-        let (status, stale_since_ms) = if m.status == "stale" { ("active".to_string(), 0) } else { (m.status.clone(), m.stale_since_ms) };
+        let revived = m.status == "stale";
+        let (status, stale_since_ms) = if revived { ("active".to_string(), 0) } else { (m.status.clone(), m.stale_since_ms) };
+        let (ws, id, name) = (m.ws, m.id, m.name.clone());
         ctx.db.member().id().update(Member { online: true, last_seen_ms: now_ms(ctx), status, stale_since_ms, ..m });
+        // As heartbeat does: give back the tasks the sweep set aside (it will never see "stale" now).
+        if revived {
+            resume_tasks(ctx, id);
+            emit(ctx, ws, "resumed", id, json!({"name": name}));
+        }
     }
 }
 

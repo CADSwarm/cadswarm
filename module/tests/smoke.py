@@ -141,6 +141,18 @@ def main():
     p = [r for r in alice.sql("SELECT * FROM v_pointer") if r["member"] == alice_id][0]
     assert (p["mode"], p["point"]) == ("pointing", [5.0, 5.0, 1.0]), p
 
+    if os.environ.get("CADSWARM_SMOKE_SLOW"):  # ~40 s: wait out STALE_AFTER_MS and a sweep
+        import time
+        dave = join(host, "dave-quiet")
+        dave.call("create_task", dave.fence, "t_smoke_stale", "quiet work", "", [], "dave-quiet", "")
+        dave.call("claim_task", dave.fence, "t_smoke_stale", 1)
+        time.sleep(40)
+        t = [x for x in host.sql("SELECT * FROM v_task") if x["id"] == "t_smoke_stale"][0]
+        assert t["status"] == "awaiting_takeover", t
+        dave.call("heartbeat", dave.fence, "back")  # an HTTP call: connect (revives) then heartbeat
+        t = [x for x in host.sql("SELECT * FROM v_task") if x["id"] == "t_smoke_stale"][0]
+        assert t["status"] == "claimed" and dave.me()["status"] == "active", t
+
     # Tasks and messages.
     alice.call("create_task", alice.fence, "t_smoke001", "motor mount", "", [], "bob-codex", "")
     bob.call("claim_task", bob.fence, "t_smoke001", 1)
