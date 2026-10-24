@@ -30,6 +30,11 @@ pub struct BriefState {
     pub active: usize,
     pub done: usize,
     pub cancelled: usize,
+    /// Reported blocked by a helper; nothing can reopen it, so it must not hold the brief open.
+    pub blocked: usize,
+    /// The planner has written a plan. A building brief always has one; if its task rows vanish
+    /// the cache is not merely waiting for the first subscription update.
+    pub planned: bool,
     pub exporting: bool,
     pub reviewer_enabled: bool,
     pub reviewer_alive: bool,
@@ -68,10 +73,16 @@ pub fn next_action(s: &BriefState) -> Action {
                 Action::Export
             }
         }
-        // Nothing is running and nothing was built: every task was stopped or removed. A brief
-        // must not sit in `building` forever waiting for work that will never arrive.
+        // Nothing is running and nothing was built: every task was stopped, blocked or removed.
+        // A brief must not sit in `building` forever waiting for work that will never arrive.
         "building" if s.open + s.active == 0 && s.cancelled > 0 => {
             Action::Fail("every task was stopped; a person needs to steer".into())
+        }
+        "building" if s.open + s.active == 0 && s.blocked > 0 => {
+            Action::Fail("every task is blocked; a person needs to steer".into())
+        }
+        "building" if s.planned && s.open + s.active + s.done + s.cancelled + s.blocked == 0 => {
+            Action::Fail("every task was removed; a person needs to steer".into())
         }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
@@ -98,6 +109,24 @@ pub fn next_action(s: &BriefState) -> Action {
             _ => Action::Wait,
         },
         _ => Action::Wait,
+    }
+}
+
+/// The names an export should use, or why it must not run. Parts from stopped or blocked tasks may
+/// be absent on purpose; a part a done task promised but the model does not have is a broken model.
+pub fn export_names(tasks: &[crate::space::TaskRow], present: &[String]) -> Result<Vec<String>, String> {
+    let mut missing: Vec<String> = tasks.iter().filter(|t| t.status == "done")
+        .flat_map(|t| t.objects.clone())
+        .filter(|n| !present.contains(n))
+        .collect();
+    missing.sort();
+    missing.dedup();
+    if !missing.is_empty() {
+        Err(format!("the model is missing {}", missing.join(", ")))
+    } else if present.is_empty() {
+        Err("nothing to export: no part was built".into())
+    } else {
+        Ok(present.to_vec())
     }
 }
 
@@ -341,6 +370,8 @@ impl Orchestrator {
             active: tasks.iter().filter(|t| t.status == "claimed" || t.status == "awaiting_takeover").count(),
             done: tasks.iter().filter(|t| t.status == "done").count(),
             cancelled: tasks.iter().filter(|t| t.status == "cancelled").count(),
+            blocked: tasks.iter().filter(|t| t.status == "blocked").count(),
+            planned: !space.brief_plan(&b.id).is_empty(),
             exporting: rt.export_op.is_some(),
             reviewer_enabled: self.reviewer_enabled,
             reviewer_alive: rt.reviewer.as_mut().map(|a| a.alive()).unwrap_or(false),
@@ -453,16 +484,15 @@ impl Orchestrator {
                 // and fails the whole op on one missing part, so export only what exists.
                 let wanted: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
                 let objects = space.objects_present(&wanted);
-                if objects.is_empty() {
-                    space.set_brief(
-                        &b.id,
-                        "failed",
-                        &json!({"error": "nothing to export: no part was built"}).to_string(),
-                    )?;
-                } else {
-                    let id = op_id();
-                    space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
-                    rt.export_op = Some(id);
+                match export_names(&tasks, &objects) {
+                    Ok(objects) => {
+                        let id = op_id();
+                        space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
+                        rt.export_op = Some(id);
+                    }
+                    Err(why) => {
+                        space.set_brief(&b.id, "failed", &json!({"error": why}).to_string())?;
+                    }
                 }
             }
             Action::Fail(why) => {
@@ -507,8 +537,15 @@ mod tests {
     #[test]
     fn a_brief_whose_every_task_was_stopped_fails_instead_of_hanging() {
         assert!(matches!(next_action(&BriefState { cancelled: 2, ..st("building") }), Action::Fail(_)));
+        assert!(matches!(next_action(&BriefState { blocked: 2, ..st("building") }), Action::Fail(_)));
+        // The last task was deleted after the plan was written: no rows are left to count.
+        assert!(matches!(next_action(&BriefState { planned: true, ..st("building") }), Action::Fail(_)));
+        // A brief whose task rows have not arrived from the subscription yet must not be failed.
+        assert_eq!(next_action(&st("building")), Action::Wait);
         // A cancelled task does not hide finished work: the build still reviews and exports.
         assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
+        // A blocked task does not hide a finished part either.
+        assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Export);
     }
 
     #[test]
@@ -541,6 +578,31 @@ mod tests {
         assert_eq!(next_action(&BriefState { review_orphaned: true, ..st("reviewing") }), Action::Export);
         // A run this host started is not orphaned, so a failed round still goes back to building.
         assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 1, ..st("reviewing") }), Action::Build(1));
+    }
+
+    fn task(id: &str, status: &str, objects: &[&str]) -> crate::space::TaskRow {
+        crate::space::TaskRow {
+            id: id.into(),
+            status: status.into(),
+            objects: objects.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn export_skips_stopped_and_blocked_parts_but_not_a_finished_one() {
+        let present = vec!["Base".to_string()];
+        let tasks = vec![
+            task("t1", "done", &["Base"]),
+            task("t2", "cancelled", &["Lid"]),
+            task("t3", "blocked", &["Clip"]),
+        ];
+        assert_eq!(export_names(&tasks, &present), Ok(vec!["Base".to_string()]));
+        // A done task's part must exist, or the brief fails with the names.
+        let broken = vec![task("t1", "done", &["Base", "Lid"])];
+        assert_eq!(export_names(&broken, &present), Err("the model is missing Lid".into()));
+        // Every task stopped: nothing to export.
+        let stopped = vec![task("t2", "cancelled", &["Lid"])];
+        assert_eq!(export_names(&stopped, &[]), Err("nothing to export: no part was built".into()));
     }
 
     #[test]

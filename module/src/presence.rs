@@ -128,6 +128,11 @@ pub fn cancel_brief(ctx: &ReducerContext, fence: u32, brief_id: String) -> Resul
 pub fn report_review(ctx: &ReducerContext, fence: u32, review_id: String, brief_id: String, round: u32, passed: bool, findings_json: String) -> Result<(), String> {
     let m = me(ctx, fence)?;
     require_kind(&m, "reviewer")?;
+    let b = ctx.db.brief().id().find(&brief_id).filter(|b| b.ws == m.ws)
+        .ok_or_else(|| format!("not_found: No brief {brief_id}"))?;
+    if b.status == "cancelled" {
+        return Err(format!("cancelled: Brief {brief_id} was stopped; its verdict is not wanted"));
+    }
     if review_id.is_empty() || ctx.db.review().id().find(&review_id).is_some() {
         return Err("bad_args: review_id must be new and non-empty".into());
     }
