@@ -72,6 +72,7 @@ import TakeOverReducer from "./take_over_reducer";
 // Import all table schema definitions
 import VActivityRow from "./v_activity_table";
 import VArtifactRow from "./v_artifact_table";
+import VArtifactBlobRow from "./v_artifact_blob_table";
 import VBriefRow from "./v_brief_table";
 import VEventRow from "./v_event_table";
 import VHandoffRow from "./v_handoff_table";
@@ -107,6 +108,13 @@ const tablesSchema = __schema({
     constraints: [
     ],
   }, VArtifactRow),
+  vArtifactBlob: __table({
+    name: 'v_artifact_blob',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, VArtifactBlobRow),
   vBrief: __table({
     name: 'v_brief',
     indexes: [
@@ -267,6 +275,8 @@ type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "ta
     readonly "v_activity": Omit<typeof tablesSchema.schemaType.tables["vActivity"], "accessorName"> & { readonly accessorName: "v_activity" };
     /** @deprecated Use `vArtifact` instead. This alias will be removed in the next major version. */
     readonly "v_artifact": Omit<typeof tablesSchema.schemaType.tables["vArtifact"], "accessorName"> & { readonly accessorName: "v_artifact" };
+    /** @deprecated Use `vArtifactBlob` instead. This alias will be removed in the next major version. */
+    readonly "v_artifact_blob": Omit<typeof tablesSchema.schemaType.tables["vArtifactBlob"], "accessorName"> & { readonly accessorName: "v_artifact_blob" };
     /** @deprecated Use `vBrief` instead. This alias will be removed in the next major version. */
     readonly "v_brief": Omit<typeof tablesSchema.schemaType.tables["vBrief"], "accessorName"> & { readonly accessorName: "v_brief" };
     /** @deprecated Use `vEvent` instead. This alias will be removed in the next major version. */
@@ -319,6 +329,7 @@ const REMOTE_MODULE = {
 const tableAccessorAliases = {
   "v_activity": "vActivity",
   "v_artifact": "vArtifact",
+  "v_artifact_blob": "vArtifactBlob",
   "v_brief": "vBrief",
   "v_event": "vEvent",
   "v_handoff": "vHandoff",
@@ -359,6 +370,8 @@ export type DbView = __DbViewBase & {
   readonly "v_activity": __DbViewBase["vActivity"];
   /** @deprecated Use `vArtifact` instead. This alias will be removed in the next major version. */
   readonly "v_artifact": __DbViewBase["vArtifact"];
+  /** @deprecated Use `vArtifactBlob` instead. This alias will be removed in the next major version. */
+  readonly "v_artifact_blob": __DbViewBase["vArtifactBlob"];
   /** @deprecated Use `vBrief` instead. This alias will be removed in the next major version. */
   readonly "v_brief": __DbViewBase["vBrief"];
   /** @deprecated Use `vEvent` instead. This alias will be removed in the next major version. */
@@ -399,6 +412,8 @@ export type Tables = __TablesBase & {
   readonly "v_activity": __TablesBase["vActivity"];
   /** @deprecated Use `vArtifact` instead. This alias will be removed in the next major version. */
   readonly "v_artifact": __TablesBase["vArtifact"];
+  /** @deprecated Use `vArtifactBlob` instead. This alias will be removed in the next major version. */
+  readonly "v_artifact_blob": __TablesBase["vArtifactBlob"];
   /** @deprecated Use `vBrief` instead. This alias will be removed in the next major version. */
   readonly "v_brief": __TablesBase["vBrief"];
   /** @deprecated Use `vEvent` instead. This alias will be removed in the next major version. */

@@ -12,7 +12,6 @@ pub struct Artifact {
     pub name: String,
     pub mime: String,
     pub size: u64,
-    pub bytes: Vec<u8>,
     pub brief: String,
     pub created_ms: u64,
 }
@@ -30,7 +29,6 @@ pub struct ArtifactCols {
     pub name: __sdk::__query_builder::Col<Artifact, String>,
     pub mime: __sdk::__query_builder::Col<Artifact, String>,
     pub size: __sdk::__query_builder::Col<Artifact, u64>,
-    pub bytes: __sdk::__query_builder::Col<Artifact, Vec<u8>>,
     pub brief: __sdk::__query_builder::Col<Artifact, String>,
     pub created_ms: __sdk::__query_builder::Col<Artifact, u64>,
 }
@@ -44,7 +42,6 @@ impl __sdk::__query_builder::HasCols for Artifact {
             name: __sdk::__query_builder::Col::new(table_name, "name"),
             mime: __sdk::__query_builder::Col::new(table_name, "mime"),
             size: __sdk::__query_builder::Col::new(table_name, "size"),
-            bytes: __sdk::__query_builder::Col::new(table_name, "bytes"),
             brief: __sdk::__query_builder::Col::new(table_name, "brief"),
             created_ms: __sdk::__query_builder::Col::new(table_name, "created_ms"),
         }

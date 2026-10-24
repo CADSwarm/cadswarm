@@ -9,6 +9,7 @@ use spacetimedb_sdk::__codegen::{self as __sdk, __lib, __sats, __ws};
 pub mod accept_handoff_reducer;
 pub mod ack_messages_reducer;
 pub mod activity_type;
+pub mod artifact_blob_type;
 pub mod artifact_type;
 pub mod brief_type;
 pub mod cad_lock_type;
@@ -57,6 +58,7 @@ pub mod take_over_reducer;
 pub mod task_type;
 pub mod team_event_type;
 pub mod v_activity_table;
+pub mod v_artifact_blob_table;
 pub mod v_artifact_table;
 pub mod v_brief_table;
 pub mod v_event_table;
@@ -79,6 +81,7 @@ pub mod workspace_type;
 pub use accept_handoff_reducer::accept_handoff;
 pub use ack_messages_reducer::ack_messages;
 pub use activity_type::Activity;
+pub use artifact_blob_type::ArtifactBlob;
 pub use artifact_type::Artifact;
 pub use brief_type::Brief;
 pub use cad_lock_type::CadLock;
@@ -127,6 +130,7 @@ pub use take_over_reducer::take_over;
 pub use task_type::Task;
 pub use team_event_type::TeamEvent;
 pub use v_activity_table::*;
+pub use v_artifact_blob_table::*;
 pub use v_artifact_table::*;
 pub use v_brief_table::*;
 pub use v_event_table::*;
@@ -713,6 +717,7 @@ impl __sdk::Reducer for Reducer {
 pub struct DbUpdate {
     v_activity: __sdk::TableUpdate<Activity>,
     v_artifact: __sdk::TableUpdate<Artifact>,
+    v_artifact_blob: __sdk::TableUpdate<ArtifactBlob>,
     v_brief: __sdk::TableUpdate<Brief>,
     v_event: __sdk::TableUpdate<TeamEvent>,
     v_handoff: __sdk::TableUpdate<Handoff>,
@@ -743,6 +748,9 @@ impl TryFrom<__ws::v2::TransactionUpdate> for DbUpdate {
                 "v_artifact" => db_update
                     .v_artifact
                     .append(v_artifact_table::parse_table_update(table_update)?),
+                "v_artifact_blob" => db_update
+                    .v_artifact_blob
+                    .append(v_artifact_blob_table::parse_table_update(table_update)?),
                 "v_brief" => db_update
                     .v_brief
                     .append(v_brief_table::parse_table_update(table_update)?),
@@ -819,6 +827,8 @@ impl __sdk::DbUpdate for DbUpdate {
 
         diff.v_activity = cache.apply_diff_to_table::<Activity>("v_activity", &self.v_activity);
         diff.v_artifact = cache.apply_diff_to_table::<Artifact>("v_artifact", &self.v_artifact);
+        diff.v_artifact_blob =
+            cache.apply_diff_to_table::<ArtifactBlob>("v_artifact_blob", &self.v_artifact_blob);
         diff.v_brief = cache.apply_diff_to_table::<Brief>("v_brief", &self.v_brief);
         diff.v_event = cache.apply_diff_to_table::<TeamEvent>("v_event", &self.v_event);
         diff.v_handoff = cache.apply_diff_to_table::<Handoff>("v_handoff", &self.v_handoff);
@@ -847,6 +857,9 @@ impl __sdk::DbUpdate for DbUpdate {
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "v_artifact" => db_update
                     .v_artifact
+                    .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
+                "v_artifact_blob" => db_update
+                    .v_artifact_blob
                     .append(__sdk::parse_row_list_as_inserts(table_rows.rows)?),
                 "v_brief" => db_update
                     .v_brief
@@ -915,6 +928,9 @@ impl __sdk::DbUpdate for DbUpdate {
                 "v_artifact" => db_update
                     .v_artifact
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
+                "v_artifact_blob" => db_update
+                    .v_artifact_blob
+                    .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
                 "v_brief" => db_update
                     .v_brief
                     .append(__sdk::parse_row_list_as_deletes(table_rows.rows)?),
@@ -980,6 +996,7 @@ impl __sdk::DbUpdate for DbUpdate {
 pub struct AppliedDiff<'r> {
     v_activity: __sdk::TableAppliedDiff<'r, Activity>,
     v_artifact: __sdk::TableAppliedDiff<'r, Artifact>,
+    v_artifact_blob: __sdk::TableAppliedDiff<'r, ArtifactBlob>,
     v_brief: __sdk::TableAppliedDiff<'r, Brief>,
     v_event: __sdk::TableAppliedDiff<'r, TeamEvent>,
     v_handoff: __sdk::TableAppliedDiff<'r, Handoff>,
@@ -1011,6 +1028,11 @@ impl<'r> __sdk::AppliedDiff<'r> for AppliedDiff<'r> {
     ) {
         callbacks.invoke_table_row_callbacks::<Activity>("v_activity", &self.v_activity, event);
         callbacks.invoke_table_row_callbacks::<Artifact>("v_artifact", &self.v_artifact, event);
+        callbacks.invoke_table_row_callbacks::<ArtifactBlob>(
+            "v_artifact_blob",
+            &self.v_artifact_blob,
+            event,
+        );
         callbacks.invoke_table_row_callbacks::<Brief>("v_brief", &self.v_brief, event);
         callbacks.invoke_table_row_callbacks::<TeamEvent>("v_event", &self.v_event, event);
         callbacks.invoke_table_row_callbacks::<Handoff>("v_handoff", &self.v_handoff, event);
@@ -1689,6 +1711,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     fn register_tables(client_cache: &mut __sdk::ClientCache<Self>) {
         v_activity_table::register_table(client_cache);
         v_artifact_table::register_table(client_cache);
+        v_artifact_blob_table::register_table(client_cache);
         v_brief_table::register_table(client_cache);
         v_event_table::register_table(client_cache);
         v_handoff_table::register_table(client_cache);
@@ -1709,6 +1732,7 @@ impl __sdk::SpacetimeModule for RemoteModule {
     const ALL_TABLE_NAMES: &'static [&'static str] = &[
         "v_activity",
         "v_artifact",
+        "v_artifact_blob",
         "v_brief",
         "v_event",
         "v_handoff",

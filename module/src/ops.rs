@@ -292,11 +292,19 @@ pub fn put_artifact(ctx: &ReducerContext, fence: u32, hash: String, name: String
     let m = me(ctx, fence)?;
     require_kind(&m, "host")?;
     let size = bytes.len() as u64;
-    let row = Artifact { hash: hash.clone(), ws: m.ws, name, mime, size, bytes, brief, created_ms: now_ms(ctx) };
+    let row = Artifact { hash: hash.clone(), ws: m.ws, name, mime, size, brief, created_ms: now_ms(ctx) };
     if ctx.db.artifact().hash().find(&hash).is_some() {
         ctx.db.artifact().hash().update(row);
     } else {
         ctx.db.artifact().insert(row);
+    }
+    if !bytes.is_empty() {
+        let blob = ArtifactBlob { hash: hash.clone(), ws: m.ws, bytes };
+        if ctx.db.artifact_blob().hash().find(&hash).is_some() {
+            ctx.db.artifact_blob().hash().update(blob);
+        } else {
+            ctx.db.artifact_blob().insert(blob);
+        }
     }
     Ok(())
 }

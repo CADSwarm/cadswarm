@@ -16,7 +16,6 @@ export default __t.row({
   name: __t.string(),
   mime: __t.string(),
   size: __t.u64(),
-  bytes: __t.byteArray(),
   brief: __t.string(),
   createdMs: __t.u64().name("created_ms"),
 });

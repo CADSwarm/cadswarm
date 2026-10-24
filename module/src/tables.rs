@@ -288,9 +288,19 @@ pub struct Artifact {
     pub name: String,
     pub mime: String,
     pub size: u64,
-    pub bytes: Vec<u8>,
     pub brief: String,
     pub created_ms: u64,
+}
+
+// Export bytes live apart from `artifact` so subscribers to v_artifact never receive them.
+#[table(accessor = artifact_blob)]
+#[derive(Clone)]
+pub struct ArtifactBlob {
+    #[primary_key]
+    pub hash: String,
+    #[index(btree)]
+    pub ws: u64,
+    pub bytes: Vec<u8>,
 }
 
 #[table(accessor = sweep_schedule, scheduled(crate::sweep::sweep))]

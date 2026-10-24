@@ -90,6 +90,13 @@ def join(host, name, kind="agent"):
     return c
 
 
+def decode_bytes(v):
+    """SATS JSON encodes Vec<u8> as a hex string (older builds: a list of ints)."""
+    if isinstance(v, str):
+        return bytes.fromhex(v[2:] if v.startswith("0x") else v)
+    return bytes(v)
+
+
 def main():
     host = Client(owner_token())
     me = host.me()
@@ -164,6 +171,20 @@ def main():
     rev = join(host, "reviewer", kind="reviewer")
     rev.call("submit_op", rev.fence, "o_smoke000004", "delete", json.dumps({"name": "Plate"}), "",
              expect_error="not_allowed")
+
+    # Export bytes live in artifact_blob, never in v_artifact; WHERE on a view works over /sql.
+    data = bytes(range(16))
+    h = hashlib.sha256(data).hexdigest()
+    host.call("put_artifact", host.fence, h, "model-1.stl", "model/stl", list(data), "")
+    art = [a for a in alice.sql("SELECT * FROM v_artifact") if a["hash"] == h]
+    assert len(art) == 1 and art[0]["size"] == 16 and "bytes" not in art[0], art
+    blobs = alice.sql(f"SELECT * FROM v_artifact_blob WHERE hash = '{h}'")
+    assert len(blobs) == 1, blobs
+    print("smoke: v_artifact_blob bytes encoded as", repr(blobs[0]["bytes"]))
+    assert decode_bytes(blobs[0]["bytes"]) == data, blobs[0]["bytes"]
+    assert eve.sql(f"SELECT * FROM v_artifact_blob WHERE hash = '{h}'") == []
+    host.call("put_artifact", host.fence, h, "model-1.stl", "model/stl", [], "")  # empty keeps the blob
+    assert len(alice.sql(f"SELECT * FROM v_artifact_blob WHERE hash = '{h}'")) == 1
 
     print("smoke: all checks passed")
 

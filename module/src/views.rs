@@ -49,4 +49,5 @@ ws_view!(v_brief, brief, Brief);
 ws_view!(v_review, review, Review);
 ws_view!(v_preview, preview, Preview);
 ws_view!(v_artifact, artifact, Artifact);
+ws_view!(v_artifact_blob, artifact_blob, ArtifactBlob);
 ws_view!(v_handoff, handoff, Handoff);

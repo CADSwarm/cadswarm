@@ -26,11 +26,17 @@ export const Artifact = __t.object("Artifact", {
   name: __t.string(),
   mime: __t.string(),
   size: __t.u64(),
-  bytes: __t.byteArray(),
   brief: __t.string(),
   createdMs: __t.u64(),
 });
 export type Artifact = __Infer<typeof Artifact>;
+
+export const ArtifactBlob = __t.object("ArtifactBlob", {
+  hash: __t.string(),
+  ws: __t.u64(),
+  bytes: __t.byteArray(),
+});
+export type ArtifactBlob = __Infer<typeof ArtifactBlob>;
 
 export const Brief = __t.object("Brief", {
   id: __t.string(),
