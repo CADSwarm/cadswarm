@@ -180,12 +180,18 @@ def validate_spec(raw):
             raise ValueError(f"hole ({x}, {y}) is outside the {pcb[0]} x {pcb[1]} board")
     if holes and not str(src.get("holes", "")).startswith("http"):
         raise ValueError("holes have no source_url")
+    hole_d = float(raw.get("hole_d") or 0)
+    if holes and not 0.5 <= hole_d <= 8:
+        raise ValueError(f"hole_d looks wrong for mounting holes: {raw.get('hole_d')}")
     ports = []
     for p in raw.get("ports", []):
-        if p.get("side") not in ("-x", "+x", "-y", "+y"):
-            raise ValueError(f"port {p.get('name')} has no valid side")
-        ports.append({"name": re.sub(r"\W+", "_", str(p["name"]).lower()), "side": p["side"],
-                      "center": [float(v) for v in p["center"]], "size": [float(v) for v in p["size"]]})
-    return {"label": str(raw.get("label", "")), "pcb": pcb, "holes": holes, "hole_d": float(raw.get("hole_d", 0)),
+        if not isinstance(p, dict) or p.get("side") not in ("-x", "+x", "-y", "+y"):
+            raise ValueError(f"port {p.get('name') if isinstance(p, dict) else p} has no valid side")
+        try:
+            ports.append({"name": re.sub(r"\W+", "_", str(p["name"]).lower()), "side": p["side"],
+                          "center": [float(v) for v in p["center"]], "size": [float(v) for v in p["size"]]})
+        except (KeyError, TypeError, ValueError) as e:
+            raise ValueError(f"port {p.get('name')} needs a name, center and size ({e})")
+    return {"label": str(raw.get("label", "")), "pcb": pcb, "holes": holes, "hole_d": hole_d,
             "clear_top": float(raw.get("clear_top", 0)) or 10.0, "clear_bottom": float(raw.get("clear_bottom", 0)) or 3.0,
             "ports": ports, "sources": src, "verified": False}

@@ -96,9 +96,15 @@ fn main() -> Result<()> {
         }
         Cmd::InitReviewer => {
             let cfg = HostConfig::load(&cli.data)?;
+            let dir = cfg.data_dir.join("agents").join("reviewer");
+            // Setup only redeems an invite when the folder has no identity yet, so a fresh one here
+            // would sit unused while this said "ready".
+            if dir.join(".cadswarm").join("identity.json").exists() {
+                println!("reviewer already set up in {} (delete that folder to set it up again)", dir.display());
+                return Ok(());
+            }
             let space = space::Space::attach(&cfg)?;
             let ticket = mint_invite(&space, &cfg, "reviewer", "member")?;
-            let dir = cfg.data_dir.join("agents").join("reviewer");
             std::fs::create_dir_all(&dir)?;
             let ok = std::process::Command::new(&cfg.cadswarm_python)
                 .args(["-m", "cadswarm.cli", "setup", "--client", "droid", "--invite", &ticket, "--name", "reviewer", "--dir"])

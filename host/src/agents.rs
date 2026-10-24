@@ -24,7 +24,16 @@ pub fn cli_candidates(exe: &str, env: Option<String>, path_var: &str, home: &Pat
         out.extend(names.iter().map(|n| dir.join(n)));
     }
     out.extend(names.iter().map(|n| home.join(".local").join("bin").join(n)));
-    out.push(appdata.join("npm").join(format!("{exe}.cmd")));
+    if !cfg!(windows) {
+        for dir in [home.join(".claude").join("local"), home.join(".npm-global").join("bin"),
+                    home.join(".volta").join("bin"), home.join(".bun").join("bin"),
+                    PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")] {
+            out.extend(names.iter().map(|n| dir.join(n)));
+        }
+    }
+    if cfg!(windows) && !appdata.as_os_str().is_empty() {
+        out.push(appdata.join("npm").join(format!("{exe}.cmd")));
+    }
     if exe == "claude" {
         let ext = home.join(".vscode").join("extensions");
         let mut bundled: Vec<PathBuf> = std::fs::read_dir(&ext)
@@ -50,6 +59,20 @@ pub fn cli_candidates(exe: &str, env: Option<String>, path_var: &str, home: &Pat
     out
 }
 
+/// A file we can start: on Unix it must also have an execute bit (a stray non-executable copy
+/// would otherwise win and fail with "permission denied").
+fn is_runnable(p: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        p.metadata().map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        p.is_file()
+    }
+}
+
 pub fn find_cli(exe: &str) -> Result<PathBuf> {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
     let appdata = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default();
@@ -57,7 +80,7 @@ pub fn find_cli(exe: &str) -> Result<PathBuf> {
     let env = std::env::var(format!("CADSWARM_{}", exe.to_uppercase())).ok();
     cli_candidates(exe, env, &path_var, &home, &appdata)
         .into_iter()
-        .find(|p| p.is_file())
+        .find(|p| is_runnable(p))
         .ok_or_else(|| anyhow!(format!("{exe} isn't installed (set CADSWARM_{} to its path)", exe.to_uppercase())))
 }
 
@@ -82,8 +105,11 @@ impl Agent {
     pub fn spawn(cfg: &HostConfig, name: &str, ticket: &str, prompt: &str) -> Result<Agent> {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
+        // PYTHONSAFEPATH, not -I: -I would also drop PYTHONPATH, which is how a guide-hosted team
+        // (FreeCAD's own Python) finds the package; both keep a checkout in the cwd from being imported.
         let setup = Command::new(&cfg.cadswarm_python)
-            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
+            .env("PYTHONSAFEPATH", "1")
+            .args(["-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;

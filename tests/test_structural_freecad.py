@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from cadswarm.config import find_freecad_python
+from cadswarm.config import find_freecad_python, freecad_import_dirs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -16,7 +16,7 @@ def runtime():
         python = find_freecad_python()
     except RuntimeError:
         pytest.skip("FreeCAD Python unavailable")
-    env = dict(os.environ, PYTHONPATH=str(ROOT) + os.pathsep + str(Path(python).parent))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(ROOT), *freecad_import_dirs(python)]))
     check = subprocess.run([python, "-c", "import FreeCAD,Part,numpy,scipy"], capture_output=True, env=env)
     if check.returncode:
         pytest.skip("FreeCAD Python lacks structural numpy/scipy dependencies: " + check.stderr.decode(errors="replace"))
@@ -26,7 +26,7 @@ def runtime():
 @pytest.mark.parametrize("solver", ["scipy", "calculix"])
 def test_real_freecad_roundtrips_and_holes(tmp_path, solver):
     python, env = runtime()
-    if solver == "calculix" and not (os.environ.get("CADSWARM_CCX") or (Path(python).parent / "ccx.exe").is_file()):
+    if solver == "calculix" and not (os.environ.get("CADSWARM_CCX") or any((Path(python).parent / n).is_file() for n in ("ccx.exe", "ccx"))):
         pytest.skip("CalculiX unavailable")
     proc = subprocess.run([python, str(ROOT / "tests" / "structural_freecad_check.py"), str(tmp_path), solver],
                           env=env, capture_output=True, text=True, timeout=180)

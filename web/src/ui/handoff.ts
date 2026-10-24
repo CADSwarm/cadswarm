@@ -17,7 +17,10 @@ export function mountHandoff(el: HTMLElement, store: Store, api: Api | null) {
     </details>`;
   const note = el.querySelector<HTMLTextAreaElement>('textarea')!;
   const armed = { id: null as string | null };
+  const box = el.querySelector<HTMLInputElement>('[data-arm]')!;
   el.querySelector('[data-now]')!.addEventListener('click', () => {
+    // An armed "if I leave" handoff would open again later and start a second agent on the same work.
+    if (armed.id) { api?.cancelHandoff(armed.id); armed.id = null; box.checked = false; }
     api?.requestHandoff(note.value, 'now');
     note.value = '';
   });
@@ -35,7 +38,8 @@ export function mountHandoff(el: HTMLElement, store: Store, api: Api | null) {
       mine.status === 'accepted' ? `${taker ?? 'An AI'} picked up where you left off.` :
       mine.status === 'cancelled' ? '' : '';
     // Keep the checkbox honest when someone else (or a reload) resolved it.
-    const box = el.querySelector<HTMLInputElement>('[data-arm]')!;
+    const waiting = s.handoffs.find(h => h.from === s.meId && h.trigger === 'on_leave' && h.status === 'waiting');
+    if (waiting && !armed.id) { armed.id = waiting.id; box.checked = true; }
     if (mine?.status === 'cancelled' && armed.id === mine.id) { armed.id = null; box.checked = false; }
   });
 }

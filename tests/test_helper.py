@@ -34,6 +34,13 @@ def test_lookup_returns_passages_with_their_sources(tmp_path):
     assert "47 x 11.4" in r["result"]["answers"][0]["text"]
 
 
+def test_a_board_alone_is_enough_to_look_up_or_recall(tmp_path):
+    p = project(tmp_path, FakeElastic())
+    assert helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "", "board": "raspberry-pi-pico"}})["ok"]
+    assert helper.handle(p, {"id": 2, "op": "recall_designs", "args": {"query": "", "board": "raspberry-pi-pico"}})["ok"]
+    assert helper.handle(p, {"id": 3, "op": "lookup_board", "args": {"question": "", "board": ""}})["code"] == "bad_args"
+
+
 def test_unknown_ops_and_failures_are_errors_not_crashes(tmp_path):
     assert helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "nope", "args": {}})["code"] == "unknown_op"
 

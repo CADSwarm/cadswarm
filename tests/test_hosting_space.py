@@ -299,3 +299,10 @@ def test_mint_invite_explains_a_failure(tmp_path, monkeypatch):
                         lambda argv, **kw: SimpleNamespace(returncode=1, stdout="", stderr="no host.json"))
     with pytest.raises(RuntimeError, match="Couldn't make an invite code"):
         hosting.mint_invite(str(tmp_path))
+
+
+def test_the_host_is_pointed_at_this_checkouts_board_library(monkeypatch):
+    monkeypatch.delenv("CADSWARM_BOARDS", raising=False)
+    assert hosting.host_env()["CADSWARM_BOARDS"] == os.path.join(hosting.ROOT, "boards", "boards.json")
+    monkeypatch.setenv("CADSWARM_BOARDS", "/mine.json")  # an explicit library wins
+    assert hosting.host_env()["CADSWARM_BOARDS"] == "/mine.json"

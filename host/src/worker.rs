@@ -142,7 +142,8 @@ mod tests {
 
     fn driver(timeout_ms: u64) -> WorkerDriver {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fake_worker.py");
-        let python = PathBuf::from(std::env::var("PYTHON").unwrap_or_else(|_| "python".into()));
+        let default = if cfg!(windows) { "python" } else { "python3" };
+        let python = PathBuf::from(std::env::var("PYTHON").unwrap_or_else(|_| default.into()));
         WorkerDriver::new(python, script, PathBuf::from("doc.FCStd"), Duration::from_millis(timeout_ms))
     }
 

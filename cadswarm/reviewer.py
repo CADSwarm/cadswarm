@@ -11,6 +11,8 @@ import os
 import sys
 from collections.abc import Mapping
 
+from .client import HubRequestError, load_json, state_dir
+from .paths import LAUNCHER
 from .space_hub import project_hub
 
 MCP_SERVER = "cadswarm"
@@ -76,6 +78,14 @@ async def _review_tool_ids(session):
         return REVIEW_TOOLS
 
 
+def _adopt_fence(hub, project):
+    """The MCP server Droid starts rejoins this same identity, which bumps the fence and makes ours
+    stale; it saves the new one to identity.json, so the reviewer's own writes pick it up from there."""
+    fence = load_json(os.path.join(state_dir(project), "identity.json"), {}).get("fence")
+    if isinstance(fence, (int, float)) and fence > (hub.identity.get("fence") or 0):
+        hub.identity["fence"] = int(fence)
+
+
 async def review(project, brief_id, round_no):
     from droid_sdk import (AssistantMessage, Autonomy, Session, SessionConfig, StdioMcpServerConfig,
                            ToolCall, ToolResult)
@@ -92,8 +102,10 @@ async def review(project, brief_id, round_no):
     bed = [ws["bed_x_mm"], ws["bed_y_mm"], ws["bed_z_mm"]]
     config = SessionConfig(
         autonomy=Autonomy.LOW,
+        # The launcher, like every agent config: it finds the package and the private deps folder
+        # whether or not the child inherits this process's PYTHONPATH.
         mcp_servers=[StdioMcpServerConfig(name=MCP_SERVER, command=sys.executable,
-                                          args=["-m", "cadswarm.mcp_server"],
+                                          args=[LAUNCHER, "mcp"],
                                           env={"CADSWARM_PROJECT": project})],
         restrict_tools=REVIEW_TOOLS,
     )
@@ -106,13 +118,18 @@ async def review(project, brief_id, round_no):
                 if isinstance(ev, (ToolCall, ToolResult, AssistantMessage)):
                     mapped = activity_for(ev)
                     if mapped:
+                        _adopt_fence(hub, project)
                         hub.log_activity(*mapped)
     # If Droid never recorded a verdict, record a failing one so the brief does not hang.
     reviews = [r for r in hub.space.sql("SELECT * FROM v_review") if r["brief"] == brief_id and r["round"] == round_no]
     if not reviews:
-        hub.post("/reviews", {"brief_id": brief_id, "round": round_no, "passed": False,
-                              "findings": [{"object": "", "problem": "the reviewer did not report a verdict",
-                                            "task_id": ""}]})
+        _adopt_fence(hub, project)
+        try:
+            hub.post("/reviews", {"brief_id": brief_id, "round": round_no, "passed": False,
+                                  "findings": [{"object": "", "problem": "the reviewer did not report a verdict",
+                                                "task_id": ""}]})
+        except HubRequestError as e:  # the host's watchdog fails the brief when no verdict arrives
+            print(f"reviewer: could not record the fallback verdict: {e}", file=sys.stderr)
 
 
 def main(argv=None):

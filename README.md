@@ -6,14 +6,21 @@ Each teammate's AI helper (Claude Code, Codex, Droid, or the CLI you already use
 shared 3D model, live.
 You watch the parts appear in FreeCAD and chat with the helpers to steer them.
 
-## Get started (Windows, about 5 minutes)
+## Get started (Windows, macOS or Linux, about 5 minutes)
 
 1. **Install FreeCAD** (free) from [freecad.org/downloads](https://www.freecad.org/downloads.php).
    Default options are fine.
 2. **Download CadSwarm**: on this page click the green **Code** button, then **Download ZIP**.
    Unzip it anywhere, for example your Downloads folder.
-3. **Double-click `Install CadSwarm.cmd`** in the unzipped folder. It puts CadSwarm into FreeCAD,
-   offers a desktop shortcut, and opens FreeCAD.
+3. **Run the installer** in the unzipped folder. It puts CadSwarm into FreeCAD, offers a desktop
+   shortcut, and opens FreeCAD.
+   - *Windows:* double-click `Install CadSwarm.cmd`.
+   - *macOS:* right-click `Install CadSwarm.command` and choose **Open** (the first time, macOS asks
+     because the file came from the internet).
+   - *Linux:* in a terminal, `sh "Install CadSwarm.command"`. Use FreeCAD from your distribution's
+     packages (`sudo apt install freecad`), or extract the AppImage into `~/Applications/FreeCAD` with
+     `--appimage-extract`: CadSwarm needs a FreeCAD whose Python it can run, which Flatpak and Snap
+     installs don't offer.
 4. **Follow the guide that opens in FreeCAD.**
    - *First person on the team:* choose **Start a new team project**, name it, and copy the
      **invite code** to your teammates.
@@ -34,7 +41,8 @@ own after a reboot until you do).
   may ask to approve the "cadswarm" tools. Say yes to both.
 - **Whoever starts a team** makes one extra download, about 50 MB: CadSwarm's team server plus the
   [SpacetimeDB](https://spacetimedb.com/) database program (pinned to 2.13.0). The guide fetches them
-  into `%APPDATA%\CadSwarm\bin` the first time you start a team, checks the SHA-256 of each file, and
+  into CadSwarm's app folder (`%APPDATA%\CadSwarm` on Windows, `~/Library/Application Support/CadSwarm`
+  on macOS, `~/.local/share/CadSwarm` on Linux) the first time you start a team, checks the SHA-256 of each file, and
   needs nothing installed by hand. Teammates who join don't need them. (If your computer already has
   both, the guide uses those instead.)
 - The team's database runs on SpacetimeDB's cloud (Maincloud) by default, so teammates can join from
@@ -42,7 +50,7 @@ own after a reboot until you do).
   everyone must share a network and Windows may ask to allow access through its firewall.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
   FreeCAD.
-- The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`, plus the team
+- The first setup downloads about 70 MB of helper software into CadSwarm's app folder, plus the team
   server download above if you host. Nothing is installed into FreeCAD itself.
 - When you start a team, the guide asks **where to save the project** (default
   `Documents\CadSwarm\<project name>`). If you pick a folder that already has other things in it,

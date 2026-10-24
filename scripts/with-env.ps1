@@ -27,8 +27,11 @@ while ($i -lt $args.Count) {
     $i += 1
 }
 
+if ($envFile -and -not (Test-Path -LiteralPath $envFile)) {
+    throw "env file not found: $envFile"  # never fall back to another file's keys when one was named
+}
 $candidates = @()
-if ($envFile) { $candidates += $envFile }
+if ($envFile) { $candidates += (Resolve-Path -LiteralPath $envFile).Path }
 if ($env:CADSWARM_ENV_FILE) { $candidates += $env:CADSWARM_ENV_FILE }
 $candidates += (Join-Path $root ".env")
 $candidates += (Join-Path (Split-Path -Parent $root) "cadswarm.env")
@@ -61,5 +64,9 @@ if ($argv.Count -eq 0) {
 $exe = $argv[0]
 $rest = @($argv | Select-Object -Skip 1)
 if ($env:CADSWARM_ENV_DEBUG) { Write-Host "env: $file | exe: $exe | args: $($rest -join ' | ')" }
+if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) {
+    Write-Error "command not found: $exe"
+    exit 127
+}
 & $exe $rest
 exit $LASTEXITCODE
