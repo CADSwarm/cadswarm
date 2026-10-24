@@ -155,7 +155,7 @@ proof if everything else is done.
 | Stable address | No: the quick tunnel URL changes when the host restarts, so phones re-scan | Yes |
 
 SpacetimeDB is source-available under BSL 1.1, not open source; it converts to AGPL v3 with a
-linking exception four years after each release. Self-hosting for your own team is within the free
+linking exception four years after each release (for the current release, on 2031-10-14). Self-hosting for your own team is within the free
 grant; offering SpacetimeDB itself as a service to others is not.
 
 Moving a workspace from local to Maincloud is out of scope: a team starts a new Maincloud
@@ -169,7 +169,8 @@ host binds it to `127.0.0.1` and runs a small reverse proxy in front of it that 
 - the WebSocket connection for this database (`/v1/database/<db>/subscribe`, to verify),
 - `POST /v1/database/<db>/call/<reducer>`,
 - `POST /v1/database/<db>/sql`,
-- `POST /v1/identity`.
+- `POST /v1/identity` and the routes under it (browsers call `POST /v1/identity/websocket-token`
+  before opening the WebSocket).
 
 Everything else (publish, delete, other databases, logs) returns 403. Requests are rate-limited per
 source. Data stays protected by the member-only views and the reducers' membership checks either
@@ -179,7 +180,7 @@ The gateway is exposed two ways:
 
 - **iroh, for laptops and agents** (ALPN `cadswarm/gw/0`). Each inbound iroh stream is piped to the
   gateway. A peer whose endpoint id belongs to an active member gets the full allowlist; an unknown
-  peer gets only `POST /v1/identity` and the `redeem_invite` reducer, which is enough to pair. The
+  peer gets only the `/v1/identity` routes and the `redeem_invite` reducer, which is enough to pair. The
   invite ticket for a laptop is base32 of `{ mode, db, host_addr, token }`, where `host_addr` is the
   host's iroh `EndpointAddr`, minted after waiting up to 10 s for the relay address. `redeem_invite`
   takes the joiner's `endpoint_id` and records it on the member row. A member could register a
@@ -337,8 +338,9 @@ the workbench draws everyone's pointers inside FreeCAD as coloured markers.
 
 **Cost.** Agent pointers ride on calls already being made. Human pointers are the only new traffic:
 at 5 updates a second while actively moving, one person moving for an hour is about 18,000 calls,
-small against the free tier for a weekend. If SpacetimeDB 2.x offers non-persisted event tables,
-cursors use one; otherwise the one-row-per-member upsert above keeps storage flat.
+small against the free tier for a weekend. SpacetimeDB 2.x has event tables, but views cannot read
+them and every client read here goes through a view, so cursors use the one-row-per-member upsert
+above, which keeps storage flat.
 
 ## Handing off to an AI (P1)
 
@@ -389,8 +391,9 @@ Every Elastic call goes through the host, which holds the only Elastic key; agen
 machines use queued op kinds (`lookup_board`, `recall_designs`) like FreeCAD queries.
 
 - **Elastic Cloud Serverless**, Elasticsearch project. An inference endpoint for
-  `jina-embeddings-v3` on the Elastic Inference Service (fallback `jina-embeddings-v5-text-small`,
-  since v3 is Preview on Serverless) and the preconfigured `.jina-reranker-v3.5`.
+  `jina-embeddings-v5-text-small` on the Elastic Inference Service (newer than v3; `jina-embeddings-v3`,
+  in Preview on Serverless, is the fallback) and the preconfigured JINA reranker `.jina-reranker-v3.5`
+  (setup checks the id against `GET _inference/_all`).
 - **Indices:**
   - `boards`: chunks of datasheets, product pages and drawings (`board_id`, `title`, `source_url`,
     `source_type`, `content` as `semantic_text`). Text is extracted before indexing (`pypdf` for
@@ -412,6 +415,9 @@ machines use queued op kinds (`lookup_board`, `recall_designs`) like FreeCAD que
   - Before planning → the planner prompt gets the top similar designs and the board's lessons.
   - A brief reaching `ready` → the host indexes it into `designs`.
   - The reviewer uses `lookup_board` to check cutouts against the datasheet.
+- **Prize rules:** the 13.0 Elastic rules are not published; 12.0's required Agent Builder with MCP.
+  Confirm at the booth. If MCP is required, agents also reach `cadswarm-board-expert` through Agent
+  Builder's MCP endpoint (`/api/agent_builder/mcp`), alongside the host helper.
 - **Risks:** datasheet values can be wrong (sources shown, reviewer cross-checks, calipers win); the
   free trial is 14 days with unverified limits.
 
@@ -511,7 +517,7 @@ shown live.
 | The host loses Maincloud | The op in flight finishes locally; the host reconnects with backoff (TypeScript and Rust SDKs reconnect) and completes it; queued ops wait. |
 | The phone drops | Its subscription catches up on reconnect. |
 | A headless agent runs away | Killed after 15 minutes; its locks go stale and are reclaimable. |
-| Free-tier database paused while idle | It resumes on the next connection; the demo checklist warms it 5 minutes before judging. |
+| Free-tier database paused after a week with no activity | It resumes in under a second on the next connection; nothing to do for the demo. |
 | Local mode: the host machine goes offline | Everyone loses access until it is back; nothing is lost while the disk survives. This is the stated reason to choose Maincloud. |
 | Local mode: the host restarts | The quick tunnel URL changes; the host prints a new QR and phones re-scan (their stored identity is kept, so they stay members). iroh peers reconnect on their own, since the host's endpoint id is stable. |
 | Local mode: an unknown iroh peer or a stranger on the tunnel URL | Gets only identity creation and `redeem_invite`; without a valid invite token it can do nothing, and the views return nothing. |
@@ -532,10 +538,18 @@ shown live.
 
 1. **Headless Claude Code reliability.** Agents may stall or loop. Mitigations: the 15 minute kill,
    a small number of workers, and a plan template for enclosures that the planner fills in.
-2. **Python on HTTP only.** `wait_for_changes` polls the `event` view (starting at 250 ms, backing
-   off to 2 s). Fine for a few agents; noted as a cost item for scale.
-3. **Free-tier energy.** Heartbeats every 15 s for 5 agents come to about 0.9 M calls a month,
-   within the 2,500 TeV (about 3 M calls) free credit for a weekend's use.
+2. **Python on HTTP only.** `wait_for_changes` polls the `event` view (once a second, backing off
+   to 3 s). Fine for a few agents; noted as a cost item for scale. A hand-rolled Python WebSocket
+   client over the documented `v1.json.spacetimedb` protocol would remove the polling; not worth it
+   before the deadline (the only PyPI SDK is a 2023 pre-1.0 client).
+3. **Free-tier energy.** The 2,500 TeV credit is about 3 M calls, or 12.5 GB of egress, or 1 GB of
+   storage, and the pricing page does not say what happens when it runs out. Heartbeats every 15 s
+   for 5 agents are about 0.9 M calls a month. Egress is the bigger risk: every subscriber receives
+   every changed row of the views it subscribes to, so preview meshes (up to 200 KB per object
+   revision) go to every phone. Export bytes therefore live in their own table, `artifact_blob`,
+   that nothing subscribes to; a download reads one row by hash. HTTP polling is capped at once a
+   second (SQL is billed by bytes scanned and index seeks). Watch the Maincloud usage page during
+   the event.
 4. **The single FreeCAD worker** serialises ops. This is the stated scale limit; the answer for
    judges is per-part documents across hosts, coordinated through the same database, with files
    over the iroh mesh (P2).

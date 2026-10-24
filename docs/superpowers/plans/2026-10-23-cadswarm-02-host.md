@@ -6,7 +6,7 @@
 
 **Architecture:** One binary with three commands (`init`, `invite`, `run`). `run` keeps a SpacetimeDB connection (Rust SDK, subscription cache on a background thread) and a single main loop that ticks every 100 ms, reading only the local cache: it executes the oldest queued op, then advances each brief's state machine. Everything that decides something (worker response → reducer args, brief transitions, board → params, tickets) is a pure function with unit tests. Only `space.rs` touches the generated bindings.
 
-**Tech Stack:** Rust stable, `spacetimedb-sdk` (version matching the CLI), `serde_json`, `anyhow`, `clap`, `base64`, `sha2`, `hex`, `data-encoding`, `getrandom`, `qrcode`.
+**Tech Stack:** Rust stable, `spacetimedb-sdk = "=2.13.0"`, `serde_json`, `anyhow`, `clap`, `base64`, `sha2`, `hex`, `data-encoding`, `getrandom`, `qrcode`.
 
 Read first: `docs/superpowers/plans/2026-10-23-cadswarm-00-overview.md` (contract) and `cadswarm/worker/freecad_worker.py` (the worker protocol you drive).
 
@@ -58,7 +58,7 @@ cargo new host --bin --name cadswarm-host
 cd host
 cargo add serde --features derive
 cargo add serde_json anyhow base64 sha2 hex data-encoding qrcode
-cargo add getrandom@0.2
+cargo add getrandom@0.4
 cargo add clap --features derive
 cd ..
 ```
@@ -144,7 +144,7 @@ Add above the tests in `host/src/ticket.rs`:
 ```rust
 pub fn new_token() -> String {
     let mut b = [0u8; 32];
-    getrandom::getrandom(&mut b).expect("system rng");
+    getrandom::fill(&mut b).expect("system rng");
     hex::encode(b)
 }
 

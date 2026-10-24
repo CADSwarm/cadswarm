@@ -6,7 +6,7 @@
 
 **Architecture:** Elastic is reached only from the host machine, which holds the only key. A Python helper process (`cadswarm/helper.py`) speaks the same JSON-lines protocol as the FreeCAD worker; the Rust host routes the `lookup_board`, `recall_designs` and `index_design` ops to it (and, per the Python plan, the project-file ops). The helper calls Elasticsearch for hybrid search and Kibana's Agent Builder for board specs. A one-time ingestion command fills the `boards` index from datasheets; finished briefs fill `designs`; a scheduled Workflow fills `lessons`.
 
-**Tech Stack:** Python 3 stdlib (`urllib`, `json`, `html.parser`), `pypdf` (ingestion only), Elastic Cloud Serverless (Elasticsearch project), Elastic Inference Service (`jina-embeddings-v3`, `.jina-reranker-v3.5`), Agent Builder (Kibana API), Workflows (YAML).
+**Tech Stack:** Python 3 stdlib (`urllib`, `json`, `html.parser`), `pypdf` (ingestion only), Elastic Cloud Serverless (Elasticsearch project), Elastic Inference Service (`jina-embeddings-v5-text-small`, `.jina-reranker-v3.5`), Agent Builder (Kibana API), Workflows (YAML).
 
 Read first: `docs/superpowers/plans/2026-10-23-cadswarm-00-overview.md` (op kinds `lookup_board`, `recall_designs`), the spec section "Elastic: board knowledge and design memory".
 
@@ -51,7 +51,7 @@ $env:KIBANA_URL  = "https://<project>.kb.<region>.elastic.cloud"
 $env:ELASTIC_API_KEY = "<key>"
 curl.exe -s $env:ELASTIC_URL -H "Authorization: ApiKey $env:ELASTIC_API_KEY"
 ```
-Expected: JSON with a `version` block. The API key must have Agent Builder privileges (`feature_agentBuilder.read` and `.all` for creating agents); a key made from the Connection details panel as the project owner has them.
+Expected: JSON with a `version` block. The API key must have Agent Builder privileges (the `manageAgents` privilege, to create agents); a key made from the Connection details panel as the project owner has them.
 
 - [ ] **Step 2: Write `elastic/setup.json`**
 
@@ -59,7 +59,7 @@ Expected: JSON with a `version` block. The API key must have Agent Builder privi
 {
   "inference": [
     {"path": "_inference/text_embedding/cadswarm-jina",
-     "body": {"service": "elastic", "service_settings": {"model_id": "jina-embeddings-v3"}}}
+     "body": {"service": "elastic", "service_settings": {"model_id": "jina-embeddings-v5-text-small"}}}
   ],
   "indices": {
     "cadswarm-boards": {"mappings": {"properties": {
@@ -252,7 +252,7 @@ class Elastic:
 
 Run: `python -m pytest tests/test_knowledge.py -q` → `2 passed`.
 Then: `python -c "import json; from cadswarm.knowledge import Elastic; print(Elastic.from_env().setup(json.load(open('elastic/setup.json'))))"`
-Expected: the inference id and the three index names. If creating `cadswarm-jina` fails because `jina-embeddings-v3` is unavailable on your project, change `model_id` in `elastic/setup.json` to `jina-embeddings-v5-text-small` and rerun.
+Expected: the inference id and the three index names. If creating `cadswarm-jina` fails because `jina-embeddings-v5-text-small` is unavailable on your project, change `model_id` in `elastic/setup.json` to `jina-embeddings-v3` and rerun. Then run `GET _inference/_all`: it must list `.jina-reranker-v3.5`; if it lists a different `.jina-reranker-*` id, set `RERANKER` in `cadswarm/knowledge.py` to that id. The 13.0 Elastic prize rules are not published (12.0's required Agent Builder with MCP); confirm at the booth whether agents must reach `cadswarm-board-expert` over Agent Builder's MCP endpoint.
 
 - [ ] **Step 7: Commit**
 

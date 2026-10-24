@@ -700,7 +700,7 @@ class SpaceHub:
         op_id = ticket.new_id("o_")
         self._f("submit_op", op_id, kind, json.dumps(args or {}),
                 json.dumps(expected_revs) if expected_revs else "")
-        deadline, delay = time.time() + OP_WAIT_SECONDS, 0.15
+        deadline, delay = time.time() + OP_WAIT_SECONDS, 0.5
         while time.time() < deadline:
             rows = self._rows("v_op", f"id = '{op_id}'")
             if rows and rows[0]["status"] == "done":
@@ -737,7 +737,10 @@ class SpaceHub:
         return {"file": r["name"], "url": f"/artifacts/{r['hash']}", "objects": r.get("objects", [])}
 
     def artifact_bytes(self, sha):
-        rows = [a for a in self._rows("v_artifact") if a["hash"] == sha]
+        # Read the one blob by hash; v_artifact carries no bytes (plan 00: never pull every export).
+        if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+            raise HubRequestError(404, {"error": "No such export", "code": "not_found"})
+        rows = self._rows("v_artifact_blob", f"hash = '{sha}'")
         if not rows or not rows[0]["bytes"]:
             raise HubRequestError(404, {"error": "No such export (or it is too large to store inline)", "code": "not_found"})
         b = rows[0]["bytes"]
@@ -856,7 +859,7 @@ class SpaceHub:
                  **_json(e["data_json"], {})} for e in rows]
 
     def events(self, since=0, wait=0):
-        deadline, delay = time.time() + min(float(wait), 25.0), 0.25
+        deadline, delay = time.time() + min(float(wait), 25.0), 1.0
         while True:
             rows = self._event_rows(since)
             if rows or time.time() >= deadline:
@@ -864,7 +867,7 @@ class SpaceHub:
                     self._seq = max(self._seq, rows[-1]["seq"])
                 return {"seq": rows[-1]["seq"] if rows else int(since), "events": rows}
             time.sleep(delay)
-            delay = min(delay * 1.5, 2.0)
+            delay = min(delay * 1.5, 3.0)
 
     # ------------------------------------------------------------------ context
 
@@ -1655,7 +1658,7 @@ Expected: `3 passed` (the SDK is only imported inside `review`, so these run wit
 
 - [ ] **Step 5: Verify the MCP tool id format against Droid**
 
-On the host machine: `pip install droid-sdk`, install the `droid` CLI, set `FACTORY_API_KEY`, then in a reviewer folder made by `cadswarm-host init-reviewer`:
+On the host machine: `pip install droid-sdk` (not `droid-sdk[mcp]`: that extra requires `mcp<2`, which conflicts with the repo's `mcp>=2.3`), install the `droid` CLI, set `FACTORY_API_KEY`, then in a reviewer folder made by `cadswarm-host init-reviewer`:
 ```powershell
 python -c "import asyncio, droid_sdk as d; from cadswarm.reviewer import *; import sys, os
 async def go():
