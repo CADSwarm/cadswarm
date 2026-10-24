@@ -96,11 +96,16 @@ impl Space {
             .on_error(|_, e| eprintln!("[host] subscription error: {e:?}"))
             .subscribe(QUERIES);
         let space = Space { conn };
-        // The subscription must be applied before rejoin, so `v_me` shows the new fence.
-        space.wait_for(Duration::from_secs(20), |s| s.me().is_some())?;
         if !rejoin {
+            // Attaching alongside a live host: it must already be a member with a fence to reuse.
+            space.wait_for(Duration::from_secs(20), |s| s.me().is_some())?;
             return Ok(space);
         }
+        // Wait for the subscription so `before` is the real fence, but do not require it: a member
+        // row the sweep retired ("left") is invisible in `v_me`, and that must not stop a host from
+        // starting — `rejoin` recreates the row. Without this a host that has been offline long
+        // enough to be orphaned could never start again.
+        let _ = space.wait_for(Duration::from_secs(10), |s| s.me().is_some());
         let before = space.fence();
         space.rejoin("host")?;
         space.wait_for(Duration::from_secs(20), |s| s.fence() > before)?;
