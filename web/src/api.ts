@@ -19,20 +19,21 @@ import type VReviewRow from './module_bindings/v_review_table';
 import type VArtifactRow from './module_bindings/v_artifact_table';
 import type VHandoffRow from './module_bindings/v_handoff_table';
 import type VOpRow from './module_bindings/v_op_table';
+import type VMessageRow from './module_bindings/v_message_table';
 import type VComponentRow from './module_bindings/v_component_table';
 import type VSettingRow from './module_bindings/v_setting_table';
 import type VSuggestionRow from './module_bindings/v_suggestion_table';
 import type {
-  Activity, Artifact, Brief, Component, Handoff, Member, Obj, Op, Pointer, Preview, Review, Setting, State, Store,
-  Suggestion, Task,
+  Activity, Artifact, Brief, Component, Handoff, Member, Message, Obj, Op, Pointer, Preview, Review, Setting, State,
+  Store, Suggestion, Task,
 } from './store';
 import { newId } from './ids';
 import { saveSession } from './session';
 import { saveBytes } from './download';
 
 const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param', 'v_op', 'v_task', 'v_activity',
-  'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff', 'v_component', 'v_setting',
-  'v_suggestion'] as const;
+  'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff', 'v_message', 'v_receipt', 'v_component',
+  'v_setting', 'v_suggestion'] as const;
 
 /** What placing a library part needs: a team part's id, or a standard family + size (+ length). */
 export interface PlaceRequest { component?: string; family?: string; size?: string; length?: number; name: string; label?: string }
@@ -49,6 +50,8 @@ export interface Api {
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
   cancelHandoff(id: string): void;
+  /** An instruction for an AI helper (by name, or "all"): it does it first and its receipt says how far it got. */
+  sendCommand(to: string, body: string, taskId?: string): string;
   downloadArtifact(hash: string, filename: string): Promise<void>;
   /** Place a library part in the model; resolves true once the host has built it. */
   placeComponent(req: PlaceRequest): Promise<boolean>;
@@ -92,6 +95,9 @@ export const toReview = (r: Infer<typeof VReviewRow>): Review => ({
 export const toArtifact = (r: Infer<typeof VArtifactRow>): Artifact => ({ hash: r.hash, name: r.name, mime: r.mime, size: num(r.size) });
 export const toHandoff = (r: Infer<typeof VHandoffRow>): Handoff => ({
   id: r.id, from: num(r.from), note: r.note, trigger: r.trigger, status: r.status, taker: num(r.taker), createdMs: num(r.createdMs),
+});
+export const toMessage = (r: Infer<typeof VMessageRow>): Message => ({
+  id: r.id, from: num(r.from), to: r.to, kind: r.kind, body: r.body, taskId: r.taskId, createdMs: num(r.createdMs),
 });
 export const toOp = (r: Infer<typeof VOpRow>): Op => ({
   id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error, argsJson: r.argsJson,
@@ -193,6 +199,8 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         previews,
         artifacts: [...conn.db.vArtifact.iter()].map(toArtifact),
         handoffs: [...conn.db.vHandoff.iter()].map(toHandoff),
+        messages: [...conn.db.vMessage.iter()].map(toMessage),
+        receipts: [...conn.db.vReceipt.iter()].map(r => ({ messageId: r.messageId, member: num(r.member), state: r.state })),
         components: [...conn.db.vComponent.iter()].map(toComponent),
         settings: [...conn.db.vSetting.iter()].map(toSetting),
         suggestions: [...conn.db.vSuggestion.iter()].map(toSuggestion),
@@ -205,8 +213,14 @@ export function connect(store: Store, uri: string, db: string, token: string | n
     }
     const handles = [conn.db.vMe, conn.db.vWorkspace, conn.db.vMember, conn.db.vLock, conn.db.vObject, conn.db.vParam,
       conn.db.vOp, conn.db.vTask, conn.db.vActivity, conn.db.vPointer, conn.db.vBrief, conn.db.vReview, conn.db.vPreview,
-      conn.db.vArtifact, conn.db.vHandoff, conn.db.vComponent, conn.db.vSetting, conn.db.vSuggestion];
-    for (const h of handles) { h.onInsert(schedule); h.onDelete(schedule); }
+      conn.db.vArtifact, conn.db.vHandoff, conn.db.vMessage, conn.db.vReceipt, conn.db.vComponent, conn.db.vSetting,
+      conn.db.vSuggestion];
+    for (const h of handles) {
+      h.onInsert(schedule); h.onDelete(schedule);
+      // A view without a primary key reports a change as delete + insert; one with a key reports an update.
+      const withUpdate = h as unknown as { onUpdate?: (cb: () => void) => void };
+      withUpdate.onUpdate?.(schedule);
+    }
 
     function report(e: unknown) {
       const { code, message } = splitError(e);
@@ -278,6 +292,11 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         return id;
       },
       cancelHandoff: id => void quiet(r.cancelHandoff({ fence: fence(), handoffId: id })),
+      sendCommand: (to, body, taskId = '') => {
+        const id = newId('m_');
+        void quiet(r.sendMessage({ fence: fence(), messageId: id, to, body, kind: 'command', taskId }));
+        return id;
+      },
       placeComponent: req => req.family
         ? runOp('insert_standard_part', { family: req.family, size: req.size, name: req.name, label: req.label,
           ...(req.length ? { length: req.length } : {}) })

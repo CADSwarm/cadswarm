@@ -880,7 +880,7 @@ class TeamPanel(QtGui.QDockWidget):
                     pending[name] = pending.get(name, 0) + 1
         rows, tips = [], []
         for p in s.model["participants"]:
-            if p.get("kind") == "human":
+            if not takes_instructions(p):
                 continue
             state, task, status = helper_row(p, local.get(p["name"]), s.tasks)
             if pending.get(p["name"]):
@@ -1311,7 +1311,7 @@ class TeamPanel(QtGui.QDockWidget):
         helper = t.get("assignee") or t.get("owner_name")
         p = self.session.participant(helper) if helper else None
         if not p or p.get("kind") == "human":
-            helpers = [x["name"] for x in self.session.model["participants"] if x.get("kind") != "human"]
+            helpers = [x["name"] for x in self.session.model["participants"] if takes_instructions(x)]
             if not helpers:
                 hint("No AI helper has joined yet. Click ＋ New helper.")
                 return
@@ -1429,6 +1429,13 @@ PANEL_STYLE = """
 #cadswarmPanel QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 8px;
     padding: 0 4px; }
 """
+
+
+def takes_instructions(p):
+    """AI helpers and the reviewer take instructions; people and the team server itself never do."""
+    return p.get("kind") not in ("human", "host")
+
+
 BRIEF_WORDS = {"new": "⏳ waiting for the team server", "planning": "🧠 planning the parts",
                "building": "🔨 building", "reviewing": "🔍 checking the result", "ready": "✓ done",
                "failed": "✗ stopped (see Activity)"}
@@ -1489,7 +1496,7 @@ class NewTaskDialog(QtGui.QDialog):
             form.addRow("Parts involved (optional)", self.parts)
         self.who = QtGui.QComboBox()
         me = session.ident["name"] if session.ident else None
-        helpers = [p for p in session.model.get("participants", []) if p.get("kind") != "human"]
+        helpers = [p for p in session.model.get("participants", []) if takes_instructions(p)]
         local = local_helper_status(session)
         ready = sorted(helpers, key=lambda p: {"ready": 0, "working": 1, "away": 2}.get(
             helper_state(p, local.get(p["name"]))[0], 3))

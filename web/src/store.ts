@@ -15,6 +15,10 @@ export interface Workspace { bedXMm: number; bedYMm: number; bedZMm: number }
 /** A short message for the person (a refused reducer, a failed download). `at` makes repeats distinct. */
 export interface Notice { text: string; at: number }
 export interface Op { id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string }
+/** A team message. `to` is "all", "member:<id>" or "@name" (not joined yet); a person's command is stored as kind "steer". */
+export interface Message { id: string; from: number; to: string; kind: string; body: string; taskId: string; createdMs: number }
+/** Who has read (delivered) or handled (consumed) a message. */
+export interface Receipt { messageId: string; member: number; state: string }
 /** A part in the team's components library (the bytes stay on the host; previews are fetched one at a time). */
 export interface Component {
   id: string; name: string; category: string; tags: string[]; description: string; source: string; sourceUrl: string;
@@ -33,14 +37,14 @@ export interface State {
   members: Member[]; locks: Lock[]; objects: Obj[]; params: Param[]; tasks: Task[]; ops: Op[];
   activity: Activity[]; pointers: Pointer[]; briefs: Brief[]; reviews: Review[];
   previews: Map<string, Preview>; artifacts: Artifact[]; handoffs: Handoff[];
-  components: Component[]; settings: Setting[]; suggestions: Suggestion[];
+  messages: Message[]; receipts: Receipt[]; components: Component[]; settings: Setting[]; suggestions: Suggestion[];
   notice: Notice | null;
 }
 
 export function emptyState(): State {
   return { connected: false, meId: null, workspace: null, members: [], locks: [], objects: [], params: [], tasks: [], ops: [],
     activity: [], pointers: [], briefs: [], reviews: [], previews: new Map(), artifacts: [], handoffs: [],
-    components: [], settings: [], suggestions: [], notice: null };
+    messages: [], receipts: [], components: [], settings: [], suggestions: [], notice: null };
 }
 
 export class Store {

@@ -172,6 +172,25 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       return id;
     },
     cancelHandoff: id => store.set({ handoffs: store.state.handoffs.map(h => h.id === id ? { ...h, status: 'cancelled' } : h) }),
+    sendCommand: (to, body, taskId = '') => {
+      // A helper reads it, says how it will do it, then marks it done: the same receipts a real helper leaves.
+      const id = newId('m_');
+      const target = to === 'all' ? null : members.find(m => m.name === to);
+      const helperIds = target ? [target.id] : members.filter(m => m.kind === 'agent').map(m => m.id);
+      store.set({ messages: [...store.state.messages, { id, from: 1, to: target ? `member:${target.id}` : 'all', kind: 'steer',
+        body, taskId, createdMs: Date.now() }] });
+      const mark = (state: string) => store.set({ receipts: [
+        ...store.state.receipts.filter(r => !(r.messageId === id && helperIds.includes(r.member))),
+        ...helperIds.map(member => ({ messageId: id, member, state }))] });
+      setTimeout(() => mark('delivered'), 1200);
+      setTimeout(() => {
+        mark('consumed');
+        const by = helperIds[0];
+        store.set({ messages: [...store.state.messages, { id: newId('m_'), from: by, to: 'member:1', kind: 'message',
+          body: `Done: ${body.length > 60 ? body.slice(0, 57) + '…' : body}`, taskId, createdMs: Date.now() }] });
+      }, 4500);
+      return id;
+    },
     downloadArtifact: async (hash, filename) => {
       if (hash !== STL_HASH) throw new Error('Unknown export.');
       saveBytes(mergeStl([...store.state.previews.values()].map(p => p.mesh)), 'model/stl', filename);
