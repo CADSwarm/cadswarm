@@ -2,10 +2,12 @@
 
 **Build 3D designs together with your team's AI helpers: no CAD or coding experience needed.**
 
-Each teammate's AI helper (Claude Code, Codex, Droid, or the CLI you already use) builds part of one
-shared 3D model, live.
-You watch the parts appear in FreeCAD, give the helpers tasks and instructions, and change parts
-yourself when that's quicker.
+Describe a part, say "an enclosure for this Raspberry Pi", and a swarm of AI helpers (Claude Code,
+Codex, Droid, or the agent CLI you already use) builds it together in one shared FreeCAD model, live,
+while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts yourself when
+that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one SpacetimeDB
+database, the hosting computer runs the only copy of the model, Elastic supplies board datasheets and
+design memory, and a Factory Droid reviewer checks fit and printability before the STL is exported.
 
 ## Get started (about 5 minutes)
 
@@ -23,7 +25,8 @@ Or install by hand:
 
 1. **Install FreeCAD** (free) from [freecad.org/downloads](https://www.freecad.org/downloads.php).
    Default options are fine. On Linux, use the official AppImage: the snap, Flatpak and distro packages
-   have no Python of their own, so with them you can join a team but not start one (the installer offers to
+   have no Python of their own, so with them you can join a teammate's project but not start a team or
+   connect an AI helper (the installer offers to
    fetch the official FreeCAD for you).
 2. **Download CadSwarm**: on this page click the green **Code** button, then **Download ZIP**.
    Unzip it anywhere, for example your Downloads folder.
@@ -289,15 +292,19 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
 ```
  alice: Claude Code ─┐  MCP (stdio)          ┌──── SpacetimeDB: the team's database ────┐
  bob:   Codex  ──────┼──► cadswarm MCP ──────► members · fences · locks · revisions ·    │
- dana:  Droid  ──────┘   + prompt hook       │ tasks · messages · events · stale sweep   │
-                                             └─────────────────▲─────────────────────────┘
- carol: FreeCAD GUI ─── CadSwarm workbench ────────────────────┤ ops, one at a time
-        (mirror + team panel)                                 │
-                                         cadswarm-host (Rust) on the host's computer
-                                                               │ JSON lines
-                                                               ▼
-                                         FreeCAD worker (FreeCAD's python): THE live .FCStd,
-                                         transactions · lock-checked rollback
+ dana:  Droid  ──────┘   + prompt hook       │ tasks · messages · briefs · stale sweep   │
+                                             └───▲──────────────────▲──────────────▲────┘
+ carol: FreeCAD GUI ─── CadSwarm workbench ──────┘                  │              │
+        (mirror + team panel)                                       │   phone / browser: web app
+                                                                    │   (pair by QR or #t= link;
+                                         cadswarm-host (Rust) ──────┘    pointers, briefs, 3D view)
+                                         on the host's computer: runs ops one at a time,
+                                         orchestrates briefs, spawns agents and the reviewer
+                                           │ JSON lines                  │ JSON lines
+                                           ▼                             ▼
+                          FreeCAD worker (FreeCAD's python):    helper (cadswarm/helper.py):
+                          THE live .FCStd, transactions,        project files, storage limits,
+                          lock-checked rollback                 Elastic lookups and design memory
 ```
 
 ## Where Droid runs
@@ -318,6 +325,44 @@ host\target\release\cadswarm-host --data .\team-model init-reviewer
 That mints a reviewer invite and writes the reviewer's folder under `team-model\agents\reviewer`. Until that folder exists briefs skip review and export directly, so a team without Droid still works. If the reviewer exits without a verdict (for example Droid is not logged in) the brief fails with that message instead of waiting forever, and its log is `team-model\agents\reviewer\review-<brief>-<round>.log`.
 
 People can also hand work to an agent mid-design: while holding a part, "Hand off now" with a note spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks and tasks), reads their note and recent ops, and continues instead of starting over.
+
+## Run the demo
+
+On Windows, one command brings up the whole stack on this machine: it builds the host and the web app,
+serves the web app, opens a Cloudflare quick tunnel so phones can reach it, sets up the data folder
+against Maincloud, runs the host with your keys from `scripts\with-env.ps1`, and prints a single-use
+phone link and QR code.
+
+```powershell
+powershell -File scripts\demo-up.ps1               # first run: builds everything
+powershell -File scripts\demo-up.ps1 -SkipBuild    # later runs
+powershell -File scripts\demo-down.ps1             # stop everything demo-up started
+```
+
+Options: `-Data <dir>` (data folder), `-Db <name>` (Maincloud database), `-Python <exe>` (Python with
+the cadswarm package), `-Agent claude|codex|droid`, `-AgentCommand <argv>` (see below), `-WebPort <n>`
+(default 4173), `-WebUrl <url>` (use a fixed public URL instead of a tunnel). Everything it starts is
+recorded in `<Data>\.cadswarm-team\demo-pids.json`; `demo-down.ps1` stops only those processes, and
+only after checking each one's command line. See [demo/README.md](demo/README.md) for a three-agent
+demo script.
+
+## Bring your own agent
+
+The agents that build briefs run on whichever agent CLI the host's owner already uses, with their own
+account and model provider. Pick one when you set up the host:
+
+```powershell
+host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | droid
+```
+
+Or run any other CLI by setting `agent_command` in `team-model\host.json`; `{prompt}` is replaced by the
+task prompt:
+
+```json
+"agent_command": ["aider", "--message", "{prompt}", "--yes"]
+```
+
+A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX` or `CADSWARM_DROID`.
 
 ## For developers: command line
 
@@ -432,9 +477,10 @@ through the MCP tools instead.
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
   `get_inbox`, `ack_messages`, `take_over`
 
-Optional, when an Elastic project is configured on the host: board datasheets, design memory and
-reviewer lessons are available to the same agents, and an Agent Builder expert can supply a board
-spec the local library lacks. See [ELASTIC.md](ELASTIC.md).
+Elastic is a core part of CadSwarm: with an Elastic project configured on the host, board datasheets,
+design memory and reviewer lessons are available to the same agents, and an Agent Builder expert can
+supply a board spec the local library lacks. Without one, CadSwarm falls back to the local board
+library. See [ELASTIC.md](ELASTIC.md).
 
 ## Rules the team enforces
 
@@ -460,9 +506,14 @@ spec the local library lacks. See [ELASTIC.md](ELASTIC.md).
 
 ```powershell
 .venv\Scripts\python -m pytest        # the integration and sandbox tests drive real FreeCAD
+cargo test --release --manifest-path host\Cargo.toml
+cargo test --release --manifest-path rules\Cargo.toml
+cd web; npm test
 ```
 
-See [demo/README.md](demo/README.md) for a three-agent demo script.
+Latest CI run on `main` (Windows, macOS and Linux): Python 369–371 passed depending on the platform
+(18–20 skipped where FreeCAD or the platform sandbox is unavailable), host 30 passed, web 26 passed;
+rules 17 passed locally.
 
 ## Known limits (hackathon MVP)
 
@@ -476,6 +527,10 @@ See [demo/README.md](demo/README.md) for a three-agent demo script.
   add. Scripts can't edit other objects; they can only create or replace one shape.
 - Locks are per object. Editing a shared upstream object (e.g. a sketch used by two features)
   requires its lock; there is no sub-object locking.
+- One host per data folder, and each host drives a single FreeCAD worker, so ops run one at a time.
+  Agents work in parallel, but their edits queue at the host.
+- `scripts\demo-up.ps1` uses a Cloudflare quick tunnel, whose URL changes on every run; mint new phone
+  links after a restart, or pass `-WebUrl` for a fixed address.
 - Maincloud handles TLS and sign-in, and every person has their own identity; invites are single-use
   and expire after a day. The advanced local mode has no TLS, so use it only with people you trust on
   your own network.
