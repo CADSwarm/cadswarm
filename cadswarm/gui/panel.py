@@ -36,6 +36,7 @@ MIRROR_DOC = "CadSwarmLive"
 HEARTBEAT_SECONDS = 10
 REFRESH_SECONDS = 3         # the panel re-reads the team this often (in the background) even with no events
 HELPER_CHECK_SECONDS = 20   # how often to make sure this computer's AI helpers are running
+TOAST_SECONDS = 6           # how long a confirmation ("✓ Created task …") stays in the panel
 FATAL = ("taken_over", "fence_stale", "left", "bad_token", "not_member")
 
 
@@ -85,6 +86,16 @@ def owner_color(owner_id):
 
 def say(msg):
     App.Console.PrintMessage(f"[CADSwarm] {msg}\n")
+    # Most people never open FreeCAD's console: confirm it in the status bar and the panel too (GUI thread only).
+    app = QtGui.QApplication.instance()
+    if app is None or QtCore.QThread.currentThread() != app.thread():
+        return
+    try:
+        Gui.getMainWindow().statusBar().showMessage(f"CADSwarm: {msg}", TOAST_SECONDS * 1000)
+    except Exception:
+        pass
+    if SESSION.panel is not None:
+        SESSION.panel.flash(msg)
 
 
 def warn(msg):
@@ -624,6 +635,15 @@ class TeamPanel(QtGui.QDockWidget):
         brow.addWidget(self.banner_button)
         bl.addLayout(brow)
         lay.addWidget(self.banner)
+        self.toast = QtGui.QLabel()  # "✓ Created task …": what say() confirms, where people are looking
+        self.toast.setObjectName("toast")
+        self.toast.setWordWrap(True)
+        self.toast.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        self.toast.hide()
+        self.toast_timer = QtCore.QTimer(self)
+        self.toast_timer.setSingleShot(True)
+        self.toast_timer.timeout.connect(self.toast.hide)
+        lay.addWidget(self.toast)
 
         self.tabs = QtGui.QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -964,6 +984,12 @@ class TeamPanel(QtGui.QDockWidget):
         if obj is getattr(self, "chat", None) and ev.type() == QtCore.QEvent.Resize:
             self.place_jump()
         return super().eventFilter(obj, ev)
+
+    def flash(self, text):
+        """Confirm something the person did in the panel itself, for a few seconds."""
+        self.toast.setText(f"✓  {text}")
+        self.toast.show()
+        self.toast_timer.start(TOAST_SECONDS * 1000)
 
     # --------------------------------------------------------------- jump to the newest message
 
@@ -1879,6 +1905,11 @@ PANEL_STYLE = """
     background: palette(base); }
 #cadswarmPanel QTextBrowser { padding: 4px; }
 #cadswarmPanel QTreeWidget::item { padding: 4px 2px; }
+#cadswarmPanel QHeaderView { background: transparent; border: none; }
+#cadswarmPanel QHeaderView::section { background: transparent; color: #8b949e; font-weight: bold; border: none;
+    border-bottom: 1px solid palette(mid); padding: 5px 8px; }
+#cadswarmPanel QLabel#toast { background: palette(base); color: palette(text); border: 1px solid #1a7f37;
+    border-left: 4px solid #1a7f37; border-radius: 6px; padding: 6px 10px; }
 #cadswarmPanel QLineEdit { min-height: 28px; border: 1px solid palette(mid); border-radius: 6px; padding: 0 8px;
     background: palette(base); }
 #cadswarmPanel QLineEdit:focus { border-color: #d9822b; }

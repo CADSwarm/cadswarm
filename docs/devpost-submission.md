@@ -27,8 +27,9 @@ Devpost's field limits (the sections below are sized for the "built with a story
 - [x] Tests: CI run 40118091369 on `main` `95664cc`: Python 437 / 436 / 435 passed on Linux / Windows
   / macOS (20–22 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed on all
   three, web 36 passed; rules 22 passed locally.
-- [x] Live database: Maincloud `cadswarm-calhacks-ca8c` runs the module built from `main` `d5aa68a`
-  (published 2026-10-24 with `--delete-data=never`), and the team server shows `active` in `v_member`.
+- [x] Live database: Maincloud `cadswarm-calhacks-0180` (new account with the Cal Hacks credits; the old
+  `cadswarm-calhacks-ca8c` ran out of credits) runs the module from `feat/panel-tabs-workload-shifting`
+  `ff382fe`, published 2026-10-24, and the team server shows `active` in `v_member`.
 - [x] Elastic, counted live on 2026-10-24: `cadswarm-boards` 6 datasheet documents for 5 boards
   (raspberry-pi-4, arduino-uno-r3, esp32-s3-devkitc-1, raspberry-pi-pico, seeed-xiao-esp32c3),
   `cadswarm-designs` 1, `cadswarm-lessons` 4 (the four design problems the Droid reviewer found in
@@ -213,7 +214,7 @@ Actions · Windows
 
 | Track | Evidence in the repo | What to look at |
 |---|---|---|
-| Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-ca8c`. |
+| Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-0180`. |
 | Anthropic | `cadswarm/mcp_server.py`; `host/src/agents.rs` (`planner_prompt`, `worker_prompt`, `handoff_prompt`); `host/src/briefs.rs` | Claude Code agents work only through the MCP server's tools and its 13 working rules. The host plans a brief with a planner agent and starts up to three workers, and adds the team's learned design style to each prompt. |
 | Factory | `cadswarm/reviewer.py`; README "Where Droid runs" | The Droid reviewer runs on `droid-sdk` with `restrict_tools` limited to inspection, joins as a `reviewer` member, and the module refuses any write op from that member kind. |
 | Elastic | `elastic/setup.json`, `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | JINA `semantic_text` hybrid search with the reranker over board datasheets; design memory written back by the host; Agent Builder agents; the `distil-lessons` Workflow. |

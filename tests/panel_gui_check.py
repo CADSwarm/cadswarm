@@ -196,6 +196,12 @@ p.jump.click()
 for _ in range(5):
     QtGui.QApplication.processEvents()
 back_down = p.chat_at_bottom() and p.chat_follow and not p.jump.isVisible()
+
+# Confirmations show in the panel, not only in FreeCAD's console.
+panel.say("Created task “Lid”")
+QtGui.QApplication.processEvents()
+toast = p.toast.text() if p.toast.isVisible() else None
+p.grab().save(str(out / "panel-toast.png"))
 result = {
     "layout": checks,
     "follows_window": {"at_1600": wide_w, "at_1000": narrow_w},
@@ -219,6 +225,7 @@ result = {
     "sponsors": p.sponsors_box.text(),
     "chat_jump": {"followed": followed, "jump_shown": jump_shown, "kept_place": kept_place,
                   "unseen_text": unseen_text, "back_down": back_down},
+    "toast": toast,
 }
 (out / "panel-verified.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 QtCore.QTimer.singleShot(0, QtGui.QApplication.quit)

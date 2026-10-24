@@ -24,7 +24,7 @@
 
 param(
   [string]$Data = "$env:USERPROFILE\Documents\Projects\cadswarm-demo",
-  [string]$Db = "cadswarm-calhacks-ca8c",
+  [string]$Db = "cadswarm-calhacks-0180",
   [string]$Python = "",
   [ValidateSet("claude","codex","droid")][string]$Agent = "claude",
   [string[]]$AgentCommand = @(),

@@ -391,7 +391,7 @@ powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --da
 
 `-EnvFile <path>` or `CADSWARM_ENV_FILE` picks a specific file. `.env.example` lists every variable:
 Elastic (`ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` for board knowledge and design memory),
-Factory's reviewer (`FACTORY_API_KEY`), the optional Cartesia voice key, agent API-key fallbacks, and
+Factory's reviewer (`FACTORY_API_KEY`), agent API-key fallbacks, and
 developer overrides. SpacetimeDB publishing uses the CLI's stored login (`spacetime login`), not an
 environment variable.
 

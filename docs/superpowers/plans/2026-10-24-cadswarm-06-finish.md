@@ -9,7 +9,7 @@
 
 **Goal:** Merge everything that's built, fix the known bugs, prove the phone brief end to end (M2)
 on Maincloud, make the demo one command to start, then submit on Devpost with a recorded video and a
-printed part. Local-mode reach and voice come after that, and only if time is left.
+printed part. Local-mode reach comes after that, and only if time is left.
 
 **State at the time of writing (Sat 2026-10-24):**
 - `main` = `f648109`. It has the module (SpacetimeDB 2.13.0), host executor and brief orchestration,
@@ -88,7 +88,6 @@ printed part. Local-mode reach and voice come after that, and only if time is le
 | 6 | T6 Teammate branches merged | Sat 20:00 | freeze |
 | 7 | T7 Submission: README, Devpost, video, print, booths | Sun 08:30 | — |
 | 8 | T8 Local-mode gateway behind one quick tunnel (P2) | only if T1–T6 are done by Sat 22:00 | — |
-| 9 | T9 Voice with Creao + Cartesia (stretch) | only if Creao confirms and T8 is done or skipped | — |
 
 Out of scope for this event (state it in the Devpost "what's next"): iroh transport for laptops,
 `cadswarm-host tunnel` client mode, the build123d and Onshape backends.
@@ -389,7 +388,6 @@ If a step fails, the director files it as a bug task in this plan (T5-fix-N) wit
 
 #### T7e: Booth confirmations (people), then update the plan
 - [ ] Elastic: does the prize require agents to reach `cadswarm-board-expert` over Agent Builder's MCP endpoint? If yes, add the Agent Builder MCP server to the agent config that `cadswarm setup` writes (follow-up task T7e-1).
-- [ ] Creao: does a Creao-built voice pipeline count as core work? This gates T9.
 - [ ] Spacetime / Factory: confirm the eligibility rules match the README sections.
 
 **Acceptance:** Devpost submitted by Sun 08:30 PT with video, repo link, track write-ups and photos.
@@ -471,30 +469,6 @@ Wiring:
 - `init` in local mode must put the **tunnel URL** in tickets as `uri` (new optional `--public-uri` flag stored in host.json as `public_uri`; `mint_invite` uses `public_uri` when set, else `uri`).
 
 Acceptance: with `-Mode local`, a phone on cellular pairs through the one tunnel URL and sees the model; `curl -X POST <tunnel>/v1/database/cadswarm` returns 403.
-
----
-
-### T9 (stretch): Voice with Creao + Cartesia
-
-Gate: Creao confirms at the booth (T7e), T1–T7 are done, and T8 is done or explicitly skipped.
-
-Contract our side provides, so the Creao-built pipeline only has to wire voice to it:
-- **Where it runs:** in the phone web app, a "Talk" button on the Build tab.
-- **Session:** the web app opens a Cartesia Managed Agent session with a short-lived access token (≤ 3600 s, grants `{agent: true}`). The token is minted on the **host machine**, where the Cartesia key lives, by a new `cadswarm-host voice-token` command. demo-up appends it to the phone link as `#vt=<token>`, kept only in memory, never stored.
-- **Client tools** (`client_tool_call` → the web app runs them through `api.ts` → `client_tool_result`):
-
-  | Tool | Arguments | Effect |
-  |---|---|---|
-  | `submit_brief` | `{text, board}` | `api.submitBrief` |
-  | `brief_status` | `{}` | latest brief status, tasks done/total, last 3 activity lines |
-  | `read_param` | `{alias}` | from the store |
-  | `set_param` | `{alias, value}` | `api.setParam` |
-  | `steer` | `{to, text}` | `send_message` with kind `steer` |
-  | `hand_off` | `{note}` | `api.requestHandoff(note, 'now')` |
-
-- **Spoken reads:** the agent reads measurements from `read_param` / `brief_status`. Speech can't be injected into a call, so all speech is the agent's reply to a tool result.
-
-The Creao agent builds the UI and pipeline against this contract. The director reviews the PR like any other.
 
 ---
 
