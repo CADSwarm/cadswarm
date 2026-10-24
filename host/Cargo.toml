@@ -8,7 +8,7 @@ anyhow = "1.0.104"
 base64 = "0.23.1"
 clap = { version = "4.6.7", features = ["derive"] }
 data-encoding = "2.11.1"
-getrandom = "0.2"
+getrandom = "0.4"
 hex = "0.4.3"
 qrcode = "0.14.1"
 serde = { version = "1.0.229", features = ["derive"] }

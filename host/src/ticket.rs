@@ -17,7 +17,7 @@ pub struct Ticket {
 
 pub fn new_token() -> String {
     let mut b = [0u8; 32];
-    getrandom::getrandom(&mut b).expect("system rng");
+    getrandom::fill(&mut b).expect("system rng");
     hex::encode(b)
 }
 
