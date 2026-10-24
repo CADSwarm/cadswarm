@@ -2,6 +2,7 @@ import type { Brief, Review, State, Store } from '../store';
 import type { Api } from '../api';
 import { memberColor } from '../color';
 import { mountBrief } from './brief';
+import { mountHandoff } from './handoff';
 import { mountParams } from './params';
 import { esc } from './esc';
 
@@ -58,6 +59,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null) {
     </nav>
     <div class="tab" id="tab-build" data-tab="build" role="tabpanel">
       <section id="status" class="card status-card" aria-live="polite"></section>
+      <section id="handoff"></section>
       <section id="brief"></section>
       <h2>Dimensions</h2><section id="params"></section>
       <h2>Team</h2><ul id="team" class="team"></ul>
@@ -69,6 +71,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null) {
 
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   mountBrief($('#brief'), api, store.state.briefs.length === 0);
+  mountHandoff($('#handoff'), store, api);
   mountParams($('#params'), store, api);
 
   // Tabs (phones only; wide screens show every section stacked).
