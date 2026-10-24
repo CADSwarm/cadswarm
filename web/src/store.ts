@@ -46,6 +46,8 @@ export class Store {
   holderOf(object: string) { const l = this.state.locks.find(x => x.object === object); return l ? this.member(l.holder) : undefined; }
   /** Pointers of live members that are not idle. */
   activePointers() {
-    return this.state.pointers.filter(p => p.mode !== 'idle' && this.member(p.member)?.status === 'active');
+    return this.state.pointers.filter(p =>
+      p.mode !== 'idle' && (p.object !== '' || p.point.length === 3) &&
+      this.member(p.member)?.status === 'active');
   }
 }

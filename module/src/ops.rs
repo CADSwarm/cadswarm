@@ -100,7 +100,8 @@ pub fn complete_op(
     let now = now_ms(ctx);
     let (ws, by) = (op.ws, op.by);
     let actor = name_of(ctx, by);
-    set_pointer(ctx, ws, by, "", vec![], "pointing", "", "");
+    // The op is finished: rest the pointer; the agent's next tool call moves it again.
+    set_pointer(ctx, ws, by, "", vec![], "idle", "", "");
 
     if !ok {
         let status = if error_code == "lock_violation" { "rejected" } else { "failed" };

@@ -125,10 +125,8 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
         activity: say(2, 'exported model-12.stl', 'tool_result'),
       });
     } else {
-      // Keep the scene alive: agents polish parts in turn.
-      const i = (step - n - 5) % n;
-      build(i, (store.state.objects.find(o => o.name === parts[i][0])?.rev ?? 1) + 1);
-      store.set({ tasks: store.state.tasks.map(t => ({ ...t, status: 'done' })) });
+      // The brief is ready: agents are done, so nobody edits or points any more. Keep only a quiet heartbeat.
+      store.set({ pointers: store.state.pointers.map(p => ({ ...p, mode: 'idle' })) });
     }
     step++;
   }
