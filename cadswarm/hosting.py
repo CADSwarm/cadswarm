@@ -572,7 +572,7 @@ def _command_line(pid):
             ps = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"
             cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
         else:
-            cmd = ["ps", "-p", str(int(pid)), "-o", "command="]
+            cmd = ["ps", "-ww", "-p", str(int(pid)), "-o", "command="]  # -ww: piped ps cuts lines at 80 columns
         return subprocess.run(cmd, capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return ""
