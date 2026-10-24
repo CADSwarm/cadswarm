@@ -36,6 +36,7 @@ Spec: `docs/superpowers/specs/2026-10-23-cadswarm-spacetime-design.md`.
 | **A** | `2026-10-23-cadswarm-01-module.md` | `rules/`, `module/`, publishing, generated bindings, smoke tests, Maincloud deploy | Everything: A is the critical path for the first 3 hours |
 | **B** | `2026-10-23-cadswarm-02-host.md` | `host/` (Rust): worker driver, executor, previews, exports, brief orchestration, agent spawning | The FreeCAD worker driver (needs no SpacetimeDB) |
 | **C** | `2026-10-23-cadswarm-03-python.md` | `cadswarm/` (Python): SpaceClient, ticket, setup, the hub-compatible adapter, MCP and hook port, new worker queries, board library, Droid reviewer | SpaceClient and ticket code against a fake HTTP server; worker `mesh` and `printability` queries |
+| **A after M0** (or whoever is free) | `2026-10-23-cadswarm-05-elastic.md` | Elastic Serverless setup, datasheet ingestion, Agent Builder board expert, lessons Workflow, the host's Python helper process, wiring into briefs and agents | Task 1 needs only an Elastic sign-up, so it can start any time |
 | **D** | `2026-10-23-cadswarm-04-web.md` | `web/`: pairing, live panels, three.js viewer, pointer animation, params, STL download | The viewer and pointer animation against a mock store |
 
 Branch per person (`feat/module`, `feat/host`, `feat/python`, `feat/web`), small PRs into `main`, rebase often. Only person A edits `rules/` and `module/`; contract changes go through A and get a line in the "Contract changes" log at the bottom of this file.
