@@ -9,12 +9,17 @@ Devpost's field limits (the sections below are sized for the "built with a story
   The guide's `releases/latest/download` URLs and the release assets only work unauthenticated on a
   public repository.
 - [ ] Web link: enable GitHub Pages with source "GitHub Actions" (private repos need a paid plan), or
-  deploy `web/dist` to Vercel/Netlify and use that URL.
+  deploy `web/dist` to Vercel/Netlify production and use that URL. The Vercel project linked to this
+  repo deploys pull requests as previews, but they are behind Vercel Authentication, so a preview
+  link will not work for judges.
 - [ ] Video: record the 2:45 demo using the beats below and upload it; paste the URL under "Try it
   out".
 - [ ] Fill in the team list and the three `[TBD]` links.
-- [ ] Verify the release: `v0.1.0` assets exist (five host platforms, `cadswarm_module.wasm`,
-  `SHA256SUMS.txt`) and a fresh install downloads and checks them.
+- [x] Verify the release: `v0.1.0` published by run 40078446476 with all five host platforms,
+  `cadswarm_module.wasm` and `SHA256SUMS.txt`. Checked on 2026-10-24: the downloaded assets match
+  the checksums, the release wasm publishes to Maincloud, and the released Windows host ran the
+  FreeCAD 1.1.4 worker through a human join, lock, box (1440 mm3), printability, STL export and
+  `model.FCStd` save.
 
 ## Project name
 
