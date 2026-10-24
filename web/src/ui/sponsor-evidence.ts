@@ -2,9 +2,8 @@
  * A stamped snapshot of the outside services, taken from the live deployment.
  *
  * The sponsors panel shows this beside the live trace so nobody mistakes a checked number for a
- * live one. Regenerate it with:
- *
- *   python -m cadswarm.sponsor_evidence      (writes this file)
+ * live one. There is no generator: stamp it by hand from an Elastic query for the index counts
+ * and `droid --version` for the CLI versions, then update `checkedAt`.
  */
 export const SPONSOR_EVIDENCE = {
   checkedAt: '2026-10-24T20:35:00Z',

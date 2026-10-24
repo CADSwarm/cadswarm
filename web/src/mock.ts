@@ -115,7 +115,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       store.set({
         briefs: brief('planning'),
         tasks: parts.map(([name], i) => ({ id: `t_mock000${i}`, title: `Model the ${name}`, status: 'open', owner: 0,
-          assignee: members[workerOf(i) - 1].name, brief: briefId, objects: [name] })),
+          assignee: members[workerOf(i) - 1].name, brief: briefId, objects: [name], createdBy: 2 })),
         pointers: [{ member: 2, object: '', point: [35, 16, 30], mode: 'pointing', label: 'planning', op: '', seq: seq++, atMs: Date.now() }],
         activity: say(2, `planned ${n} tasks`, 'say'),
       });

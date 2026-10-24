@@ -9,7 +9,8 @@ const base = {
   objects: [{ name: 'Base' }, { name: 'Lid' }, { name: 'Params' }],
   params: [{ alias: 'wall' }],
   locks: [{ object: 'Params', holder: 1 }],
-  tasks: [{ id: 't_1', status: 'open' }, { id: 't_2', status: 'done' }],
+  tasks: [{ id: 't_1', status: 'open', createdBy: 5 }, { id: 't_2', status: 'done', createdBy: 5 },
+    { id: 't_3', status: 'done', createdBy: 5 }, { id: 't_4', status: 'done', createdBy: 1 }],
   ops: [{ id: 'o_1', status: 'done' }, { id: 'o_2', status: 'queued' }],
   activity: [
     { id: 1, member: 1, kind: 'say', summary: 'submitted a brief', atMs: 1 },
@@ -62,7 +63,7 @@ describe('sponsors panel', () => {
     const factory = sponsorCards(base, 'cadswarm-demo').find(c => c.id === 'factory')!;
     expect(factory.facts).toContainEqual(['agent', 'reviewer · droid · left']);
     expect(factory.facts).toContainEqual(['last review', 'round 2 · 2 findings']);
-    expect(factory.facts).toContainEqual(['tasks filed', '2']);
+    expect(factory.facts).toContainEqual(['tasks filed', '3']);
     expect(factory.trace).toEqual(['cadswarm.model_status', 'cadswarm.create_task', 'cadswarm.create_task']);
     expect(factory.list?.rows[0]).toContain('the wall is 1.1 mm');
   });

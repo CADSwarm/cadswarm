@@ -3,7 +3,7 @@ export interface Member { id: number; name: string; kind: string; client: string
 export interface Lock { object: string; holder: number }
 export interface Obj { name: string; label: string; typeId: string; rev: number; bbox: number[]; volume: number; visible: boolean; broken: boolean; usedBy: string[]; lastActor: number }
 export interface Param { alias: string; value: string; num: number }
-export interface Task { id: string; title: string; status: string; owner: number; assignee: string; brief: string; objects: string[] }
+export interface Task { id: string; title: string; status: string; owner: number; assignee: string; brief: string; objects: string[]; createdBy: number }
 export interface Activity { id: number; member: number; kind: string; summary: string; atMs: number }
 export interface Pointer { member: number; object: string; point: number[]; mode: string; label: string; op: string; seq: number; atMs: number }
 export interface Brief { id: string; by: number; text: string; board: string; status: string; planJson: string; stlHash: string; updatedMs: number }

@@ -57,7 +57,8 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
   const findings = parseFindings(review);
   const reviewer = s.members.find(m => m.kind === 'reviewer');
   const trace = reviewer ? s.activity.filter(a => a.member === reviewer.id) : [];
-  const filed = trace.filter(a => a.summary.includes('create_task')).length;
+  // Same rule as the FreeCAD tab: tasks the reviewer filed, not the tool calls it made.
+  const filed = reviewer ? s.tasks.filter(t => t.createdBy === reviewer.id).length : 0;
   const parts = s.objects.filter(o => o.name !== 'Params').length;
   // Params is the shared spreadsheet, not a part, and its lock is not a held part (same as the FreeCAD panel).
   const held = s.locks.filter(l => l.object !== 'Params').length;

@@ -116,6 +116,7 @@ export const toObj = (r: Infer<typeof VObjectRow>): Obj => ({
 });
 export const toTask = (r: Infer<typeof VTaskRow>): Task => ({
   id: r.id, title: r.title, status: r.status, owner: num(r.owner), assignee: r.assignee, brief: r.brief, objects: [...r.objects],
+  createdBy: num(r.createdBy),
 });
 export const toActivity = (r: Infer<typeof VActivityRow>): Activity => ({
   id: num(r.id), member: num(r.member), kind: r.kind, summary: r.summary, atMs: num(r.atMs),
