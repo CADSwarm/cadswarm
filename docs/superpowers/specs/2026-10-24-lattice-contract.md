@@ -1,5 +1,10 @@
 # CadSwarm lattice contract (v1, proposed)
 
+> **Implementation note (2026-10-24).** Implemented by plan 07. Differences from this proposal: apply creates a
+> `Mesh::Feature` (not a `Part::Feature`); the request adds `grading`, `stiffness_target`, `fea_job_id`/`fixed`/
+> `loads`, `auto_skin`; results carry `verify`; tools are `lighten_part`, `lattice_status`, `lattice_apply`,
+> `lattice_cancel`, `lattice_cells`, `lattice_estimate`. See `docs/lattice/`.
+
 **Status:** proposed contract for implementation. No code exists yet.  
 **Applies to:** the current FastAPI/SQLite hub and, when it lands, the SpacetimeDB host.  
 **Related documents:** [evidence dossier](../research/2026-10-24-implicit-build-evidence.md),

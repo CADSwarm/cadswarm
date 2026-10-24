@@ -14,6 +14,8 @@ pub const MUTATING: &[&str] = &[
     "set_expression", "set_placement", "delete", "set_param", "run_part_script",
     // Components library: place a library part or a generated standard part into the model.
     "insert_component", "insert_standard_part",
+    // A mesh from project files (a lattice from lighten_part) as a Mesh::Feature.
+    "insert_mesh",
 ];
 /// Read-only ops the host answers: FreeCAD queries, Elastic lookups, project file reads.
 pub const QUERIES: &[&str] = &[
@@ -22,6 +24,9 @@ pub const QUERIES: &[&str] = &[
     "list_files", "read_file", "file_history",
     "brep", "storage_status",
     "faces", "fea_status", "fea_reports",
+    // Lighten jobs: reading their state and the cell library (the host's helper, lattice_jobs.py).
+    "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_status", "lattice_list",
+    "lattice_result",
     // Components library reads (the host's helper; analyze_component is a FreeCAD query).
     "library_search", "library_recommend", "library_get", "library_export_pack", "standard_parts",
     "analyze_component", "suggest_settings",
@@ -33,6 +38,8 @@ pub const FILE_WRITES: &[&str] = &[
     "save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage",
     // FEA: a job copies the model and later writes its report into files/fea/.
     "fea_run", "fea_publish",
+    // Lighten: a job copies the model and later writes its lattice into files/lattice/.
+    "lattice_start", "lattice_cancel",
     // Components library: files under library/ on the host, mirrored into the `component` table.
     "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
     // Style rules live in the host's project database: teaching, confirming and re-learning change them.
@@ -40,7 +47,8 @@ pub const FILE_WRITES: &[&str] = &[
 ];
 /// Team events a completed (non-mutating) op may carry in its result as `_events` for complete_op to emit:
 /// the host's helper can't call reducers, and an FEA report must pop up for every member.
-pub const RESULT_EVENTS: &[&str] = &["fea_started", "fea_progress", "fea_report", "fea_failed"];
+pub const RESULT_EVENTS: &[&str] = &["fea_started", "fea_progress", "fea_report", "fea_failed",
+    "lattice_started", "lattice_progress", "lattice_report", "lattice_failed"];
 pub const MAX_RESULT_EVENTS: usize = 10;
 
 pub fn is_result_event(kind: &str) -> bool { RESULT_EVENTS.contains(&kind) }
@@ -97,7 +105,7 @@ fn targets(kind: &str) -> &'static [&'static str] {
 pub fn created_name(kind: &str, args: &Value) -> Option<String> {
     match kind {
         "create_primitive" | "create_extrusion" | "boolean" | "run_part_script" | "insert_component"
-        | "insert_standard_part" => str_arg(args, "name"),
+        | "insert_standard_part" | "insert_mesh" => str_arg(args, "name"),
         _ => None,
     }
 }
@@ -617,6 +625,19 @@ mod tests {
     }
 
     #[test]
+    fn lighten_jobs_are_helper_reads_and_writes_and_a_mesh_insert_is_a_locked_change() {
+        for k in ["lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_status", "lattice_list",
+                  "lattice_result"] {
+            assert!(is_query(k) && !is_write(k), "{k}");
+        }
+        assert!(is_file_write("lattice_start") && is_file_write("lattice_cancel") && !is_mutating("lattice_start"));
+        assert!(is_mutating("insert_mesh"));
+        assert_eq!(created_name("insert_mesh", &json!({"name": "Bracket_lattice"})), Some("Bracket_lattice".into()));
+        let r = json!({"_events": [{"kind": "lattice_report", "data": {"job_id": "lj_1"}}]});
+        assert_eq!(result_events(&r), vec![("lattice_report".to_string(), json!({"job_id": "lj_1"}))]);
+    }
+
+    #[test]
     fn reading_the_team_style_is_a_query_and_changing_it_is_a_write() {
         for k in ["style_context", "list_style", "teach_style", "resolve_style", "learn_style"] {
             assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
@@ -848,7 +869,8 @@ mod tests {
         assert!(result_events(&json!({"ok": true})).is_empty());
         let many = json!({"_events": (0..20).map(|i| json!({"kind": "fea_progress", "data": {"i": i}})).collect::<Vec<_>>()});
         assert_eq!(result_events(&many).len(), MAX_RESULT_EVENTS);
-    }
+    }
+
 
     #[test]
     fn a_rename_needs_a_valid_name_nobody_else_holds() {

@@ -136,6 +136,12 @@ def save():
 # Fingerprints: what counts as "this op changed that object"
 # --------------------------------------------------------------------------
 
+def mesh_sig(mesh):
+    bb = mesh.BoundBox
+    return (mesh.CountPoints, mesh.CountFacets, round(mesh.Volume, 3),
+            tuple(round(v, 4) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)))
+
+
 def shape_sig(shape):
     if shape is None or shape.isNull():
         return None
@@ -152,6 +158,8 @@ def value_repr(v):
         return "[" + ",".join(value_repr(x) for x in v) + "]"
     if isinstance(v, Part.Shape):
         return repr(shape_sig(v))
+    if hasattr(v, "CountFacets") and hasattr(v, "Topology"):  # a Mesh.Mesh: never print its triangles
+        return repr(mesh_sig(v))
     text = repr(v)
     if ADDRESS.search(text):
         # e.g. ShapeMaterial reprs as '<Material at 0000029A...>' and gets a new
@@ -190,6 +198,8 @@ def primary_fp(obj):
         parts.append(("Shape", repr(shape_sig(obj.Shape))))
     if obj.TypeId == "Spreadsheet::Sheet":
         parts.append(("cells", repr(sheet_contents(obj))))
+    if obj.TypeId.startswith("Mesh::") and hasattr(obj, "Mesh"):
+        parts.append(("Mesh", repr(mesh_sig(obj.Mesh))))
     return repr(parts)
 
 
@@ -633,6 +643,45 @@ def op_insert_standard_part(a):
     return {"name": obj.Name, "label": obj.Label, "volume": round(solid.Volume, 3)}
 
 
+def project_file(rel):
+    """Absolute path of a project file (files/<rel>), refusing anything outside files/."""
+    if not isinstance(rel, str) or not rel.strip():
+        raise OpError("bad_args", "file must be a project file path, e.g. 'lattice/.../result.stl'")
+    base = os.path.realpath(os.path.join(os.path.dirname(DOC_PATH), "files"))
+    rel = rel.replace("\\", "/").lstrip("/")
+    if rel.startswith("files/"):
+        rel = rel[len("files/"):]
+    path = os.path.realpath(os.path.join(base, rel))
+    if os.path.commonpath([base, path]) != base:
+        raise OpError("bad_args", "file must be inside the project's files folder")
+    if not os.path.isfile(path):
+        raise OpError("not_found", f"No project file {rel}")
+    return path
+
+
+def op_insert_mesh(a):
+    """{"name", "file", "label"?, "source"?} -> a Mesh::Feature (e.g. a lattice) from an STL in project files.
+
+    A lattice has millions of triangles, too many for a B-rep solid; a mesh object shows it, measures it and
+    exports it. The original part is left as it was."""
+    import Mesh
+    name = new_name(a.get("name"))
+    path = project_file(a.get("file"))
+    mesh = Mesh.Mesh(path)
+    if mesh.CountFacets == 0:
+        raise OpError("bad_args", f"{a.get('file')} has no triangles")
+    if not mesh.isSolid():
+        raise OpError("not_solid", f"{a.get('file')} is not a closed mesh; it was not added")
+    obj = doc.addObject("Mesh::Feature", name)
+    obj.Mesh = mesh
+    obj.Label = str(a.get("label") or name)
+    obj.addProperty("App::PropertyString", "CadSwarmSource", "CadSwarm", "What this mesh was made from")
+    obj.CadSwarmSource = json.dumps({"file": a.get("file"), "source": a.get("source"), "job": a.get("job")})
+    bb = mesh.BoundBox
+    return {"name": obj.Name, "triangles": mesh.CountFacets, "volume_mm3": round(mesh.Volume, 3),
+            "size": [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]}
+
+
 MUTATIONS = {
     "create_primitive": op_create_primitive,
     "create_extrusion": op_create_extrusion,
@@ -646,6 +695,7 @@ MUTATIONS = {
     "run_part_script": op_run_part_script,
     "insert_component": op_insert_component,
     "insert_standard_part": op_insert_standard_part,
+    "insert_mesh": op_insert_mesh,
 }
 
 
@@ -750,6 +800,11 @@ def obj_summary(o):
         anchor = anchor_of(shape)
         if anchor:
             info["anchor"] = anchor
+    elif o.TypeId.startswith("Mesh::") and hasattr(o, "Mesh") and o.Mesh.CountFacets:
+        bb = o.Mesh.BoundBox
+        info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
+        info["volume"] = round(o.Mesh.Volume, 3)
+        info["triangles"] = o.Mesh.CountFacets
     return info
 
 
@@ -871,6 +926,26 @@ def q_faces(a):
     return out
 
 
+def _mesh_stl(o, budget):
+    """Binary STL of a mesh object, decimated until it fits the preview budget."""
+    m = o.Mesh.copy()
+    for _ in range(8):
+        size = 84 + 50 * m.CountFacets
+        if size <= budget or m.CountFacets < 200:
+            break
+        try:
+            m.decimate(0.05, min(0.9, 1 - budget / size))
+        except Exception:
+            break
+    tris = []
+    for f in m.Facets:
+        tris.append(f.Points)
+    out = bytearray(80) + struct.pack("<I", len(tris))
+    for p in tris:
+        out += struct.pack("<12fH", 0, 0, 0, *p[0], *p[1], *p[2], 0)
+    return bytes(out)
+
+
 def _solid_shape(o):
     shape = getattr(o, "Shape", None) if o is not None else None
     if shape is None or shape.isNull() or not shape.Faces:
@@ -898,7 +973,11 @@ def q_mesh(a):
     budget = int(a.get("max_bytes") or 200_000)
     out = {}
     for name in a.get("names") or [o.Name for o in doc.Objects]:
-        shape = _solid_shape(doc.getObject(name))
+        obj = doc.getObject(name)
+        if obj is not None and obj.TypeId.startswith("Mesh::") and hasattr(obj, "Mesh"):
+            out[name] = base64.b64encode(_mesh_stl(obj, budget)).decode()
+            continue
+        shape = _solid_shape(obj)
         if shape is None:
             continue
         t, data = tol, stl_bytes(shape, tol)

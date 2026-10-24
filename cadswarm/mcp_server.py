@@ -88,6 +88,18 @@ Work like a careful teammate:
    your context. Follow it. Before modelling a new kind of part, call team_style(topic=...) for the rules that
    apply. A [confirmed] rule is the team's decision: never go against it without asking your person. When your
    person states a lasting preference ("we always use 2.4 mm walls"), propose it with teach_style.
+14. Lighten without losing stiffness (lighten_part). SUGGEST IT when your person wants a part lighter, cheaper,
+   faster to print or with less material ("make it lighter", "save weight", "infill", "lattice"), when an FEA
+   report shows a high safety factor (the part is over-built), and for drones, robots, brackets, mounts,
+   prosthetics and anything 3D printed in metal or plastic. It fills the inside with a lattice that is thicker
+   where the stress is high, keeps a solid skin and solid zones at supports and loads, and checks that the part
+   keeps the stiffness you ask for (default 90 %) by simulating the real lattice. Before running, ask in ONE
+   message: how the part is held and loaded (or reuse a finished static FEA with fea_job_id), the material,
+   and how it will be made (powder/resin printing needs open_faces so powder can drain). Not sure which cell?
+   lattice_cells ranks them. It runs in the background: poll lattice_status. Then tell your person the weight
+   saving and the VERIFIED stiffness, read out any warnings, and only with their OK call lattice_apply (it adds
+   a mesh next to the original, which stays unchanged). If no design meets the target, say so and pass on the
+   suggestions in the notes. Never present it as certification; printed parts still need testing.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 
@@ -519,6 +531,77 @@ def style_rules() -> dict:
     """Every learned style rule with its evidence and status (confirmed, active, or a candidate awaiting a person).
     A person can confirm or dismiss candidates in the CADSwarm panel (Learned style)."""
     return call("POST", "/style/rules", {})
+
+
+# ------------------------------------------------- lighten without losing stiffness
+
+LATTICE_WAIT = 45  # seconds a call waits for the job; keeps tool calls under the CLIs' timeouts
+
+
+@mcp.tool()
+def lighten_part(target: str, stiffness_target_pct: float = 90, cell: str = "gyroid",
+                 fea_job_id: str | None = None, fixed: list[str] | None = None, loads: list[dict] | None = None,
+                 material: str | dict | None = None, cell_size_mm: float | None = None,
+                 min_thickness_mm: float | None = None, max_thickness_mm: float | None = None,
+                 skin_mm: float | None = None, open_faces: list[str] | None = None, voxel_mm: float | None = None,
+                 name: str | None = None, grading: str = "stress", thickness_mm: float | None = None) -> dict:
+    """Lighten a part without losing stiffness: fill its inside with a lattice that is thicker where the stress
+    is high, then verify on the real lattice that it keeps `stiffness_target_pct` % of the solid part's
+    stiffness. Works on a copy; the model only changes when you call lattice_apply.
+    Load case, like run_fea: reuse a finished static FEA (`fea_job_id`) or give `fixed` (face selectors) and
+    `loads` ([{"type": "force", "faces": ["xmax"], "newtons": 200, "direction": [0, 0, -1]}], pressure, gravity)
+    and `material` (preset or dict). With no load case use grading="uniform" and thickness_mm: an unverified
+    uniform lattice.
+    cell: gyroid (default, prints without supports), diamond or iwp (stiffest TPMS), schwarzP, octet (stiffest
+    beams), bcc, fcc, cubic. cell_size_mm (default 8), walls between min_thickness_mm (default: the team's
+    min_wall) and max_thickness_mm, skin_mm (default 1.5; thickened automatically if the core alone can't reach
+    the target), open_faces like ["+z", "-z"] for powder/resin drainage, voxel_mm (build resolution).
+    Returns job status; if not done, call lattice_status(job_id, wait=45)."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/lattice/jobs", {**body, "wait": LATTICE_WAIT}, doing=f"lightening {target}",
+                targets=[target])
+
+
+@mcp.tool()
+def lattice_status(job_id: str, wait: int = LATTICE_WAIT) -> dict:
+    """A lighten job's progress, or its result: weight saving, verified stiffness, wall range, warnings,
+    files (STL, 3MF, report) and the next step. wait: seconds to wait for it to finish (max 55)."""
+    return call("GET", f"/lattice/jobs/{job_id}", wait=min(int(wait or 0), 55))
+
+
+@mcp.tool()
+def lattice_apply(job_id: str, name: str | None = None, force: bool = False) -> dict:
+    """Add a finished lattice to the shared model as a mesh object next to its source part (unchanged).
+    Refused with stale_source if the part changed since the job started (force adds it anyway). Ask your
+    person first."""
+    return call("POST", f"/lattice/jobs/{job_id}/apply", {"name": name, "force": force},
+                doing="adding the lattice to the model")
+
+
+@mcp.tool()
+def lattice_cancel(job_id: str) -> dict:
+    """Stop a lighten job (yours; a person can stop anyone's)."""
+    return call("POST", f"/lattice/jobs/{job_id}/cancel", {})
+
+
+@mcp.tool()
+def lattice_cells(target: str = "stiffness", value: float | None = None, cell_size_mm: float = 8,
+                  min_wall_mm: float | None = None, youngs_mpa: float | None = None) -> dict:
+    """Which lattice cell to use: every cell's wall thickness and density for a target, lightest first.
+    target "stiffness": value is the lattice's stiffness relative to solid (0.1 = 10 %; or MPa with youngs_mpa).
+    target "density": value is the solid fraction (0.3 = 30 %). From CadSwarm's simulated cell map."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/lattice/cells", body)
+
+
+@mcp.tool()
+def lattice_estimate(target: str, cell: str = "gyroid", cell_size_mm: float | None = None,
+                     min_thickness_mm: float | None = None, skin_mm: float | None = None,
+                     open_faces: list[str] | None = None, voxel_mm: float | None = None) -> dict:
+    """Check a lighten request before running it: the normalized recipe, warnings (thin walls, trapped powder,
+    closing channels, too few voxels) and a rough time. Changes nothing."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/lattice/estimate", body)
 
 
 # --------------------------------------------------- components library & settings

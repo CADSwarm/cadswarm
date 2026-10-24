@@ -213,6 +213,18 @@ lists past reports. If a helper forgets to publish, the hub publishes the automa
 
 FEA here is a design aid for linear-elastic behaviour with idealised supports, not a certification.
 
+### Lighten without losing stiffness
+
+**Lighten part…** (the CadSwarm panel's Tools tab, the CadSwarm menu, and the CADSwarm Optimization workbench without a
+team) fills a part with a lattice that is thicker where the stress is high, keeps a solid skin and solid zones
+where it is held and loaded, and checks, by simulating the real lattice, that it keeps the stiffness you ask
+for (90 % by default). Pick the faces it is held by and loaded on, the material and how it is made; you get
+the weight saving, the verified stiffness, a preview you can cut open, and STL, 3MF and a report in
+`files/lattice/`. **Add to model** puts the lattice next to the original as a mesh; the original is never
+changed. AI helpers use `lighten_part` and suggest it when a part could be lighter, including when an FEA
+report shows strength to spare. Everything runs on the hosting computer in FreeCAD's own Python. It is a
+design aid, not a certification. See [docs/lattice](docs/lattice/README.md).
+
 ### Components library and precision settings
 
 The **Library** tab (Team panel in FreeCAD, and the web app) is the team's parts shelf, like Onshape's:
@@ -369,6 +381,11 @@ A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_C
 
 ## For developers: command line
 
+> **Updating the team database.** After any change to `module/` or `rules/` (new op kinds such as the
+> lighten and style tools), the SpacetimeDB module must be republished, keeping the data, and the host
+> restarted. Step-by-step guide, including owner sign-in, bindings, a local rehearsal and troubleshooting:
+> [docs/publishing-spacetimedb.md](docs/publishing-spacetimedb.md).
+
 The guide wraps these commands; they still work for scripting and CI.
 
 Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to its
@@ -472,6 +489,7 @@ through the MCP tools instead.
   `delete_object`, `set_param`, `run_part_script`
 - **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
 - **Simulation (FEA):** `list_faces`, `run_fea` (static / modal / thermal), `fea_status`, `publish_fea_report`
+- **Lighten:** `lighten_part`, `lattice_status`, `lattice_apply`, `lattice_cancel`, `lattice_cells`, `lattice_estimate`
 - **Components library:** `search_components`, `recommend_components`, `get_component`, `insert_component`,
   `add_standard_part`, `hole_size`, `import_component_from_url`, `add_component_from_file`
 - **Team settings:** `get_settings`, `suggest_setting` (people accept suggestions; helpers never change settings)

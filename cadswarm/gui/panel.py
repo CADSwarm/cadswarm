@@ -29,7 +29,7 @@ from ..client import HubRequestError, load_json, save_json
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, overlay, sponsors as sponsors_ui, style_ui
+from . import library_ui, lighten_ui, overlay, sponsors as sponsors_ui, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -847,7 +847,9 @@ class TeamPanel(QtGui.QDockWidget):
                 ("Build", (("✎ Edit a part yourself…", "Change a part by hand and share the change", edit_part),
                            ("Change a shared size…", "Change a size every part reads from", self.set_param),
                            ("Check for clashes", "Find parts that overlap", run_interference),
-                           ("Save as 3D file (STEP)…", "Save the shared model as a STEP file", run_export))),
+                           ("Save as 3D file (STEP)…", "Save the shared model as a STEP file", run_export),
+                           ("Lighten part…", "Fill the selected part with a lattice that keeps its stiffness",
+                            lighten_ui.show_lighten))),
                 ("Print", (("Printer bed…", "Tell the team what printer you print on", printer_bed),
                            ("Check it fits the printer…", "Check the parts fit the bed, are closed solids and have "
                             "printable walls", check_printability))),

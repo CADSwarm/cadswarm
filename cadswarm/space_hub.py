@@ -122,6 +122,13 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/fea/faces", self.fea_faces), ("POST", r"/fea/run", self.fea_run),
             ("GET", r"/fea/jobs/(?P<jid>[^/]+)", self.fea_job), ("POST", r"/fea/jobs/(?P<jid>[^/]+)/publish", self.fea_publish),
             ("GET", r"/fea/reports", self.fea_reports),
+            # Lighten without losing stiffness: stress-graded lattices (helper ops, cadswarm/lattice_jobs.py).
+            ("GET", r"/lattice/capabilities", self.lattice_capabilities), ("POST", r"/lattice/cells", self.lattice_cells),
+            ("POST", r"/lattice/estimate", self.lattice_estimate), ("POST", r"/lattice/jobs", self.lattice_start),
+            ("GET", r"/lattice/jobs", self.lattice_list),
+            ("GET", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)", self.lattice_job),
+            ("POST", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)/cancel", self.lattice_cancel),
+            ("POST", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)/apply", self.lattice_apply),
             # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
             # The team's learned design style (cadswarm/style_memory.py), kept by the host helper.
@@ -401,6 +408,84 @@ class SpaceHub(LibraryRoutes):
 
     def fea_reports(self):
         return self._fea_op("fea_reports", {})
+
+    # ------------------------------------------------------------------ lattice
+
+    def _target(self, name):
+        obj = {o["name"]: o for o in self._rows("v_object")}.get(name)
+        if obj is None:
+            raise HubRequestError(400, {"error": f"No part named {name!r} in the model (see model_status).",
+                                        "code": "bad_args"})
+        return obj
+
+    def _lattice_args(self, body):
+        args = {k: v for k, v in body.items() if k != "wait"}
+        target = args.get("target") or args.get("source")
+        if not isinstance(target, str):
+            raise HubRequestError(400, {"error": "target must name the part to lighten, e.g. 'Bracket'",
+                                        "code": "bad_args"})
+        obj = self._target(target)
+        args["target"] = target
+        args["revs"] = {target: obj["rev"]}
+        if obj.get("bbox") and len(obj["bbox"]) == 6:
+            args["_bbox"] = list(obj["bbox"])
+        if args.get("min_thickness_mm") is None:  # the team's thinnest printable wall
+            try:
+                from . import settings as team_settings
+                args["min_thickness_mm"] = float(team_settings.effective(self._rows("v_setting"))["min_wall"])
+            except (HubRequestError, KeyError, TypeError, ValueError):
+                pass
+        return args
+
+    def _lattice_op(self, kind, args):
+        r = self.run_op(kind, args)
+        return {k: v for k, v in r.items() if k != "_events"} if isinstance(r, dict) else r
+
+    def _lattice_wait(self, out, wait):
+        """Poll from here (never inside the host, which runs one op at a time) for up to `wait` seconds."""
+        deadline = time.time() + min(float(wait or 0), 55.0)
+        while out.get("status") not in ("done", "failed", "cancelled", "expired") and time.time() < deadline:
+            time.sleep(min(3.0, max(0.0, deadline - time.time())))
+            out = self._lattice_op("lattice_status", {"job_id": out["job_id"]})
+        return out
+
+    def lattice_capabilities(self):
+        return self._lattice_op("lattice_capabilities", {})
+
+    def lattice_cells(self, body):
+        return self._lattice_op("lattice_cells", dict(body or {}))
+
+    def lattice_estimate(self, body):
+        return self._lattice_op("lattice_estimate", self._lattice_args(body))
+
+    def lattice_start(self, body):
+        return self._lattice_wait(self._lattice_op("lattice_start", self._lattice_args(body)), body.get("wait", 0))
+
+    def lattice_list(self, limit=20):
+        return self._lattice_op("lattice_list", {"limit": int(limit)})
+
+    def lattice_job(self, jid, wait=0):
+        return self._lattice_wait(self._lattice_op("lattice_status", {"job_id": jid}), wait)
+
+    def lattice_cancel(self, body, jid):
+        return self._lattice_op("lattice_cancel", {"job_id": jid})
+
+    def lattice_apply(self, body, jid):
+        """Add a finished lattice to the model as a mesh next to its source (which stays as it was)."""
+        r = self._lattice_op("lattice_result", {"job_id": jid})
+        target = r["target"]
+        obj = {o["name"]: o for o in self._rows("v_object")}.get(target)
+        started = (r.get("revs") or {}).get(target)
+        if not body.get("force") and obj is not None and started is not None and obj["rev"] != started:
+            raise HubRequestError(409, {"error": f"{target} changed after the lattice was made (rev {started} -> "
+                                                 f"{obj['rev']}). Run lighten again, or pass force to add it anyway.",
+                                        "code": "stale_source"})
+        name = body.get("name") or r["name"]
+        out = self.run_op("insert_mesh", {"name": name, "file": r["file"], "label": body.get("label") or name,
+                                          "source": target, "job": jid})
+        out.update(job_id=jid, verdict=r.get("verdict"),
+                   note=f"{name} is a mesh next to {target}, which is unchanged. Hide {target} to see it.")
+        return out
 
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})
