@@ -1,10 +1,10 @@
-/* CadSwarm web: the team panel from the site, made real. Dark, flat, monospace for names and numbers.
+/* CADSwarm web: the team panel from the site, made real. Dark, flat, monospace for names and numbers.
    Same tokens as website/index.html so a screenshot of either reads as the same product. */
 :root {
   --bg: #0a0a0a; --surface: #121212; --surface-2: #181818;
   --line: rgba(244, 243, 241, .10); --line-strong: rgba(244, 243, 241, .18);
   --text: #f4f3f1; --body: #d4d2cd; --muted: #8f8d88; --bone: #e8e2d4; --ink-on-light: #0a0a0a;
-  /* owner colours: the same order CadSwarm hands them out in FreeCAD */
+  /* owner colours: the same order CADSwarm hands them out in FreeCAD */
   --own-1: #4c9be0; --own-2: #f0913a; --own-3: #4fb35a; --own-4: #e5534b;
   --ok: #4fb35a; --warn: #e3b341; --err: #e5534b; --refused: #f0a29d;
 

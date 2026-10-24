@@ -56,7 +56,7 @@ describe('sponsors panel', () => {
   it('says so when no reviewer is set up', () => {
     const factory = sponsorCards({ ...(base as object), members: [], activity: [], reviews: [] } as never, '').find(c => c.id === 'factory')!;
     expect(factory.facts).toContainEqual(['agent', 'not set up']);
-    expect(factory.facts).toContainEqual(['last review', '—']);
+    expect(factory.facts).toContainEqual(['last review', 'no review yet']);
     expect(factory.trace).toEqual([]);
   });
 

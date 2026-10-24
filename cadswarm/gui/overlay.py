@@ -1,6 +1,6 @@
 """Agent pointers drawn *inside* FreeCAD's 3D view.
 
-The team panel already mirrors the shared model in the read-only "CadSwarm Live"
+The team panel already mirrors the shared model in the read-only "CADSwarm Live"
 document.  This module adds one marker per teammate whose pointer is not idle: a
 soft, rounded cursor arrow in that member's colour, sitting exactly on the spot
 they mean.  It carries no text, no outline and no leader line, so the model
@@ -526,7 +526,7 @@ def _reduce_motion():
 
 
 class Overlay:
-    """Draws the live pointers over the CadSwarm Live view, or over the active document when it
+    """Draws the live pointers over the CADSwarm Live view, or over the active document when it
     holds the parts being pointed at.  Create on the GUI thread."""
 
     def __init__(self, source, on_error=None, document=MIRROR_DOC):
@@ -627,7 +627,7 @@ class Overlay:
 
     def _pick_document(self):
         """The document whose view gets the arrows: the active one when it holds a part someone is
-        pointing at (your own working copy of the model), otherwise the CadSwarm Live mirror."""
+        pointing at (your own working copy of the model), otherwise the CADSwarm Live mirror."""
         import FreeCAD as App
         import FreeCADGui as Gui
         active = Gui.ActiveDocument
@@ -718,7 +718,7 @@ class Overlay:
     def _warn(self, text):
         try:
             import FreeCAD as App
-            App.Console.PrintWarning(f"[CadSwarm pointers] {text}\n")
+            App.Console.PrintWarning(f"[CADSwarm pointers] {text}\n")
         except Exception:  # noqa: BLE001
             pass
 
@@ -880,7 +880,7 @@ def _announce(on):
         import FreeCAD as App
         import FreeCADGui as Gui
         Gui.getMainWindow().statusBar().showMessage(text, 8000)
-        App.Console.PrintMessage(f"[CadSwarm] {text}\n")
+        App.Console.PrintMessage(f"[CADSwarm] {text}\n")
     except Exception:  # noqa: BLE001
         pass
 

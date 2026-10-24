@@ -80,7 +80,7 @@ export function readInvite(text: string): Invite {
   if (i >= 0) {
     data = longest(chunks(s.slice(i + INVITE_PREFIX.length), B64_RUN), base64UrlJson);
   } else if (s.includes('cadswarm-1:')) {
-    throw new Error('This invite is from an older CadSwarm. Ask your teammate for a new one.');
+    throw new Error('This invite is from an older CADSwarm. Ask your teammate for a new one.');
   } else {
     const at = s.search(/[#?&]t=/);
     const words = s.split(/\s+/);
@@ -89,13 +89,13 @@ export function readInvite(text: string): Invite {
       return k >= 0 ? words.slice(k).join(' ') : null;
     })();
     if (start == null) {
-      throw new Error(`That doesn't look like a CadSwarm invite code. It should start with “${INVITE_PREFIX}”. ` +
+      throw new Error(`That doesn't look like a CADSwarm invite code. It should start with “${INVITE_PREFIX}”. ` +
         'Ask your teammate to copy it again with the Copy button.');
     }
     data = longest(chunks(start, B32_RUN), base32Json);
   }
   if (!data || !data.uri || !data.db || !data.token) {
-    throw new Error('That invite code is incomplete — part of it may have been cut off. Ask your teammate to send it again.');
+    throw new Error('That invite code is incomplete: part of it may have been cut off. Ask your teammate to send it again.');
   }
   const { p, ...t } = data as Record<string, unknown> & { p?: string };
   const defaults = { v: 1, kind: 'human', role: 'member', host_addr: '' };

@@ -1,5 +1,5 @@
 /**
- * The sponsors panel: what each outside service does for CadSwarm, the exact calls we make, and the
+ * The sponsors panel: what each outside service does for CADSwarm, the exact calls we make, and the
  * live trace of it working in this workspace. It is a debug view (`?debug`, Shift+D, or the small
  * "sponsors" button in the sidebar), not part of the product's own story.
  */
@@ -76,7 +76,7 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
       facts: [
         ['agent', reviewer ? `${reviewer.name} · ${reviewer.client} · ${reviewer.status}` : 'not set up'],
         ['mode', 'autonomy HIGH · 7 read-only MCP tools'],
-        ['last review', review ? `round ${review.round} · ${review.passed ? 'approved' : `${findings.length} findings`}` : '—'],
+        ['last review', review ? `round ${review.round} · ${review.passed ? 'approved' : `${findings.length} findings`}` : 'no review yet'],
         ['tasks filed', String(filed)],
       ],
       list: findings.length ? {
@@ -91,8 +91,8 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
       name: 'Elastic',
       role: 'board knowledge, design memory, lessons',
       facts: [
-        ['board', brief?.board || '—'],
-        ['design memory', brief ? `${brief.id} · ${findings.length} problems` : '—'],
+        ['board', brief?.board || 'none'],
+        ['design memory', brief ? `${brief.id} · ${findings.length} problems` : 'no designs yet'],
         ['lessons', 'distil-lessons · every 10 min'],
         ['agent tools', 'lookup_board · recall_designs · board_spec'],
       ],

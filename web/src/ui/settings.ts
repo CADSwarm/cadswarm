@@ -49,7 +49,7 @@ export function mountSettings(el: HTMLElement, store: Store, api: Api | null) {
           const s = spec.find(x => x.key === g.setting);
           const value = s?.kind === 'choice' ? g.text : g.num;
           return `<div class="suggestion"><p><b>${esc(s?.label ?? g.setting)}</b>: ${esc(fmt(s, values[g.setting] ?? ''))} → <b>${esc(fmt(s, value))}</b></p>
-            <p class="small muted">${esc(g.reason)} — ${esc(name(g.by))}</p>
+            <p class="small muted">${esc(g.reason)} (${esc(name(g.by))})</p>
             ${api ? `<button type="button" class="mini" data-accept="${esc(g.id)}">Accept</button>
                      <button type="button" class="mini ghost" data-dismiss="${esc(g.id)}">Dismiss</button>` : ''}</div>`;
         }).join('')}</div>` : ''}

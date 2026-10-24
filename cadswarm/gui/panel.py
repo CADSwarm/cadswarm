@@ -1,6 +1,6 @@
-"""CadSwarm workbench: a human's seat at the table.
+"""CADSwarm workbench: a human's seat at the table.
 
-* A live, read-only MIRROR document ("CadSwarm Live") shows the hub's shared
+* A live, read-only MIRROR document ("CADSwarm Live") shows the hub's shared
   model, each part colored by whoever holds its lock, updated as agents work.
 * A TEAM PANEL shows presence, locks, tasks and the session chat, and lets the
   human steer: message agents (human messages outrank peer requests in every
@@ -84,11 +84,11 @@ def owner_color(owner_id):
 
 
 def say(msg):
-    App.Console.PrintMessage(f"[CadSwarm] {msg}\n")
+    App.Console.PrintMessage(f"[CADSwarm] {msg}\n")
 
 
 def warn(msg):
-    App.Console.PrintWarning(f"[CadSwarm] {msg}\n")
+    App.Console.PrintWarning(f"[CADSwarm] {msg}\n")
 
 
 def friendly_error(e, hub=""):
@@ -97,7 +97,7 @@ def friendly_error(e, hub=""):
     if code == "unreachable" or getattr(e, "status", None) == 0:
         return (f"Couldn't reach your team's server at {hub or 'that address'}.\n"
                 "Check your internet connection, and that whoever is hosting the team has it running "
-                "(CadSwarm ▸ Get started ▸ Reconnect).")
+                "(CADSwarm ▸ Get started ▸ Reconnect).")
     return {
         "bad_invite": "That invite code has already been used or has expired. Ask your teammate for a new one.",
         "not_member": "Your saved sign-in isn't part of this team any more. Join again with a new invite code.",
@@ -110,7 +110,7 @@ def friendly_error(e, hub=""):
         "not_allowed": "Only whoever started the team can do that.",
         "host_only": "Only the computer hosting the team can change its storage limits.",
         "host_timeout": "The team's server didn't pick that up. Check that whoever is hosting the team has "
-                        "CadSwarm running, then try again.",
+                        "CADSwarm running, then try again.",
     }.get(code, str(e))
 
 
@@ -383,14 +383,14 @@ class Session:
             self._moved_hint = time.time()
             hint(f"{', '.join(moved)} is shared with your team, so the move was undone.\n\n"
                  "To change a part yourself, select it and choose the Tools tab \u25b8 Edit a part yourself in the "
-                 "CadSwarm panel "
+                 "CADSwarm panel "
                  "(or start the edit first, then move it). Your change is sent to everyone when you click Save.")
 
     def mirror(self):
         doc = App.listDocuments().get(MIRROR_DOC)
         if doc is None:
             doc = App.newDocument(MIRROR_DOC)
-            doc.Label = "CadSwarm Live (read-only mirror)"
+            doc.Label = "CADSwarm Live (read-only mirror)"
         return doc
 
     def apply_breps(self, objects):
@@ -490,7 +490,7 @@ class Session:
             r = self.client.request(method, path, body if method != "GET" else None)
         except HubRequestError as e:
             QtGui.QApplication.restoreOverrideCursor()
-            QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm", friendly_error(e, self.client.hub if self.client else ""))
+            QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm", friendly_error(e, self.client.hub if self.client else ""))
             return None
         QtGui.QApplication.restoreOverrideCursor()
         if done:
@@ -528,7 +528,7 @@ class Session:
 
     def finish_async(self, done, failed, result, error):
         if error:
-            QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm", error)
+            QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm", error)
             if failed:
                 failed()
         elif done:
@@ -578,7 +578,7 @@ class TeamPanel(QtGui.QDockWidget):
     SPINNER = "◐◓◑◒"
 
     def __init__(self, session):
-        super().__init__("CadSwarm Team")
+        super().__init__("CADSwarm Team")
         self.session = session
         self.setObjectName("CadSwarmTeam")
         self.spin_i = 0
@@ -803,7 +803,7 @@ class TeamPanel(QtGui.QDockWidget):
                              ("Storage and free up space…", "What uses the project's room", show_storage))),
                 ("Team rules", (("Precision settings…", "Clearances, fits and precision for the whole team",
                                  library_ui.show_settings),
-                                ("Learned design style…", "The design rules CadSwarm learned from your team",
+                                ("Learned design style…", "The design rules CADSwarm learned from your team",
                                  style_ui.show_style))),
                 ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex or Droid",
                                  add_helper),
@@ -1514,7 +1514,7 @@ class TeamPanel(QtGui.QDockWidget):
             return []
         names_ = self.session.selected_names()
         if not names_:
-            hint("Select one or more parts in the 3D view first (in the “CadSwarm Live” document), "
+            hint("Select one or more parts in the 3D view first (in the “CADSwarm Live” document), "
                  f"then click this again to {verb} them.")
         return names_
 
@@ -1864,7 +1864,7 @@ def setting_suggestion(g, spec):
 
 
 def style_suggestion(r):
-    """A design rule CadSwarm learned (or a helper proposed) that waits for a person to confirm."""
+    """A design rule CADSwarm learned (or a helper proposed) that waits for a person to confirm."""
     return {"key": f"style:{r['id']}", "id": r["id"], "kind": "style", "yes": "Make it a rule",
             "plain": r["statement"],
             "text": f"Make this a rule every helper follows?<br><b>{html.escape(r['statement'])}</b>"
@@ -1908,7 +1908,7 @@ class NewTaskDialog(QtGui.QDialog):
     def __init__(self, session):
         super().__init__(Gui.getMainWindow())
         self.session = session
-        self.setWindowTitle("CadSwarm: new task")
+        self.setWindowTitle("CADSwarm: new task")
         fit_to_screen(self, 520, 480)
         lay = QtGui.QVBoxLayout(self)
         form = QtGui.QFormLayout()
@@ -2073,7 +2073,7 @@ def away_tip(p, local):
     state = (local or {}).get("state")
     if local is None:
         return (f"<b>{n}</b> runs on a teammate's computer. It answers once that computer has FreeCAD and "
-                "CadSwarm open; your messages wait for it.")
+                "CADSwarm open; your messages wait for it.")
     if state == "missing":
         return f"<b>{n}</b> can't start: {html.escape(local.get('detail') or 'its AI helper is not installed')}."
     if state == "paused":
@@ -2193,7 +2193,7 @@ class NewHelperDialog(QtGui.QDialog):
         super().__init__(Gui.getMainWindow())
         from ..agent_setup import CLIENTS, find_agent_cli
         self.session = session
-        self.setWindowTitle("CadSwarm: new AI helper")
+        self.setWindowTitle("CADSwarm: new AI helper")
         fit_to_screen(self, 460, 260)
         lay = QtGui.QVBoxLayout(self)
         form = QtGui.QFormLayout()
@@ -2268,13 +2268,13 @@ def restart_helpers():
         return
     started = start_local_helpers(SESSION, restart=True)
     hint(f"Restarted {', '.join(started)}." if started else
-         "No AI helper is set up on this computer yet. Click ＋ New helper in the CadSwarm panel.")
+         "No AI helper is set up on this computer yet. Click ＋ New helper in the CADSwarm panel.")
 
 
 def show_helper_log():
     helpers = local_helpers(SESSION)
     if not helpers:
-        hint("No AI helper is set up on this computer yet. Click ＋ New helper in the CadSwarm panel.")
+        hint("No AI helper is set up on this computer yet. Click ＋ New helper in the CADSwarm panel.")
         return
     from .wizard import open_folder
     for _name, (folder, _cfg) in helpers.items():
@@ -2476,7 +2476,7 @@ class EditPartDialog(QtGui.QDialog):
         props, moved = self.changes()
         if props or moved:
             answer = QtGui.QMessageBox.question(
-                self, "CadSwarm", "Save your change to the team before you stop editing?",
+                self, "CADSwarm", "Save your change to the team before you stop editing?",
                 QtGui.QMessageBox.Save | QtGui.QMessageBox.Discard | QtGui.QMessageBox.Cancel)
             if answer == QtGui.QMessageBox.Cancel:
                 ev.ignore()
@@ -2543,7 +2543,7 @@ def edit_part():
     holder, me = obj.get("locked_by"), SESSION.ident["name"]
     if holder and holder != me:
         p = SESSION.participant(holder) or {}
-        box = QtGui.QMessageBox(QtGui.QMessageBox.Question, "CadSwarm",
+        box = QtGui.QMessageBox(QtGui.QMessageBox.Question, "CADSwarm",
                                 f"{obj.get('label') or name} is held by {holder}, so only they can change it right now.",
                                 parent=Gui.getMainWindow())
         ask = box.addButton(f"Ask {holder} to let go", QtGui.QMessageBox.AcceptRole)
@@ -2660,11 +2660,11 @@ def describe_event(ev):
 
 
 def hint(text):
-    QtGui.QMessageBox.information(Gui.getMainWindow(), "CadSwarm", text)
+    QtGui.QMessageBox.information(Gui.getMainWindow(), "CADSwarm", text)
 
 
 def confirm(text):
-    return QtGui.QMessageBox.question(Gui.getMainWindow(), "CadSwarm", text,
+    return QtGui.QMessageBox.question(Gui.getMainWindow(), "CADSwarm", text,
                                       QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes
 
 
@@ -2727,7 +2727,7 @@ def run_interference():
     Gui.Selection.clearSelection()
     if not r["clashes"]:
         say(f"No interference among {len(r['checked'])} parts")
-        QtGui.QMessageBox.information(Gui.getMainWindow(), "CadSwarm", "No interference found.")
+        QtGui.QMessageBox.information(Gui.getMainWindow(), "CADSwarm", "No interference found.")
         return
     lines = []
     for c in r["clashes"]:
@@ -2735,7 +2735,7 @@ def run_interference():
         for n in (c["a"], c["b"]):
             if App.getDocument(MIRROR_DOC).getObject(n):
                 Gui.Selection.addSelection(MIRROR_DOC, n)
-    QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm: interference", "\n".join(lines))
+    QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm: interference", "\n".join(lines))
 
 
 def run_export():
@@ -2788,14 +2788,14 @@ def invite_teammates():
     try:
         code = SESSION.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"))
     except HubRequestError as e:
-        QtGui.QMessageBox.warning(Gui.getMainWindow(), "CadSwarm", friendly_error(e, SESSION.client.hub))
+        QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm", friendly_error(e, SESSION.client.hub))
         return
     QtGui.QApplication.clipboard().setText(code)
     QtGui.QMessageBox.information(
         Gui.getMainWindow(), "Invite teammates",
         "The invite code is copied. Paste it to one teammate (email, Discord, text...).\n\n"
         f"{code}\n\nThis code works once. Make a new one for each teammate.\n\nThey open FreeCAD, pick "
-        "CadSwarm, click Get started, then \u201cJoin a teammate\u2019s project\u201d.")
+        "CADSwarm, click Get started, then \u201cJoin a teammate\u2019s project\u201d.")
 
 
 STOPPED_HOSTING = "You stopped hosting the team."
@@ -2836,7 +2836,7 @@ class ProjectFilesDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm: project files")
+        self.setWindowTitle("CADSwarm: project files")
         fit_to_screen(self, 640, 460)
         lay = QtGui.QVBoxLayout(self)
         where = hosted_project_folder()
@@ -2931,7 +2931,7 @@ class StorageDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm: storage")
+        self.setWindowTitle("CADSwarm: storage")
         fit_to_screen(self, 560, 520)
         self.is_host = hosted_project_folder() is not None
         lay = QtGui.QVBoxLayout(self)
@@ -3009,7 +3009,7 @@ class StorageDialog(QtGui.QDialog):
                  f"&bull; Exported 3D files: {size_text(u['exports'])}",
                  f"&bull; The live model: {size_text(u['model'])} (not counted)"]
         if free is not None:
-            lines.append(f"<br>The host's drive has {size_text(free)} free; CadSwarm stops saving when less than "
+            lines.append(f"<br>The host's drive has {size_text(free)} free; CADSwarm stops saving when less than "
                          f"{size_text(st['reserve_bytes'])} would be left.")
         lines.append(f"<small>Older versions: the newest {s['history_keep']} of each file are kept, plus everything from "
                      f"the last {s['history_hours']} hours. Snapshots and exports are only deleted here, by a person.</small>")
@@ -3099,7 +3099,7 @@ class FeaReportDialog(QtGui.QDialog):
             except HubRequestError:
                 pass
         r = self.report
-        self.setWindowTitle(f"CadSwarm: simulation report: {r['title']}")
+        self.setWindowTitle(f"CADSwarm: simulation report: {r['title']}")
         fit_to_screen(self, 780, 720)
         lay = QtGui.QVBoxLayout(self)
         color, word = VERDICT_WORDS.get(r["verdict"], VERDICT_WORDS["check"])
@@ -3185,7 +3185,7 @@ class FeaReportsDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm: simulation reports")
+        self.setWindowTitle("CADSwarm: simulation reports")
         fit_to_screen(self, 720, 400)
         lay = QtGui.QVBoxLayout(self)
         lay.addWidget(QtGui.QLabel("Simulations (FEA) your team's AI helpers ran. Double-click one to open it."))
@@ -3265,7 +3265,7 @@ def register_commands():
                                                                 "parts, or upload a STEP file", library_ui.show_library))
     Gui.addCommand("CadSwarm_Settings", Cmd("Precision settings…", "The team's clearances, fits and precision, and "
                                                                  "what AI helpers suggest", library_ui.show_settings))
-    Gui.addCommand("CadSwarm_Style", Cmd("Learned design style…", "The design rules CadSwarm learned from how your "
+    Gui.addCommand("CadSwarm_Style", Cmd("Learned design style…", "The design rules CADSwarm learned from how your "
                                                                  "team works; confirm, dismiss or teach one",
                                          style_ui.show_style))
     Gui.addCommand("CadSwarm_TellHelper", Cmd("Chat with helpers", "Tell an AI helper what to do; it answers in the "
