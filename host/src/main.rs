@@ -143,12 +143,10 @@ fn run(cfg: &HostConfig) -> Result<()> {
     // Optional: an old cadswarm package without helper.py still runs FreeCAD ops; file and
     // knowledge ops then complete as failed with `helper_unavailable`.
     let mut helper = match config::python_says(&cfg.cadswarm_python, "c.helper_script()") {
-        Ok(script) => Some(worker::WorkerDriver::new(
-            cfg.cadswarm_python.clone(),
-            script,
-            cfg.data_dir.clone(),
-            Duration::from_secs(120),
-        )),
+        Ok(script) => Some(
+            worker::WorkerDriver::new(cfg.cadswarm_python.clone(), script, cfg.data_dir.clone(), Duration::from_secs(120))
+                .with_env("CADSWARM_FREECAD_PYTHON", cfg.freecad_python.to_string_lossy()),
+        ),
         Err(e) => {
             let why = e.to_string();
             eprintln!("[host] helper unavailable: {}", why.trim().lines().last().unwrap_or(""));

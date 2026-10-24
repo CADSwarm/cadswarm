@@ -5,6 +5,8 @@ import re
 import shutil
 import sys
 
+from .paths import app_dir
+
 HEARTBEAT_SECONDS = 15
 STALE_AFTER_SECONDS = 30       # no heartbeat for this long -> stale, work awaits takeover
 ORPHAN_AFTER_SECONDS = 600     # stale this long -> locks freed, tasks reopened
@@ -96,6 +98,11 @@ def freecad_candidates():
                 for _ in range(up):  # the FreeCAD* folder holding the version text
                     folder = os.path.dirname(folder)
                 found.setdefault(os.path.normpath(py), _version_key(os.path.basename(folder)))
+    # The official Linux AppImage, unpacked by CadSwarm's installer into <app dir>/FreeCAD-<version>/.
+    for bin_dir in glob.glob(os.path.join(app_dir(), "FreeCAD-*", "squashfs-root", "usr", "bin")):
+        py = _python_in(bin_dir)
+        if py:
+            found.setdefault(os.path.normpath(py), _version_key(bin_dir.split("FreeCAD-")[-1]))
     for exe in ("freecadcmd", "FreeCADCmd"):
         hit = shutil.which(exe)
         if hit:

@@ -1,0 +1,9 @@
+{
+  "name": "cadswarm-website",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "24.x" },
+  "dependencies": {
+    "@upstash/redis": "^1.35.0"
+  }
+}

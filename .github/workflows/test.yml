@@ -56,11 +56,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - run: sh -n install/install.sh && sh -n "Install CadSwarm.command"
-      # With no FreeCAD on the runner the installer must stop with its friendly message.
+      - run: bash -n install/install.sh && bash -n "Install CadSwarm.command" && bash -n "Install CadSwarm.sh"
+      # With no FreeCAD on the runner the installer must stop with its friendly message (--yes: never
+      # downloads FreeCAD).
       - run: |
           set +e
-          out=$(CADSWARM_YES=1 HOME="$RUNNER_TEMP" sh install/install.sh --no-launch </dev/null)
+          out=$(HOME="$RUNNER_TEMP" XDG_DATA_HOME="$RUNNER_TEMP/share" bash install/install.sh --yes --no-launch </dev/null)
           code=$?
           echo "$out"
           [ "$code" -eq 1 ] && echo "$out" | grep -q "FreeCAD isn't installed"

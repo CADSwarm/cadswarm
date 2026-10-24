@@ -116,6 +116,8 @@ def clean_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nolocal"))
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "nopf"))
     monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "nopf86"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "noappdata"))  # CadSwarm's own unpacked FreeCAD
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))        # ~/Applications
     monkeypatch.setattr(config, "_registry_installs", lambda: [])
     monkeypatch.setattr(config.shutil, "which", lambda name: None)
     return tmp_path
@@ -189,6 +191,15 @@ def test_linux_extracted_appimage_layout(clean_env, monkeypatch):
         monkeypatch.setenv(var, str(clean_env))
     py = _install(clean_env / "Applications", "FreeCAD", "python", ("usr", "bin"))  # --appimage-extract
     assert config.find_freecad_python() == os.path.normpath(py)
+
+
+def test_freecad_unpacked_by_the_installer_is_found(clean_env, monkeypatch):
+    monkeypatch.setattr(config, "app_dir", lambda: str(clean_env / "app" / "CadSwarm"))
+    bin_dir = clean_env / "app" / "CadSwarm" / "FreeCAD-1.1.4" / "squashfs-root" / "usr" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python").write_text("")
+    os.chmod(bin_dir / "python", 0o755)
+    assert config.find_freecad_python() == os.path.normpath(bin_dir / "python")
 
 
 def test_explicit_env_wins_and_missing_raises(clean_env, monkeypatch):

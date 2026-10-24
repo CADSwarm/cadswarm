@@ -21,8 +21,9 @@ static char * icon_xpm[] = {
         panel.register_commands()
         from cadswarm.gui.structural import register_command
         register_command()
-        toolbar = ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_AddHelper", "CadSwarm_Invite",
-                   "CadSwarm_Interference", "CadSwarm_Export", "CadSwarm_OptimizePart"]
+        toolbar = ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
+                   "CadSwarm_EditPart", "CadSwarm_AddHelper", "CadSwarm_Invite",
+                   "CadSwarm_Interference", "CadSwarm_Export", "CadSwarm_OptimizePart", "CadSwarm_FeaReports"]
         self.appendToolbar("CadSwarm", toolbar)
         self.appendMenu("CadSwarm", toolbar + ["Separator", "CadSwarm_Lock", "CadSwarm_Release",
                                                "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
@@ -37,3 +38,23 @@ static char * icon_xpm[] = {
 
 
 Gui.addWorkbench(CadSwarmWorkbench())
+
+
+class CadSwarmOptimizationWorkbench(Gui.Workbench):
+    """Local structural workflow, available without starting a collaboration session."""
+    MenuText = "CADSwarm Optimization"
+    ToolTip = "Analyze and optimize a solid locally with CalculiX"
+    Icon = ""
+
+    def Initialize(self):
+        from cadswarm.gui.structural import register_command
+        register_command()
+        commands = ["CadSwarm_OptimizationDemo", "CadSwarm_OptimizePart"]
+        self.appendToolbar("Structural optimization", commands)
+        self.appendMenu("Optimization", commands)
+
+    def GetClassName(self):
+        return "Gui::PythonWorkbench"
+
+
+Gui.addWorkbench(CadSwarmOptimizationWorkbench())

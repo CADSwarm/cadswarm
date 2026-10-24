@@ -61,7 +61,7 @@ def cmd_brief(a):
 
 
 ADDON_IGNORE = shutil.ignore_patterns(".git", ".venv", "*.egg-info", "__pycache__", ".pytest_cache",
-                                     "cadswarm-data", "exports", ".cadswarm", "*.pyc")
+                                     "cadswarm-data", "exports", ".cadswarm", "*.pyc", "node_modules", "target")
 
 
 def freecad_mod_dir(fc_py=None):
@@ -82,6 +82,9 @@ def install_addon(dest_mod_dir):
     if os.path.exists(dest):
         shutil.rmtree(dest)
     shutil.copytree(ROOT, dest, ignore=ADDON_IGNORE)
+    wasm = os.path.join(ROOT, "module", "target", "wasm32-unknown-unknown", "release", "cadswarm_module.wasm")
+    if os.path.isfile(wasm):  # the team server's database module (build folders aren't copied)
+        shutil.copy2(wasm, os.path.join(dest, "module", "cadswarm_module.wasm"))
     return dest
 
 

@@ -1,0 +1,53 @@
+{
+  "esp32-s3-devkitc-1": {
+    "label": "ESP32-S3-DevKitC-1",
+    "pcb": [62.7, 25.4, 1.6],
+    "holes": [],
+    "hole_d": 0,
+    "clear_top": 9.0,
+    "clear_bottom": 3.0,
+    "ports": [
+      {"name": "usb_uart", "side": "-x", "center": [6.4, 1.6], "size": [9.5, 3.6]},
+      {"name": "usb_otg", "side": "-x", "center": [19.0, 1.6], "size": [9.5, 3.6]}
+    ],
+    "verified": false
+  },
+  "raspberry-pi-4": {
+    "label": "Raspberry Pi 4 Model B",
+    "pcb": [85.0, 56.0, 1.4],
+    "holes": [[3.5, 3.5], [61.5, 3.5], [3.5, 52.5], [61.5, 52.5]],
+    "hole_d": 2.7,
+    "clear_top": 17.0,
+    "clear_bottom": 3.0,
+    "ports": [
+      {"name": "usb_c", "side": "-y", "center": [11.2, 1.6], "size": [9.5, 3.6]},
+      {"name": "hdmi0", "side": "-y", "center": [26.0, 1.6], "size": [7.5, 3.6]},
+      {"name": "hdmi1", "side": "-y", "center": [39.5, 1.6], "size": [7.5, 3.6]},
+      {"name": "usb_eth", "side": "+x", "center": [28.0, 8.0], "size": [54.0, 16.0]}
+    ],
+    "verified": false
+  },
+  "raspberry-pi-pico": {
+    "label": "Raspberry Pi Pico",
+    "pcb": [51.0, 21.0, 1.0],
+    "holes": [[2.0, 4.8], [2.0, 16.2], [49.0, 4.8], [49.0, 16.2]],
+    "hole_d": 2.1,
+    "clear_top": 4.0,
+    "clear_bottom": 2.0,
+    "ports": [{"name": "usb", "side": "-x", "center": [10.5, 1.4], "size": [8.5, 3.2]}],
+    "verified": false
+  },
+  "arduino-uno-r3": {
+    "label": "Arduino Uno R3",
+    "pcb": [68.6, 53.3, 1.6],
+    "holes": [[14.0, 2.5], [15.3, 50.7], [66.1, 7.6], [66.1, 35.5]],
+    "hole_d": 3.2,
+    "clear_top": 13.0,
+    "clear_bottom": 3.0,
+    "ports": [
+      {"name": "usb_b", "side": "-x", "center": [38.1, 5.5], "size": [12.5, 11.0]},
+      {"name": "dc_jack", "side": "-x", "center": [7.6, 5.5], "size": [9.5, 11.0]}
+    ],
+    "verified": false
+  }
+}

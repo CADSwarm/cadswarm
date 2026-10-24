@@ -14,15 +14,28 @@ Say "  Build 3D designs together with your team's AI helpers." "Gray"
 Say ""
 
 # 1. Find FreeCAD
-$candidates = @()
-foreach ($root in @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
-    if ($root -and (Test-Path $root)) {
-        $candidates += Get-ChildItem -Path $root -Directory -Filter "FreeCAD*" -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName "bin\freecad.exe" } | Where-Object { Test-Path $_ }
+function FindFreeCAD {
+    $found = @()
+    foreach ($root in @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if ($root -and (Test-Path $root)) {
+            $found += Get-ChildItem -Path $root -Directory -Filter "FreeCAD*" -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName "bin\freecad.exe" } | Where-Object { Test-Path $_ }
+        }
+    }
+    return $found
+}
+$candidates = FindFreeCAD
+if (-not $candidates) {
+    Say "FreeCAD isn't installed on this computer yet." "Yellow"
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        $answer = Read-Host "  Install the official FreeCAD now with winget? (Y/n)"
+        if ($answer -notmatch "^[nN]") {
+            winget install --id FreeCAD.FreeCAD --exact --accept-package-agreements --accept-source-agreements
+            $candidates = FindFreeCAD
+        }
     }
 }
 if (-not $candidates) {
-    Say "FreeCAD isn't installed on this computer yet." "Yellow"
     Say "Opening the FreeCAD download page. Install it (the default options are fine),"
     Say "then double-click 'Install CadSwarm' again."
     Start-Process "https://www.freecad.org/downloads.php"
@@ -67,8 +80,11 @@ if (SamePath $Here $Dest) {
     if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     robocopy $Here $Dest /E /NFL /NDL /NJH /NJS /NP `
-        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info /XF *.pyc | Out-Null
+        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target `
+        /XF *.pyc | Out-Null
     if ($LASTEXITCODE -ge 8) { Say "Copying CadSwarm into FreeCAD failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
+    $Wasm = Join-Path $Here "module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm"
+    if (Test-Path $Wasm) { Copy-Item $Wasm (Join-Path $Dest "module\cadswarm_module.wasm") }  # the team server's database module
     Say "  [ok] Installed CadSwarm into FreeCAD" "Green"
 }
 
