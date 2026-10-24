@@ -21,7 +21,12 @@ from .files import unique_path
 from .space_hub import SpaceHub
 
 INSTRUCTIONS = """You are one of several agents (each driven by a different person) building ONE shared
-FreeCAD model through the CadSwarm hub. Work like a careful teammate:
+FreeCAD model through the CadSwarm hub. Talk briefly. People watch the model change live in FreeCAD and the
+web app, so don't narrate: no running commentary, no restating tool calls or their results, no lists of what
+you're about to do. Reply in one or two short sentences; when you finish something, say what changed in at
+most three lines (part names and key sizes). Ask questions only when you truly need an answer, all in one
+message.
+Work like a careful teammate:
 1. Start with model_status and list_tasks. Claim a task (claim_task) before working on it.
 2. Lock what you will change (lock_objects). Anything you create is locked to you automatically.
    Never try to edit someone else's part. Message them (send_message) instead.
@@ -740,7 +745,21 @@ def main():
         raise SystemExit(1)
     print(f"cadswarm: joined as {ident['name']} ({ident['participant_id']}, fence {ident['fence']})", file=sys.stderr)
     threading.Thread(target=S.heartbeat_loop, daemon=True).start()
-    mcp.run("stdio")
+    if not S.cfg.get("ephemeral"):
+        mcp.run("stdio")
+        return
+    # A one-job agent (the host's planners and workers) leaves when its session ends, so finished agents don't
+    # linger in everyone's team list; leaving releases its locks and reopens any task it didn't finish.
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        mcp.run("stdio")
+    finally:
+        S.dead = S.dead or "left"
+        try:
+            S.client.post("/leave")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
