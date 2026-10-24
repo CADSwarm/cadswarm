@@ -200,6 +200,11 @@ pub fn delete_task(ctx: &ReducerContext, fence: u32, task_id: String) -> Result<
         caller: m.id,
         caller_kind: &m.kind,
     })?;
+    // Leave/revoke reopens a claimed task, so `open` does not mean nothing was built. Deleting a
+    // task whose parts exist would drop them from the brief's export list.
+    if t.objects.iter().any(|n| ctx.db.cad_object().key().find(&lock_key(m.ws, n)).is_some()) {
+        return Err(format!("not_deletable: Task {task_id} has parts in the model; stop it instead"));
+    }
     let (title, assignee) = (t.title.clone(), t.assignee.clone());
     ctx.db.task().id().delete(&task_id);
     if !assignee.is_empty() && !assignee.eq_ignore_ascii_case(&m.name) {

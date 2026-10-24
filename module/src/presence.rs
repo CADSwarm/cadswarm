@@ -64,6 +64,11 @@ pub fn set_brief(ctx: &ReducerContext, fence: u32, brief_id: String, status: Str
     if !status.is_empty() && !BRIEF_STATUSES.contains(&status.as_str()) {
         return Err("bad_args: unknown brief status".into());
     }
+    // Stopping a request also stops its tasks and tells its author. That is `cancel_brief`; a bare
+    // status write would leave the work open and the event log empty.
+    if status == "cancelled" {
+        return Err("bad_args: stop a brief with cancel_brief, not set_brief".into());
+    }
     let status = if status.is_empty() { b.status.clone() } else { status };
     if b.status == "cancelled" && status != "cancelled" && m.kind != "human" {
         return Err(format!("cancelled: Brief {brief_id} was stopped"));
@@ -99,8 +104,14 @@ pub fn cancel_brief(ctx: &ReducerContext, fence: u32, brief_id: String) -> Resul
         .collect();
     let note = json!({"summary": format!("{} stopped the request", m.name), "by": m.name, "at": now, "cancelled": true}).to_string();
     for t in &dropped {
+        // A blocked task already holds the blocker's summary and evidence; keep it.
+        let result_json = if t.status == "blocked" && !t.result_json.is_empty() {
+            t.result_json.clone()
+        } else {
+            note.clone()
+        };
         ctx.db.task().id().update(Task {
-            status: "cancelled".into(), result_json: note.clone(), rev: t.rev + 1, updated_ms: now, ..t.clone()
+            status: "cancelled".into(), result_json, rev: t.rev + 1, updated_ms: now, ..t.clone()
         });
     }
     let (author, text) = (b.by, b.text.clone());
@@ -119,6 +130,14 @@ pub fn report_review(ctx: &ReducerContext, fence: u32, review_id: String, brief_
     require_kind(&m, "reviewer")?;
     if review_id.is_empty() || ctx.db.review().id().find(&review_id).is_some() {
         return Err("bad_args: review_id must be new and non-empty".into());
+    }
+    if round == 0 {
+        return Err("bad_args: review rounds start at 1".into());
+    }
+    // A reviewer that outlived a restarted host can report the round the new host also started.
+    // Two verdicts for one round would make the host's choice depend on row order.
+    if ctx.db.review().ws().filter(&m.ws).any(|r| r.brief == brief_id && r.round == round) {
+        return Err(format!("already_reported: review round {round} for {brief_id} is recorded"));
     }
     ctx.db.review().insert(Review { id: review_id, ws: m.ws, brief: brief_id.clone(), round, passed, findings_json, at_ms: now_ms(ctx) });
     emit(ctx, m.ws, "review", m.id, json!({"brief": brief_id, "round": round, "passed": passed}));

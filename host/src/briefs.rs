@@ -29,6 +29,7 @@ pub struct BriefState {
     pub open: usize,
     pub active: usize,
     pub done: usize,
+    pub cancelled: usize,
     pub exporting: bool,
     pub reviewer_enabled: bool,
     pub reviewer_alive: bool,
@@ -67,6 +68,11 @@ pub fn next_action(s: &BriefState) -> Action {
                 Action::Export
             }
         }
+        // Nothing is running and nothing was built: every task was stopped or removed. A brief
+        // must not sit in `building` forever waiting for work that will never arrive.
+        "building" if s.open + s.active == 0 && s.cancelled > 0 => {
+            Action::Fail("every task was stopped; a person needs to steer".into())
+        }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
         // No reviewer of ours is running this round: a host restarted, or the only verdict is from a
@@ -77,6 +83,9 @@ pub fn next_action(s: &BriefState) -> Action {
             Some((round, false)) if round >= MAX_REVIEW_ROUNDS => {
                 Action::Fail(format!("review failed {round} times; a person needs to steer"))
             }
+            // The reviewer files its fix tasks before reporting a failed verdict. After a restart
+            // those tasks are still open: build them before spending another review round.
+            Some((_, false)) if s.open > 0 => Action::Build(s.open.min(MAX_WORKERS)),
             _ if s.reviewer_enabled => Action::Review,
             _ => Action::Export,
         },
@@ -331,6 +340,7 @@ impl Orchestrator {
             open: tasks.iter().filter(|t| t.status == "open").count(),
             active: tasks.iter().filter(|t| t.status == "claimed" || t.status == "awaiting_takeover").count(),
             done: tasks.iter().filter(|t| t.status == "done").count(),
+            cancelled: tasks.iter().filter(|t| t.status == "cancelled").count(),
             exporting: rt.export_op.is_some(),
             reviewer_enabled: self.reviewer_enabled,
             reviewer_alive: rt.reviewer.as_mut().map(|a| a.alive()).unwrap_or(false),
@@ -419,7 +429,7 @@ impl Orchestrator {
                 space.set_brief(&b.id, "building", "")?;
             }
             Action::Review => {
-                let round = review.map(|(r, _)| r + 1).unwrap_or(1);
+                let round = review.map(|(r, _)| r.saturating_add(1)).unwrap_or(1);
                 let dir = self.cfg.data_dir.join("agents").join("reviewer");
                 std::fs::create_dir_all(&dir)?;
                 let log = std::fs::File::create(dir.join(format!("review-{}-{round}.log", b.id.trim_start_matches("b_"))))?;
@@ -438,10 +448,22 @@ impl Orchestrator {
             }
             Action::Export => {
                 keep_sources(&self.boards, space, b)?;
-                let objects: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
-                let id = op_id();
-                space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
-                rt.export_op = Some(id);
+                // Task rows keep their object names after a task is stopped, and a reopened task
+                // can name a part that was never built. The worker treats `names` as a whitelist
+                // and fails the whole op on one missing part, so export only what exists.
+                let wanted: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
+                let objects = space.objects_present(&wanted);
+                if objects.is_empty() {
+                    space.set_brief(
+                        &b.id,
+                        "failed",
+                        &json!({"error": "nothing to export: no part was built"}).to_string(),
+                    )?;
+                } else {
+                    let id = op_id();
+                    space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
+                    rt.export_op = Some(id);
+                }
             }
             Action::Fail(why) => {
                 eprintln!("[host] brief {} failed: {why}", b.id);
@@ -483,6 +505,13 @@ mod tests {
     }
 
     #[test]
+    fn a_brief_whose_every_task_was_stopped_fails_instead_of_hanging() {
+        assert!(matches!(next_action(&BriefState { cancelled: 2, ..st("building") }), Action::Fail(_)));
+        // A cancelled task does not hide finished work: the build still reviews and exports.
+        assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
+    }
+
+    #[test]
     fn reviews_pass_to_export_fail_back_to_building_and_give_up_after_three() {
         assert_eq!(next_action(&BriefState { review: Some((1, true)), ..st("reviewing") }), Action::Export);
         assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 1, ..st("reviewing") }), Action::Build(1));
@@ -495,9 +524,13 @@ mod tests {
         // The host restarted mid-review: no run of ours, no verdict yet.
         assert_eq!(next_action(&BriefState { review_orphaned: true, reviewer_enabled: true, ..st("reviewing") }),
                    Action::Review);
-        // A failed round from a previous host asks for the next round, it does not spawn a worker.
+        // A failed round from a previous host with no fix tasks asks for the next round.
         assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
             ..st("reviewing") }), Action::Review);
+        // The reviewer files its fixes before its verdict: after a restart those tasks are built,
+        // not skipped for another review of the unchanged model.
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
+            open: 2, ..st("reviewing") }), Action::Build(2));
         // A passed round from a previous host still goes straight to export.
         assert_eq!(next_action(&BriefState { review: Some((2, true)), review_orphaned: true, reviewer_enabled: true,
             ..st("reviewing") }), Action::Export);
