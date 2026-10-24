@@ -1036,7 +1036,7 @@ class TeamPanel(QtGui.QDockWidget):
             self.remote_qr.setMinimumHeight(0)
             return
         self.remote_qr.setMinimumHeight(0)
-        room = self.remote_qr.width() or self.width() - 40 or 220
+        room = max(200, min(280, self.remote_qr.width() or self.width() - 40 or 220))
         self.remote_qr.setPixmap(qr_pixmap(rows, room, self.devicePixelRatioF()))
 
     def copy_remote_link(self):
