@@ -1086,6 +1086,132 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Re
 }
 ```
 
+- [ ] **Step 1b: Helper ops, large results and the status file (added after the M0 audit)**
+
+Three additions to `executor.rs`. Write the unit tests first (`cargo test` must show them failing, then passing).
+
+1. **Helper ops.** Project-file, storage and Elastic ops run in the Python helper (`cadswarm/helper.py`, plan 03 Task 5 and plan 05 Task 6), which speaks the worker protocol. The host keeps a second `WorkerDriver` for it.
+2. **Large results.** Phones subscribe to `v_op`, so a result over 32 KB (a BREP dump, a file read) goes into `artifact_blob` and the op's `result_json` becomes `{"blob": "<sha256>"}` (plan 00 contract log). The module's sweep deletes `op-result:*` artifacts after 10 minutes.
+3. **Status file.** After the first refresh the host writes `<data_dir>/.cadswarm-team/host-status.json` so the FreeCAD guide (plan 03 Task 6) can tell that hosting started.
+
+```rust
+/// Ops the Python helper answers (plan 00 op kinds). Everything else goes to the FreeCAD worker.
+pub const HELPER_KINDS: &[&str] = &[
+    "list_files", "read_file", "file_history", "save_file", "make_folder", "move_file", "delete_file",
+    "restore_file", "snapshot", "storage_status", "prune_storage", "lookup_board", "recall_designs",
+];
+pub const MAX_INLINE_RESULT: usize = 32 * 1024;
+
+pub fn is_helper_kind(kind: &str) -> bool {
+    HELPER_KINDS.contains(&kind)
+}
+
+/// The args the helper gets: the op's own args plus who asked (file authorship, human-only pruning).
+pub fn helper_args(mut args: Value, by: u64, name: &str, kind: &str) -> Value {
+    if !args.is_object() {
+        args = json!({});
+    }
+    args["_actor"] = json!({"id": by, "name": name, "kind": kind});
+    args
+}
+
+/// Some((hash, bytes)) when the result is too large to travel in v_op.
+pub fn spill(result_json: &str) -> Option<(String, Vec<u8>)> {
+    (result_json.len() > MAX_INLINE_RESULT)
+        .then(|| (hex::encode(Sha256::digest(result_json.as_bytes())), result_json.as_bytes().to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_and_knowledge_ops_go_to_the_helper() {
+        assert!(is_helper_kind("save_file") && is_helper_kind("prune_storage") && is_helper_kind("lookup_board"));
+        assert!(!is_helper_kind("create_primitive") && !is_helper_kind("brep") && !is_helper_kind("export"));
+    }
+
+    #[test]
+    fn helper_args_carry_the_actor() {
+        let a = helper_args(json!({"path": "notes.md"}), 7, "carol", "human");
+        assert_eq!(a["path"], "notes.md");
+        assert_eq!(a["_actor"], json!({"id": 7, "name": "carol", "kind": "human"}));
+    }
+
+    #[test]
+    fn only_large_results_spill() {
+        assert!(spill("{\"ok\":true}").is_none());
+        let big = format!("{{\"x\":\"{}\"}}", "a".repeat(40_000));
+        let (hash, bytes) = spill(&big).unwrap();
+        assert_eq!(hash.len(), 64);
+        assert_eq!(bytes, big.as_bytes());
+    }
+}
+```
+
+Change `run_op` to take the helper and route by kind, and spill large results before completing:
+```rust
+pub fn run_op(space: &Space, worker: &mut WorkerDriver, helper: &mut WorkerDriver, cfg: &HostConfig, op: &OpRow) -> Result<()> {
+    space.start_op(&op.id)?;
+    let mut args: Value = serde_json::from_str(&op.args_json).unwrap_or(json!({}));
+    let reply = match op.kind.as_str() {
+        k if is_helper_kind(k) => {
+            let (name, kind) = space.member_name_kind(op.by);
+            helper.call(k, &helper_args(args, op.by, &name, &kind), None)
+        }
+        "export" => export(space, worker, cfg, op, &args),
+        "printability" => {
+            if args.get("bed").is_none() {
+                args["bed"] = json!(space.bed());
+            }
+            worker.call("printability", &args, None)
+        }
+        _ if op.mutating => worker.call(&op.kind, &args, Some(&op.allowed)),
+        _ => worker.call(&op.kind, &args, None),
+    };
+    let mut done = completion(reply);
+    if let Some((hash, bytes)) = spill(&done.result_json) {
+        space.put_artifact(&hash, &format!("op-result:{}", op.id), "application/json", bytes, "")?;
+        done.result_json = json!({"blob": hash}).to_string();
+    }
+    space.complete_op(&op.id, &done)?;
+    if done.ok && op.mutating {
+        refresh(space, worker, &touched(&done))?;
+    }
+    Ok(())
+}
+```
+Add to `impl Space` (in `space.rs`, from the `v_member` cache): `pub fn member_name_kind(&self, id: u64) -> (String, String)` returning `("?", "agent")` for an unknown id.
+
+Add the status file writer:
+```rust
+/// Tell the FreeCAD guide on this computer that hosting is up (plan 03 Task 6 reads it).
+pub fn write_status(cfg: &HostConfig, worker: &mut WorkerDriver) -> Result<()> {
+    let ping = worker.call("ping", &json!({}), None).unwrap_or(json!({}));
+    let dir = cfg.data_dir.join(".cadswarm-team");
+    std::fs::create_dir_all(&dir)?;
+    let status = json!({"pid": std::process::id(), "uri": cfg.uri, "db": cfg.db, "ready": true,
+                        "freecad": ping["result"]["freecad"], "script_sandbox": ping["result"]["script_sandbox"]});
+    std::fs::write(dir.join("host-status.json"), serde_json::to_string_pretty(&status)?)?;
+    Ok(())
+}
+```
+In Step 2's `run`, start the helper next to the worker, write the status after the first refresh, and pass the helper to `run_op`:
+```rust
+    let helper_script = config::python_says(&cfg.cadswarm_python, "c.helper_script()")?;
+    let mut helper = worker::WorkerDriver::new(
+        cfg.cadswarm_python.clone(),
+        helper_script.into(),
+        cfg.data_dir.clone(),
+        Duration::from_secs(120),
+    );
+    executor::refresh(&space, &mut worker, &[])?;
+    executor::write_status(cfg, &mut worker)?;
+    // ... in the loop:
+            if let Err(e) = executor::run_op(&space, &mut worker, &mut helper, cfg, &op) {
+```
+`cadswarm.config.helper_script()` comes from plan 03 Task 5. Until it lands, `run` fails at that line; for M1 testing before then, wrap the helper start in `match` and log `helper unavailable: {e}`, and have helper kinds complete as failed with code `helper_unavailable`. Delete the fallback once plan 03 Task 5 is on main.
+
 - [ ] **Step 2: Replace `host/src/main.rs`**
 
 ```rust
