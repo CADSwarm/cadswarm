@@ -109,3 +109,8 @@ def test_start_script_sends_the_first_message(tmp_path, monkeypatch):
     assert "leading our team's CAD project \"Robot's arm\"" in first
     again = subprocess.run(["sh", script], capture_output=True, text=True).stdout
     assert "continuing our team's CAD project" in again  # later starts carry on instead of re-planning
+
+def test_nvm_installs_are_ordered_by_version_not_text():
+    paths = [f"/h/.nvm/versions/node/v{v}/bin/claude" for v in ("9.11.2", "22.1.0", "18.20.4")]
+    newest = sorted(paths, key=agent_setup._node_version, reverse=True)[0]
+    assert "v22.1.0" in newest

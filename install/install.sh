@@ -204,7 +204,8 @@ fi
 if [ "$(cd "$HERE" && pwd -P)" = "$( (cd "$DEST" 2>/dev/null && pwd -P) || echo none)" ]; then
     ok "CadSwarm is already installed in FreeCAD"
 else
-    mkdir -p "$DEST.new" || die "Couldn't create $DEST"
+    # Start from an empty staging folder: a failed earlier run must not leave old files in the copy.
+    rm -rf "$DEST.new" && mkdir -p "$DEST.new" || die "Couldn't create $DEST"
     (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
         --exclude=cadswarm-data --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
         --exclude=node_modules --exclude=target .) | (cd "$DEST.new" && tar -xf -) || die "Copying CadSwarm into FreeCAD failed."

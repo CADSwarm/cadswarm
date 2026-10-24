@@ -8,6 +8,7 @@ into the agent's environment.
 import glob
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -282,6 +283,11 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False):
     return written
 
 
+def _node_version(path):
+    """(22, 1, 0) for ~/.nvm/versions/node/v22.1.0/bin/<exe>: newest Node first, not "v9" before "v22"."""
+    return tuple(int(n) for n in re.findall(r"\d+", os.path.basename(os.path.dirname(os.path.dirname(path)))))
+
+
 def find_agent_cli(client):
     """Absolute path of the AI helper's command, or None. Looks beyond PATH because apps
     started from the Start menu don't always see what a terminal sees."""
@@ -299,7 +305,8 @@ def find_agent_cli(client):
     else:
         # Apps started from Finder/the dock or a desktop launcher get a minimal PATH.
         candidates = [os.path.join(home, ".local", "bin", exe)]
-        candidates += sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin", exe)), reverse=True)
+        candidates += sorted(glob.glob(os.path.join(home, ".nvm", "versions", "node", "*", "bin", exe)),
+                             key=_node_version, reverse=True)
         candidates += [os.path.join(home, ".claude", "local", exe),
                        os.path.join(home, ".npm-global", "bin", exe),
                        os.path.join(home, ".volta", "bin", exe),
