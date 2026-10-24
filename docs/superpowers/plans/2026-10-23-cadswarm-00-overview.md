@@ -19,7 +19,9 @@ Spec: `docs/superpowers/specs/2026-10-23-cadswarm-spacetime-design.md`.
 - Times are `u64` milliseconds since the Unix epoch, from `ctx.timestamp`.
 - Status and kind values are lowercase strings (lists below).
 - Reducer errors are `Err("<code>: <message>")`. Clients split on the first `": "` to get the code.
-- Every reducer except `init`, the two lifecycle reducers, `redeem_invite`, `rejoin` and `sweep` takes `fence: u32` as its first argument and rejects a stale fence.
+- Every reducer except `init`, the two lifecycle reducers, `redeem_invite`, `rejoin` and `sweep` takes `fence: u32` as its first argument and rejects a stale fence. The fence is never optional. Only the MCP server (and the web app on connect) calls `rejoin`; the prompt hook and every helper reuse the fence stored by the live process and never rejoin, or they would supersede it.
+- The FreeCAD worker saves `model.FCStd` before committing its transaction; if the save fails (file locked by OneDrive or antivirus), the op aborts so memory and disk never diverge.
+- Project file paths are compared case-insensitively and with Windows 8.3 short names resolved (`NOTES.md` is `notes.md`; `LONGFI~1.MD` is the long name), in `ProjectFiles` and anywhere a path is used as a key.
 - IDs a client creates are strings with a prefix and random hex: op `o_` + 12 hex, task `t_` + 8, message `m_` + 12, brief `b_` + 8, review `r_` + 8, handoff `h_` + 8. Member ids and event seqs are `u64` from `auto_inc`.
 - Heartbeat every 15 s; stale after 30 s without activity (WebSocket clients that are connected never go stale); orphaned after 600 s stale.
 - No secret ever goes into the repo, the web app bundle, or a phone. Ticket tokens travel in the URL fragment only.
@@ -210,5 +212,6 @@ Coordinates in mm from the PCB's lower-left corner, viewed from the top. `side` 
 
 | When | Who | Change |
 |---|---|---|
+| 2026-10-23 | from 3d-cad-08's testing of fddfa28 | Fence never optional; hooks reuse the live fence and never rejoin; the worker saves before committing; file paths are case-insensitive keys on Windows (see Global Constraints) |
 | 2026-10-23 | plan author | Team decision: SpacetimeDB is the core; the teammate's FreeCAD setup guide, `cadswarm-N:` invite codes and file tools stay on top of it. Added op kinds `lookup_board`, `recall_designs` (Elastic, via the host) and the project-file ops; `rules::is_write` refuses file writes for reviewers |
 | 2026-10-23 | plan author | Added `handoff` table, `v_handoff`, `request_handoff`, `cancel_handoff`, `accept_handoff`; disconnects keep the pointer's object and point (mode `idle`) so a handoff snapshot knows where the person was |

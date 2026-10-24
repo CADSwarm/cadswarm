@@ -14,6 +14,7 @@ Read first: `docs/superpowers/plans/2026-10-23-cadswarm-00-overview.md` (contrac
 
 - The worker protocol is JSON lines: request `{"id", "op", "args", "allowed"}`, response `{"ok": true, "result", "created", "modified", "deleted", "recomputed", "broken"}` or `{"ok": false, "code", "error"}`. First line on start is `{"ready": true}`.
 - Worker timeout 120 s; on timeout kill it and restart on the next call (it reloads the last save).
+- The worker saves `model.FCStd` before committing each transaction (fix on branch `fix/post-fddfa28-hardening`); a save failure comes back as an op error and the host completes the op as `failed`, never as `done`.
 - The host's member kind is `host`; it calls `rejoin` on start and then uses its fence from `v_me` on every reducer.
 - Previews: binary STL ≤ 200 KB per object. Artifacts: bytes stored only if ≤ 5 MB.
 - Headless agents: at most 3 workers per brief, each killed after 15 minutes.
