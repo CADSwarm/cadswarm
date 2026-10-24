@@ -26,6 +26,7 @@ Spec: `docs/superpowers/specs/2026-10-23-cadswarm-spacetime-design.md`.
 - Heartbeat every 15 s; stale after 30 s without activity (WebSocket clients that are connected never go stale); orphaned after 600 s stale.
 - No secret ever goes into the repo, the web app bundle, or a phone. Ticket tokens travel in the URL fragment only.
 - Database name: `cadswarm` locally; `cadswarm-<team>` on Maincloud.
+- SpacetimeDB is pinned to **2.11** everywhere: the module crate (`spacetimedb = "=2.11.0"`), the host SDK (`spacetimedb-sdk = "=2.11.0"`), the web SDK (`spacetimedb@~2.11.0`), and the CLI that generates bindings (`spacetime version install 2.11.0`, then `spacetime version use 2.11.0`). 2.12 and later need rustc 1.97; the team boxes have 1.96. Move everyone together or not at all.
 
 ---
 
@@ -216,3 +217,4 @@ Coordinates in mm from the PCB's lower-left corner, viewed from the top. `side` 
 | 2026-10-23 | from 3d-cad-08's testing of fddfa28 | Fence never optional; hooks reuse the live fence and never rejoin; the worker saves before committing; file paths are case-insensitive keys on Windows (see Global Constraints) |
 | 2026-10-23 | plan author | Team decision: SpacetimeDB is the core; the teammate's FreeCAD setup guide, `cadswarm-N:` invite codes and file tools stay on top of it. Added op kinds `lookup_board`, `recall_designs` (Elastic, via the host) and the project-file ops; `rules::is_write` refuses file writes for reviewers |
 | 2026-10-23 | plan author | Added `handoff` table, `v_handoff`, `request_handoff`, `cancel_handoff`, `accept_handoff`; disconnects keep the pointer's object and point (mode `idle`) so a handoff snapshot knows where the person was |
+| 2026-10-23 | from 3d-cad-08's M0 build (`feat/module` 49eb37d) | No contract changes: 19 tables, 18 views, 33 reducers as specified. SpacetimeDB pinned to 2.11 everywhere (see Global Constraints). `sweep` has no `ctx.identity()` guard; in 2.x only the database can invoke a scheduled reducer. Still unverified until a server runs: the HTTP `/sql` response shape and how a reducer `Err` text arrives over HTTP (plan 03 Task 1 depends on both) |

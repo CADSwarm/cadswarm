@@ -725,9 +725,9 @@ git commit -m "feat(host): worker reply mapping and board params seeding"
 ```powershell
 git fetch origin; git rebase origin/main
 spacetime --version
-cargo add --manifest-path host/Cargo.toml spacetimedb-sdk
+cargo add --manifest-path host/Cargo.toml spacetimedb-sdk@=2.11.0
 ```
-The SDK's major.minor must match the CLI that generated the bindings; if `cargo add` picked a different one, pin it: `cargo add --manifest-path host/Cargo.toml spacetimedb-sdk@<cli major.minor>`.
+`spacetime --version` must print 2.11.x (plan 00 Global Constraints: SpacetimeDB is pinned to 2.11 everywhere, because 2.12+ needs rustc 1.97). If it prints something else, run `spacetime version install 2.11.0; spacetime version use 2.11.0` and regenerate the bindings before going on.
 
 - [ ] **Step 2: Read the generated API before writing code**
 
