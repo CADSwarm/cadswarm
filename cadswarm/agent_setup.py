@@ -41,7 +41,9 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
 - Start every task with `model_status` and `list_tasks`; `claim_task` before working.
 - `lock_objects` before changing anything; what you create is yours. Ask owners, don't override them.
 - Shared dimensions go in the `Params` sheet (`set_param`); bind geometry with expressions
-  like `Params.hole_pitch` so a change propagates to every part that depends on it.
+  like `Params.hole_pitch` so a change propagates to every part that depends on it. When parts
+  already repeat a size, `auto_constrain` previews the shared sizes, equal-spacing patterns and
+  shaft/hole fits it can infer; apply the ones you mean.
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
 - Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
   from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what

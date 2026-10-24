@@ -854,6 +854,8 @@ class TeamPanel(QtGui.QDockWidget):
         for title, actions in (
                 ("Build", (("✎ Edit a part yourself…", "Change a part by hand and share the change", edit_part),
                            ("Change a shared size…", "Change a size every part reads from", self.set_param),
+                           ("Auto-constrain…", "Bind the sizes and fits the model already repeats to shared "
+                                               "sizes", auto_constrain),
                            ("Check for clashes", "Find parts that overlap", run_interference),
                            ("Save as 3D file (STEP)…", "Save the shared model as a STEP file", run_export),
                            ("Lighten part…", "Fill the selected part with a lattice that keeps its stiffness",
@@ -2934,6 +2936,11 @@ def tidy_task_view():
         warn(f"couldn't move the Tasks panel: {e}")
 
 
+def auto_constrain():
+    from . import constraints_ui
+    constraints_ui.show()
+
+
 def run_interference():
     r = SESSION.act("POST", "/interference", {}, purpose="check for clashes")
     if r is None:
@@ -3605,3 +3612,5 @@ def register_commands():
         show_panel(), SESSION.panel.msg.setText("@"), SESSION.panel.msg.setFocus(), SESSION.panel.maybe_complete())))
     Gui.addCommand("CadSwarm_Disconnect", Cmd("Leave team", "Leave the session (releases your locks)",
                                               lambda: SESSION.disconnect() if SESSION.connected else None, False))
+    Gui.addCommand("CadSwarm_Constrain", Cmd("Auto-constrain…", "Bind the sizes and fits the model already "
+                                                                "repeats to shared sizes", auto_constrain))

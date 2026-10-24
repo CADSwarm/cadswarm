@@ -32,6 +32,8 @@ Work like a careful teammate:
    Never try to edit someone else's part. Message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
    (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
+   When parts already repeat a size, auto_constrain previews the shared sizes, equal-spacing patterns and
+   shaft/hole fits it can infer; apply the ones you mean.
    For a dev board's real dimensions (hole spacing, port positions, PCB size) call lookup_board, never guess.
 4. Build parametric primitives/booleans, or use run_part_script to compute complex shapes (set `shape`; the
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
@@ -320,6 +322,25 @@ def set_param(alias: str, value: str, note: str | None = None) -> dict:
     """Set a shared dimension in the Params sheet, e.g. alias="hole_pitch", value="40 mm".
     Lock 'Params' first. Owners of parts bound to it are notified of the recompute."""
     return op("set_param", locals(), f"setting Params.{alias}")
+
+
+@mcp.tool()
+def auto_constrain(names: list[str] | None = None, apply: bool = False,
+                   ids: list[str] | None = None) -> dict:
+    """Turn sizes the model already repeats into shared Params, so one edit moves every part.
+
+    It finds equal dimensions across parts, holes on one pitch, and a shaft in a hole that should
+    use the team's slip/press fit. Preview first (the default): the plan lists each constraint with
+    its Params and expressions. Call again with apply=True to write them; pass ids to write only
+    the ones you mean. Applying locks Params and the parts, uses their current revisions, and
+    needs no publish. `names` limits it to a selection."""
+    body = {"apply": bool(apply)}
+    if names:
+        body["names"] = list(names)
+    if ids is not None:
+        body["ids"] = list(ids)
+    return call("POST", "/constrain", body,
+                doing="applying shared sizes" if apply else "looking for shared sizes")
 
 
 @mcp.tool()

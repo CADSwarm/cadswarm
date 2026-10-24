@@ -14,7 +14,7 @@ import re
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from . import ticket
+from . import constraints, ticket
 from .client import HubRequestError, load_json, state_dir
 from .space import SpaceClient, SpaceError
 from .space_library import LibraryRoutes
@@ -94,6 +94,7 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/ops", self.ops), ("POST", r"/locks", self.lock), ("POST", r"/locks/release", self.release),
             ("POST", r"/interference", self.interference), ("POST", r"/printability", self.printability),
             ("POST", r"/dependents", self.dependents), ("POST", r"/export", self.export),
+            ("POST", r"/constrain", self.constrain),
             ("GET", r"/participants", self.participants_route), ("POST", r"/takeover", self.takeover),
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
@@ -509,6 +510,34 @@ class SpaceHub(LibraryRoutes):
 
     def dependents(self, body):
         return self.run_op("dependents", {"names": body.get("names", [])})
+
+    def constrain(self, body):
+        """Auto-constrain: propose shared sizes/patterns/fits, or apply the chosen ones.
+
+        Preview (apply false) writes nothing. Apply writes Params and expressions through the
+        existing ops, locking Params and every part first and honoring each part's revision.
+        """
+        model = self.model()
+        names = [str(n) for n in body["names"]] if body.get("names") else None
+        scope = [o for o in (model.get("objects") or [])
+                 if names is None or o["name"] in set(names)]
+        details = {}
+        for o in scope:
+            if o.get("name") == "Params" or "Spreadsheet" in str(o.get("type") or ""):
+                continue
+            try:
+                details[o["name"]] = self.run_op("get_object", {"name": o["name"]}) or {}
+            except HubRequestError as e:
+                if e.code not in ("not_found", "bad_args"):
+                    raise  # a broken part should not stop the rest, but a lost host should
+        plan = constraints.plan_from_model(model, details, settings=self.setting_values(),
+                                           names=names)
+        if not body.get("apply"):
+            return {"plan": plan, "applied": None}
+        ids = [str(i) for i in body["ids"]] if body.get("ids") is not None else None
+        out = constraints.apply(plan, self, ids=ids)
+        out["plan"] = plan
+        return out
 
     def export(self, body):
         r = self.run_op("export", {"format": body.get("format", "step"), "names": body.get("names"),
