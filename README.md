@@ -162,7 +162,7 @@ CadSwarm uses the Factory Droid SDK (`cadswarm/reviewer.py`) as the swarm's desi
 - **What it can touch:** only inspection and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
 - **Where you see its work:** every tool call and finding is written to the `activity` table and shown live in the app, and its verdict is stored in `review` and shown as a review card on the brief.
 
-Setup, once per team (needs `pip install droid-sdk`, the `droid` CLI, and `FACTORY_API_KEY`):
+Setup, once per team (needs `pip install droid-sdk` or `pip install -e ".[reviewer]"`, the `droid` CLI, and `FACTORY_API_KEY`):
 
 ```powershell
 host\target\release\cadswarm-host --data .\team-model init-reviewer
