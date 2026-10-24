@@ -117,6 +117,33 @@ pub fn redeem_invite(ctx: &ReducerContext, token: String, name: String, client: 
     Ok(())
 }
 
+/// Renames the calling member: a person, or an AI helper through its own sign-in (FreeCAD holds it in the
+/// helper's folder). Not fenced: a name changes nothing in the model, and a helper is renamed while its agent
+/// may be running. Open tasks waiting for the old name follow the member.
+#[reducer]
+pub fn rename_me(ctx: &ReducerContext, name: String) -> Result<(), String> {
+    let m = latest_member(ctx, ctx.sender())
+        .filter(|m| m.status == "active" || m.status == "stale")
+        .ok_or_else(|| "not_member: join with an invite first".to_string())?;
+    let name = name.trim().to_string();
+    if name == m.name {
+        return Ok(());
+    }
+    rules::check_rename(&name, live_by_name(ctx, m.ws, &name).map(|x| x.id), m.id)?;
+    let old = m.name.clone();
+    let waiting: Vec<Task> = ctx.db.task().ws().filter(&m.ws)
+        .filter(|t| t.status != "done" && t.assignee.eq_ignore_ascii_case(&old))
+        .collect();
+    let now = now_ms(ctx);
+    for t in waiting {
+        ctx.db.task().id().update(Task { assignee: name.clone(), updated_ms: now, ..t });
+    }
+    let (ws, id) = (m.ws, m.id);
+    ctx.db.member().id().update(Member { name: name.clone(), ..m });
+    emit(ctx, ws, "renamed", id, json!({"name": name, "from": old}));
+    Ok(())
+}
+
 /// Creates the member row, delivers mail queued for the name, and inherits a stale namesake's work.
 fn join_as(ctx: &ReducerContext, ws: u64, name: &str, kind: &str, client: &str, role: &str, endpoint_id: &str) -> Result<Member, String> {
     rules::check_name(name)?;

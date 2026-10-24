@@ -34,7 +34,7 @@ def add_freecad_paths(bin_dir):
 
 
 # Modules a part script may import: geometry and maths only. No os, shutil, subprocess,
-# pathlib, socket, ctypes… — scripts build shapes; saving files goes through save_file,
+# pathlib, socket, ctypes…: scripts build shapes; saving files goes through save_file,
 # which never overwrites. This is a guard against accidents and naive misuse, not a
 # security boundary (Python cannot be fully sandboxed in-process); the real boundary is the OS
 # sandbox this script runs inside (see sandbox.py).

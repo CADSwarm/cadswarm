@@ -39,6 +39,7 @@ pub mod receipt_type;
 pub mod redeem_invite_reducer;
 pub mod rejoin_reducer;
 pub mod release_objects_reducer;
+pub mod rename_me_reducer;
 pub mod report_review_reducer;
 pub mod report_task_reducer;
 pub mod request_handoff_reducer;
@@ -111,6 +112,7 @@ pub use receipt_type::Receipt;
 pub use redeem_invite_reducer::redeem_invite;
 pub use rejoin_reducer::rejoin;
 pub use release_objects_reducer::release_objects;
+pub use rename_me_reducer::rename_me;
 pub use report_review_reducer::report_review;
 pub use report_task_reducer::report_task;
 pub use request_handoff_reducer::request_handoff;
@@ -259,6 +261,9 @@ pub enum Reducer {
         names: Vec<String>,
         force: bool,
     },
+    RenameMe {
+        name: String,
+    },
     ReportReview {
         fence: u32,
         review_id: String,
@@ -367,6 +372,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::RedeemInvite { .. } => "redeem_invite",
             Reducer::Rejoin { .. } => "rejoin",
             Reducer::ReleaseObjects { .. } => "release_objects",
+            Reducer::RenameMe { .. } => "rename_me",
             Reducer::ReportReview { .. } => "report_review",
             Reducer::ReportTask { .. } => "report_task",
             Reducer::RequestHandoff { .. } => "request_handoff",
@@ -561,6 +567,9 @@ impl __sdk::Reducer for Reducer {
                 names: names.clone(),
                 force: force.clone(),
             }),
+            Reducer::RenameMe { name } => {
+                __sats::bsatn::to_vec(&rename_me_reducer::RenameMeArgs { name: name.clone() })
+            }
             Reducer::ReportReview {
                 fence,
                 review_id,

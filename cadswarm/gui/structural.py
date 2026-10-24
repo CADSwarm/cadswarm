@@ -12,6 +12,7 @@ from PySide import QtCore, QtGui
 from ..config import freecad_import_dirs
 from ..paths import ROOT, app_dir, freecad_python
 from ..structural.collaboration import accepted_operation
+from .panel import fit_to_screen
 
 
 DEMO = {
@@ -28,8 +29,8 @@ DEMO = {
 class OptimizeDialog(QtGui.QDialog):
     def __init__(self, obj):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CADSwarm — Optimize Part")
-        self.resize(760, 780)
+        self.setWindowTitle("CADSwarm: Optimize Part")
+        fit_to_screen(self, 760, 780)
         self.source_doc, self.source_name = obj.Document.Name, obj.Name
         self.source_brep = obj.Shape.exportBrepToString()
         self.preview_doc = None
@@ -119,7 +120,7 @@ class OptimizeDialog(QtGui.QDialog):
         self.inputs.setVisible(visible)
         self.inputs_button.setText("Hide inputs" if visible else "Show inputs / run again")
         self.layout().activate()
-        self.resize(760, 820 if visible else 350)
+        fit_to_screen(self, 760, 820 if visible else 350)
 
     def load_demo(self):
         for key, value in {**DEMO["material"], **DEMO["constraints"], "pitch_mm": 3, "force": "[0, 0, -200]"}.items():
@@ -237,7 +238,7 @@ class OptimizeDialog(QtGui.QDialog):
                 candidate = candidate.cut(cutter)
             candidate.translate(App.Vector(offset, 0, 0))
             doc.Original.Shape, doc.Optimized.Shape = source, candidate
-            suffix = " — section display" if enabled else ""
+            suffix = ": section display" if enabled else ""
             doc.Original.Label, doc.Optimized.Label = "Original" + suffix, "Optimized" + suffix
             doc.recompute()
             self.section_button.setText("Show whole models" if enabled else "Show section view (display only)")
@@ -348,7 +349,7 @@ class OptimizationDemoCommand:
         doc = App.newDocument("StructuralOptimizationDemo")
         doc.Label = "Structural optimization demo"
         obj = doc.addObject("Part::Box", "Original")
-        obj.Label = "Original — select to optimize"
+        obj.Label = "Original: select to optimize"
         obj.Length, obj.Width, obj.Height = 72, 24, 24
         doc.recompute()
         Gui.Selection.clearSelection()

@@ -198,6 +198,16 @@ pub fn check_name(name: &str) -> Result<(), String> {
     if ok { Ok(()) } else { Err("bad_args: name must be 1-40 letters, digits, - or _".into()) }
 }
 
+/// Renaming a member to `name`: a valid name that no other live member holds (`holder` is the live member
+/// with that name, compared without case). The same member may change only the case of its own name.
+pub fn check_rename(name: &str, holder: Option<u64>, me: u64) -> Result<(), String> {
+    check_name(name)?;
+    match holder {
+        Some(id) if id != me => Err(format!("name_in_use: {name:?} is already taken on this team. Pick another name.")),
+        _ => Ok(()),
+    }
+}
+
 pub fn check_take_over(
     taker: u64,
     target: u64,
@@ -510,5 +520,15 @@ mod tests {
         assert!(result_events(&json!({"ok": true})).is_empty());
         let many = json!({"_events": (0..20).map(|i| json!({"kind": "fea_progress", "data": {"i": i}})).collect::<Vec<_>>()});
         assert_eq!(result_events(&many).len(), MAX_RESULT_EVENTS);
+    }
+
+    #[test]
+    fn a_rename_needs_a_valid_name_nobody_else_holds() {
+        assert!(check_rename("lid-builder", None, 7).is_ok());
+        assert!(check_rename("Lid-Builder", Some(7), 7).is_ok()); // only the case of its own name changed
+        let taken = check_rename("lid-builder", Some(3), 7).unwrap_err();
+        assert!(taken.starts_with("name_in_use:"), "{taken}");
+        assert!(check_rename("lid builder", None, 7).unwrap_err().starts_with("bad_args:"));
+        assert!(check_rename("", None, 7).is_err());
     }
 }
