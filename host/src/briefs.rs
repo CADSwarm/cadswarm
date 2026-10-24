@@ -30,6 +30,8 @@ pub struct BriefState {
     pub active: usize,
     pub done: usize,
     pub cancelled: usize,
+    /// Reported blocked by a helper; nothing can reopen it, so it must not hold the brief open.
+    pub blocked: usize,
     pub exporting: bool,
     pub reviewer_enabled: bool,
     pub reviewer_alive: bool,
@@ -68,10 +70,16 @@ pub fn next_action(s: &BriefState) -> Action {
                 Action::Export
             }
         }
-        // Nothing is running and nothing was built: every task was stopped or removed. A brief
-        // must not sit in `building` forever waiting for work that will never arrive.
+        // Nothing is running and nothing was built: every task was stopped, blocked or removed.
+        // A brief must not sit in `building` forever waiting for work that will never arrive.
         "building" if s.open + s.active == 0 && s.cancelled > 0 => {
             Action::Fail("every task was stopped; a person needs to steer".into())
+        }
+        "building" if s.open + s.active == 0 && s.blocked > 0 => {
+            Action::Fail("every task is blocked; a person needs to steer".into())
+        }
+        "building" if s.open + s.active + s.done + s.cancelled + s.blocked == 0 => {
+            Action::Fail("every task was removed; a person needs to steer".into())
         }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
@@ -341,6 +349,7 @@ impl Orchestrator {
             active: tasks.iter().filter(|t| t.status == "claimed" || t.status == "awaiting_takeover").count(),
             done: tasks.iter().filter(|t| t.status == "done").count(),
             cancelled: tasks.iter().filter(|t| t.status == "cancelled").count(),
+            blocked: tasks.iter().filter(|t| t.status == "blocked").count(),
             exporting: rt.export_op.is_some(),
             reviewer_enabled: self.reviewer_enabled,
             reviewer_alive: rt.reviewer.as_mut().map(|a| a.alive()).unwrap_or(false),
@@ -507,8 +516,13 @@ mod tests {
     #[test]
     fn a_brief_whose_every_task_was_stopped_fails_instead_of_hanging() {
         assert!(matches!(next_action(&BriefState { cancelled: 2, ..st("building") }), Action::Fail(_)));
+        assert!(matches!(next_action(&BriefState { blocked: 2, ..st("building") }), Action::Fail(_)));
+        // The last task was deleted: no rows are left to count.
+        assert!(matches!(next_action(&st("building")), Action::Fail(_)));
         // A cancelled task does not hide finished work: the build still reviews and exports.
         assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
+        // A blocked task does not hide a finished part either.
+        assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Export);
     }
 
     #[test]
