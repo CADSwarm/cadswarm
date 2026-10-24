@@ -2,7 +2,7 @@
 
 Runs inside FreeCAD's bundled Python (NOT the hub's venv) and owns the single
 live shared document. The hub talks to it over JSON lines on stdin/stdout,
-one request at a time, so every mutation of the model is serialized — FreeCAD
+one request at a time, so every mutation of the model is serialized: FreeCAD
 is not thread-safe, and this is the one place the document is ever touched.
 
 Every mutating op runs inside a FreeCAD transaction. After the op and a
@@ -128,7 +128,7 @@ def save():
                 except OSError:
                     pass
                 raise OpError("save_failed", f"Could not write {os.path.basename(DOC_PATH)} ({e}); another "
-                              "program probably has it open. Your change was rolled back — try again.")
+                              "program probably has it open. Your change was rolled back. Try again.")
             time.sleep(SAVE_BACKOFF * (attempt + 1))
 
 
@@ -286,7 +286,7 @@ def op_create_primitive(a):
 
 
 def op_create_extrusion(a):
-    """Closed XY polygon (+ optional round holes) extruded along Z — a static Part::Feature."""
+    """Closed XY polygon (+ optional round holes) extruded along Z: a static Part::Feature."""
     pts = a.get("points") or []
     if len(pts) < 3:
         raise OpError("bad_args", "points needs at least 3 [x, y] pairs")

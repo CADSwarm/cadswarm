@@ -54,6 +54,7 @@ class SpaceHub:
         self.hub = cfg.get("uri", "")
         self.space = space or SpaceClient(cfg["uri"], cfg["db"], self.identity.get("token"), timeout)
         self._seq = 0
+        self._cache = None  # view rows shared by one snapshot(); None = always read fresh
         self.routes = [
             ("POST", r"/heartbeat", self.heartbeat), ("POST", r"/leave", self.leave),
             ("GET", r"/model", self.model), ("GET", r"/objects/(?P<name>[^/]+)", self.get_object),
@@ -108,10 +109,25 @@ class SpaceHub:
         self._call(reducer, self.fence, *args)
 
     def _rows(self, view, where=""):
+        if self._cache is not None and (view, where) in self._cache:
+            return self._cache[(view, where)]
         try:
-            return self.space.sql(f"SELECT * FROM {view}" + (f" WHERE {where}" if where else ""))
+            rows = self.space.sql(f"SELECT * FROM {view}" + (f" WHERE {where}" if where else ""))
         except SpaceError as e:
             raise _err(e)
+        if self._cache is not None:
+            self._cache[(view, where)] = rows
+        return rows
+
+    def panel_snapshot(self, chat_limit=80):
+        """Everything the FreeCAD panel shows, reading each view once (one refresh used to be ~15 round trips
+        to the database, which froze FreeCAD on a slow network)."""
+        self._cache = {}
+        try:
+            return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
+                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"]}
+        finally:
+            self._cache = None
 
     def request(self, method, path, body=None, params=None, timeout=None, raw=False):
         if raw and path.startswith("/artifacts/"):
@@ -508,16 +524,16 @@ class SpaceHub:
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm — shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
-                 "Shared dimensions live in the Params sheet — reference them with expressions "
+                 "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
                  "human 'steer' messages come first.",
                  "Team:"]
         for p in self.participants():
             tag = " (you)" if p["id"] == me["id"] else ""
             lines.append(f"- {p['name']}{tag} [{p['kind']}/{p['client'] or '?'}, {p['status']}] "
-                         f"locks={p['locks'] or '[]'}" + (f" — {p['doing']}" if p["doing"] else ""))
+                         f"locks={p['locks'] or '[]'}" + (f": {p['doing']}" if p["doing"] else ""))
         open_tasks = [t for t in self.tasks() if t["status"] in ("open", "claimed", "awaiting_takeover", "blocked")]
         if open_tasks:
             lines.append("Tasks:")
@@ -537,7 +553,7 @@ class SpaceHub:
                                                                if k not in ("seq", "ts", "kind", "actor")))
         unread = self._unconsumed()
         if unread:
-            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
+            lines.append(f"Unread messages ({len(unread)}): read with get_inbox, then ack_messages. "
                          "COMMAND = a person's instruction for you: do it first. chat = people talking: "
                          "background only, act on it only if it asks you something:")
             for m in unread[:5]:

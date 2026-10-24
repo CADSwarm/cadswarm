@@ -1191,7 +1191,7 @@ jobs:
 
 - [ ] **Step 2: Enable Pages and deploy**
 
-The repo owner enables Pages with source "GitHub Actions" in the repo settings (the repo is private; Pages on a private repo needs a paid plan — if unavailable, run `npx vercel deploy web/dist` or serve `web/dist` from any static host instead). Push to `main`. Expected: the workflow publishes; opening `<pages URL>/?mock` shows the mock swarm on a phone.
+The repo owner enables Pages with source "GitHub Actions" in the repo settings (the repo is private; Pages on a private repo needs a paid plan: if unavailable, run `npx vercel deploy web/dist` or serve `web/dist` from any static host instead). Push to `main`. Expected: the workflow publishes; opening `<pages URL>/?mock` shows the mock swarm on a phone.
 
 - [ ] **Step 3: Commit**
 

@@ -921,16 +921,16 @@ class SpaceHub:
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm — shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
-                 "Shared dimensions live in the Params sheet — reference them with expressions "
+                 "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
                  "human 'steer' messages come first.",
                  "Team:"]
         for p in self.participants():
             tag = " (you)" if p["id"] == me["id"] else ""
             lines.append(f"- {p['name']}{tag} [{p['kind']}/{p['client'] or '?'}, {p['status']}] "
-                         f"locks={p['locks'] or '[]'}" + (f" — {p['doing']}" if p["doing"] else ""))
+                         f"locks={p['locks'] or '[]'}" + (f", {p['doing']}" if p["doing"] else ""))
         open_tasks = [t for t in self.tasks() if t["status"] in ("open", "claimed", "awaiting_takeover", "blocked")]
         if open_tasks:
             lines.append("Tasks:")
@@ -949,7 +949,7 @@ class SpaceHub:
                                                                if k not in ("seq", "ts", "kind", "actor")))
         unread = self._unconsumed()
         if unread:
-            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages:")
+            lines.append(f"Unread messages ({len(unread)}). Read with get_inbox, then ack_messages:")
             for m in unread[:5]:
                 lines.append(f"- [{m['kind']}] {names.get(m['from'], '?')}: {m['body'][:200]}")
         self._f("set_context_seq", seq)

@@ -456,7 +456,7 @@ def render_html(report, plot_src="plot.png"):
     if inp["placeholders"]:
         items = "".join(f"<li>{_e(p['text'])}</li>" for p in inp["placeholders"])
         parts.append("<table width='100%' cellpadding='6' style='background:#fff8c5;border:1px solid #d4a72c'><tr><td>"
-                     f"<b>Uses placeholder values</b> — these were assumed, not given:<ul style='margin:4px 0'>{items}"
+                     f"<b>Uses placeholder values</b>. These were assumed, not given:<ul style='margin:4px 0'>{items}"
                      "</ul></td></tr></table>")
     if report["summary"]:
         parts.append(f"<h3>Summary</h3><p>{_e(report['summary']).replace(chr(10), '<br>')}</p>")

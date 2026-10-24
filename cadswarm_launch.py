@@ -2,6 +2,7 @@
 
     python cadswarm_launch.py mcp            # an AI helper's MCP server (Claude Code / Codex start this)
     python cadswarm_launch.py hook           # UserPromptSubmit hook (stdlib only, fast)
+    python cadswarm_launch.py runner <dir>   # keeps the AI helper in <dir> on the team, no terminal needed
     python cadswarm_launch.py check          # is the MCP package importable?
     python cadswarm_launch.py <cli args>     # anything else goes to the `cadswarm` CLI
 
@@ -21,6 +22,11 @@ def main():
         from cadswarm.prompt_hook import main as hook
         hook()
         os._exit(0)
+    if cmd == "runner":
+        # Stdlib only, like the hook: it runs for hours and only ever starts the agent CLI.
+        from cadswarm.runner import main as runner_main
+        runner_main(sys.argv[2:])
+        return
     from cadswarm.paths import activate_deps
     activate_deps()
     if cmd == "mcp":

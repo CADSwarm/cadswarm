@@ -15,7 +15,7 @@ def run(request, output):
 
     source = None
     if "brep" in request:
-        import FreeCAD  # noqa: F401 — initializes the Part module search paths
+        import FreeCAD  # noqa: F401. Initializes the Part module search paths
         import Part
         from .freecad import discretize, reconstruct, preserve_boxes
         source = Part.Shape()

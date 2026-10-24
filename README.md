@@ -1,6 +1,6 @@
 # CADSwarm
 
-**Build 3D designs together with your team's AI helpers — no CAD or coding experience needed.**
+**Build 3D designs together with your team's AI helpers: no CAD or coding experience needed.**
 
 Each teammate's AI helper (Claude Code, Codex, Droid, or the CLI you already use) builds part of one
 shared 3D model, live.
@@ -36,8 +36,8 @@ Or install by hand:
    - *First person on the team:* choose **Start a new team project**, name it, and copy the
      **invite code** to your teammates.
    - *Everyone else:* choose **Join a teammate's project** and paste the invite code.
-   - Then pick your AI helper. The guide connects it, opens it for you, gives you a first
-     message to paste, and tells you when it has joined the team.
+   - Then pick your AI helper. The guide connects it and starts it in the background, so there's no
+     window to keep open and nothing to paste. You talk to it in the CadSwarm panel's **Chat**.
 
 That's it. Next time, open the **CadSwarm** shortcut (or pick *CadSwarm* in FreeCAD's workbench
 list) and you're back with your team. If you hosted the team, its server starts again when you open CadSwarm (it doesn't start on its
@@ -48,8 +48,11 @@ own after a reboot until you do).
   [Codex](https://learn.chatgpt.com/docs/codex/cli), or
   [Factory Droid](https://docs.factory.ai/cli/getting-started/quickstart). The guide detects which ones
   you have and links to install instructions.
-- The first time you open an AI helper in its folder it may ask whether you trust the folder, and
-  may ask to approve the "cadswarm" tools. Say yes to both.
+- Your AI helper must be signed in once on this computer (open `claude`, `codex` or `droid` in a terminal
+  and follow its sign-in). After that CadSwarm starts it by itself whenever FreeCAD is open, and wakes it
+  when someone messages it or hands it a task. Its log is under **Team tools ▸ Show my AI helper's log**.
+- AI helpers always join as ordinary members. The people on the team lead it, and only a person's computer
+  hosts it.
 - **Whoever starts a team** makes one extra download, about 50 MB: CadSwarm's team server plus the
   [SpacetimeDB](https://spacetimedb.com/) database program (pinned to 2.13.0). The guide fetches them
   into CadSwarm's app folder (`%APPDATA%\CadSwarm` on Windows, `~/Library/Application Support/CadSwarm`
@@ -73,29 +76,31 @@ own after a reboot until you do).
 
 ## Working with your team in FreeCAD
 
-The **CadSwarm Team** panel on the right (wide, with large text and buttons) has four tabs, so talking and
-giving orders never get mixed up:
+The **CadSwarm Team** panel on the right follows the size of the FreeCAD window (drag its edge to give it
+more or less room) and scrolls when the window is short.
 
 - **Who's here** (top) shows every person and AI helper. A helper that is busy shows a turning
-  **◐ Working on "…"**; one with nothing to do shows **Ready for instructions**.
-- **Tasks**: click **＋ New task…**, say what kind of task it is (build a part, change one, check strength,
-  fix clashes), describe it, and pick who does it: a helper, "whichever helper is free first", or yourself.
-  Leave **Start right away** ticked and the helper is told to begin. For a task that's already on the
-  list, use **Ask to start**, **I'll do it** or **Mark done**.
-- **Tell a helper**: instructions for one AI helper (or all of them). A helper does these before anything
-  else. Each one shows **⏳ not read yet**, **👀 read — working on it** or **✓ done**. The quick buttons fill in
-  common ones (check for clashes, run a strength check, give me a status, pause, let go of a part).
-  Helpers read new instructions when they finish a step, and between tasks they wait for new ones, so you
-  don't have to go back to their window. Pick **🧠 The whole team — plan it and build it** instead of a
-  helper to hand over a whole request ("a stand for a 7 mm thick phone"): the team server plans it into
-  tasks and starts AI helpers itself (using the agent CLI on the hosting computer), and the list shows its
-  progress (*planning*, *building (1/3 parts done)*, *done*).
-- **Helpers start themselves.** When the guide connects an AI helper and you click **Open**, it starts
-  with its first instructions already sent; nothing to paste. Opening it again later sends a short
-  "carry on" instead.
-- **Team chat**: people talking to each other. Helpers can read it, and their replies show up here marked
-  *(AI helper)*, but they never take chat as an order.
-- **Activity**: what happened, written by CadSwarm (parts added, tasks finished, files saved, reports).
+  **◐ Working on "…"**; one with nothing to do shows **Ready for instructions**. If a helper is away, a
+  line under the list says why (for example, it runs on a teammate's computer that isn't on).
+- **Chat**: one conversation with your team. Pick who you're talking to:
+  - an **AI helper** (or **All AI helpers**): it does what you ask before anything else and answers right
+    there, first with what it'll do and then with what it did. Your message shows **⏳ not read yet**,
+    **👀 read, working on it** or **✓ done**. The quick buttons (Status?, Clashes, Strength, Pause, Let go)
+    send common requests in one click. Enter sends; Shift+Enter starts a new line.
+  - **🧠 The whole team: plan it and build it** to hand over a whole request ("a stand for a 7 mm thick
+    phone"): the team server plans it into parts, starts AI helpers itself (with the agent CLI on the
+    hosting computer) and shows the progress in **Tasks**.
+  - **People only**, or one person: plain chat. AI helpers can read it but don't act on it.
+- **Tasks**: everything that needs doing. Whole-team requests show their parts underneath them with
+  progress. Click **＋ New task…**, describe it and pick who does it: a helper, whichever helper is free
+  first, the whole team, or yourself. For a task already on the list, use **Start it**, **I'll do it** or
+  **Mark done**.
+- **Activity**: what happened, written by CadSwarm (parts added, tasks finished, files saved, reports), and
+  🤝 the messages AI helpers send each other while they work together.
+- **AI helpers work together.** A helper can see who is free (`list_helpers`), hand another helper part of
+  a job (`delegate_task`, which wakes that helper) and ask the helper who holds a part to change it. When a
+  handed-out task is finished, the helper that handed it out is woken with the result. Each helper runs at
+  most 30 times an hour, so two helpers can't keep waking each other.
 
 **Changing a part yourself.** Select the part in the 3D view and click **✎ Edit a part…**. While the
 editor is open, the part is held by you, so no helper can change it at the same time. Type a new size

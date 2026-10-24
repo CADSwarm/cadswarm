@@ -5,7 +5,7 @@
 // - views:   conn.db.vMe, conn.db.vMember, ... (camelCase accessors; snake_case aliases are deprecated)
 // - rows:    camelCase fields (statusText, bedXMm, stlHash, atMs); u64 columns arrive as bigint, u32 as number,
 //            Vec<u8> as Uint8Array
-// - reducers: conn.reducers.lockObjects({ fence, names }) — one object argument, returns a Promise that
+// - reducers: conn.reducers.lockObjects({ fence, names }): one object argument, returns a Promise that
 //            rejects with Error("<code>: <message>") when the reducer returns Err
 import type { Infer } from 'spacetimedb';
 import { DbConnection } from './module_bindings';

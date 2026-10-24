@@ -4,7 +4,7 @@ Hobbyists never install Python: everything (the team server, each AI helper's
 MCP server, the prompt hook) runs in FreeCAD's own bundled Python. The few
 packages the server side needs are pip-installed once into a private folder
 (`deps_dir()`), never into FreeCAD itself, and only helper processes put that
-folder on their path — so FreeCAD's own packages are never shadowed.
+folder on their path, so FreeCAD's own packages are never shadowed.
 Stdlib only: imported by FreeCAD's GUI, the launcher and the CLI alike.
 """
 import os

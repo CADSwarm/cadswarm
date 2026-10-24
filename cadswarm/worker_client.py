@@ -3,7 +3,7 @@
 Calls are serialized by a lock: the worker handles one request at a time, which
 is exactly the ordering guarantee the shared document needs. If the worker
 dies (an agent script segfaulting OCC, say), the next call restarts it from the
-FCStd it saved after its last committed op — so a crash loses at most the op
+FCStd it saved after its last committed op, so a crash loses at most the op
 that crashed it, never committed work.
 """
 import json
