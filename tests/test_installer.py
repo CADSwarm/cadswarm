@@ -39,9 +39,13 @@ def test_installs_into_the_folder_freecad_reports_and_adds_a_shortcut(tmp_path):
     assert (dest / "InitGui.py").exists() and (dest / "cadswarm" / "fea.py").exists()
     for skipped in (".git", ".venv", "__pycache__"):
         assert not list(dest.rglob(skipped))
-    desktop = (tmp_path / "home" / ".local" / "share" / "applications" / "cadswarm.desktop").read_text()
-    assert f'Exec="{exe}" "{dest}/cadswarm/gui/open_cadswarm.py"' in desktop  # paths with spaces stay whole
-    assert "Icon=" in desktop and "no Python of its own" in r.stdout  # a distro FreeCAD can only join
+    assert "no Python of its own" in r.stdout  # a distro FreeCAD can only join
+    if sys.platform == "darwin":  # the shortcut is an app made with osacompile
+        assert (tmp_path / "home" / "Applications" / "CadSwarm.app").is_dir(), r.stdout
+    else:
+        desktop = (tmp_path / "home" / ".local" / "share" / "applications" / "cadswarm.desktop").read_text()
+        assert f'Exec="{exe}" "{dest}/cadswarm/gui/open_cadswarm.py"' in desktop  # paths with spaces stay whole
+        assert "Icon=" in desktop
 
     r = run(tmp_path, "--yes", "--no-shortcut", CADSWARM_FREECAD=str(exe))  # again: a clean update
     assert r.returncode == 0 and (dest / "InitGui.py").exists() and not list(user_dir.parent.glob("**/CadSwarm.new"))
