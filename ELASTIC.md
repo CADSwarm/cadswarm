@@ -12,8 +12,8 @@ process's environment and is never written to the repo, the database, or an agen
 | Index | Written by | Read by |
 | --- | --- | --- |
 | `cadswarm-boards` | `python -m cadswarm.ingest boards/sources.json` | `cadswarm.board_docs` tool, `lookup_board` helper op |
-| `cadswarm-designs` | `index_design` when a brief reaches `ready` | `cadswarm.design_memory` tool, `recall_designs` helper op |
-| `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes) | `cadswarm.board_lessons` tool, `lessons` helper op |
+| `cadswarm-designs` | `index_design` (`cadswarm.knowledge`) for a finished brief | `cadswarm.design_memory` tool, `recall_designs` helper op |
+| `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes), from reviewer findings | `cadswarm.board_lessons` tool, `lessons` helper op |
 
 `cadswarm-boards` and `cadswarm-designs` use `semantic_text` with the JINA embedding endpoint,
 so Elasticsearch chunks and embeds the text itself; queries are hybrid (BM25 + semantic) and
@@ -42,6 +42,10 @@ powershell -File ..\cadswarm-guide\scripts\with-env.ps1 .venv\Scripts\python.exe
 `elastic/setup.json` creates the inference endpoint and the three indices (idempotent).
 `ingest` skips a source whose text extracts to nothing (scanned or vector-only PDFs) instead of
 indexing a blank document.
+
+Run one host per database. Two `cadswarm-host` processes share the host identity and supersede
+each other's fence, so either one can win the export completion; if the loser predates
+`index_design`, the brief still reaches `ready` but is never indexed.
 
 ## Agent Builder (optional, not in the demo)
 
@@ -83,6 +87,12 @@ A run takes about a second. `GET /api/workflows/executions/<id>` shows step-by-s
 the failure reason if a step errors; `DELETE /api/workflows/workflow/<id>` removes a workflow. The
 scheduled trigger fires every 10 minutes, so lessons stay current without anyone pressing run.
 
+The Workflow only has something to write when a design carries `problems`, and those come from the
+design reviewer. The reviewer is a Factory Droid agent (`python -m cadswarm.reviewer`, enabled by
+`cadswarm-host init-reviewer`), so on a machine without Droid every brief finishes with
+`problems: []`: the Workflow still runs and completes, it just distils nothing. The judged demo
+therefore shows board search, design memory and the Workflow itself, not a populated lessons index.
+
 ## Validated live (2026-10-24)
 
 Serverless Elasticsearch/Kibana 9.6.0, project region us-east-1:
@@ -92,10 +102,16 @@ Serverless Elasticsearch/Kibana 9.6.0, project region us-east-1:
   mechanical drawing extracts no text and is skipped.
 - Hybrid + rerank search returns the right board chunks for Pico holes, ESP32-S3 dimensions, and
   Uno mounting holes with a `board_id` filter.
+- Design memory round trip: a live brief ("an enclosure for an ESP32-S3-DevKitC-1 with a lid and a
+  USB cutout") was built by the swarm, exported, and indexed by the host on export completion with
+  its 36 final params. `recall_designs` then returned it first (score 1.661) for "a pocket enclosure
+  for an ESP32-S3 dev board with a USB cutout". Deleting the document and re-running the export put
+  it back, so the automatic path works, not just the helper op.
 - The three tools and `cadswarm-board-expert` install cleanly; one converse answered in 65 s before
   the trial model quota ran out (see Known limit).
-- `distil-lessons` ran end to end and wrote two lessons from a synthetic finished design (removed
-  afterwards), with `updated_at` coming from ES|QL `NOW()`.
+- `distil-lessons` ran end to end, both steps `completed`, against the real design. It wrote 0
+  lessons: that design finished with `problems: []` because no reviewer ran, which is the case
+  above rather than a fault in the Workflow.
 
 Known limit: the agent's model is whichever model Agent Builder is configured with, and on the trial
 tier that is a managed model with a per-model request quota. When the quota is exhausted, `converse`
