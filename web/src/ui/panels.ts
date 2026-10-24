@@ -122,7 +122,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null) {
       <p class="brief-text">${esc(brief.text)}</p>
       ${brief.board ? `<p class="muted small">Board: ${esc(brief.board)}</p>` : ''}
       <ol class="steps ${brief.status === 'failed' ? 'failed' : ''}" aria-label="Build progress">
-        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''} title="${st}">${STEP_LABEL[st]}</li>`).join('')}
+        ${STEPS.map((st, i) => `<li class="${i < at ? 'done' : i === at ? 'now' : ''}"${i === at ? ' aria-current="step"' : ''} title="${st}" aria-label="${st}">${STEP_LABEL[st]}</li>`).join('')}
       </ol>
       ${brief.status === 'failed' ? '<p class="err">The build failed. Check the activity feed for why.</p>' : ''}
       ${tasks.length ? `<p class="small"><b>${done}</b> of ${tasks.length} tasks done</p>` : ''}

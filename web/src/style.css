@@ -80,8 +80,8 @@ button.mini { min-height: 32px; margin: 0; padding: 4px 10px; font-size: 13px; b
 /* ---- Status card ---- */
 .brief-text { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .steps { display: flex; gap: 4px; list-style: none; padding: 0; margin: 10px 0; }
-.steps li { flex: 1; min-width: 0; font: 600 10.5px/1.2 system-ui; text-transform: uppercase; letter-spacing: .03em; color: var(--muted);
-  padding-top: 8px; border-top: 4px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.steps li { flex: 1; min-width: 0; font: 600 10.5px/1.2 system-ui; text-transform: uppercase; letter-spacing: .02em; color: var(--muted);
+  padding-top: 8px; border-top: 4px solid var(--line); overflow-wrap: anywhere; white-space: normal; }
 .steps li.done { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .steps li.now { border-color: var(--accent); color: var(--fg); }
 .steps.failed li.now { border-color: var(--err); }

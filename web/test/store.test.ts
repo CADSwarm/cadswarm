@@ -23,4 +23,13 @@ describe('Store', () => {
     expect(s.holderOf('Lid')?.name).toBe('m1');
     expect(s.activePointers().map(p => p.member)).toEqual([1]);
   });
+  it('hides a pointer that has nowhere to point (an agent whose op just finished)', () => {
+    const s = new Store();
+    s.set({ members: [m(1), m(2)],
+      pointers: [
+        { member: 1, object: '', point: [], mode: 'pointing', label: '', op: '', seq: 2, atMs: 0 },
+        { member: 2, object: 'Lid', point: [], mode: 'editing', label: 'building Lid', op: 'o_1', seq: 1, atMs: 0 },
+      ] });
+    expect(s.activePointers().map(p => p.member)).toEqual([2]);
+  });
 });
