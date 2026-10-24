@@ -43,7 +43,10 @@ powershell -File ..\cadswarm-guide\scripts\with-env.ps1 .venv\Scripts\python.exe
 `ingest` skips a source whose text extracts to nothing (scanned or vector-only PDFs) instead of
 indexing a blank document.
 
-## Agent Builder
+## Agent Builder (optional, not in the demo)
+
+The demo and the judging story use search, design memory and the Workflow only. This section is the
+extra that ships alongside them; it degrades to the local board library whenever it is unavailable.
 
 `elastic/agent.json` and `elastic/tools/*.json` define the Board expert:
 
@@ -89,11 +92,14 @@ Serverless Elasticsearch/Kibana 9.6.0, project region us-east-1:
   mechanical drawing extracts no text and is skipped.
 - Hybrid + rerank search returns the right board chunks for Pico holes, ESP32-S3 dimensions, and
   Uno mounting holes with a `board_id` filter.
-- The three tools and `cadswarm-board-expert` install cleanly; the first converse answered in 65 s.
+- The three tools and `cadswarm-board-expert` install cleanly; one converse answered in 65 s before
+  the trial model quota ran out (see Known limit).
 - `distil-lessons` ran end to end and wrote two lessons from a synthetic finished design (removed
   afterwards), with `updated_at` coming from ES|QL `NOW()`.
 
-Known limit: the Agent Builder agent's default model is Anthropic Claude on the trial tier, which
-has a per-model trial quota. When it is exhausted, converse returns 429 until the quota refills
-(the message states how long). The rest of the pipeline (search, ingest, tools, Workflow) does not
-use that model.
+Known limit: the agent's model is whichever model Agent Builder is configured with, and on the trial
+tier that is a managed model with a per-model request quota. When the quota is exhausted, `converse`
+returns a bare `429 Too Many Requests` with no refill time, and the model selection made in the
+Kibana UI is not stored on the agent document, so it cannot be changed from this API. Nothing else
+in the pipeline (search, ingest, design memory, the Workflow) uses that model, and the host's
+`board_spec` call is best effort: on any error it falls back to the local board library.
