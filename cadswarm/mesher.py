@@ -2,7 +2,7 @@
 
 Standard FreeCAD downloads ship `gmsh`, and the FEA runner uses that first. If it can't find one, the hub
 installs the official Gmsh build from PyPI (one pinned version, checked against a hard-coded SHA-256) into
-CadSwarm's own folder, `<app dir>/tools/gmsh-<version>/`. Nothing goes into FreeCAD or the system. The wheel
+CADSwarm's own folder, `<app dir>/tools/gmsh-<version>/`. Nothing goes into FreeCAD or the system. The wheel
 has no stand-alone program, only the Gmsh library and its Python API, so a two-line launcher runs it with the
 hub's own Python as `python gmsh_launcher.py - shape2mesh.geo`, which takes the same arguments as `gmsh`.
 

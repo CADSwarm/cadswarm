@@ -17,9 +17,12 @@ from .space_hub import project_hub
 
 MCP_SERVER = "cadswarm"
 
-# What the reviewer may do: read, run the checks, file tasks, talk, and record its verdict.
+# What the reviewer may do: read, run the checks, move its own pointer, file tasks, talk, and
+# record its verdict.  `point_at` changes nothing but where the reviewer's arrow rests: the
+# module lets any member move its own pointer, and the team sees this one on the part under
+# review, in the reviewer's colour.
 ALLOWED = (
-    "model_status", "get_object", "check_interference", "check_printability",
+    "model_status", "get_object", "point_at", "check_interference", "check_printability",
     "create_task", "send_message", "report_review",
 )
 
@@ -34,9 +37,11 @@ def review_prompt(brief, board_label, bed, round_no, style=""):
         "   write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n" + style + "\n"
     ) if style else ""
     return (
-        f"You are the design REVIEWER for CadSwarm brief {brief['id']} (review round {round_no}).\n"
+        f"You are the design REVIEWER for CADSwarm brief {brief['id']} (review round {round_no}).\n"
         f"The person asked: \"{brief['text']}\". Board: {board_label}. Printer bed: {bed[0]} x {bed[1]} x {bed[2]} mm.\n"
         "Check, using the tools only (you cannot change geometry):\n"
+        "0. Your arrow shows the team which part you are on: call point_at(\"<part>\") before you check it,\n"
+        "   and point_at again when you move to the next one.  It only moves your pointer, never the model.\n"
         "1. model_status: read the Params sheet (the board's measured dimensions) and the parts.\n"
         "2. check_interference on all parts: any clash between separate parts is a problem.\n"
         "3. Fit: the enclosure's inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs must sit at\n"
@@ -48,6 +53,27 @@ def review_prompt(brief, board_label, bed, round_no, style=""):
         f"Finish by calling report_review(brief_id=\"{brief['id']}\", round={round_no}, passed=<true only if no problems>,\n"
         "findings=[{\"object\", \"problem\", \"task_id\"}])."
     )
+
+
+def brief_objects(tasks, brief_id):
+    """The parts this brief's tasks name, in task order and without repeats.
+
+    Used to park the reviewer's arrow on the first part the moment the round starts, so
+    the team sees where the review is happening before Droid's first tool call."""
+    seen = []
+    for t in tasks or []:
+        if (t.get("brief") or "") != brief_id:
+            continue
+        names = t.get("objects")
+        if isinstance(names, str):
+            try:
+                names = json.loads(names or "[]")
+            except ValueError:
+                names = []
+        for name in names or []:
+            if isinstance(name, str) and name and name not in seen:
+                seen.append(name)
+    return seen
 
 
 def team_style(hub, brief):
@@ -137,7 +163,7 @@ async def review(project, brief_id, round_no):
 
     hub, _cfg = project_hub(project)
     if hub is None:
-        raise SystemExit(f"{project} is not set up for CadSwarm; run cadswarm setup --invite first")
+        raise SystemExit(f"{project} is not set up for CADSwarm; run cadswarm setup --invite first")
     hub.join()
     briefs = [b for b in hub.space.sql("SELECT * FROM v_brief") if b["id"] == brief_id]
     if not briefs:
@@ -158,20 +184,30 @@ async def review(project, brief_id, round_no):
                                           env={"CADSWARM_PROJECT": project})],
         restrict_tools=REVIEW_TOOLS,
     )
+    # The reviewer gets a pointer of its own, in its own colour: park it on the first part
+    # of this brief before Droid's first tool call, so the team sees the review start.
+    parts = brief_objects(hub.space.sql("SELECT * FROM v_task"), brief_id)
+    if parts:
+        hub.move_pointer(parts[0], [], "inspecting", f"reviewing {parts[0]}")
     hub.log_activity("say", f"reviewing brief {brief_id}, round {round_no}", [])
     # The SDK starts Droid itself (no shell), so hand it the real binary rather than PATH's shim.
     interactions = InteractionHandlers(on_permission=allow_review_tools)
-    async with Session(cwd=project, config=config, interactions=interactions,
-                       runtime=Runtime(executable=droid_exe())) as session:
-        await _review_tool_ids(session)
-        prompt = review_prompt(brief, brief.get("board") or "unspecified", bed, round_no, team_style(hub, brief))
-        async with session.stream(prompt) as stream:
-            async for ev in stream:
-                if isinstance(ev, (ToolCall, ToolResult, AssistantMessage)):
-                    mapped = activity_for(ev)
-                    if mapped:
-                        _adopt_fence(hub, project)
-                        hub.log_activity(*mapped)
+    try:
+        async with Session(cwd=project, config=config, interactions=interactions,
+                           runtime=Runtime(executable=droid_exe())) as session:
+            await _review_tool_ids(session)
+            prompt = review_prompt(brief, brief.get("board") or "unspecified", bed, round_no, team_style(hub, brief))
+            async with session.stream(prompt) as stream:
+                async for ev in stream:
+                    if isinstance(ev, (ToolCall, ToolResult, AssistantMessage)):
+                        mapped = activity_for(ev)
+                        if mapped:
+                            _adopt_fence(hub, project)
+                            hub.log_activity(*mapped)
+    finally:
+        # The round is over: rest the reviewer's arrow like any agent's when it stops working.
+        _adopt_fence(hub, project)
+        hub.move_pointer("", [], "idle", "")
     # If Droid never recorded a verdict, record a failing one so the brief does not hang.
     reviews = [r for r in hub.space.sql("SELECT * FROM v_review") if r["brief"] == brief_id and r["round"] == round_no]
     if not reviews:

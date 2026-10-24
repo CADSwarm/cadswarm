@@ -1,11 +1,11 @@
-# CadSwarm lattice — agent guide
+# CADSwarm lattice — agent guide
 
 **Status:** proposed, 2026-10-24. **The tools described here do not exist yet.** This guide is written against
 the [lattice contract v1](../superpowers/specs/2026-10-24-lattice-contract.md) so the tools can be implemented
 and tested against a stable description. Do not call these tools until `lattice_capabilities` is present in your
 tool list.
 
-**Audience:** AI helpers (Claude Code, Codex) working in a CadSwarm team.
+**Audience:** AI helpers (Claude Code, Codex) working in a CADSwarm team.
 **Related:** [contract](../superpowers/specs/2026-10-24-lattice-contract.md) ·
 [implementation plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) ·
 [evidence dossier](../superpowers/research/2026-10-24-implicit-build-evidence.md) ·
@@ -84,7 +84,7 @@ closed solid. A part with multiple solids, an open shell or an empty shape is re
 
 ## 4. Tools
 
-All tools keep the normal CadSwarm response convention: success returns data, failure returns
+All tools keep the normal CADSwarm response convention: success returns data, failure returns
 `{"error": "...actionable text...", "code": "..."}`. Tools never raise through MCP.
 
 | Tool | Mutates model? | Purpose |

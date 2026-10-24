@@ -1,11 +1,12 @@
-# CadSwarm lattice documentation
+# CADSwarm lattice documentation
 
-This folder documents a proposed CadSwarm capability: local, agent-accessible lattice generation for a closed
+This folder documents a proposed CADSwarm capability: local, agent-accessible lattice generation for a closed
 part in the shared FreeCAD model, with a thin `Lattice` tab and MCP tools for the team's AI helpers.
 
 **Status: proposed, 2026-10-24. No implementation code has been written.** The documents exist so the feature
 can be reviewed, scoped and implemented without rediscovering the design. Commands, tools and tabs described
-here do not exist yet.
+here do not exist yet. A throwaway headless test of the geometry kernel is recorded in
+[the PicoGK spike](spike-2026-10-24.md); it produced an STL outside the product and changed no CADSwarm code.
 
 **Provenance:** the capability is a clean-room reimplementation of the core workflow observed in
 [IMPLICIT](https://implicit.build/), using PicoGK 2.3.0 and the LEAP 71 libraries (Apache-2.0). No IMPLICIT
@@ -22,6 +23,7 @@ code, assets or strings are used. See the evidence dossier for the boundary and 
 | [Implementation plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) | implementers, project lead | Phased tasks 0–9, repository layout, acceptance criteria, benchmarks, risks, backlog |
 | [Agent guide](agent-guide.md) | AI helpers (Claude Code, Codex) | How to use the tools, choose parameters, read warnings, recover from errors, and stay safe |
 | [Operator guide](operator-guide.md) | host, support, rollout | Install, configure, run the tab, job states, storage, troubleshooting, limits, security |
+| [PicoGK spike, 2026-10-24](spike-2026-10-24.md) | implementers | What a throwaway headless test of the kernel proved (speed, mesh size, process shape) and what it did not |
 
 The contract is the source of truth for names, fields, limits and error codes. If a guide disagrees with it, the
 contract wins and the guide is wrong.
@@ -79,7 +81,7 @@ These hold across the contract, plan and guides:
    lock change.
 5. **Agents never pass paths.** They name a job and an output object; the hub resolves the rest.
 6. **Everything is millimetres.** 3MF declares millimetres; STL is interpreted as millimetres.
-7. **The engine is optional.** Missing or disabled means `lattice_unavailable`, and the rest of CadSwarm is
+7. **The engine is optional.** Missing or disabled means `lattice_unavailable`, and the rest of CADSwarm is
    unaffected.
 8. **Local only.** No uploads, no telemetry, no hosted fallback.
 9. **Additive.** Existing ops, tools, locks and storage behavior do not change.
@@ -153,7 +155,7 @@ These are recorded in the plan and evidence dossier, and should be settled first
 - IMPLICIT is proprietary. The public page and bundles were used as **reference** for observable behavior only.
   No code, assets, locale strings, shaders, WASM or recipe schema are copied. Do not add any.
 - Public mathematical definitions of TPMS surfaces and beam cells are not proprietary; the implementation must
-  still be CadSwarm's own.
+  still be CADSwarm's own.
 - PicoGK, LEAP 71 ShapeKernel and the LEAP 71 Lattice Library are Apache-2.0. Pin exact versions, keep the
   licence texts, and ship `THIRD_PARTY_NOTICES.md` with any distribution. Re-verify before release.
 - The evidence dossier is engineering input, not legal advice.

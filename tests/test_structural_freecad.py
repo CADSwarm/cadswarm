@@ -29,7 +29,7 @@ def test_real_freecad_roundtrips_and_holes(tmp_path, solver):
     if solver == "calculix" and not (os.environ.get("CADSWARM_CCX") or any((Path(python).parent / n).is_file() for n in ("ccx.exe", "ccx"))):
         pytest.skip("CalculiX unavailable")
     proc = subprocess.run([python, str(ROOT / "tests" / "structural_freecad_check.py"), str(tmp_path), solver],
-                          env=env, capture_output=True, text=True, timeout=180)
+                          env=env, capture_output=True, encoding="utf-8", errors="replace", timeout=180)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     evidence = json.loads((tmp_path / "verified.json").read_text())
     assert evidence["optimized_volume_mm3"] < evidence["original_volume_mm3"]
@@ -52,7 +52,7 @@ def test_accepted_operation_runs_in_the_worker(tmp_path):
         request_path.write_text(json.dumps(request), encoding="utf-8")
         out = tmp_path / "output"
         proc = subprocess.run([python, "-m", "cadswarm.structural.job", str(request_path), str(out)], env=env,
-                              capture_output=True, text=True, timeout=180)
+                              capture_output=True, encoding="utf-8", errors="replace", timeout=180)
         assert proc.returncode == 0, proc.stdout + proc.stderr
         report = json.loads((out / "report.json").read_text())
         candidate = (out / "optimized.brep").read_text()
@@ -85,6 +85,6 @@ def test_real_freecad_gui_accept_reject_cancel(tmp_path):
     env["FREECAD_USER_HOME"] = str(profile)
     env["FREECAD_USER_DATA"] = str(profile)
     proc = subprocess.run([python, str(ROOT / "tests" / "structural_gui_check.py"), str(tmp_path)], env=env,
-                          capture_output=True, text=True, timeout=240)
+                          capture_output=True, encoding="utf-8", errors="replace", timeout=240)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads((tmp_path / "gui-verified.json").read_text())["accepted"]

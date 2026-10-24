@@ -1,4 +1,4 @@
-"""The old CadSwarm hub's REST paths, answered by SpacetimeDB.
+"""The old CADSwarm hub's REST paths, answered by SpacetimeDB.
 
 The MCP server, prompt hook and FreeCAD workbench were written against `HubClient.get/post`
 and the JSON shapes `cadswarm/hub/core.py` returned. SpaceHub keeps those paths and shapes:
@@ -42,6 +42,34 @@ def _json(text, default):
         return default
 
 
+def _findings(text):
+    """Review findings as plain sentences. Reviewer JSON is free-form, so take whatever shape arrives:
+    a list of strings, a list of objects, or {"findings": [...]} with message/text/detail/summary keys."""
+    v = _json(text, [])
+    if isinstance(v, dict):
+        v = v.get("findings") or []
+    if not isinstance(v, list):
+        return [str(v)] if v else []
+    out = []
+    for f in v:
+        if isinstance(f, str):
+            out.append(f.strip())
+        elif isinstance(f, dict):
+            # The reviewer's prompt asks for {"object", "problem", "task_id"}; older verdicts and
+            # free-form experiments use the other keys. Read the problem, not the JSON blob.
+            line = f.get("problem") or next(
+                (f[k] for k in ("message", "text", "detail", "summary", "finding") if f.get(k)), None)
+            if not line:
+                out.append(json.dumps(f))
+            elif f.get("object"):
+                out.append(f"{f['object']}: {str(line).strip()}")
+            else:
+                out.append(str(line).strip())
+        elif f is not None:
+            out.append(str(f))
+    return [f for f in out if f]
+
+
 def _num(v):
     try:
         return float(v)
@@ -70,11 +98,15 @@ class SpaceHub(LibraryRoutes):
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/cancel", self.cancel_task),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/delete", self.delete_task),
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
             ("POST", r"/reviews", self.report_review),
+            ("POST", r"/briefs/(?P<bid>[^/]+)/cancel", self.cancel_brief),
+            ("GET", r"/workspace", self.workspace), ("POST", r"/bed", self.set_bed),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
             # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
             ("GET", r"/health", self.health), ("POST", r"/join", self.join_route), ("POST", r"/brep", self.brep),
@@ -137,7 +169,8 @@ class SpaceHub(LibraryRoutes):
         self._cache = {}
         try:
             return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
-                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"]}
+                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"],
+                    "reviews": self.reviews(), "workspace": self.workspace()}
         finally:
             self._cache = None
 
@@ -502,6 +535,17 @@ class SpaceHub(LibraryRoutes):
         self._f("report_task", tid, body.get("status", "done"), body.get("summary", ""), body.get("evidence") or [])
         return self.task(tid)
 
+    def cancel_task(self, body, tid):
+        """Stop a task. A person may stop any; a helper only one it asked for or claimed."""
+        self._f("cancel_task", tid, body.get("reason") or "")
+        return self.task(tid)
+
+    def delete_task(self, body, tid):
+        """Remove a leftover open task. A claimed one is stopped instead, so no work disappears."""
+        t = self.task(tid)  # 404 before the call, so a bad id reads as unknown_task
+        self._f("delete_task", tid)
+        return {"task": tid, "title": t["title"], "deleted": True}
+
     # ----------------------------------------------------------------- messages
 
     def send(self, body):
@@ -605,7 +649,7 @@ class SpaceHub(LibraryRoutes):
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CADSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
                  "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
@@ -701,15 +745,48 @@ class SpaceHub(LibraryRoutes):
         out = []
         for b in sorted(self._rows("v_brief"), key=lambda b: b["created_ms"], reverse=True)[:int(limit)]:
             mine = [t for t in tasks if t.get("brief") == b["id"]]
-            out.append({"id": b["id"], "text": b["text"], "status": b["status"], "by": names.get(b["by"], "?"),
+            out.append({"id": b["id"], "text": b["text"], "board": b["board"], "status": b["status"],
+                        "by": names.get(b["by"], "?"),
                         "at": b["created_ms"] / 1000, "tasks": len(mine),
-                        "done": sum(1 for t in mine if t["status"] == "done")})
+                        "done": sum(1 for t in mine if t["status"] == "done"),
+                        "stl": b["stl_hash"]})
         return {"briefs": out}
 
     def submit_brief(self, body):
         bid = ticket.new_id("b_")
         self._f("submit_brief", bid, body.get("text", ""), body.get("board") or "")
         return {"brief": bid}
+
+    def cancel_brief(self, body, bid):
+        """Stop a whole request; unstarted tasks go with it and the host no longer works on it."""
+        self._f("cancel_brief", bid)
+        return {"brief": bid, "status": "cancelled"}
+
+    def workspace(self):
+        """The team's printer bed, in millimetres. The reviewer and the printability check both use it."""
+        rows = self._rows("v_workspace")
+        bed = [180.0, 180.0, 180.0] if not rows else [rows[0]["bed_x_mm"], rows[0]["bed_y_mm"], rows[0]["bed_z_mm"]]
+        return {"bed": bed, "bed_x_mm": bed[0], "bed_y_mm": bed[1], "bed_z_mm": bed[2]}
+
+    def set_bed(self, body):
+        try:
+            x, y, z = (float(body[k]) for k in ("x_mm", "y_mm", "z_mm"))
+        except (KeyError, TypeError, ValueError):
+            raise HubRequestError(400, {"error": "Set the bed's width, depth and height in millimetres.",
+                                        "code": "bad_args"})
+        if not 20.0 <= min(x, y, z) or max(x, y, z) > 2000.0:
+            raise HubRequestError(400, {"error": "A printer bed between 20 and 2000 mm on each side, please.",
+                                        "code": "bad_args"})
+        self._f("set_bed", x, y, z)
+        return self.workspace()
+
+    def reviews(self, limit=10):
+        """The Droid reviewer's rounds, newest first, with findings as sentences a person can read."""
+        out = []
+        for r in sorted(self._rows("v_review"), key=lambda r: r["at_ms"], reverse=True)[:int(limit)]:
+            out.append({"id": r["id"], "brief": r["brief"], "round": r["round"], "passed": bool(r["passed"]),
+                        "findings": _findings(r.get("findings_json")), "at": r["at_ms"] / 1000})
+        return out
 
     def accept_handoff(self, body, hid):
         self._f("accept_handoff", hid)

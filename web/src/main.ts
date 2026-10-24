@@ -36,7 +36,7 @@ function askForCode(intro: string) {
     <form class="pair" data-code>
       <label>Invite code
         <textarea name="code" rows="4" required placeholder="cadswarm-2:…" autocomplete="off" spellcheck="false"></textarea></label>
-      <p class="muted small">In FreeCAD: CadSwarm team panel ▸ <b>Invite</b> makes a code and copies it. A code from
+      <p class="muted small">In FreeCAD: CADSwarm team panel ▸ <b>Invite</b> makes a code and copies it. A code from
         <code>cadswarm-host invite</code> or a phone link works too.</p>
       <button type="submit">Continue</button>
       <p class="err" role="alert"></p>
@@ -66,7 +66,7 @@ async function boot() {
   let t: Ticket | null = null;
   if (frag) t = decodeTicket(frag);
   if (!t && !lastDb()) {
-    askForCode('<h1>CadSwarm</h1><p>Scan the invite QR from the host, or paste the invite code your teammate sent you.</p>');
+    askForCode('<h1>CADSwarm</h1><p>Scan the invite QR from the host, or paste the invite code your teammate sent you.</p>');
     return;
   }
   await start(t);
@@ -77,7 +77,7 @@ async function start(t: Ticket | null) {
   // A local team's code points at 127.0.0.1; from another device, reach that computer at the address that served this page.
   if (t) t = { ...t, uri: reachableUri(t.uri, location.hostname) };
   const target = t ? { uri: t.uri, db: t.db } : lastDb();
-  if (!target) { askForCode('<h1>CadSwarm</h1><p>Paste the invite code your teammate sent you.</p>'); return; }
+  if (!target) { askForCode('<h1>CADSwarm</h1><p>Paste the invite code your teammate sent you.</p>'); return; }
   message('<p class="muted">Connecting…</p>');
   const { connect } = await import('./api');
   const saved = loadSession(target.uri, target.db);
@@ -85,7 +85,7 @@ async function start(t: Ticket | null) {
   try { api = await connect(store, target.uri, target.db, saved); }
   catch (e) {
     if (!saved || !t) {
-      throw new Error(`Couldn't reach the team at ${target.uri}. Check that the host computer is on and CadSwarm is ` +
+      throw new Error(`Couldn't reach the team at ${target.uri}. Check that the host computer is on and CADSwarm is ` +
         `running there${/127\.0\.0\.1|localhost/.test(target.uri) ? ', and open this page on that computer (its code points at itself)' : ''}.`);
     }
     forgetSession(target.uri, target.db); // stored token refused (database reset?); join fresh with the ticket

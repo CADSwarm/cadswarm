@@ -1,10 +1,10 @@
-# FreeCAD runs this when it starts. This folder (the CadSwarm add-on) is on sys.path,
+# FreeCAD runs this when it starts. This folder (the CADSwarm add-on) is on sys.path,
 # so the `cadswarm` package beside this file is importable.
 import FreeCADGui as Gui
 
 
 class CadSwarmWorkbench(Gui.Workbench):
-    MenuText = "CadSwarm"
+    MenuText = "CADSwarm"
     ToolTip = "Build one 3D model together with your team's AI helpers"
     Icon = """
 /* XPM */
@@ -25,8 +25,8 @@ static char * icon_xpm[] = {
         from cadswarm.gui.structural import register_command
         register_command()
         # Everything else lives in the team panel's tabs; the toolbar only opens it (and the setup guide).
-        self.appendToolbar("CadSwarm", ["CadSwarm_Connect", "CadSwarm_Panel"])
-        self.appendMenu("CadSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
+        self.appendToolbar("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel"])
+        self.appendMenu("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
                                      "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_Style",
                                      "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator", "CadSwarm_Interference",
                                      "CadSwarm_Export", "CadSwarm_OptimizePart", "CadSwarm_FeaReports",

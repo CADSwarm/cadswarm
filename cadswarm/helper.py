@@ -60,7 +60,7 @@ class Project:
 
     @property
     def style(self):
-        """What the team's way of working has taught CadSwarm (style_memory.py)."""
+        """What the team's way of working has taught CADSwarm (style_memory.py)."""
         if self._style is None:
             self._style = StyleMemory(self.db, self.clock)
         return self._style
@@ -96,7 +96,7 @@ def _author(a):
     return _actor(a).get("name") or "someone"
 
 
-def _people_only(a, what, where="the CadSwarm panel's Tools tab > Storage and free up space"):
+def _people_only(a, what, where="the CADSwarm panel's Tools tab > Storage and free up space"):
     if _actor(a).get("kind") != "human":
         raise HelperError("humans_only", f"Only a person can {what}. Ask someone on the team to do it "
                                          f"(in FreeCAD: {where}).")
@@ -227,7 +227,7 @@ def teach_style(p, a):
 
 
 def resolve_style(p, a):
-    _people_only(a, "confirm or dismiss a design-style rule", "the CadSwarm panel > Learned style")
+    _people_only(a, "confirm or dismiss a design-style rule", "the CADSwarm panel > Learned style")
     rule = p.style.resolve(_need(a, "rule_id"), _need(a, "decision"), _author(a))
     return {"rule": rule, "profile": p.style.context("", "", 6)["text"]}
 

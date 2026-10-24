@@ -105,7 +105,8 @@ and the binaries. The repo is **private**, so anyone not logged in gets 404 and 
 The alternative is publishing the release files to a public location and pointing `ensure_tools` at it.
 
 If making it public:
-- [ ] **Scan the full history for secrets first.** Run `gitleaks detect --source . --log-opts="--all"` in a fresh clone (install with `winget install gitleaks`). If gitleaks is not available, use DeepSeek `swarm_fanout` over `git log --all -p` chunks with the instruction "list any API key, token, password, private key or .env content; quote the commit and line". Also grep for `ELASTIC_API_KEY=`, `FACTORY_API_KEY=`, `ApiKey `, `-----BEGIN`, and `trycloudflare.com/#t=` (phone links carry live single-use invite tokens).
+- [x] **Scan the full history for secrets first.** Run `gitleaks detect --source . --log-opts="--all"` in a fresh clone (install with `winget install gitleaks`). If gitleaks is not available, use DeepSeek `swarm_fanout` over `git log --all -p` chunks with the instruction "list any API key, token, password, private key or .env content; quote the commit and line". Also grep for `ELASTIC_API_KEY=`, `FACTORY_API_KEY=`, `CARTESIA`, `ApiKey `, `-----BEGIN`, and `trycloudflare.com/#t=` (phone links carry live single-use invite tokens).
+  **Done 2026-10-24 without gitleaks** (not installed): `git log --all -p` over all 228 commits (1.88 MiB pack) searched for every pattern above plus `BEGIN *PRIVATE KEY`, `sk-`, `ghp_`, `password=`, `token=` and long `ApiKey` values. Every hit is placeholder or prose: `.env.example` keys are empty, one doc line says `<base64 api key>`, and the `trycloudflare` hits are regexes, a config `allowedHosts`, and plan text. No private key, live token, invite URL or tracked `.env` file. The only tracked env file in history is `.env.example`.
 - [ ] If anything is found: rotate the key at its provider **first**, then decide with the owner whether to rewrite history (`git filter-repo`) or accept the rotated key in history.
 - [ ] The owner flips visibility (Settings → General → Danger Zone). Verify with `curl -sI https://github.com/SachchitBalamurugan/cadswarm/releases/latest/download/SHA256SUMS.txt` while logged out: expect `302` then `200`.
 
@@ -220,8 +221,8 @@ If making it public:
 #### T3a: An agent's pointer stays on screen after its op finishes
 
 Root cause: the module's `complete_op` sets the actor's pointer to mode `"pointing"` with an empty object and label (`module/src/ops.rs` line ~103: `set_pointer(ctx, ws, by, "", vec![], "pointing", "", "")`). The web store's `activePointers()` keeps every non-idle pointer of an active member, so the glyph lingers. The fix is on both sides:
-- [ ] **Module** `module/src/ops.rs`: change that call's mode `"pointing"` to `"idle"`. The agent's next tool call moves the pointer again through `log_activity` / `submit_op`. No schema change: republish **without** `--delete-data`.
-- [ ] **Web** `web/src/store.ts` `activePointers()`: also drop pointers that have nowhere to point:
+- [x] **Module** `module/src/ops.rs`: change that call's mode `"pointing"` to `"idle"`. The agent's next tool call moves the pointer again through `log_activity` / `submit_op`. No schema change: republish **without** `--delete-data`.
+- [x] **Web** `web/src/store.ts` `activePointers()`: also drop pointers that have nowhere to point:
 ```ts
   activePointers() {
     return this.state.pointers.filter(p =>
@@ -229,17 +230,17 @@ Root cause: the module's `complete_op` sets the actor's pointer to mode `"pointi
       this.member(p.member)?.status === 'active');
   }
 ```
-- [ ] **Web** `web/src/mock.ts`: once the brief is `ready`, the mock keeps calling `build(...)` (the final `else` branch). Change that branch so it no longer creates `editing` pointers. Advance a counter and do nothing visible, or re-emit only `activity`. The pointers set to `idle` at the `ready` step must stay idle.
-- [ ] Test `web/test/store.test.ts` (new `it`): a pointer `{mode: 'pointing', object: '', point: []}` of an active member is not in `activePointers()`; `{mode: 'editing', object: 'Lid', point: []}` is.
-- [ ] **Deploy order:** merge, then publish the module to Maincloud **without** `--delete-data`:
+- [x] **Web** `web/src/mock.ts`: once the brief is `ready`, the mock keeps calling `build(...)` (the final `else` branch). Change that branch so it no longer creates `editing` pointers. Advance a counter and do nothing visible, or re-emit only `activity`. The pointers set to `idle` at the `ready` step must stay idle.
+- [x] Test `web/test/store.test.ts` (new `it`): a pointer `{mode: 'pointing', object: '', point: []}` of an active member is not in `activePointers()`; `{mode: 'editing', object: 'Lid', point: []}` is.
+- [x] **Deploy order:** merge, then publish the module to Maincloud **without** `--delete-data`:
   `spacetime publish --server maincloud --module-path module --yes cadswarm-calhacks-ca8c`. Run `spacetime publish --help` first to confirm a non-breaking publish of the same db keeps data. If it prompts about breaking changes, stop and ask a person.
 
 #### T3b: Step labels truncate on phones
 
 `web/src/style.css` `.steps li` uses `white-space: nowrap; text-overflow: ellipsis` at 10.5 px, and `web/src/ui/panels.ts` renders `STEP_LABEL` = Sent / Plan / Build / Review / Ready (uppercased by CSS).
-- [ ] In `style.css`, change `.steps li` to wrap instead of truncating: replace `overflow: hidden; text-overflow: ellipsis; white-space: nowrap;` with `overflow-wrap: anywhere; white-space: normal;`, and drop the letter-spacing to `.02em`.
-- [ ] Keep the single label set (`STEP_LABEL`), and add the full status as an accessible name: in `panels.ts`, the `<li>` already has `title="${st}"`; add `aria-label="${st}"`.
-- [ ] Visual check: build, serve `vite preview`, open `/?mock` at 360×740 (headless Edge plus CDP device metrics, as before), and confirm all five labels are fully visible in the `reviewing` state. Save the screenshot to the scratchpad.
+- [x] In `style.css`, change `.steps li` to wrap instead of truncating: replace `overflow: hidden; text-overflow: ellipsis; white-space: nowrap;` with `overflow-wrap: anywhere; white-space: normal;`, and drop the letter-spacing to `.02em`.
+- [x] Keep the single label set (`STEP_LABEL`), and add the full status as an accessible name: in `panels.ts`, the `<li>` already has `title="${st}"`; add `aria-label="${st}"`. The build bubble lives in `ask.ts`, so the labels and the full names were added there; `panels.ts` only exports the status list.
+- [x] Visual check: build, serve `vite preview`, open `/?mock` at 360×740 (headless Edge plus CDP device metrics, as before), and confirm all five labels are fully visible in the `reviewing` state. Save the screenshot to the scratchpad. **Screenshots were unavailable** (the browser pane refuses to capture a hidden tab and headless Edge returned blank frames), so the check was done in the live page: the five `<li>`s were cloned into a 300 px and then a 180 px wide container. At 300 px each label is one line (57 px, `scrollWidth` equals `clientWidth`). At 180 px each wraps to two lines (33 px wide, 34 px tall) with `scrollHeight` equal to `clientHeight`, so nothing is clipped, and every label carries its full `title` and `aria-label`.
 
 **Acceptance:** web tests green (≥ 26), screenshot shows full labels, the module is republished, and no lingering pointer after `ready` in `?mock`.
 

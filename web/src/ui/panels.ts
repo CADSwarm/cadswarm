@@ -7,6 +7,8 @@ import { mountParams } from './params';
 import { freeHelper, helperNow, startInstruction } from './helpers';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
+import { mountSponsors } from './sponsors';
+import { mountPrinter, mountReview } from './review';
 import { esc } from './esc';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
@@ -27,6 +29,11 @@ export function currentBrief(s: Pick<State, 'briefs'>): Brief | undefined {
   return [...s.briefs].sort((a, b) => b.updatedMs - a.updatedMs)[0];
 }
 
+/** The newest request that has a finished model, so a newer unfinished one cannot hide it. */
+export function modelBrief(s: Pick<State, 'briefs'>): Brief | undefined {
+  return [...s.briefs].filter(b => b.stlHash).sort((a, b) => b.updatedMs - a.updatedMs)[0];
+}
+
 /** The latest review round for a brief. */
 export function latestReview(s: Pick<State, 'reviews'>, brief: string): Review | undefined {
   return s.reviews.filter(r => r.brief === brief).sort((a, b) => b.round - a.round)[0];
@@ -38,9 +45,14 @@ export function findingLines(json: string, max = 3): string[] {
   try { v = JSON.parse(json); } catch { return json.trim() ? [json.trim()] : []; }
   const list = Array.isArray(v) ? v : v && typeof v === 'object' && Array.isArray((v as { findings?: unknown }).findings)
     ? (v as { findings: unknown[] }).findings : [];
-  return list.slice(0, max).map(f => typeof f === 'string' ? f
-    : f && typeof f === 'object' ? String((f as Record<string, unknown>).message ?? (f as Record<string, unknown>).text
-      ?? (f as Record<string, unknown>).detail ?? (f as Record<string, unknown>).summary ?? JSON.stringify(f)) : String(f));
+  return list.map(f => {
+    if (typeof f === 'string') return f;
+    if (!f || typeof f !== 'object') return String(f);
+    const r = f as Record<string, unknown>;
+    // The reviewer's prompt asks for {"object","problem","task_id"}; older verdicts use other keys.
+    const text = String(r.problem ?? r.message ?? r.text ?? r.detail ?? r.summary ?? JSON.stringify(f));
+    return r.object ? `${r.object}: ${text}` : text;
+  }).filter(Boolean).slice(0, max);
 }
 
 /** Ask the 3D view to fly to a part (the viewer listens; panels never touch three.js). */
@@ -53,7 +65,10 @@ function loadTab(): Tab {
   return 'ask';
 }
 
-const TASK_GROUPS: [string, string[]][] = [['In progress', ['claimed', 'awaiting_takeover']], ['To do', ['open', 'blocked']], ['Done', ['done']]];
+const TASK_GROUPS: [string, string[]][] = [['In progress', ['claimed', 'awaiting_takeover']], ['To do', ['open', 'blocked']], ['Done', ['done']], ['Cancelled', ['cancelled']]];
+const BRIEF_WORDS: Record<string, string> = { new: 'waiting for the team', planning: 'planning the parts', building: 'building',
+  reviewing: 'checking the result', ready: 'ready', failed: 'stopped', cancelled: 'cancelled' };
+const ACTIVE_BRIEFS = ['new', 'planning', 'building', 'reviewing'];
 
 /** What a member holds, in the words the panel shows: "Base plate, 4 posts". */
 export function heldBy(s: Pick<State, 'locks' | 'objects'>, id: number, max = 2): string {
@@ -97,7 +112,8 @@ export function clock(ms: number): string {
 export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '') {
   el.innerHTML = `
     <header class="sidebar-head">
-      <span class="brand">CadSwarm</span>
+      <span class="brand">CADSwarm</span>
+      <button type="button" class="debug-open" data-sponsors aria-haspopup="dialog" title="How CADSwarm uses its sponsors (Shift+D)">Sponsors</button>
       <span class="conn" data-conn></span>
     </header>
     <nav class="tabbar" role="tablist" aria-label="Sections">
@@ -109,13 +125,15 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       <h1 class="large-title">Model</h1>
       <h2 class="group-title">Parts</h2><ul class="group" data-parts></ul>
       <h2 class="group-title">Dimensions</h2><div class="group params" data-params></div>
+      <h2 class="group-title">Printer bed</h2><div data-printer></div>
+      <h2 class="group-title">Review</h2><div data-review></div>
       <div data-export></div>
     </section>
     <section class="tab" id="tab-library" data-tab="library" role="tabpanel">
       <h1 class="large-title">Library</h1><div data-library></div>
     </section>
     <section class="tab" id="tab-tasks" data-tab="tasks" role="tabpanel">
-      <h1 class="large-title">Tasks</h1><div data-tasks></div>
+      <h1 class="large-title">Tasks</h1><div data-briefs></div><div data-tasks></div>
     </section>
     <section class="tab team-tab" id="tab-team" data-tab="team" role="tabpanel">
       <div class="panel-bar">
@@ -144,9 +162,14 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   const $ = <T extends Element = HTMLElement>(sel: string) => el.querySelector<T>(sel)!;
   mountAsk($('#tab-ask'), store, api, picked);
   mountParams($('[data-params]'), store, api);
+  mountPrinter($('[data-printer]'), store, api);
+  mountReview($('[data-review]'), store);
   mountHandoff($('[data-handoff]'), store, api);
   mountLibrary($('[data-library]'), store, api);
   mountSettings($('[data-settings]'), store, api);
+  // A debug view of the outside services, for showing a judge how each one is wired in.
+  const sponsors = mountSponsors(document.body, store, project);
+  $('[data-sponsors]').addEventListener('click', sponsors.open);
 
   function select(tab: Tab) {
     el.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
@@ -167,11 +190,39 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     const t = e.target as HTMLElement;
     const stl = t.closest<HTMLButtonElement>('[data-stl]');
     if (stl && api) {
+      const label = stl.textContent || 'Download STL';
       stl.disabled = true;
       stl.textContent = 'Preparing…';
       api.downloadArtifact(stl.dataset.stl!, stl.dataset.file!)
         .catch(err => notice((err as Error).message ?? String(err)))
-        .finally(() => { stl.disabled = false; stl.textContent = 'Download STL'; });
+        .finally(() => { stl.disabled = false; stl.textContent = label; });
+      return;
+    }
+    const stop = t.closest<HTMLButtonElement>('[data-cancel-task]');
+    if (stop && api) {
+      const task = store.state.tasks.find(x => x.id === stop.dataset.cancelTask);
+      if (!task || !confirm(`Cancel “${task.title}”? The team stops working on it.`)) return;
+      stop.disabled = true;
+      void api.cancelTask(task.id, '').catch(err => notice((err as Error).message ?? String(err)))
+        .finally(() => { stop.disabled = false; });
+      return;
+    }
+    const del = t.closest<HTMLButtonElement>('[data-delete-task]');
+    if (del && api) {
+      const task = store.state.tasks.find(x => x.id === del.dataset.deleteTask);
+      if (!task || !confirm(`Delete “${task.title}”? It was never started.`)) return;
+      del.disabled = true;
+      void api.deleteTask(task.id).catch(err => notice((err as Error).message ?? String(err)))
+        .finally(() => { del.disabled = false; });
+      return;
+    }
+    const stopBrief = t.closest<HTMLButtonElement>('[data-cancel-brief]');
+    if (stopBrief && api) {
+      const brief = store.state.briefs.find(x => x.id === stopBrief.dataset.cancelBrief);
+      if (!brief || !confirm(`Cancel “${brief.text}”? Its unstarted tasks are cancelled too.`)) return;
+      stopBrief.disabled = true;
+      void api.cancelBrief(brief.id).catch(err => notice((err as Error).message ?? String(err)))
+        .finally(() => { stopBrief.disabled = false; });
       return;
     }
     const lock = t.closest<HTMLButtonElement>('[data-lock]');
@@ -193,7 +244,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     if (act) {
       const which = act.dataset.act;
       if (which === 'save') {
-        const brief = currentBrief(store.state);
+        const brief = modelBrief(store.state);
         if (!api || !brief?.stlHash) { notice('No 3D file yet. Finish a build first.'); return; }
         act.disabled = true;
         api.downloadArtifact(brief.stlHash, `cadswarm-${brief.id}.stl`)
@@ -239,19 +290,39 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         ${sel && api && (!h || mine) ? `<button type="button" class="text-button" data-lock="${esc(o.name)}"${mine ? ' data-mine="1"' : ''}>${mine ? 'Release' : 'Hold'}</button>` : '<span class="chevron" aria-hidden="true">›</span>'}
       </li>`;
     }).join('') || '<li class="row-item empty">Parts appear here as they are built.</li>';
-    const brief = currentBrief(s);
+    const brief = modelBrief(s);
     const art = brief?.stlHash ? s.artifacts.find(a => a.hash === brief.stlHash) : undefined;
     $('[data-export]').innerHTML = brief?.stlHash && !(art && art.size === 0)
       ? `<button type="button" class="wide-button" data-stl="${esc(brief.stlHash)}" data-file="cadswarm-${esc(brief.id)}.stl"${api ? '' : ' disabled'}>Download STL</button>` : '';
 
+    // Builds: every request, newest first, so an older finished model stays reachable.
+    $('[data-briefs]').innerHTML = s.briefs.length
+      ? `<h2 class="group-title">Builds</h2><ul class="group">${[...s.briefs].sort((a, b) => b.updatedMs - a.updatedMs)
+        .map(b => {
+          const n = s.tasks.filter(t => t.brief === b.id).length;
+          return `<li class="row-item">
+          <span class="row-main"><span class="row-title">${esc(b.text)}</span>
+            <span class="row-detail">${esc(BRIEF_WORDS[b.status] ?? b.status)}${n ? ` · ${n} parts` : ''}</span></span>
+          ${b.stlHash && !(s.artifacts.find(a => a.hash === b.stlHash)?.size === 0)
+            ? `<button type="button" class="text-button" data-stl="${esc(b.stlHash)}" data-file="cadswarm-${esc(b.id)}.stl">Download</button>` : ''}
+          ${api && ACTIVE_BRIEFS.includes(b.status)
+            ? `<button type="button" class="text-button" data-cancel-brief="${esc(b.id)}">Cancel</button>` : ''}
+        </li>`;
+        }).join('')}</ul>`
+      : '';
+
     // Tasks, grouped like Reminders.
-    $('[data-tasks]').innerHTML = TASK_GROUPS.map(([title, statuses]) => {
+    $('[data-tasks]').innerHTML = (s.tasks.length ? '<h2 class="group-title">Parts</h2>' : '')
+      + TASK_GROUPS.map(([title, statuses]) => {
       const rows = s.tasks.filter(t => statuses.includes(t.status));
       if (!rows.length) return '';
       return `<h2 class="group-title">${title}</h2><ul class="group">${rows.map(t => `<li class="row-item">
           <span class="row-main"><span class="row-title">${esc(t.title)}</span>
             <span class="row-detail">${t.owner ? `${who(t.owner)}` : t.assignee ? `for ${esc(t.assignee)}` : t.status === 'blocked' ? 'stuck' : 'nobody yet'}</span></span>
           ${api && t.status === 'open' ? `<button type="button" class="text-button" data-start="${esc(t.id)}">Start</button>` : ''}
+          ${api && t.status === 'open' ? `<button type="button" class="text-button" data-delete-task="${esc(t.id)}">Delete</button>` : ''}
+          ${api && ['claimed', 'awaiting_takeover', 'blocked'].includes(t.status)
+            ? `<button type="button" class="text-button" data-cancel-task="${esc(t.id)}">Cancel</button>` : ''}
         </li>`).join('')}</ul>`;
     }).join('') || '<p class="empty-note">No tasks yet. When the team plans a build, its parts show up here.</p>';
 
@@ -278,7 +349,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
 
     const counts: Record<Tab, number> = { ask: 0, model: 0, library: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
-      tasks: s.tasks.filter(t => t.status === 'open' || t.status === 'claimed').length };
+      tasks: s.tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });
 
     if (s.notice && s.notice.at !== lastNotice) {

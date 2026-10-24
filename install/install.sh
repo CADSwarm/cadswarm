@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# CadSwarm installer for macOS and Linux. Run via "Install CadSwarm.command" (macOS, double-click),
+# CADSwarm installer for macOS and Linux. Run via "Install CadSwarm.command" (macOS, double-click),
 # "Install CadSwarm.sh" (Linux), or the one-line quick install (install/quick-install.sh).
 # Finds FreeCAD, copies this folder into FreeCAD's add-on folder, optionally adds a shortcut, then opens
-# FreeCAD in CadSwarm, where a step-by-step guide takes over.
+# FreeCAD in CADSwarm, where a step-by-step guide takes over.
 #
 #   --no-launch     install only (don't open FreeCAD)
 #   --yes           don't ask: add the shortcut; never download or unpack FreeCAD unless --get-freecad
@@ -51,7 +51,7 @@ open_url() {
 }
 
 say ""
-say "  ${C_HEAD}CadSwarm setup${C_END}"
+say "  ${C_HEAD}CADSwarm setup${C_END}"
 say "  ${C_DIM}Build 3D designs together with your team's AI helpers.${C_END}"
 say ""
 
@@ -96,7 +96,7 @@ find_freecad() {
              "$HOME"/.local/bin/FreeCAD*.AppImage "$HOME"/Desktop/FreeCAD*.AppImage; do
         if [ -f "$c" ]; then
             say "  Found the FreeCAD download $c"
-            if { [ "$GET_FREECAD" = 1 ] || { [ "$ASSUME_YES" = 0 ] && ask "Unpack it so CadSwarm can use it (about 3 GB, once)?" y; }; } \
+            if { [ "$GET_FREECAD" = 1 ] || { [ "$ASSUME_YES" = 0 ] && ask "Unpack it so CADSwarm can use it (about 3 GB, once)?" y; }; } \
                     && unpack_appimage "$c"; then return; fi
         fi
     done
@@ -174,7 +174,7 @@ elif [ "$KIND" = snap ] || [ "$KIND" = flatpak ] || [ "$KIND" = system ]; then
     say "  Found FreeCAD ($KIND package)."
     warn "  This FreeCAD has no Python of its own, so from it you can join a teammate's project but not"
     warn "  start a team or connect an AI helper. The official FreeCAD download can do both."
-    if [ "$GET_FREECAD" = 1 ] || { [ "$ASSUME_YES" = 0 ] && ask "Download the official FreeCAD for CadSwarm (about 800 MB, once)?" n; }; then
+    if [ "$GET_FREECAD" = 1 ] || { [ "$ASSUME_YES" = 0 ] && ask "Download the official FreeCAD for CADSwarm (about 800 MB, once)?" n; }; then
         download_freecad || warn "  Keeping the FreeCAD you already have."
     fi
 fi
@@ -199,35 +199,38 @@ if pgrep -x FreeCAD >/dev/null 2>&1 || pgrep -x freecad >/dev/null 2>&1; then
     pause
 fi
 
-# ---------------------------------------------------------------- 3. copy CadSwarm into FreeCAD
+# ---------------------------------------------------------------- 3. copy CADSwarm into FreeCAD
 # A clean copy each time (updates included). Only code lives here: projects are in Documents.
 if [ "$(cd "$HERE" && pwd -P)" = "$( (cd "$DEST" 2>/dev/null && pwd -P) || echo none)" ]; then
-    ok "CadSwarm is already installed in FreeCAD"
+    ok "CADSwarm is already installed in FreeCAD"
 else
     # Start from an empty staging folder: a failed earlier run must not leave old files in the copy.
     rm -rf "$DEST.new" && mkdir -p "$DEST.new" || die "Couldn't create $DEST"
     (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
         --exclude=cadswarm-data --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
-        --exclude=node_modules --exclude=target .) | (cd "$DEST.new" && tar -xf -) || die "Copying CadSwarm into FreeCAD failed."
+        --exclude=node_modules --exclude=target .) | (cd "$DEST.new" && tar -xf -) || die "Copying CADSwarm into FreeCAD failed."
     WASM="$HERE/module/target/wasm32-unknown-unknown/release/cadswarm_module.wasm"
+    # A local build wins; otherwise use the module the installer put beside the code, so a fresh
+    # workbench never falls back to a stale download in the app folder.
+    [ -f "$WASM" ] || WASM="$HERE/module/cadswarm_module.wasm"
     [ -f "$WASM" ] && cp "$WASM" "$DEST.new/module/cadswarm_module.wasm"  # the team server's database module
-    rm -rf "$DEST" && mv "$DEST.new" "$DEST" || die "Couldn't replace the old CadSwarm in $DEST"
-    ok "Installed CadSwarm into FreeCAD ($DEST)"
+    rm -rf "$DEST" && mv "$DEST.new" "$DEST" || die "Couldn't replace the old CADSwarm in $DEST"
+    ok "Installed CADSwarm into FreeCAD ($DEST)"
 fi
 OPENER="$DEST/cadswarm/gui/open_cadswarm.py"
 
-# ---------------------------------------------------------------- 4. shortcut that opens FreeCAD in CadSwarm
+# ---------------------------------------------------------------- 4. shortcut that opens FreeCAD in CADSwarm
 quote_args() { local out="" a; for a in "$@"; do out+="\"${a//\"/\\\"}\" "; done; printf '%s' "${out% }"; }
-if [ "$SHORTCUT" = 1 ] && ask "Add a CadSwarm shortcut?" y; then
+if [ "$SHORTCUT" = 1 ] && ask "Add a CADSwarm shortcut?" y; then
     if [ "$OS" = Darwin ]; then
         APP="$HOME/Applications/CadSwarm.app"
         mkdir -p "$HOME/Applications"
         SCRIPT="do shell script \"$(quote_args "${LAUNCH[@]}" "$OPENER" | sed 's/\\/\\\\/g; s/"/\\"/g') > /dev/null 2>&1 &\""
         if command -v osacompile >/dev/null && rm -rf "$APP" && osacompile -o "$APP" -e "$SCRIPT" 2>/dev/null; then
             ln -sfn "$APP" "$HOME/Desktop/CadSwarm.app" 2>/dev/null
-            ok "Added CadSwarm to ~/Applications and your desktop"
+            ok "Added CADSwarm to ~/Applications and your desktop"
         else
-            warn "  Couldn't make the shortcut; open FreeCAD and pick CadSwarm instead."
+            warn "  Couldn't make the shortcut; open FreeCAD and pick CADSwarm instead."
         fi
     else
         APPS="$DATA_HOME/applications"
@@ -236,7 +239,7 @@ if [ "$SHORTCUT" = 1 ] && ask "Add a CadSwarm shortcut?" y; then
         {
             echo "[Desktop Entry]"
             echo "Type=Application"
-            echo "Name=CadSwarm"
+            echo "Name=CADSwarm"
             echo "Comment=Build 3D designs with your team's AI helpers"
             echo "Exec=$(quote_args "${LAUNCH[@]}" "$OPENER")"
             [ -f "$ICON" ] && echo "Icon=$ICON" || echo "Icon=org.freecad.FreeCAD"
@@ -249,13 +252,13 @@ if [ "$SHORTCUT" = 1 ] && ask "Add a CadSwarm shortcut?" y; then
             cp "$APPS/cadswarm.desktop" "$DESK/CadSwarm.desktop" && chmod +x "$DESK/CadSwarm.desktop"
             command -v gio >/dev/null && gio set "$DESK/CadSwarm.desktop" metadata::trusted true 2>/dev/null
         fi
-        ok "Added CadSwarm to your applications menu and desktop"
+        ok "Added CADSwarm to your applications menu and desktop"
     fi
 fi
 
 say ""
-if [ "$NO_LAUNCH" = 1 ]; then say "${C_HEAD}All set! Open FreeCAD and pick CadSwarm to see the guide.${C_END}"
-else say "${C_HEAD}All set! FreeCAD will open now and show you the CadSwarm guide.${C_END}"; fi
+if [ "$NO_LAUNCH" = 1 ]; then say "${C_HEAD}All set! Open FreeCAD and pick CADSwarm to see the guide.${C_END}"
+else say "${C_HEAD}All set! FreeCAD will open now and show you the CADSwarm guide.${C_END}"; fi
 say "${C_DIM}(The first time FreeCAD starts it may ask about language and theme; any choice is fine.)${C_END}"
 if [ "$NO_LAUNCH" = 0 ]; then
     nohup "${LAUNCH[@]}" "$OPENER" >/dev/null 2>&1 &

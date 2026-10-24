@@ -1,6 +1,6 @@
 """Agent pointers drawn *inside* FreeCAD's 3D view.
 
-The team panel already mirrors the shared model in the read-only "CadSwarm Live"
+The team panel already mirrors the shared model in the read-only "CADSwarm Live"
 document.  This module adds one marker per teammate whose pointer is not idle: a
 soft, rounded cursor arrow in that member's colour, sitting exactly on the spot
 they mean.  It carries no text, no outline and no leader line, so the model
@@ -187,7 +187,9 @@ class DemoSource:
 
     members = [{"id": 1, "name": "planner", "kind": "agent", "status": "active", "status_text": "planning the case"},
                {"id": 2, "name": "worker1", "kind": "agent", "status": "active", "status_text": "cutting the lid"},
-               {"id": 3, "name": "worker2", "kind": "agent", "status": "active", "status_text": "checking holes"}]
+               {"id": 3, "name": "worker2", "kind": "agent", "status": "active", "status_text": "checking holes"},
+               # The Factory.ai reviewer has a pointer like anyone else, in its own colour.
+               {"id": 4, "name": "reviewer", "kind": "reviewer", "status": "active", "status_text": "reviewing"}]
     objects = [{"name": "Base", "label": "Base", "bbox": [0, 0, 0, 60, 40, 12], "visible": True},
                {"name": "Lid", "label": "Lid", "bbox": [0, 0, 18, 60, 40, 30], "visible": True},
                {"name": "Standoff1", "label": "Standoff1", "bbox": [10, 10, 12, 16, 16, 24], "visible": True}]
@@ -198,7 +200,8 @@ class DemoSource:
     def fetch(self):
         t = time.time() - self.t0
         picks = [("Base", "pointing", "measuring the wall"), ("Lid", "editing", "cutting the opening"),
-                 ("Standoff1", "inspecting", "checking the height")]
+                 ("Standoff1", "inspecting", "checking the height"),
+                 ("Lid", "inspecting", "reviewing the lid")]
         pointers = []
         for i, (obj, mode, label) in enumerate(picks):
             pointers.append({"member": i + 1, "object": obj, "point": [], "mode": mode,
@@ -526,7 +529,7 @@ def _reduce_motion():
 
 
 class Overlay:
-    """Draws the live pointers over the CadSwarm Live view, or over the active document when it
+    """Draws the live pointers over the CADSwarm Live view, or over the active document when it
     holds the parts being pointed at.  Create on the GUI thread."""
 
     def __init__(self, source, on_error=None, document=MIRROR_DOC):
@@ -627,7 +630,7 @@ class Overlay:
 
     def _pick_document(self):
         """The document whose view gets the arrows: the active one when it holds a part someone is
-        pointing at (your own working copy of the model), otherwise the CadSwarm Live mirror."""
+        pointing at (your own working copy of the model), otherwise the CADSwarm Live mirror."""
         import FreeCAD as App
         import FreeCADGui as Gui
         active = Gui.ActiveDocument
@@ -718,7 +721,7 @@ class Overlay:
     def _warn(self, text):
         try:
             import FreeCAD as App
-            App.Console.PrintWarning(f"[CadSwarm pointers] {text}\n")
+            App.Console.PrintWarning(f"[CADSwarm pointers] {text}\n")
         except Exception:  # noqa: BLE001
             pass
 
@@ -880,7 +883,7 @@ def _announce(on):
         import FreeCAD as App
         import FreeCADGui as Gui
         Gui.getMainWindow().statusBar().showMessage(text, 8000)
-        App.Console.PrintMessage(f"[CadSwarm] {text}\n")
+        App.Console.PrintMessage(f"[CADSwarm] {text}\n")
     except Exception:  # noqa: BLE001
         pass
 

@@ -329,7 +329,7 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     hub, fake = world
     fake.tables["v_brief"] = [
         {"id": "b_old", "by": 3, "text": "a phone stand", "board": "", "status": "ready", "plan_json": "",
-         "stl_hash": "", "created_ms": 1, "updated_ms": 2},
+         "stl_hash": "ab" * 32, "created_ms": 1, "updated_ms": 2},
         {"id": "b_new", "by": 3, "text": "an enclosure for the pico", "board": "", "status": "building", "plan_json": "",
          "stl_hash": "", "created_ms": 5, "updated_ms": 6}]
     fake.tables["v_task"] = [dict(fake.tables["v_task"][0], id="t_a", brief="b_new", status="done"),
@@ -337,6 +337,7 @@ def test_requests_to_the_whole_team_show_their_progress(world):
     briefs = hub.get("/briefs")["briefs"]
     assert [b["id"] for b in briefs] == ["b_new", "b_old"]  # newest first
     assert (briefs[0]["tasks"], briefs[0]["done"], briefs[0]["by"]) == (2, 1, "carol")
+    assert briefs[1]["stl"] == "ab" * 32  # an older brief keeps its finished model reachable
     r = hub.post("/briefs", {"text": "a lid"})
     assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]
 
@@ -471,3 +472,79 @@ def test_the_mirror_catches_changes_that_made_no_event_and_retries_failed_fetche
     fake.tables["v_object"][1] = {**plate, "name": "Lid", "volume": 9.0}
     with pytest.raises(HubRequestError):
         hub.mirror_changes(applied)  # the caller keeps `applied`, so the next pass fetches Lid again
+
+
+# ---- printer bed and review rounds
+
+
+def test_the_workspace_reports_the_bed_and_defaults_to_180_mm(world):
+    hub, fake = world
+    assert hub.get("/workspace")["bed"] == [180.0, 180.0, 180.0]
+    fake.tables["v_workspace"] = [{"id": 1, "bed_x_mm": 256.0, "bed_y_mm": 210.0, "bed_z_mm": 300.0}]
+    r = hub.get("/workspace")
+    assert r["bed"] == [256.0, 210.0, 300.0] and r["bed_z_mm"] == 300.0
+
+
+def test_setting_the_bed_calls_the_reducer_and_checks_the_size(world):
+    hub, fake = world
+    hub.post("/bed", {"x_mm": 256, "y_mm": 210, "z_mm": 300})
+    assert fake.calls[-1] == ("set_bed", (2, 256.0, 210.0, 300.0))
+    for body in ({"x_mm": 0, "y_mm": 180, "z_mm": 180}, {"x_mm": 5000, "y_mm": 180, "z_mm": 180},
+                 {"x_mm": 180, "y_mm": 180}):
+        before = len(fake.calls)
+        with pytest.raises(HubRequestError) as e:
+            hub.post("/bed", body)
+        assert e.value.status == 400 and e.value.code == "bad_args"
+        assert len(fake.calls) == before
+
+
+def test_reviews_are_newest_first_and_findings_read_as_sentences(world):
+    hub, fake = world
+    fake.tables["v_review"] = [
+        {"id": "r_1", "brief": "b_1", "round": 1, "passed": False, "at_ms": 1000,
+         "findings_json": json.dumps({"findings": [{"message": "hole too small"}, "lid loose"]})},
+        {"id": "r_2", "brief": "b_1", "round": 2, "passed": True, "at_ms": 2000, "findings_json": "[]"},
+    ]
+    rows = hub.reviews()
+    assert [r["id"] for r in rows] == ["r_2", "r_1"]
+    assert rows[1]["findings"] == ["hole too small", "lid loose"] and rows[1]["at"] == 1.0
+    # The reviewer's own shape names the part and the problem; show that, never the JSON blob.
+    fake.tables["v_review"][0]["findings_json"] = json.dumps(
+        [{"object": "Base", "problem": "the wall is 1.1 mm", "task_id": "t_1"}])
+    assert hub.reviews()[1]["findings"] == ["Base: the wall is 1.1 mm"]
+    fake.tables["v_review"][1]["findings_json"] = "{not json"
+    assert hub.reviews()[0]["findings"] == []
+
+
+def test_panel_snapshot_carries_reviews_and_the_printer_bed(world):
+    hub, fake = world
+    fake.tables["v_workspace"] = [{"id": 1, "bed_x_mm": 220.0, "bed_y_mm": 220.0, "bed_z_mm": 250.0}]
+    fake.tables["v_review"] = [{"id": "r_1", "brief": "b_1", "round": 1, "passed": False, "at_ms": 1000,
+                                "findings_json": json.dumps([{"text": "thin wall"}])}]
+    snap = hub.panel_snapshot()
+    assert snap["workspace"]["bed"] == [220.0, 220.0, 250.0]
+    assert snap["reviews"][0]["findings"] == ["thin wall"]
+
+
+# ---- stopping and removing work
+
+
+def test_a_task_can_be_stopped_or_deleted_through_the_hub(world):
+    hub, fake = world
+    t = hub.post("/tasks/t_1/cancel", {"reason": "duplicate"})
+    assert fake.calls[-1] == ("cancel_task", (2, "t_1", "duplicate")) and t["id"] == "t_1"
+    r = hub.post("/tasks/t_1/delete")
+    assert fake.calls[-1] == ("delete_task", (2, "t_1")) and r == {"task": "t_1", "title": "lid", "deleted": True}
+    before = len(fake.calls)
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/tasks/t_missing/delete")
+    assert e.value.status == 404 and e.value.code == "unknown_task" and len(fake.calls) == before
+
+
+def test_a_request_can_be_stopped_as_a_whole(world):
+    hub, fake = world
+    fake.tables["v_brief"] = [{"id": "b_1", "by": 3, "text": "a phone stand", "board": "", "status": "building",
+                               "plan_json": "", "stl_hash": "", "created_ms": 1, "updated_ms": 2}]
+    r = hub.post("/briefs/b_1/cancel")
+    assert fake.calls[-1] == ("cancel_brief", (2, "b_1")) and r == {"brief": "b_1", "status": "cancelled"}
+

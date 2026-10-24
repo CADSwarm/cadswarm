@@ -11,7 +11,7 @@ the agents:
   `if_exists="new_name"` (a free name like `notes-2.md`) or `if_exists="replace"` with the
   `expected_version` they last read, the same optimistic check model objects use.
 * Old versions are kept. Before a file is replaced, moved away or deleted, its current bytes are
-  copied into `.cadswarm-team/history/`, including edits someone made outside CadSwarm
+  copied into `.cadswarm-team/history/`, including edits someone made outside CADSwarm
   (detected by hash), and any old version can be restored as a new version. History is trimmed
   to the newest 20 versions per file plus everything from the last day (a deleted file always
   keeps its latest version); storage.py also holds the disk guard and the project budget.
@@ -173,7 +173,7 @@ class ProjectFiles:
             return None
 
     def reconcile(self, clean):
-        """Notice files added or edited outside CadSwarm, so they're versioned like any other."""
+        """Notice files added or edited outside CADSwarm, so they're versioned like any other."""
         data, rec = self.disk_bytes(clean), self.record(clean)
         if data is None:
             if rec:
@@ -184,10 +184,10 @@ class ProjectFiles:
         digest = sha256(data)
         if rec is None:
             self.db.execute("INSERT INTO files VALUES (?,?,?,?,?,?)",
-                            (clean, 1, digest, len(data), "outside CadSwarm", self.clock()))
+                            (clean, 1, digest, len(data), "outside CADSwarm", self.clock()))
         elif rec["sha256"] != digest:
             self.db.execute("UPDATE files SET version=version+1, sha256=?, size=?, author=?, updated_at=? WHERE path=?",
-                            (digest, len(data), "outside CadSwarm", self.clock(), clean))
+                            (digest, len(data), "outside CADSwarm", self.clock(), clean))
         return self.record(clean)
 
     @_guard
@@ -200,7 +200,7 @@ class ProjectFiles:
         text_ext = os.path.splitext(clean)[1].lower() in TEXT_EXT
         if not text_ext and rec["size"] > MAX_TEXT_BYTES:  # base64 of a big CAD file would swamp an agent's context
             raise FileError(413, "too_big_to_read", f"{clean!r} is {rec['size'] // (1024 * 1024)} MB, too big to send inline. "
-                            "Ask a person to open it from FreeCAD (the CadSwarm panel's Tools tab > Project files > Save a copy).")
+                            "Ask a person to open it from FreeCAD (the CADSwarm panel's Tools tab > Project files > Save a copy).")
         out = {"path": clean, "version": rec["version"], "size": rec["size"], "author": rec["author"],
                "updated_at": rec["updated_at"]}
         if text_ext:

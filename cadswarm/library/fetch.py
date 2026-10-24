@@ -55,7 +55,7 @@ def check_ext(name):
     ext = os.path.splitext(name)[1].lower()
     if ext not in ALLOWED_EXT:
         raise FetchError("bad_type", f"{name!r} isn't a part file. Link straight to a .step, .stp, .FCStd, .stl "
-                                     "(or a CadSwarm .zip pack), not to a web page about it.")
+                                     "(or a CADSwarm .zip pack), not to a web page about it.")
     return ext
 
 

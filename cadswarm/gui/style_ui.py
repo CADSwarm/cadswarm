@@ -1,4 +1,4 @@
-"""The Learned style dialog: what CadSwarm learned about how this team designs, and the person's say in it.
+"""The Learned style dialog: what CADSwarm learned about how this team designs, and the person's say in it.
 
 Rules come from the host's style memory (cadswarm/style_memory.py): the values people use, the corrections
 they keep making to agent work, preferred parts and recurring review problems. Strong rules already guide
@@ -45,10 +45,10 @@ class StyleDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
-        self.setWindowTitle("CadSwarm — learned design style")
+        self.setWindowTitle("CADSwarm: learned design style")
         self.resize(680, 620)
         lay = QtGui.QVBoxLayout(self)
-        intro = QtGui.QLabel("CadSwarm watches how your team builds, the sizes you use and what you change "
+        intro = QtGui.QLabel("CADSwarm watches how your team builds, the sizes you use and what you change "
                              "after an AI helper, and turns it into rules every helper follows. "
                              "Confirm the rules you agree with, dismiss the ones you don't.")
         intro.setWordWrap(True)
@@ -101,7 +101,7 @@ class StyleDialog(QtGui.QDialog):
         rl.setContentsMargins(0, 0, 0, 0)
         tag = "✔ " if r["status"] == "confirmed" else ""
         text = QtGui.QLabel(f"{tag}<b>{html.escape(r['statement'])}</b><br><small style='color:#8b949e'>"
-                            f"{html.escape(TYPE_WORDS.get(r['type'], r['type']))} — "
+                            f"{html.escape(TYPE_WORDS.get(r['type'], r['type']))}: "
                             f"{html.escape(evidence_text(r))}</small>")
         text.setWordWrap(True)
         text.setTextFormat(QtCore.Qt.RichText)

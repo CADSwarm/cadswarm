@@ -22,7 +22,7 @@ cadswarm setup --client claude --invite "<lead ticket>"  --name lead-claude  --d
 cadswarm setup --client codex  --invite "<posts ticket>" --name posts-codex  --dir ..\posts
 cadswarm setup --client claude --invite "<lid ticket>"   --name lid-claude   --dir ..\lid
 
-# 4. The human watches in FreeCAD: install the add-on, then CadSwarm > Get started and paste the human invite.
+# 4. The human watches in FreeCAD: install the add-on, then CADSwarm > Get started and paste the human invite.
 cadswarm install-workbench
 ```
 
@@ -67,5 +67,5 @@ Start `claude` or `codex` in each folder and paste the prompt for that agent.
    *Take over member*) and finishes the job.
 6. **Saving.** Ask lead-claude to "write a parts list". It saves `files/docs/bom.csv`. Ask
    posts-codex to save the same file: it's refused ("already exists... nothing was overwritten")
-   until it reads the file and replaces that exact version. Open *the CadSwarm panel's Tools tab > Project files* to see both.
+   until it reads the file and replaces that exact version. Open *the CADSwarm panel's Tools tab > Project files* to see both.
 7. **Output.** *Export STEP*, then open it in FreeCAD or any CAD tool.
