@@ -348,3 +348,50 @@ def test_people_see_each_others_chat(world):
     fake.tables["v_member"].append(member(4, "dan", kind="human"))
     dan = SpaceHub({"uri": "http://x", "db": "d"}, {"participant_id": 4, "fence": 1}, space=fake)
     assert "m_chat" in [m["id"] for m in dan._unconsumed()]
+
+
+def test_an_op_rests_the_pointer_on_the_vertex_the_worker_picked(world):
+    hub, fake = world
+
+    def host_finishes(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"] = "done"
+                o["result_json"] = json.dumps({"name": "Lid", "pointer": {"object": "Lid", "point": [10, 6, 4]}})
+
+    fake.on_sql = host_finishes
+    hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})
+    assert fake.calls[-1] == ("move_pointer", (2, "Lid", [10.0, 6.0, 4.0], "pointing", "create primitive"))
+
+
+def test_point_at_without_a_point_uses_the_parts_anchor(world):
+    hub, fake = world
+
+    def host_finishes(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"] = "done"
+                o["result_json"] = json.dumps({"name": "Plate", "anchor": [1, 1, 1]})
+
+    fake.on_sql = host_finishes
+    r = hub.post("/pointer", {"object": "Plate", "mode": "inspecting", "label": "checking"})
+    assert r["point"] == [1, 1, 1]
+    assert fake.calls[-1] == ("move_pointer", (2, "Plate", [1.0, 1.0, 1.0], "inspecting", "checking"))
+    hub.post("/pointer", {"object": "Plate", "point": [0, 0.5, 1]})
+    assert fake.calls[-1] == ("move_pointer", (2, "Plate", [0.0, 0.5, 1.0], "pointing", ""))
+    with pytest.raises(HubRequestError):
+        hub.post("/pointer", {"object": "Plate", "point": [1, 2]})
+
+
+def test_a_failed_pointer_move_never_fails_the_op(world):
+    hub, fake = world
+    fake.fail["move_pointer"] = "boom"
+
+    def host_finishes(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"] = "done"
+                o["result_json"] = json.dumps({"name": "Lid", "pointer": {"object": "Lid", "point": [1, 2, 3]}})
+
+    fake.on_sql = host_finishes
+    assert hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})["name"] == "Lid"
