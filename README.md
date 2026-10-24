@@ -511,8 +511,8 @@ cargo test --release --manifest-path rules\Cargo.toml
 cd web; npm test
 ```
 
-Latest CI run on `main` (Windows, macOS and Linux): Python 369–371 passed depending on the platform
-(18–20 skipped where FreeCAD or the platform sandbox is unavailable), host 30 passed, web 26 passed;
+Latest CI run on `main` (Windows, macOS and Linux): Python 435–437 passed depending on the platform
+(20–22 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed, web 36 passed;
 rules 17 passed locally.
 
 ## Known limits (hackathon MVP)
