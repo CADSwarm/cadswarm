@@ -75,16 +75,17 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
       role: 'the design reviewer (Droid)',
       facts: [
         ['agent', reviewer ? `${reviewer.name} · ${reviewer.client} · ${reviewer.status}` : 'not set up'],
-        ['mode', 'autonomy HIGH · 7 read-only MCP tools'],
+        ['mode', 'autonomy HIGH · 8 MCP tools, geometry read-only'],
         ['last review', review ? `round ${review.round} · ${review.passed ? 'approved' : `${findings.length} findings`}` : 'no review yet'],
         ['tasks filed', String(filed)],
+        ['pointer', reviewer ? 'own arrow, in its own colour' : 'none until the reviewer joins'],
       ],
       list: findings.length ? {
         title: 'what it found',
         rows: findings.slice(0, 3).map(f => `${f.object || 'model'}: ${f.problem.length > 150 ? `${f.problem.slice(0, 147)}…` : f.problem}`),
       } : undefined,
       trace: list(trace.map(a => toolLine(a.summary)), 7),
-      calls: ['Session(mcp_servers=[cadswarm], restrict_tools=REVIEW_TOOLS, runtime=Runtime(executable=droid.exe))', 'Droid → MCP over stdio → model_status, check_interference, check_printability, report_review'],
+      calls: ['Session(mcp_servers=[cadswarm], restrict_tools=REVIEW_TOOLS, runtime=Runtime(executable=droid.exe))', 'Droid → MCP over stdio → model_status, point_at, check_interference, check_printability, report_review'],
     },
     {
       id: 'elastic',

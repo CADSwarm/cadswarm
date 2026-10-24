@@ -55,8 +55,16 @@ def _findings(text):
         if isinstance(f, str):
             out.append(f.strip())
         elif isinstance(f, dict):
-            line = next((f[k] for k in ("message", "text", "detail", "summary", "finding") if f.get(k)), None)
-            out.append(str(line).strip() if line else json.dumps(f))
+            # The reviewer's prompt asks for {"object", "problem", "task_id"}; older verdicts and
+            # free-form experiments use the other keys. Read the problem, not the JSON blob.
+            line = f.get("problem") or next(
+                (f[k] for k in ("message", "text", "detail", "summary", "finding") if f.get(k)), None)
+            if not line:
+                out.append(json.dumps(f))
+            elif f.get("object"):
+                out.append(f"{f['object']}: {str(line).strip()}")
+            else:
+                out.append(str(line).strip())
         elif f is not None:
             out.append(str(f))
     return [f for f in out if f]

@@ -8,10 +8,14 @@ function allFindings(json: string): string[] {
   try { v = JSON.parse(json || '[]'); } catch { return json.trim() ? [json.trim()] : []; }
   const list = Array.isArray(v) ? v : v && typeof v === 'object' && Array.isArray((v as { findings?: unknown }).findings)
     ? (v as { findings: unknown[] }).findings : [];
-  return list.map(f => typeof f === 'string' ? f
-    : f && typeof f === 'object' ? String((f as Record<string, unknown>).message ?? (f as Record<string, unknown>).text
-      ?? (f as Record<string, unknown>).detail ?? (f as Record<string, unknown>).summary ?? JSON.stringify(f)) : String(f))
-    .map(f => f.trim()).filter(Boolean);
+  return list.map(f => {
+    if (typeof f === 'string') return f;
+    if (!f || typeof f !== 'object') return String(f);
+    const r = f as Record<string, unknown>;
+    // The reviewer's prompt asks for {"object","problem","task_id"}; older verdicts use other keys.
+    const text = String(r.problem ?? r.message ?? r.text ?? r.detail ?? r.summary ?? JSON.stringify(f));
+    return r.object ? `${r.object}: ${text}` : text;
+  }).map(f => f.trim()).filter(Boolean);
 }
 
 /** The first few findings, for a compact panel or chat bubble. */

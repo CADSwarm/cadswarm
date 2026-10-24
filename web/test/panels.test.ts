@@ -61,6 +61,8 @@ describe('panel helpers', () => {
   it('reads findings whatever shape the reviewer sends', () => {
     expect(findingLines('[{"message":"hole too small"},"lid loose"]')).toEqual(['hole too small', 'lid loose']);
     expect(findingLines('{"findings":[{"text":"thin wall"}]}')).toEqual(['thin wall']);
+    expect(findingLines('[{"object":"Base","problem":"the wall is 1.1 mm","task_id":"t_1"}]'))
+      .toEqual(['Base: the wall is 1.1 mm']);
     expect(findingLines('plain words')).toEqual(['plain words']);
     expect(findingLines('')).toEqual([]);
   });
@@ -69,6 +71,7 @@ describe('panel helpers', () => {
     expect(reviewHeadline({ round: 3, passed: false })).toBe('Round 3 asks for changes');
     expect(reviewFindings('[{"detail":"thin wall"},{"summary":"hole small"},"lid loose","extra"]', 3))
       .toEqual(['thin wall', 'hole small', 'lid loose']);
+    expect(reviewFindings('[{"object":"Base","problem":"the wall is 1.1 mm"}]')).toEqual(['Base: the wall is 1.1 mm']);
     expect(reviewFindings('not json')).toEqual(['not json']);
     const said = shownReview({
       briefs: [{ id: 'b_1', updatedMs: 1 }, { id: 'b_2', updatedMs: 5 }],

@@ -508,6 +508,10 @@ def test_reviews_are_newest_first_and_findings_read_as_sentences(world):
     rows = hub.reviews()
     assert [r["id"] for r in rows] == ["r_2", "r_1"]
     assert rows[1]["findings"] == ["hole too small", "lid loose"] and rows[1]["at"] == 1.0
+    # The reviewer's own shape names the part and the problem; show that, never the JSON blob.
+    fake.tables["v_review"][0]["findings_json"] = json.dumps(
+        [{"object": "Base", "problem": "the wall is 1.1 mm", "task_id": "t_1"}])
+    assert hub.reviews()[1]["findings"] == ["Base: the wall is 1.1 mm"]
     fake.tables["v_review"][1]["findings_json"] = "{not json"
     assert hub.reviews()[0]["findings"] == []
 

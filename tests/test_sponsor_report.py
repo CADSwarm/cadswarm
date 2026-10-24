@@ -46,6 +46,7 @@ def test_factory_is_the_reviewer_with_its_newest_round():
     assert ("agent", "dee-droid · droid · away") in factory["facts"]
     assert ("last review", "round 2 · 2 findings") in factory["facts"]
     assert ("tasks filed", "2") in factory["facts"]
+    assert ("pointer", "own arrow, in its own colour") in factory["facts"]
     assert factory["list"]["rows"] == ["The wall is 1.1 mm.", "The cutout is 1.8 mm high."]
 
 
@@ -62,6 +63,7 @@ def test_says_so_when_nothing_is_set_up_yet():
     factory = card(cards(empty), "Factory.ai")
     assert ("agent", "not set up") in factory["facts"]
     assert ("last review", "no review yet") in factory["facts"]
+    assert ("pointer", "none until the reviewer joins") in factory["facts"]
     assert factory["list"] is None
     assert card(cards(empty), "Elastic")["facts"][1] == ("design memory", "no designs yet")
 

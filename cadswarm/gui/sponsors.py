@@ -77,6 +77,7 @@ def cards(session, database=""):
                                 f"{'approved' if review.get('passed') else f'{len(findings)} findings'}"
                                 if review else "no review yet"),
                 ("tasks filed", str(filed)),
+                ("pointer", "own arrow, in its own colour" if reviewer else "none until the reviewer joins"),
             ],
             "list": {"title": "what it found", "rows": findings[:3]} if findings else None,
             "calls": ["Session(mcp_servers=[cadswarm], restrict_tools=REVIEW_TOOLS, runtime=Runtime(executable=droid.exe))",
