@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_STRETCH, beadAt, headingFor, magnitude, speedStretch, unit } from '../src/viewer/arrow';
+import { MAX_STRETCH, beadAt, headingFor, magnitude, restFor, speedStretch, unit } from '../src/viewer/arrow';
 
 const PREVIOUS: [number, number, number] = [0, 0, 1];
 
@@ -48,5 +48,25 @@ describe('unit', () => {
     expect(unit([0, 3, 4])).toEqual([0, 0.6, 0.8]);
     expect(unit([0, 0, 0])).toBeNull();
     expect(magnitude([3, 4, 0])).toBe(5);
+  });
+});
+
+describe('restFor', () => {
+  const box = { min: [0, 0, 0], max: [40, 20, 10] };
+  it('hovers over the exact spot a member points at, not the middle of the part', () => {
+    const r = restFor(box, [40, 20, 10])!;
+    expect(r.surface).toEqual([40, 20, 10]);
+    expect(r.hover).toEqual([40, 20, 20]);
+  });
+  it('falls back to the top centre of the part', () => {
+    expect(restFor(box, [])).toEqual({ surface: [20, 10, 10], hover: [20, 10, 20] });
+  });
+  it('keeps the hover height between 8 and 18 units', () => {
+    expect(restFor({ min: [0, 0, 0], max: [5, 5, 1] }, [])!.hover[2]).toBe(9);
+    expect(restFor({ min: [0, 0, 0], max: [5, 5, 300] }, [])!.hover[2]).toBe(318);
+  });
+  it('needs a part or a point', () => {
+    expect(restFor(null, [])).toBeNull();
+    expect(restFor(null, [1, 2, 3])).toEqual({ surface: [1, 2, 3], hover: [1, 2, 11] });
   });
 });

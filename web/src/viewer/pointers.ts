@@ -3,7 +3,7 @@ import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import type { Store } from '../store';
 import { memberColor } from '../color';
 import { Spring3, acceptSeq } from './spring';
-import { beadAt, headingFor, speedStretch } from './arrow';
+import { beadAt, headingFor, restFor, speedStretch } from './arrow';
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
@@ -31,6 +31,9 @@ interface Glyph {
   heading: THREE.Vector3;
   phase: number;
   fade: number;
+  /** The newest pointer accepted (by seq): resolved to a spot every frame, since its part may not exist yet. */
+  want: { object: string; point: number[] } | null;
+  placed: boolean;
 }
 
 export class Pointers {
@@ -82,12 +85,16 @@ export class Pointers {
     const trailMat = new THREE.LineBasicMaterial({ color: tint, transparent: true, opacity: 0.45 });
     const trail = new THREE.Line(trailGeom, trailMat);
 
+    // Invisible until it has somewhere to stand and fades in there.
+    const strokes = [{ mat: headMat, base: 1 }, { mat: shaftMat, base: 1 }, { mat: beadMat, base: 1 }, { mat: trailMat, base: 0.45 }];
+    for (const s of strokes) s.mat.opacity = 0;
+    tag.style.opacity = '0';
+    beam.visible = false;
     this.scene.add(group, beam, trail, ...beads);
     return {
-      group, spring: new Spring3([0, 0, 40]), tag, arrow,
-      strokes: [{ mat: headMat, base: 1 }, { mat: shaftMat, base: 1 }, { mat: beadMat, base: 1 }, { mat: trailMat, base: 0.45 }],
+      group, spring: new Spring3([0, 0, 40]), tag, arrow, strokes,
       beam, beads, trail, trailPoints: [], heading: new THREE.Vector3(0, 0, 1),
-      phase: (member * 0.37) % 1, fade: 0,
+      phase: (member * 0.37) % 1, fade: 0, want: null, placed: false,
     };
   }
 
@@ -100,11 +107,14 @@ export class Pointers {
       const g = this.glyphs.get(p.member) ?? this.make(p.member);
       this.glyphs.set(p.member, g);
 
-      const anchor = this.anchor(meshOf(p.object));
-      if (acceptSeq(this.seen, p.member, p.seq) || g.fade === 0) {
-        const rest = p.point.length === 3 ? new THREE.Vector3().fromArray(p.point) : anchor?.hover;
-        if (rest) g.spring.target = [rest.x, rest.y, rest.z];
+      if (acceptSeq(this.seen, p.member, p.seq) || !g.want) g.want = { object: p.object, point: p.point };
+      // Resolved every frame: an op's pointer arrives before the part it creates has a mesh.
+      const anchor = this.anchor(meshOf(g.want.object), g.want.point);
+      if (anchor) {
+        g.spring.target = [anchor.hover.x, anchor.hover.y, anchor.hover.z];
+        if (!g.placed) { g.spring.snap(); g.placed = true; }           // appear in place, never fly in from afar
       }
+      if (!g.placed) continue;                                          // nowhere to stand yet
       if (still) g.spring.snap(); else g.spring.step(dt);               // reduced motion: pointers jump
       g.group.position.set(...g.spring.pos);
 
@@ -174,15 +184,11 @@ export class Pointers {
     g.trail.geometry.setDrawRange(0, g.trailPoints.length);
   }
 
-  /** Where a pointer rests on a part: just above its bounding box, and the surface below. */
-  private anchor(mesh: THREE.Mesh | null): Anchor | null {
-    if (!mesh) return null;
-    const b = new THREE.Box3().setFromObject(mesh);
-    const c = b.getCenter(new THREE.Vector3());
-    const size = b.getSize(new THREE.Vector3());
-    const surface = c.clone().setZ(b.max.z);
-    const clearance = Math.min(18, Math.max(8, size.z));
-    return { hover: surface.clone().setZ(surface.z + clearance), surface };
+  /** Where a pointer rests: over its exact point when it has one, else over the part's box (see restFor). */
+  private anchor(mesh: THREE.Mesh | null, point: number[]): Anchor | null {
+    const b = mesh ? new THREE.Box3().setFromObject(mesh) : null;
+    const r = restFor(b ? { min: b.min.toArray(), max: b.max.toArray() } : null, point);
+    return r ? { hover: new THREE.Vector3(...r.hover), surface: new THREE.Vector3(...r.surface) } : null;
   }
 
   private drop(g: Glyph) {

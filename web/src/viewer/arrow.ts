@@ -41,3 +41,19 @@ export function beadAt(phase: number, i: number, count = 2): number {
   const p = phase - Math.floor(phase);
   return (p + i / count) % 1;
 }
+
+export interface Rest { hover: V3; surface: V3 }
+
+/**
+ * Where an arrow rests: hovering over the spot the member works on. That is the exact point
+ * they gave (agents rest on a vertex the worker picked) or else the top centre of the part's
+ * box; the hover height grows with the part, between 8 and 18 units.
+ */
+export function restFor(box: { min: number[]; max: number[] } | null, point: number[]): Rest | null {
+  let surface: V3;
+  if (point.length === 3) surface = [point[0], point[1], point[2]];
+  else if (box) surface = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, box.max[2]];
+  else return null;
+  const clearance = Math.min(18, Math.max(8, box ? box.max[2] - box.min[2] : 0));
+  return { hover: [surface[0], surface[1], surface[2] + clearance], surface };
+}
