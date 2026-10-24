@@ -9,7 +9,7 @@ export interface Pointer { member: number; object: string; point: number[]; mode
 export interface Brief { id: string; by: number; text: string; board: string; status: string; planJson: string; stlHash: string; updatedMs: number }
 export interface Review { id: string; brief: string; round: number; passed: boolean; findingsJson: string }
 export interface Preview { object: string; rev: number; mesh: Uint8Array }
-export interface Artifact { hash: string; name: string; mime: string; size: number; bytes: Uint8Array }
+export interface Artifact { hash: string; name: string; mime: string; size: number }
 export interface Handoff { id: string; from: number; note: string; trigger: string; status: string; taker: number; createdMs: number }
 export interface Workspace { bedXMm: number; bedYMm: number; bedZMm: number }
 export interface Op { id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string }
