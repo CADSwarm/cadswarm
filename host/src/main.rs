@@ -6,6 +6,7 @@ mod briefs;
 mod commit;
 mod config;
 mod executor;
+mod guard;
 #[allow(dead_code)]
 mod module_bindings;
 mod space;
@@ -133,6 +134,8 @@ pub fn mint_invite(space: &space::Space, cfg: &HostConfig, kind: &str, role: &st
 }
 
 fn run(cfg: &HostConfig) -> Result<()> {
+    // One host per folder: a second one is refused before it touches the database.
+    let _instance = guard::InstanceGuard::acquire(&cfg.data_dir)?;
     let space = space::Space::connect(cfg)?;
     let mut worker = worker::WorkerDriver::new(
         cfg.freecad_python.clone(),

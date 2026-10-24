@@ -43,9 +43,10 @@ powershell -File ..\cadswarm-guide\scripts\with-env.ps1 .venv\Scripts\python.exe
 `ingest` skips a source whose text extracts to nothing (scanned or vector-only PDFs) instead of
 indexing a blank document.
 
-Run one host per database. Two `cadswarm-host` processes share the host identity and supersede
-each other's fence, so either one can win the export completion; if the loser predates
-`index_design`, the brief still reaches `ready` but is never indexed.
+Run one host per database. A second `cadswarm-host run` on the same data folder refuses to start
+and names the process that holds `host.lock`: two hosts share the host identity and supersede each
+other's fence, so one of them silently loses the export. If that loser predates `index_design`, the
+brief still reaches `ready` but is never indexed.
 
 ## Agent Builder (optional, not in the demo)
 
