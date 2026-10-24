@@ -105,6 +105,10 @@ pub fn next_action(s: &BriefState) -> Action {
             // The reviewer files its fix tasks before reporting a failed verdict. After a restart
             // those tasks are still open: build them before spending another review round.
             Some((_, false)) if s.open > 0 => Action::Build(s.open.min(MAX_WORKERS)),
+            // The same fix tasks, still claimed by the workers the restart killed. The sweep hands
+            // them back as open once their member goes stale, so wait for that instead of reviewing
+            // a model that has not changed yet.
+            Some((_, false)) if s.active > 0 => Action::Wait,
             _ if s.reviewer_enabled => Action::Review,
             _ => Action::Export,
         },
@@ -581,6 +585,10 @@ mod tests {
         // not skipped for another review of the unchanged model.
         assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
             open: 2, ..st("reviewing") }), Action::Build(2));
+        // ...and while the sweep has not yet reopened them (their dead workers still hold the
+        // claims) waiting is right: a review now would spend a round on the unchanged model.
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
+            active: 2, ..st("reviewing") }), Action::Wait);
         // A passed round from a previous host still goes straight to export.
         assert_eq!(next_action(&BriefState { review: Some((2, true)), review_orphaned: true, reviewer_enabled: true,
             ..st("reviewing") }), Action::Export);
