@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadBoards, parseBoards } from '../src/ui/brief';
 import { datasheetLinks, parseMm } from '../src/ui/params';
 import { currentBrief, findingLines, latestReview, modelBrief } from '../src/ui/panels';
-import { bedError, reviewFindings, reviewHeadline, shownReview } from '../src/ui/review';
+import { bedError, printHeadline, printLines, reviewFindings, reviewHeadline, shownReview } from '../src/ui/review';
+import { toPrintability } from '../src/api';
 import { mergeStl, startMockSwarm } from '../src/mock';
 import { Store } from '../src/store';
 import { esc } from '../src/ui/esc';
@@ -82,6 +83,20 @@ describe('panel helpers', () => {
     expect(bedError(180, 2001, 180)).toMatch(/between 20 and 2000/);
     expect(bedError(Number.NaN, 180, 180)).toMatch(/millimetres/);
   });
+  it('turns the worker printability answer into plain lines', () => {
+    const p = toPrintability({ ok: false, objects: [
+      { name: 'Base', size: [70, 32, 2], fits_bed: true, closed_solid: true, thin_wall_suspects: [] },
+      { name: 'Lid', size: [300, 32.25, 3], fits_bed: false, closed_solid: false,
+        thin_wall_suspects: [{ distance: 0.8 }, { distance: 0.6 }] },
+    ] });
+    expect(printHeadline(p)).toBe('Not printable yet');
+    expect(printLines(p)).toEqual(['Base: 70 x 32 x 2 mm - fits',
+      'Lid: 300 x 32.3 x 3 mm - too big for the bed; not a closed solid; 2 thin walls (closest 0.6 mm)']);
+    expect(toPrintability({ ok: true })).toEqual({ ok: true, objects: [] });
+    expect(toPrintability(null)).toEqual({ ok: false, objects: [] });
+    expect(printLines({ ok: true, objects: [] })).toEqual([]);
+    expect(printHeadline({ ok: true, objects: [] })).toBe('Fits the printer');
+  });
   it('escapes markup from members and tickets', () => {
     expect(esc('<img src=x onerror="a">\'')).toBe('&lt;img src=x onerror=&quot;a&quot;&gt;&#39;');
   });
@@ -113,6 +128,10 @@ describe('mock swarm', () => {
     expect(store.state.params.find(p => p.alias === 'wall')?.num).toBe(3);
     await api.setBed(256, 256, 300);
     expect(store.state.workspace).toEqual({ bedXMm: 256, bedYMm: 256, bedZMm: 300 });
+    const printed = await api.checkPrintability();
+    expect(printed?.objects.map(o => o.name)).toEqual(store.state.objects.map(o => o.name));
+    expect(printed?.ok).toBe(true);
+    expect(printed?.objects.every(o => o.fitsBed && o.closedSolid)).toBe(true);
     const id = api.submitBrief('a lid', 'rpi4');
     expect(store.state.briefs).toMatchObject([{ id, text: 'a lid', board: 'rpi4', status: 'new' }]);
     vi.advanceTimersByTime(1800 * 2);

@@ -1,4 +1,4 @@
-import type { Api } from '../api';
+import type { Api, Printability } from '../api';
 import type { Brief, Review, State, Store, Workspace } from '../store';
 import { esc } from './esc';
 
@@ -88,16 +88,60 @@ function bedValue(input: HTMLInputElement): number {
 
 const DEFAULT_BED: Workspace = { bedXMm: 180, bedYMm: 180, bedZMm: 180 };
 
+function mm(v: number): string {
+  return String(Math.round(v * 10) / 10);
+}
+
+/** One line per part: its measured size, then what (if anything) would stop it printing. */
+export function printLines(p: Printability): string[] {
+  return p.objects.map(o => {
+    const size = o.size.length ? `${o.size.slice(0, 3).map(mm).join(' x ')} mm` : 'unknown size';
+    const issues: string[] = [];
+    if (!o.fitsBed) issues.push('too big for the bed');
+    if (!o.closedSolid) issues.push('not a closed solid');
+    if (o.thinWalls.length) {
+      const closest = Math.min(...o.thinWalls);
+      issues.push(`${o.thinWalls.length} thin wall${o.thinWalls.length === 1 ? '' : 's'}`
+        + (closest > 0 ? ` (closest ${mm(closest)} mm)` : ''));
+    }
+    return `${o.name}: ${size} - ${issues.join('; ') || 'fits'}`;
+  });
+}
+
+export function printHeadline(p: Printability): string {
+  return p.ok ? 'Fits the printer' : 'Not printable yet';
+}
+
+function printCard(p: Printability): string {
+  if (!p.objects.length) return '<p class="card-empty">There are no solid parts to check yet. Build something first.</p>';
+  return `<article class="review-card ${p.ok ? 'ok' : 'warn'}">
+      <div class="review-head"><span class="review-verdict">${printHeadline(p)}</span></div>
+      <ul class="findings">${printLines(p).map(l => `<li>${esc(l)}</li>`).join('')}</ul>
+    </article>`;
+}
+
 /** The printer block in the Model tab: the team's bed, presets, and one Save button. */
 export function mountPrinter(el: HTMLElement, store: Store, api: Api | null) {
   let key = '';
   const notice = (text: string) => store.set({ notice: { text, at: Date.now() } });
 
-  el.addEventListener('click', e => {
+  el.addEventListener('click', async e => {
     const preset = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-preset]');
-    if (!preset) return;
-    const [x, y, z] = preset.dataset.preset!.split(',').map(Number);
-    el.querySelectorAll<HTMLInputElement>('[data-bed]').forEach((input, i) => { input.value = String([x, y, z][i]); });
+    if (preset) {
+      const [x, y, z] = preset.dataset.preset!.split(',').map(Number);
+      el.querySelectorAll<HTMLInputElement>('[data-bed]').forEach((input, i) => { input.value = String([x, y, z][i]); });
+      return;
+    }
+    const check = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-print-check]');
+    if (!check || !api) return;
+    const label = check.textContent;
+    check.disabled = true;
+    check.textContent = 'Checking…';
+    const result = await api.checkPrintability();
+    const box = el.querySelector<HTMLElement>('[data-print-result]');
+    if (box) box.innerHTML = result ? printCard(result) : '';
+    check.disabled = false;
+    check.textContent = label;
   });
 
   el.addEventListener('submit', e => {
@@ -133,6 +177,9 @@ export function mountPrinter(el: HTMLElement, store: Store, api: Api | null) {
           </div>
           <button type="submit" class="text-button" data-bed-save${api ? '' : ' disabled'}>Save bed</button>
         </div>
-      </form>`;
+        <button type="button" class="text-button print-check" data-print-check${api ? '' : ' disabled'}
+          title="Check the parts fit the bed, are closed solids and have printable walls">Check it fits</button>
+      </form>
+      <div data-print-result></div>`;
   });
 }

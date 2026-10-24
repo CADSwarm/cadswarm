@@ -39,6 +39,32 @@ const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param
 export interface PlaceRequest { component?: string; family?: string; size?: string; length?: number; name: string; label?: string }
 export interface PartMeta { name: string; category: string; tags: string[]; description: string; license: string }
 
+/** One part as the worker measured it. */
+export interface PrintPart {
+  name: string; size: number[]; fitsBed: boolean; closedSolid: boolean;
+  /** Distances (mm) of walls that look too thin to print. */
+  thinWalls: number[];
+}
+export interface Printability { ok: boolean; objects: PrintPart[] }
+
+/** The worker answers in snake_case; take whatever fields arrive and name them for the UI. */
+export function toPrintability(v: Record<string, unknown> | null): Printability {
+  const list = Array.isArray(v?.objects) ? v.objects : [];
+  const objects = list.filter(o => o && typeof o === 'object').map(o => {
+    const r = o as Record<string, unknown>;
+    const thin = Array.isArray(r.thin_wall_suspects) ? r.thin_wall_suspects : [];
+    return {
+      name: String(r.name ?? 'part'),
+      size: Array.isArray(r.size) ? r.size.map(Number).filter(Number.isFinite) : [],
+      fitsBed: r.fits_bed !== false,
+      closedSolid: r.closed_solid !== false,
+      thinWalls: thin.map(w => Number(w && typeof w === 'object' ? (w as Record<string, unknown>).distance : w))
+        .filter(Number.isFinite),
+    };
+  });
+  return { ok: v?.ok === true, objects };
+}
+
 export interface Api {
   fence(): number;
   redeem(token: string, name: string): Promise<void>;
@@ -54,6 +80,8 @@ export interface Api {
   deleteTask(id: string): Promise<void>;
   /** Stop a whole request; its unstarted tasks are cancelled with it. */
   cancelBrief(id: string): Promise<void>;
+  /** Ask the host whether the parts fit the bed, are closed solids and have printable walls. */
+  checkPrintability(): Promise<Printability | null>;
   movePointer(object: string, point: number[], mode: string, label: string): void;
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
@@ -109,6 +137,7 @@ export const toMessage = (r: Infer<typeof VMessageRow>): Message => ({
 });
 export const toOp = (r: Infer<typeof VOpRow>): Op => ({
   id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error, argsJson: r.argsJson,
+  resultJson: r.resultJson,
 });
 
 export const toComponent = (r: Infer<typeof VComponentRow>): Component => ({
@@ -248,18 +277,25 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       });
     }
 
-    /** Queue a host op and wait for it; reports a failure as a notice and resolves false. */
-    async function runOp(kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> {
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves its result (null on failure). */
+    async function runOpResult(kind: string, args: Record<string, unknown>, ms = 60000): Promise<Record<string, unknown> | null> {
       const opId = newId('o_');
       try {
         await r.submitOp({ fence: fence(), opId, kind, argsJson: JSON.stringify(args), expectedRevsJson: '' });
-      } catch (e) { report(e); return false; }
+      } catch (e) { report(e); return null; }
       await waitFor(() => ['done', 'failed', 'rejected'].includes(store.state.ops.find(o => o.id === opId)?.status ?? ''), ms);
       const op = store.state.ops.find(o => o.id === opId);
-      if (!op || op.status === 'queued' || op.status === 'running') { report(new Error('The host is still working on it; check back in a moment.')); return false; }
-      if (op.status !== 'done') { report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return false; }
-      return true;
+      if (!op || op.status === 'queued' || op.status === 'running') { report(new Error('The host is still working on it; check back in a moment.')); return null; }
+      if (op.status !== 'done') { report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return null; }
+      try {
+        const v = JSON.parse(op.resultJson || '{}');
+        return v && typeof v === 'object' ? v as Record<string, unknown> : {};
+      } catch { return {}; }
     }
+
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves whether it worked. */
+    const runOp = async (kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> =>
+      (await runOpResult(kind, args, ms)) !== null;
 
     const api: Api = {
       fence,
@@ -281,6 +317,10 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       cancelTask: (id, reason) => quiet(r.cancelTask({ fence: fence(), taskId: id, reason })),
       deleteTask: id => quiet(r.deleteTask({ fence: fence(), taskId: id })),
       cancelBrief: id => quiet(r.cancelBrief({ fence: fence(), briefId: id })),
+      checkPrintability: async () => {
+        const v = await runOpResult('printability', {}, 120000);
+        return v === null ? null : toPrintability(v);
+      },
       setParam: async (alias, value) => {
         // set_param needs the `Params` lock (rules::needed_locks). Hold it only until the host finishes the op.
         let locked = false;

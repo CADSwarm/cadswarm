@@ -1,7 +1,7 @@
 // A scripted swarm so the viewer, animation and panels can be built and demoed without a server.
 // `?mock` runs it: a brief is planned, five parts are built by agents, the reviewer sends one round back,
 // then the STL is ready. The mock Api answers the panels (brief, lock, params, download) locally.
-import type { Api } from './api';
+import type { Api, Printability } from './api';
 import type { Store, Obj, Task, Activity, Component } from './store';
 import { newId } from './ids';
 import { saveBytes } from './download';
@@ -94,7 +94,7 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       locks: [...store.state.locks.filter(l => l.object !== name), { object: name, holder: builder }],
       pointers: [...store.state.pointers.filter(p => p.member !== builder && p.member !== 2),
         { member: builder, object: name, point: [], mode: 'editing', label: `building ${name}`, op: `o_${step}`, seq: seq++, atMs: Date.now() }],
-      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }) }],
+      ops: [...store.state.ops.slice(-20), { id: `o_mock${step}`, by: builder, kind: 'create_primitive', status: 'done', errorCode: '', error: '', argsJson: JSON.stringify({ name }), resultJson: '{}' }],
       activity: say(builder, `create_primitive ${name}`),
     });
   }
@@ -191,6 +191,18 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
           && (t.status === 'open' || t.status === 'blocked' || t.status === 'awaiting_takeover')
           ? { ...t, status: 'cancelled' } : t),
         activity: say(1, `cancelled “${b?.text ?? id}”`, 'status') });
+    },
+    checkPrintability: async (): Promise<Printability> => {
+      const bed = store.state.workspace ?? { bedXMm: 180, bedYMm: 180, bedZMm: 180 };
+      const across = (a: number, b: number) => [Math.min(a, b), Math.max(a, b)] as const;
+      const [bx, by] = across(bed.bedXMm, bed.bedYMm);
+      const objects = store.state.objects.map(o => {
+        const size = [o.bbox[3] - o.bbox[0], o.bbox[4] - o.bbox[1], o.bbox[5] - o.bbox[2]];
+        const [sx, sy] = across(size[0], size[1]);
+        return { name: o.name, size, fitsBed: sx <= bx && sy <= by && size[2] <= bed.bedZMm,
+          closedSolid: o.volume > 0, thinWalls: [] };
+      });
+      return { ok: objects.length > 0 && objects.every(o => o.fitsBed && o.closedSolid), objects };
     },
     movePointer: (object, point, mode, label) => store.set({
       pointers: [...store.state.pointers.filter(p => p.member !== 1), { member: 1, object, point, mode, label, op: '', seq: seq++, atMs: Date.now() }] }),
