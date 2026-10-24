@@ -133,6 +133,7 @@ class Session:
         self.briefs = []       # requests handed to the whole team (the host plans and builds them)
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
+        self.mirrored = {}     # part name -> version the live model showed at join (the mirror loop takes it on)
         self._moved_hint = 0
         # What the panel's banner tells the user: disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
@@ -206,11 +207,15 @@ class Session:
         except Exception:
             self.disconnect()  # don't stay "connected" to a session that failed to load
             raise
-        self.wake = threading.Event()
-        for loop in (self._poll_loop, self._heartbeat_loop):
-            threading.Thread(target=loop, args=(self.stop, self.events, self._bg_client(), self.seq),
-                             daemon=True).start()
+        self.wake, mirror_wake = threading.Event(), threading.Event()
+        threading.Thread(target=self._poll_loop, args=(self.stop, self.events, self._bg_client(), self.seq, mirror_wake),
+                         daemon=True).start()
+        threading.Thread(target=self._heartbeat_loop, args=(self.stop, self.events, self._bg_client(), self.seq),
+                         daemon=True).start()
         threading.Thread(target=self._refresh_loop, args=(self.stop, self.events, self._bg_client(), self.wake),
+                         daemon=True).start()
+        threading.Thread(target=self._mirror_loop,
+                         args=(self.stop, self.events, self._bg_client(), mirror_wake, dict(self.mirrored)),
                          daemon=True).start()
         self.timer.start(250)
         say(f"Joined the team in {cfg['db']} as {self.ident.get('name')}")
@@ -270,7 +275,30 @@ class Session:
     def request_refresh(self):
         self.wake.set()
 
-    def _poll_loop(self, stop, events, c, seq):
+    def _mirror_loop(self, stop, events, c, wake, applied):
+        """Keep the live model equal to the team's. Each pass fetches only the parts that differ from what this
+        window last applied, so a change that made no event (the host re-syncs its document when it restarts) or a
+        fetch that failed (host busy or offline) is caught on a later pass. Op events wake it early."""
+        while True:
+            wake.wait(REFRESH_SECONDS)
+            wake.clear()
+            if stop.is_set():
+                return
+            try:
+                breps, gone, now = c.mirror_changes(applied)
+            except HubRequestError as e:
+                if e.code in FATAL:
+                    return  # the poll and heartbeat loops report it
+                continue
+            if stop.is_set():
+                return
+            if breps:
+                events.put(("brep", breps))
+            if gone:
+                events.put(("deleted", gone))
+            applied = now
+
+    def _poll_loop(self, stop, events, c, seq, mirror_wake):
         offline = False
         while not stop.is_set():
             try:
@@ -292,19 +320,10 @@ class Session:
             if not r["events"]:
                 continue
             seq = r["seq"]
-            changed, deleted = set(), set()
             for ev in r["events"]:
-                if ev["kind"] == "op":
-                    changed |= set(ev["created"] + ev["modified"] + ev["recomputed"])
-                    deleted |= set(ev["deleted"])
                 events.put(("event", ev))
-            if changed:
-                try:
-                    events.put(("brep", c.post("/brep", {"names": sorted(changed)})["objects"]))
-                except HubRequestError as e:
-                    events.put(("offline", str(e)))
-            if deleted:
-                events.put(("deleted", sorted(deleted)))
+            if any(ev["kind"] == "op" for ev in r["events"]):
+                mirror_wake.set()  # the mirror loop fetches whatever changed
             events.put(("refresh", None))
 
     # ------------------------------------------------------- GUI-thread work
@@ -423,10 +442,9 @@ class Session:
         doc.recompute()
 
     def full_refresh(self):
-        self.apply_breps(self.client.post("/brep", {})["objects"])
-        mirror = self.mirror()
-        live = {o["name"] for o in self.client.get("/model")["objects"]}
-        self.remove_objects([o.Name for o in mirror.Objects if o.Name not in live])
+        breps, _, self.mirrored = self.client.mirror_changes({})
+        self.apply_breps(breps)
+        self.remove_objects([o.Name for o in self.mirror().Objects if o.Name not in self.mirrored])
         self.refresh_meta()
         self.frame_model()
 
