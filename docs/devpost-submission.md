@@ -1,4 +1,4 @@
-# CadSwarm — Devpost submission packet
+# CADSwarm — Devpost submission packet
 
 Draft for Cal Hacks 13.0. Replace every `[TBD]` before submitting. Keep the description within
 Devpost's field limits (the sections below are sized for the "built with a story" form).
@@ -36,7 +36,7 @@ Devpost's field limits (the sections below are sized for the "built with a story
 
 ## Project name
 
-CadSwarm
+CADSwarm
 
 ## Tagline
 
@@ -51,13 +51,13 @@ wanted them to build the physical part too, together, while a person watches and
 
 The hard part is not generating a shape. It is keeping several agents' hands off each other's work.
 Two agents editing one FreeCAD document overwrite each other, a dead agent leaves half-built parts
-locked, and a plausible-looking enclosure can still not fit the board or the printer. CadSwarm is
+locked, and a plausible-looking enclosure can still not fit the board or the printer. CADSwarm is
 built around that coordination problem: the team's shared state is a database, and the rules that
 protect it are enforced there rather than requested in a prompt.
 
 ## What it does
 
-CadSwarm turns FreeCAD into a shared workspace for a small team of people and their AI helpers.
+CADSwarm turns FreeCAD into a shared workspace for a small team of people and their AI helpers.
 
 - **A beginner-friendly FreeCAD workbench.** A guide starts or joins a team with a single-use invite,
   detects the AI helper you already use (Claude Code, Codex, Factory Droid, or a CLI of your own),
@@ -147,7 +147,7 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 - **A reviewer that cannot make things worse.** We gave Droid an allowlist, but also made the module
   refuse write ops from its member kind, so a slipped tool still cannot change geometry. A reviewer
   that dies before reporting now fails the brief with a message instead of hanging it.
-- **Bring your own AI.** CadSwarm ships no model. The host finds the CLI the owner already has,
+- **Bring your own AI.** CADSwarm ships no model. The host finds the CLI the owner already has,
   starts it headlessly with the right prompt and folder, and attributes its actions to its own team
   identity.
 - **Making an installer out of a dev tree.** Pinning SpacetimeDB, extracting its archive, checksum
@@ -207,7 +207,7 @@ Actions · Windows
   macOS or Linux:
   `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash`.
   Then follow the guide in FreeCAD. The host needs an AI CLI (Claude Code, Codex, or Droid) that the
-  user already has; CadSwarm ships no model and no keys.
+  user already has; CADSwarm ships no model and no keys.
 
 ## Prize tracks: what a judge can check
 
@@ -239,9 +239,9 @@ were taken, because the browser store does not hold those numbers).
 
 **0:00–0:15 — The problem.** A desk with an ESP32 and a tangle of wires. "Every hardware team needs
 a case. CAD is the bottleneck, and one AI agent alone gets the details wrong." Show a finished
-CadSwarm enclosure in FreeCAD.
+CADSwarm enclosure in FreeCAD.
 
-**0:15–0:35 — Start a team.** Open the CadSwarm workbench, run the guide, name the project, show the
+**0:15–0:35 — Start a team.** Open the CADSwarm workbench, run the guide, name the project, show the
 invite code and the detected AI helper. Say: "No CAD or coding experience: pick the helper you
 already use."
 
@@ -268,7 +268,7 @@ next design starts smarter."
 first-use download with checksum verification, and the GitHub Actions release page. "One file into
 FreeCAD; the pinned database and team server arrive on first use."
 
-**2:35–2:45 — Close.** "CadSwarm: your team's AI helpers, one live model, a printable part." Show the
+**2:35–2:45 — Close.** "CADSwarm: your team's AI helpers, one live model, a printable part." Show the
 repo URL and the mock web link.
 
 ### Fill the Elastic indices before recording
