@@ -258,3 +258,113 @@ def test_assign_and_message_before_teammate_joins(env):
     dana = hub.join("secret", "Dana-Codex")["participant_id"]
     bodies = [m["body"] for m in hub.inbox(dana)]
     assert any("assigned you task" in b for b in bodies) and "lid must clear the posts" in bodies
+
+
+# ------------------------------------------------------------ hardening
+
+
+def test_fence_is_required_and_must_be_an_integer(env):
+    hub, _, alice, _ = env
+    row = hub.one("SELECT token, fence FROM participants WHERE id=?", alice)
+    with pytest.raises(HubError) as e:
+        hub.authenticate(alice, row["token"], None)
+    assert e.value.status == 400 and e.value.code == "missing_fence"
+    with pytest.raises(HubError) as e:
+        hub.authenticate(alice, row["token"], "abc")
+    assert e.value.status == 400 and e.value.code == "bad_fence"
+    assert hub.authenticate(alice, row["token"], str(row["fence"]))["id"] == alice
+
+
+def http_hub(tmp_path):
+    from fastapi.testclient import TestClient
+    from cadswarm.hub.app import create_app
+    worker = FakeWorker()
+    worker.doc_path = str(tmp_path / "model.FCStd")
+    (tmp_path / "model.FCStd").write_bytes(b"model-bytes")
+    hub = Hub(worker, str(tmp_path / "hub.sqlite"), "secret")
+    return hub, TestClient(create_app(hub, str(tmp_path), sweep_seconds=3600))
+
+
+def test_http_refuses_routes_without_a_fence_and_bad_input_is_400(tmp_path):
+    hub, http = http_hub(tmp_path)
+    ident = http.post("/join", json={"workspace_token": "secret", "name": "alice"}).json()
+    h = {"x-participant": ident["participant_id"], "authorization": f"Bearer {ident['token']}"}
+    assert http.get("/model", headers=h).json()["code"] == "missing_fence"
+    assert http.get("/model", headers={**h, "x-fence": "abc"}).status_code == 400
+    assert http.get("/model", headers={**h, "x-fence": "99"}).status_code == 409
+    h["x-fence"] = str(ident["fence"])
+    assert http.get("/model", headers=h).status_code == 200
+    for path, body in [("/messages", {"body": 5}), ("/ops", {"op": "set_param", "args": "x"}),
+                       ("/ops", {"op": ["a"]}), ("/locks", {"names": [["a"]]}),
+                       ("/locks/release", {"names": "a"}),
+                       ("/ops", {"op": "set_param", "args": {}, "expected_revs": {"Params": "x"}})]:
+        r = http.post(path, json=body, headers=h)
+        assert r.status_code == 400, (path, body, r.text)
+
+
+def test_snapshot_download_is_served_under_the_hub_lock(tmp_path):
+    hub, http = http_hub(tmp_path)
+    ident = http.post("/join", json={"workspace_token": "secret", "name": "alice"}).json()
+    h = {"x-participant": ident["participant_id"], "authorization": f"Bearer {ident['token']}",
+         "x-fence": str(ident["fence"])}
+    import cadswarm.hub.app as app_mod
+    held = []
+
+    def spy_open(*a, **k):
+        held.append(hub.lock._is_owned())
+        return open(*a, **k)
+    app_mod.open = spy_open
+    try:
+        assert http.get("/snapshot.FCStd", headers=h).content == b"model-bytes"
+    finally:
+        del app_mod.open
+    assert held == [True]  # the live file is read while the hub lock keeps the worker from replacing it
+    (tmp_path / "model.FCStd").replace(tmp_path / "other")  # nothing holds the live file open
+
+
+def test_events_does_not_sleep_through_an_event_emitted_before_waiting(env):
+    import time
+    hub, _, alice, _ = env
+    since = hub.seq()
+    real_q, fired = hub.q, []
+
+    def q_then_emit(*a, **k):
+        rows = real_q(*a, **k)
+        if not fired:  # an event lands in the gap between the query and the wait
+            fired.append(1)
+            hub.emit("ping", alice)
+        return rows
+    hub.q = q_then_emit
+    t0 = time.time()
+    r = hub.events(since, wait=10)
+    assert time.time() - t0 < 2 and [e["kind"] for e in r["events"]] == ["ping"]
+
+
+def test_rejoin_after_leaving_cannot_duplicate_a_live_name(env):
+    hub, _, alice, _ = env
+    old = hub.one("SELECT token FROM participants WHERE id=?", alice)
+    hub.leave(alice)
+    hub.join("secret", "alice-claude")  # someone else takes the freed name
+    with pytest.raises(HubError) as e:
+        hub.join("secret", "alice-claude", resume={"id": alice, "token": old["token"]})
+    assert e.value.code == "name_in_use"
+    assert len(hub.q("SELECT 1 FROM participants WHERE lower(name)='alice-claude' AND status='active'")) == 1
+
+
+def test_rejoin_after_leaving_with_name_free_resumes(env):
+    hub, _, alice, _ = env
+    old = hub.one("SELECT token FROM participants WHERE id=?", alice)
+    hub.leave(alice)
+    again = hub.join("secret", "alice-claude", resume={"id": alice, "token": old["token"]})
+    assert again["participant_id"] == alice
+
+
+def test_restore_file_honours_expected_version(tmp_path):
+    hub, _http = http_hub(tmp_path)
+    pid = hub.join("secret", "alice")["participant_id"]
+    hub.save_file(pid, "notes.txt", "one")
+    hub.save_file(pid, "notes.txt", "two", if_exists="replace", expected_version=1)
+    with pytest.raises(HubError) as e:
+        hub.restore_file(pid, "notes.txt", 1, expected_version=1)  # current is v2
+    assert e.value.status == 409 and e.value.code == "stale_version"
+    assert hub.restore_file(pid, "notes.txt", 1, expected_version=2)["version"] == 3

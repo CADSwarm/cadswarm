@@ -287,9 +287,11 @@ def file_history(path: str) -> dict:
 
 
 @mcp.tool()
-def restore_file(path: str, version: int) -> dict:
-    """Bring back an older version of a file as a new version (the current one is kept too)."""
-    return call("POST", "/project/files/restore", {"path": path, "version": version})
+def restore_file(path: str, version: int, expected_version: int | None = None) -> dict:
+    """Bring back an older version of a file as a new version (the current one is kept too).
+    expected_version (from read_file/list_files) refuses the restore if someone changed the file since you read it."""
+    return call("POST", "/project/files/restore",
+                {"path": path, "version": version, "expected_version": expected_version})
 
 
 @mcp.tool()

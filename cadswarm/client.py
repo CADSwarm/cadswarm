@@ -55,7 +55,7 @@ class HubClient:
         if self.identity.get("participant_id") and self.identity.get("token"):
             h["x-participant"] = self.identity["participant_id"]
             h["authorization"] = "Bearer " + self.identity["token"]
-            if self.identity.get("fence") is not None:  # a saved sign-in being resumed has none yet
+            if self.identity.get("fence") is not None:  # the hub refuses calls without one: join() first to get it
                 h["x-fence"] = str(self.identity["fence"])
         return h
 

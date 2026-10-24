@@ -75,9 +75,30 @@ def test_launcher_check_reports_deps(tmp_path):
 
 
 def test_resuming_a_saved_signin_without_fence(tmp_path):
-    """The FreeCAD guide stores only participant id + token; resuming must not need a fence."""
+    """The FreeCAD guide stores only participant id + token: joining with it yields the fence,
+    and acting before that join is refused rather than treated as fence-less."""
+    from fastapi.testclient import TestClient
     from cadswarm.client import HubClient
-    c = HubClient("http://h", {"participant_id": "p_1", "token": "t"})
-    h = c.headers()
-    assert h["x-participant"] == "p_1" and "x-fence" not in h
-    assert "x-participant" not in HubClient("http://h", {"participant_id": "p_1"}).headers()
+    from cadswarm.hub.app import create_app
+    from cadswarm.hub.core import Hub
+    from test_core import FakeWorker
+
+    hub = Hub(FakeWorker(), str(tmp_path / "hub.sqlite"), "secret")
+    http = TestClient(create_app(hub, str(tmp_path), sweep_seconds=3600))
+    first = http.post("/join", json={"workspace_token": "secret", "name": "carol"}).json()
+
+    class Client(HubClient):  # route the stdlib client's requests through the in-process app
+        def request(self, method, path, body=None, params=None, timeout=None, raw=False):
+            r = http.request(method, path, json=body, params=params, headers=self.headers())
+            if r.status_code >= 400:
+                from cadswarm.client import HubRequestError
+                raise HubRequestError(r.status_code, r.json())
+            return r.json()
+
+    c = Client("http://h", {"participant_id": first["participant_id"], "token": first["token"]})
+    with pytest.raises(Exception) as e:
+        c.get("/model")
+    assert e.value.status == 400 and e.value.code == "missing_fence"
+    ident = c.join("secret", "carol")
+    assert ident["participant_id"] == first["participant_id"] and ident["fence"] == first["fence"] + 1
+    assert "objects" in c.get("/model")

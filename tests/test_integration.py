@@ -120,11 +120,14 @@ def test_part_scripts_cannot_touch_files(hub_env, tmp_path):
         f"shape = Part.makeBox(1,1,1)\nshape.exportStep(r'{tmp_path / 'x.step'}')",
         f"doc.saveAs(r'{tmp_path / 'x.FCStd'}')",
         "__import__('os').system('echo hi')",
+        f"import random\nrandom._os.makedirs(r'{tmp_path / 'made'}')",
+        f"f = doc.saveAs\nf(r'{tmp_path / 'y.FCStd'}')",
     ]
     for code in attempts:
         s, r = op(a, "run_part_script", name="Evil", code=code)
         assert s >= 400, (code, r)
     assert target.read_text() == "precious" and not (tmp_path / "x.step").exists()
+    assert not (tmp_path / "made").exists() and not (tmp_path / "y.FCStd").exists()
     s, r = op(a, "run_part_script", name="Gear",  # ordinary geometry scripts still work
               code="import math\nshape = Part.makeCylinder(10, 5)\nresult = {'pi': round(math.pi, 2)}")
     assert s == 200 and r["result"]["result"] == {"pi": 3.14}

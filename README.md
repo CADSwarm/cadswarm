@@ -135,7 +135,7 @@ the same Wi-Fi. For teammates elsewhere, put everyone on a private network such 
 Then make an invite code with an address they can reach:
 
 ```powershell
-python cadswarm_launch.py hub --data .	eam-model --token MY-TEAM-CODE        # on the host
+python cadswarm_launch.py hub --data .\team-model --token MY-TEAM-CODE        # on the host
 python cadswarm_launch.py invite --hub http://100.64.1.5:8765 --token MY-TEAM-CODE --project "Phone stand"
 ```
 
@@ -186,7 +186,7 @@ the prompt goes through without it.
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m pytest        # 19 tests; the integration test drives real FreeCAD
+.venv\Scripts\python -m pytest        # 169 tests; the integration test drives real FreeCAD
 ```
 
 See [demo/README.md](demo/README.md) for a three-agent demo script.
@@ -195,8 +195,9 @@ See [demo/README.md](demo/README.md) for a three-agent demo script.
 
 - The FreeCAD mirror is read-only. Human geometry edits go through the panel (lock, param,
   takeover) or an agent, not direct GUI modelling.
-- `run_part_script` runs agent Python in the worker with no sandbox. Use it only with trusted
-  teammates; a timeout kills the worker and the hub restarts it from the last save.
+- `run_part_script` runs agent Python inside the worker. Its file-write guard (see "Model scripts can't
+  write files") only stops accidents, not a determined script, so use it only with trusted teammates;
+  a timeout kills the worker and the hub restarts it from the last save.
 - Locks are per object. Editing a shared upstream object (e.g. a sketch used by two features)
   requires its lock; there is no sub-object locking.
 - Single hub, no TLS, shared workspace token. Put it behind a VPN or tunnel for remote teams.

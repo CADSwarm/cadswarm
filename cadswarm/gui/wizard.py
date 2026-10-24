@@ -448,7 +448,12 @@ class SetupWizard(QtGui.QDialog):
         url = f"http://127.0.0.1:{port}"
         log(f"Starting the team server on port {port} (model saved in {data_dir})")
         pid = hosting.start_hub(self.python, data_dir, self.token, port)
-        hosting.wait_healthy(url, timeout=120, pid=pid, data_dir=data_dir)
+        self.p.SetString("HostPid", str(pid))  # saved at once, so "Stop hosting" finds it whatever happens next
+        try:
+            hosting.wait_healthy(url, timeout=120, pid=pid, data_dir=data_dir)
+        except Exception:
+            hosting.stop_hub(pid)  # else "Try again" would start a second server on the same project folder
+            raise
         self.hub_for_agent = url
         self.host_info = {"HostDataDir": data_dir, "HostToken": self.token, "HostPort": str(port),
                           "HostPid": str(pid)}
@@ -546,6 +551,11 @@ class SetupWizard(QtGui.QDialog):
                                         "• the invite code is their latest one.")
             else:
                 self.join_error.setText(panel.friendly_error(e, inv["hub"]))
+            return
+        except Exception as e:  # never leave the dialog stuck on "Joining…"
+            App.Console.PrintError(f"[CadSwarm] Join failed: {e!r}\n")
+            self.join_error.setText("Something went wrong while joining. Please try again; if it keeps "
+                                    "happening, ask your teammate to send a fresh invite code.")
             return
         self.name, self.project, self.token = name, inv["project"] or "Team project", inv["token"]
         self.hub_for_agent = inv["hub"]
@@ -764,6 +774,9 @@ class SetupWizard(QtGui.QDialog):
         url = f"http://127.0.0.1:{port}"
         if hosting.health(url):
             log("Team server is already running.")
+            pid = hosting.pid_on_port(port)
+            if pid:
+                self.p.SetString("HostPid", str(pid))  # a stale PID would make "Stop hosting" do nothing
             return
         data_dir, token = self.p.GetString("HostDataDir"), self.p.GetString("HostToken")
         try:
@@ -810,6 +823,6 @@ def stop_hosting():
                          "start it again (CadSwarm ▸ Get started ▸ Reconnect). Your project is saved."):
         return
     panel.SESSION.disconnect()
-    hosting.stop_hub(int(pid) if pid else None)
+    hosting.stop_hub(pid)
     App.Console.PrintMessage("[CadSwarm] Stopped hosting. Your project is saved.\n")
 

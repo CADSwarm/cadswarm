@@ -28,13 +28,23 @@ if (-not $candidates) {
     Start-Process "https://www.freecad.org/downloads.php"
     Finish 1
 }
-$FreeCAD = ($candidates | Sort-Object -Descending | Select-Object -First 1)
+# Newest version wins; sort by the number in the folder name, since as text "1.9" would beat "1.10".
+function FolderVersion($exe) {
+    $m = [regex]::Match((Split-Path (Split-Path $exe)), '(\d+(?:\.\d+)+)')
+    if ($m.Success) { try { return [version]$m.Groups[1].Value } catch {} }
+    return [version]"0.0"
+}
+$FreeCAD = ($candidates | Sort-Object { FolderVersion $_ } -Descending | Select-Object -First 1)
 $Python = Join-Path (Split-Path $FreeCAD) "python.exe"
 Say "  [ok] Found FreeCAD: $FreeCAD" "Green"
 
 # 2. Where FreeCAD keeps add-ons for this user
+# Windows PowerShell 5.1 turns any stderr output from a native program into a terminating error under
+# "Stop", so relax it for this call: FreeCAD's python may print warnings, which are harmless.
+$ErrorActionPreference = "Continue"
 $UserDir = & $Python -c "import sys,os; sys.path.append(os.path.dirname(sys.executable)); import FreeCAD; print(FreeCAD.getUserAppDataDir())" 2>$null |
     Select-Object -Last 1
+$ErrorActionPreference = "Stop"
 if (-not $UserDir) { Say "Couldn't ask FreeCAD where its add-ons go." "Red"; Finish 1 }
 $Dest = Join-Path $UserDir "Mod\CadSwarm"
 
@@ -45,12 +55,22 @@ if (Get-Process -Name "freecad" -ErrorAction SilentlyContinue) {
 
 # 3. Copy CadSwarm into FreeCAD
 # A clean copy each time (updates included). Only code lives here: projects are in Documents.
-if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
-New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-robocopy $Here $Dest /E /NFL /NDL /NJH /NJS /NP `
-    /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info /XF *.pyc | Out-Null
-if ($LASTEXITCODE -ge 8) { Say "Copying CadSwarm into FreeCAD failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
-Say "  [ok] Installed CadSwarm into FreeCAD" "Green"
+# If this script was started from the installed copy there is nothing to copy (and deleting $Dest
+# would delete the files we are running from).
+function SamePath($a, $b) {
+    $norm = { param($p) [IO.Path]::GetFullPath($p).TrimEnd([char[]]'\/') }
+    return (& $norm $a) -ieq (& $norm $b)
+}
+if (SamePath $Here $Dest) {
+    Say "  [ok] CadSwarm is already installed in FreeCAD" "Green"
+} else {
+    if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
+    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+    robocopy $Here $Dest /E /NFL /NDL /NJH /NJS /NP `
+        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info /XF *.pyc | Out-Null
+    if ($LASTEXITCODE -ge 8) { Say "Copying CadSwarm into FreeCAD failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
+    Say "  [ok] Installed CadSwarm into FreeCAD" "Green"
+}
 
 $Opener = Join-Path $Dest "cadswarm\gui\open_cadswarm.py"
 

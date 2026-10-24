@@ -38,6 +38,8 @@ def main():
         client, _cfg = project_client(project)
         if not client or not client.identity.get("participant_id"):
             return  # the MCP server has not joined yet
+        if client.identity.get("fence") is None:
+            return  # never join here: that would bump the fence and supersede the live MCP server
         client.timeout = 1.8
         text = client.get("/context")["context"]
         # Windows pipes default to the ANSI codepage; the CLIs read hook output as UTF-8.

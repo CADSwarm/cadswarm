@@ -84,6 +84,7 @@ class Hub:
         self.clock = clock
         self.lock = threading.RLock()
         self.changed = threading.Condition()
+        self._version = 0  # bumped by emit under `changed`, so events() never misses a wakeup
         self.db = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
@@ -148,9 +149,9 @@ class Hub:
             self.emit("file_deleted", pid, name=self.name_of(pid), path=r["deleted"])
             return r
 
-    def restore_file(self, pid, path, version):
+    def restore_file(self, pid, path, version, expected_version=None):
         with self.lock:
-            r = self._file_call(self._files().restore, path, version, self.name_of(pid))
+            r = self._file_call(self._files().restore, path, version, self.name_of(pid), expected_version)
             self.emit("file_saved", pid, name=self.name_of(pid), path=r["path"], version=r["version"], replaced=True)
             return r
 
@@ -186,6 +187,7 @@ class Hub:
         cur = self.db.execute("INSERT INTO events (ts, kind, actor, data) VALUES (?,?,?,?)",
                               (self.clock(), kind, actor, json.dumps(data)))
         with self.changed:
+            self._version += 1
             self.changed.notify_all()
         return cur.lastrowid
 
@@ -249,6 +251,11 @@ class Hub:
                 row = self.one("SELECT * FROM participants WHERE id=? AND token=?",
                                resume.get("id"), resume.get("token"))
                 if row and row["status"] != "taken_over":
+                    if row["status"] == "left" and self.one(
+                            "SELECT 1 FROM participants WHERE lower(name)=lower(?) AND id!=? "
+                            "AND status IN ('active','stale')", row["name"], row["id"]):
+                        raise HubError(409, "name_in_use", f"{row['name']!r} was taken by someone else after you left. "
+                                       "Pick another name and join again.")
                     fence = row["fence"] + 1  # supersedes any older process using this identity
                     was_stale = row["status"] == "stale"
                     self.x("UPDATE participants SET fence=?, status='active', last_seen=?, stale_since=NULL, "
@@ -292,7 +299,13 @@ class Hub:
                                "Join again as a new participant to keep working.")
             if row["status"] == "left":
                 raise HubError(403, "left", "This participant left the session; join again")
-            if fence is not None and int(fence) != row["fence"]:
+            if fence is None:
+                raise HubError(400, "missing_fence", "X-Fence header required; join first to get your fence.")
+            try:
+                fence = int(fence)
+            except (TypeError, ValueError):
+                raise HubError(400, "bad_fence", "X-Fence must be an integer")
+            if fence != row["fence"]:
                 raise HubError(409, "fence_stale",
                                "This process was superseded by a newer one using the same identity; stop acting.")
             return dict(row)
@@ -373,8 +386,14 @@ class Hub:
 
     # ------------------------------------------------------------------ locks
 
+    @staticmethod
+    def _names(names):
+        if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+            raise HubError(400, "bad_args", "names must be a list of strings")
+        return names
+
     def acquire(self, pid, names):
-        names = sorted(set(names))
+        names = sorted(set(self._names(names)))
         if not names:
             raise HubError(400, "bad_args", "names is empty")
         with self.lock:
@@ -393,10 +412,11 @@ class Hub:
             return {"locked": names, "all_my_locks": self.locks_of(pid)}
 
     def release(self, pid, names, force=False):
+        self._names(names)
         with self.lock:
             me = self.one("SELECT kind FROM participants WHERE id=?", pid)
             done = []
-            for n in sorted(set(names)):
+            for n in sorted(set(self._names(names))):
                 holder = self.holder(n)
                 if holder == pid or (holder and force and me["kind"] == "human"):
                     self.x("DELETE FROM locks WHERE object=?", n)
@@ -410,8 +430,13 @@ class Hub:
     # -------------------------------------------------------------------- ops
 
     def op(self, pid, op, args, expected_revs=None):
-        if op not in MUTATING:
+        if not isinstance(op, str) or op not in MUTATING:
             raise HubError(400, "unknown_op", f"Unknown op {op!r}")
+        if args is not None and not isinstance(args, dict):
+            raise HubError(400, "bad_args", "args must be an object")
+        if expected_revs is not None and (not isinstance(expected_revs, dict) or any(
+                not isinstance(r, int) or isinstance(r, bool) for r in expected_revs.values())):
+            raise HubError(400, "bad_args", "expected_revs must map object names to integer revisions")
         args = dict(args or {})
         with self.lock:
             mine = set(self.locks_of(pid))
@@ -435,7 +460,7 @@ class Hub:
             for name, rev in (expected_revs or {}).items():
                 row = self.one("SELECT rev, last_actor FROM objects WHERE name=?", name)
                 current = row["rev"] if row else 0
-                if current != int(rev):
+                if current != rev:
                     raise HubError(409, "stale_rev",
                                    f"{name} is at rev {current}, not {rev} (last changed by "
                                    f"{self.name_of(row['last_actor']) if row else 'nobody'}); re-read it first",
@@ -574,6 +599,8 @@ class Hub:
     # --------------------------------------------------------------- messages
 
     def send(self, pid, to, body, kind="message", task_id=None):
+        if not all(isinstance(v, str) for v in (to, body, kind)) or not (task_id is None or isinstance(task_id, str)):
+            raise HubError(400, "bad_args", "to, body and kind must be strings")
         if not body.strip():
             raise HubError(400, "bad_args", "body is empty")
         with self.lock:
@@ -630,6 +657,8 @@ class Hub:
     def events(self, since, wait=0.0, limit=200):
         deadline = time.time() + min(float(wait), 25.0)
         while True:
+            with self.changed:
+                seen = self._version  # read before the query: an emit after this is never slept through
             with self.lock:
                 rows = self.q("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?", int(since), limit)
             if rows or time.time() >= deadline:
@@ -637,7 +666,8 @@ class Hub:
                         "events": [{"seq": r["seq"], "ts": r["ts"], "kind": r["kind"], "actor": r["actor"],
                                     **json.loads(r["data"])} for r in rows]}
             with self.changed:
-                self.changed.wait(max(0.05, deadline - time.time()))
+                if self._version == seen:
+                    self.changed.wait(max(0.05, deadline - time.time()))
 
     # ---------------------------------------------------------------- context
 

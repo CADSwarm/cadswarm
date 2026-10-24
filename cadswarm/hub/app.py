@@ -163,7 +163,7 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
 
     @app.post("/project/files/restore")
     def restore(body: dict = Body(...), p=Depends(me)):
-        return hub.restore_file(p["id"], body.get("path"), body.get("version"))
+        return hub.restore_file(p["id"], body.get("path"), body.get("version"), body.get("expected_version"))
 
     @app.post("/project/snapshot")
     def save_snapshot(body: dict = Body(default={}), p=Depends(me)):
@@ -171,7 +171,11 @@ def create_app(hub: Hub, data_dir: str, sweep_seconds: float = 5.0):
 
     @app.get("/snapshot.FCStd")
     def snapshot(p=Depends(me)):
-        return FileResponse(hub.worker.doc_path, filename="model.FCStd")
+        with hub.lock:  # the worker replaces this file on save; never hand out (or hold open) the live one
+            with open(hub.worker.doc_path, "rb") as f:
+                data = f.read()
+        return Response(data, media_type="application/octet-stream",
+                        headers={"content-disposition": 'attachment; filename="model.FCStd"'})
 
     @app.get("/participants")
     def participants(p=Depends(me)):

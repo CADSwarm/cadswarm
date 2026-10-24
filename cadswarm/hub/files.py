@@ -19,11 +19,13 @@ the agents:
 Callers serialize access (the Hub's lock); this class does no locking of its own.
 """
 import base64
+import functools
 import hashlib
 import os
 import re
 import shutil
 import time
+import unicodedata
 
 TEXT_EXT = {".md", ".txt", ".json", ".csv", ".py", ".fcmacro", ".svg", ".yaml", ".yml", ".toml", ".html", ".xml"}
 BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".step", ".stp", ".stl", ".fcstd", ".dxf", ".3mf"}
@@ -31,7 +33,8 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_BYTES = 500 * 1024 * 1024
 MAX_DEPTH = 8
 MAX_PATH_CHARS = 180
-RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$",
+            *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 BAD_CHARS = re.compile(r'[<>:"|?*\x00-\x1f\\]')
 
 SCHEMA = """
@@ -54,6 +57,30 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _guard(fn):
+    """Turn file-system and encoding failures into clean 4xx errors instead of 500s."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except UnicodeError:
+            raise FileError(400, "bad_args", "That path or text has characters that can't be stored (e.g. a lone surrogate).")
+        except OSError as e:
+            raise FileError(409, "io_error", f"The file system refused that: {e.strerror or e}. Nothing was changed.")
+    return wrapper
+
+
+def _version(v, field="expected_version"):
+    """A version number from a caller: a real int (not a bool, not text like 'abc') or None."""
+    if v is None:
+        return None
+    if isinstance(v, str) and v.strip().isdigit():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise FileError(400, "bad_args", f"{field} must be a whole number like 3.")
+    return v
+
+
 class ProjectFiles:
     def __init__(self, layout, db, clock=time.time):
         self.root = os.path.realpath(layout["files"])
@@ -71,7 +98,7 @@ class ProjectFiles:
             raise FileError(400, "bad_path", "Give a file path like 'parts/base/notes.md'.")
         p = path.strip().replace("\\", "/")
         if p.startswith("files/"):
-            p = p[len("files/"):]  # tolerate agents that include the folder name
+            p = p[len("files/"):]  # tolerate agents that include the folder name (once: 'files/files/x' is a real subfolder)
         if p.startswith("/") or re.match(r"^[A-Za-z]:", p) or p.startswith("~"):
             raise FileError(400, "bad_path", "Use a path inside the project, like 'notes/plan.md', not an absolute one.")
         parts = [c for c in p.split("/") if c not in ("", ".")]
@@ -86,8 +113,14 @@ class ProjectFiles:
                 raise FileError(400, "bad_path", f"Hidden names like {c!r} aren't allowed.")
             if BAD_CHARS.search(c) or c.endswith((" ", ".")):
                 raise FileError(400, "bad_path", f"{c!r} has characters Windows can't store in a file name.")
-            if c.split(".")[0].lower() in RESERVED:
+            try:
+                c.encode("utf-8")
+            except UnicodeEncodeError:
+                raise FileError(400, "bad_path", "Paths can't contain unpaired surrogate characters.")
+            # Windows ignores trailing spaces/dots in the stem ('CON .txt') and folds superscript digits ('COM¹')
+            if unicodedata.normalize("NFKC", c.split(".")[0].rstrip(" .")).casefold() in RESERVED:
                 raise FileError(400, "bad_path", f"{c!r} is a reserved name on Windows.")
+        parts = self._canonical(parts, allow_folder)
         clean = "/".join(parts)
         if not allow_folder:
             ext = os.path.splitext(parts[-1])[1].lower()
@@ -99,13 +132,38 @@ class ProjectFiles:
             raise FileError(400, "bad_path", "That path points outside the project's files folder.")
         return clean
 
+    def _canonical(self, parts, allow_folder):
+        """Take on the casing of what is already on disk (NTFS is case-insensitive, so 'NOTES.md' IS 'notes.md'),
+        and refuse paths that run through a file or end on a folder."""
+        out, cur = [], self.root
+        for i, c in enumerate(parts):
+            last = i == len(parts) - 1
+            try:
+                names = os.listdir(cur)
+            except OSError:
+                names = []
+            match = c if c in names else next((n for n in sorted(names) if n.casefold() == c.casefold()), None)
+            if match is None:
+                if os.path.lexists(os.path.join(cur, c)):  # Windows resolved it, but it isn't a real name here
+                    raise FileError(400, "bad_path", f"{c!r} looks like a Windows short (8.3) name; use the full file name.")
+                out.extend(parts[i:])
+                break
+            cur = os.path.join(cur, match)
+            out.append(match)
+            if os.path.isdir(cur):
+                if last and not allow_folder:
+                    raise FileError(409, "is_folder", f"{'/'.join(out)!r} is a folder, not a file.")
+            elif not last or allow_folder:
+                raise FileError(409, "not_a_folder", f"{'/'.join(out)!r} is a file, so nothing can be created inside or beside it as a folder.")
+        return out
+
     def full(self, clean):
         return os.path.join(self.root, *clean.split("/"))
 
     # ----------------------------------------------------------- reading
 
     def record(self, clean):
-        row = self.db.execute("SELECT * FROM files WHERE path=?", (clean,)).fetchone()
+        row = self.db.execute("SELECT * FROM files WHERE path=? COLLATE NOCASE", (clean,)).fetchone()
         return dict(row) if row else None
 
     def disk_bytes(self, clean):
@@ -120,8 +178,10 @@ class ProjectFiles:
         data, rec = self.disk_bytes(clean), self.record(clean)
         if data is None:
             if rec:
-                self.db.execute("DELETE FROM files WHERE path=?", (clean,))
+                self.db.execute("DELETE FROM files WHERE path=?", (rec["path"],))
             return None
+        if rec and rec["path"] != clean:  # same file, different casing than we stored: follow the disk
+            self.db.execute("UPDATE files SET path=? WHERE path=?", (clean, rec["path"]))
         digest = sha256(data)
         if rec is None:
             self.db.execute("INSERT INTO files VALUES (?,?,?,?,?,?)",
@@ -131,6 +191,7 @@ class ProjectFiles:
                             (digest, len(data), "outside CadSwarm", self.clock(), clean))
         return self.record(clean)
 
+    @_guard
     def read(self, path):
         clean = self.clean(path)
         rec = self.reconcile(clean)
@@ -146,12 +207,14 @@ class ProjectFiles:
             out["base64"] = base64.b64encode(data).decode()
         return out
 
+    @_guard
     def raw(self, path):
         clean = self.clean(path)
         if self.reconcile(clean) is None:
             raise FileError(404, "not_found", f"There's no file {clean!r}.")
         return clean, self.disk_bytes(clean)
 
+    @_guard
     def listing(self, prefix=""):
         base = self.root
         if prefix:
@@ -175,9 +238,10 @@ class ProjectFiles:
                                 "author": rec["author"], "updated_at": rec["updated_at"]})
         return {"files": out, "folders": folders}
 
+    @_guard
     def history(self, path):
         clean = self.clean(path)
-        rows = self.db.execute("SELECT version, size, author, saved_at, reason FROM file_history WHERE path=? "
+        rows = self.db.execute("SELECT version, size, author, saved_at, reason FROM file_history WHERE path=? COLLATE NOCASE "
                                "ORDER BY saved_at", (clean,)).fetchall()
         current = self.reconcile(clean)
         return {"path": clean, "current": current, "older_versions": [dict(r) for r in rows]}
@@ -185,27 +249,54 @@ class ProjectFiles:
     # ----------------------------------------------------------- writing
 
     def _keep(self, clean, rec, data, reason):
-        """Copy the current bytes into history before they are replaced, moved or deleted."""
-        stored = os.path.join(self.history_dir, *clean.split("/")[:-1],
-                              f"{clean.split('/')[-1]}@v{rec['version']}-{int(self.clock() * 1000)}")
+        """Copy the current bytes into history before they are replaced, moved or deleted.
+        Returns an undo handle for `_unkeep`, for when the change that follows fails."""
+        base = os.path.join(self.history_dir, *clean.split("/")[:-1],
+                            f"{clean.split('/')[-1]}@v{rec['version']}-{int(self.clock() * 1000)}")
+        stored, n = base, 2
+        while os.path.exists(stored):  # never overwrite an earlier history copy
+            stored, n = f"{base}-{n}", n + 1
         os.makedirs(os.path.dirname(stored), exist_ok=True)
         with open(stored, "wb") as f:
             f.write(data)
-        self.db.execute("INSERT INTO file_history VALUES (?,?,?,?,?,?,?,?)",
-                        (clean, rec["version"], rec["sha256"], rec["size"], rec["author"], self.clock(), stored, reason))
+        cur = self.db.execute("INSERT INTO file_history VALUES (?,?,?,?,?,?,?,?)",
+                              (clean, rec["version"], rec["sha256"], rec["size"], rec["author"], self.clock(), stored, reason))
+        return stored, cur.lastrowid
+
+    def _unkeep(self, handle):
+        stored, rowid = handle
+        self.db.execute("DELETE FROM file_history WHERE rowid=?", (rowid,))
+        try:
+            os.remove(stored)
+        except OSError:
+            pass
 
     def _atomic_write(self, clean, data):
         target = self.full(clean)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         tmp = f"{target}.{os.getpid()}.cadswarm-tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, target)
+        try:
+            with open(tmp, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, target)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     def _total_bytes(self):
-        return self.db.execute("SELECT COALESCE(SUM(size), 0) AS s FROM files").fetchone()["s"]
+        """Live files plus every kept older version (history also covers the trash: a deleted file's bytes are there)."""
+        return self.db.execute("SELECT (SELECT COALESCE(SUM(size), 0) FROM files) + "
+                               "(SELECT COALESCE(SUM(size), 0) FROM file_history) AS s").fetchone()["s"]
+
+    def _check_quota(self, extra):
+        if self._total_bytes() + extra > MAX_TOTAL_BYTES:
+            raise FileError(413, "quota", "The project's files folder is full (500 MB, counting older saved versions "
+                            "and deleted files).")
 
     def free_name(self, clean):
         stem, ext = os.path.splitext(clean)
@@ -214,8 +305,10 @@ class ProjectFiles:
             n += 1
         return f"{stem}-{n}{ext}"
 
+    @_guard
     def save(self, path, author, text=None, base64_data=None, if_exists="error", expected_version=None):
-        clean = self.clean(path)
+        clean = requested = self.clean(path)
+        expected_version = _version(expected_version)
         if (text is None) == (base64_data is None):
             raise FileError(400, "bad_args", "Pass exactly one of text or base64.")
         ext = os.path.splitext(clean)[1].lower()
@@ -244,31 +337,38 @@ class ProjectFiles:
             if if_exists == "new_name":
                 clean, current = self.free_name(clean), None
             else:
-                if expected_version is None or int(expected_version) != current["version"]:
+                if expected_version is None or expected_version != current["version"]:
                     raise FileError(409, "stale_version",
                                     f"{clean!r} is at version {current['version']} (last saved by {current['author']}). "
                                     "Read it again and pass that expected_version to replace it.",
                                     path=clean, currentVersion=current["version"], author=current["author"])
-                self._keep(clean, current, self.disk_bytes(clean), "replaced")
                 replaced = current
         elif expected_version not in (None, 0):
             raise FileError(409, "stale_version", f"{clean!r} doesn't exist any more; it may have been moved or deleted.",
                             path=clean, currentVersion=0)
-        if self._total_bytes() - (replaced["size"] if replaced else 0) + len(data) > MAX_TOTAL_BYTES:
-            raise FileError(413, "quota", "The project's files folder is full (500 MB).")
-        self._atomic_write(clean, data)
+        # replaced bytes stay in history and keep counting, so a replace adds len(data) on top
+        self._check_quota(len(data))
+        kept = self._keep(clean, replaced, self.disk_bytes(clean), "replaced") if replaced else None
+        try:
+            self._atomic_write(clean, data)
+        except OSError:
+            if kept:
+                self._unkeep(kept)
+            raise
         version = (replaced["version"] + 1) if replaced else 1
         self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
                         (clean, version, sha256(data), len(data), author, self.clock()))
         return {"path": clean, "version": version, "size": len(data), "replaced": bool(replaced),
                 "previous_author": replaced["author"] if replaced else None,
-                "renamed_from": path.replace("\\", "/") if if_exists == "new_name" and clean != self.clean(path) else None}
+                "renamed_from": requested if if_exists == "new_name" and clean != requested else None}
 
+    @_guard
     def make_folder(self, path):
         clean = self.clean(path, allow_folder=True)
         os.makedirs(self.full(clean), exist_ok=True)
         return {"folder": clean}
 
+    @_guard
     def move(self, src, dst, author):
         s, d = self.clean(src), self.clean(dst)
         rec = self.reconcile(s)
@@ -277,43 +377,67 @@ class ProjectFiles:
         if self.reconcile(d) is not None:
             raise FileError(409, "file_exists", f"{d!r} already exists; nothing was moved or overwritten.", path=d)
         data = self.disk_bytes(s)
-        self._keep(s, rec, data, f"moved to {d}")
+        self._check_quota(len(data))  # the old bytes go to history while the moved copy stays live
         os.makedirs(os.path.dirname(self.full(d)), exist_ok=True)
-        os.replace(self.full(s), self.full(d))
+        os.replace(self.full(s), self.full(d))  # if this fails nothing has been recorded yet
+        self._keep(s, rec, data, f"moved to {d}")
         self.db.execute("DELETE FROM files WHERE path=?", (s,))
         self.db.execute("INSERT INTO files VALUES (?,?,?,?,?,?)", (d, 1, rec["sha256"], rec["size"], author, self.clock()))
         return {"from": s, "to": d}
 
+    @_guard
     def delete(self, path, author):
         """Soft delete: the file moves to the project's trash and its bytes stay in history."""
         clean = self.clean(path)
         rec = self.reconcile(clean)
         if rec is None:
             raise FileError(404, "not_found", f"There's no file {clean!r}.")
-        self._keep(clean, rec, self.disk_bytes(clean), f"deleted by {author}")
-        trash = os.path.join(self.trash_dir, f"{int(self.clock())}-{clean.replace('/', '__')}")
+        kept = self._keep(clean, rec, self.disk_bytes(clean), f"deleted by {author}")
+        base = os.path.join(self.trash_dir, f"{int(self.clock())}-{clean.replace('/', '__')}")
+        trash, n = base, 2
+        while os.path.exists(trash):  # same path deleted twice in a second, or 'a/b.md' vs 'a__b.md'
+            trash, n = f"{base}-{n}", n + 1
         os.makedirs(self.trash_dir, exist_ok=True)
-        shutil.move(self.full(clean), trash)
+        try:
+            shutil.move(self.full(clean), trash)
+        except OSError:
+            self._unkeep(kept)
+            raise
         self.db.execute("DELETE FROM files WHERE path=?", (clean,))
         return {"deleted": clean, "recoverable": True}
 
-    def restore(self, path, version, author):
-        """Bring back an older version as a NEW version (the current one is kept in history too)."""
+    @_guard
+    def restore(self, path, version, author, expected_version=None):
+        """Bring back an older version as a NEW version (the current one is kept in history too).
+        With expected_version, refuses if the file has changed since the caller last read it."""
         clean = self.clean(path)
-        row = self.db.execute("SELECT * FROM file_history WHERE path=? AND version=? ORDER BY saved_at DESC LIMIT 1",
-                              (clean, int(version))).fetchone()
+        expected_version = _version(expected_version)
+        version = _version(version, "version")
+        row = None if version is None else self.db.execute(
+            "SELECT * FROM file_history WHERE path=? COLLATE NOCASE AND version=? ORDER BY saved_at DESC LIMIT 1",
+            (clean, version)).fetchone()
         if not row:
             raise FileError(404, "not_found", f"No saved version {version} of {clean!r}; see file_history.")
+        current = self.reconcile(clean)
+        now = current["version"] if current else 0
+        if expected_version is not None and expected_version != now:
+            raise FileError(409, "stale_version",
+                            f"{clean!r} is at version {now}, not {expected_version}. Read it again before restoring over it.",
+                            path=clean, currentVersion=now, author=current["author"] if current else None)
         with open(row["stored_as"], "rb") as f:
             data = f.read()
-        current = self.reconcile(clean)
-        if current is not None:
-            self._keep(clean, current, self.disk_bytes(clean), f"replaced by restore of v{version}")
-        self._atomic_write(clean, data)
-        new_version = (current["version"] + 1) if current else int(version)
+        self._check_quota(len(data))
+        kept = self._keep(clean, current, self.disk_bytes(clean), f"replaced by restore of v{version}") if current else None
+        try:
+            self._atomic_write(clean, data)
+        except OSError:
+            if kept:
+                self._unkeep(kept)
+            raise
+        new_version = (current["version"] + 1) if current else version
         self.db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?)",
                         (clean, new_version, sha256(data), len(data), author, self.clock()))
-        return {"path": clean, "version": new_version, "restored_from": int(version)}
+        return {"path": clean, "version": new_version, "restored_from": version}
 
 
 def unique_path(folder, filename):

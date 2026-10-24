@@ -62,7 +62,11 @@ def lan_ip():
 
 def free_port(start=8765, tries=50):
     for port in range(start, start + tries):
+        # On Windows a plain wildcard bind succeeds even while something listens on 127.0.0.1:port,
+        # so ask for exclusive use there (a connect probe is unreliable on loopback).
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if os.name == "nt":
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
                 s.bind(("0.0.0.0", port))
                 return port
@@ -116,25 +120,67 @@ def log_tail(data_dir, lines=12):
 
 
 def pid_alive(pid):
-    if not pid:
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
         return False
     if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"], capture_output=True, text=True,
-                             creationflags=NO_WINDOW).stdout
-        return str(pid) in out
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"], capture_output=True,
+                             text=True, creationflags=NO_WINDOW).stdout
+        return f'"{pid}"' in out
     try:
-        os.kill(int(pid), 0)
+        os.kill(pid, 0)
         return True
     except OSError:
         return False
 
 
+def _command_line(pid):
+    """The process's command line, or "" if unknown. PowerShell's CIM query because wmic is gone on new Windows."""
+    try:
+        if os.name == "nt":
+            ps = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine"
+            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
+        else:
+            cmd = ["ps", "-p", str(int(pid)), "-o", "command="]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=20, creationflags=NO_WINDOW).stdout
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return ""
+
+
+def is_our_hub(pid):
+    """True only if `pid` is a running CadSwarm server. A saved PID can be reused by an unrelated
+    program after a reboot, and we must never kill that."""
+    return pid_alive(pid) and os.path.basename(LAUNCHER) in _command_line(pid)
+
+
 def stop_hub(pid):
     """Stop the team server. Its FreeCAD worker exits by itself when the server's pipe closes."""
-    if not pid_alive(pid):
+    if not is_our_hub(pid):
         return False
     if os.name == "nt":
         subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True, creationflags=NO_WINDOW)
     else:
         os.kill(int(pid), signal.SIGTERM)
     return True
+
+
+def pid_on_port(port):
+    """PID of the CadSwarm server listening on `port`, or None. For a server we didn't just start."""
+    try:
+        port = int(port)
+        if os.name == "nt":
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=20,
+                                 creationflags=NO_WINDOW).stdout
+            pids = [int(cols[-1]) for cols in (ln.split() for ln in out.splitlines())
+                    if len(cols) >= 5 and cols[3] == "LISTENING" and cols[1].rsplit(":", 1)[-1] == str(port)
+                    and cols[-1].isdigit()]
+        else:
+            out = subprocess.run(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True, text=True,
+                                 timeout=20).stdout
+            pids = [int(x) for x in out.split() if x.isdigit()]
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    return next((p for p in pids if is_our_hub(p)), None)

@@ -128,101 +128,110 @@ class Session:
         p = prefs()
         resume = {"participant_id": p.GetString("ParticipantId"), "token": p.GetString("ParticipantToken")}
         same_hub = p.GetString("HubUrl") == hub and p.GetString("Name") == name
-        self.client = HubClient(hub, resume if same_hub and resume["participant_id"] else {}, timeout=timeout)
+        self._end_session()  # a previous session's threads must never act on this one
+        client = HubClient(hub, resume if same_hub and resume["participant_id"] else {}, timeout=timeout)
         try:
-            self.ident = self.client.join(token, name, kind="human", client="freecad")
+            self.ident = client.join(token, name, kind="human", client="freecad")
         except HubRequestError as e:
-            if e.code not in ("bad_workspace_token", "unreachable") and self.client.identity:
-                self.client.identity = {}  # stored identity is no longer valid: join fresh
-                try:
-                    self.ident = self.client.join(token, name, kind="human", client="freecad")
-                except HubRequestError:
-                    self.client = None
-                    raise
+            if e.code not in ("bad_workspace_token", "unreachable") and client.identity:
+                client.identity = {}  # stored identity is no longer valid: join fresh
+                self.ident = client.join(token, name, kind="human", client="freecad")
             else:
-                self.client = None
                 raise
-        self.client.timeout = 30
+        client.timeout = 30
+        self.client = client
         p.SetString("HubUrl", hub)
         p.SetString("WorkspaceToken", token)
         p.SetString("Name", name)
         p.SetString("ParticipantId", self.ident["participant_id"])
         p.SetString("ParticipantToken", self.ident["token"])
-        self.stop.clear()
+        # Fresh stop flag and queue per connection: a worker still blocked in an old long-poll can
+        # only ever signal its own (already stopped) session. Workers never touch Qt; they only queue.
+        self.stop, self.events = threading.Event(), queue.Queue()
         self.seq = self.ident.get("seq", 0)
-        threading.Thread(target=self._poll_loop, daemon=True).start()
-        threading.Thread(target=self._heartbeat_loop, daemon=True).start()
         if self.timer is None:
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self.drain)
+        try:
+            self.set_state("connected")
+            self.full_refresh()
+        except Exception:
+            self.disconnect()  # don't stay "connected" to a session that failed to load
+            raise
+        for loop in (self._poll_loop, self._heartbeat_loop):
+            threading.Thread(target=loop, args=(self.stop, self.events, self._bg_client(), self.seq),
+                             daemon=True).start()
         self.timer.start(250)
-        self.set_state("connected")
-        self.full_refresh()
         say(f"Joined the team at {hub} as {name}")
 
     def disconnect(self, reason=None):
         """Leave the session. `reason` set means it ended on us (takeover, other window)."""
         if not self.client:
             return
-        self.stop.set()
+        client = self.client
+        self._end_session()
         if reason is None:
             try:
-                self.client.post("/leave")
+                client.post("/leave")
             except HubRequestError:
                 pass
+        self.set_state("ended" if reason else "disconnected", reason or "You left the team session.")
+
+    def _end_session(self):
+        """Stop this session's workers (they exit on their own stop flag) and forget its client."""
+        self.stop.set()
         self.client = None
         if self.timer:
             self.timer.stop()
-        self.set_state("ended" if reason else "disconnected", reason or "You left the team session.")
 
     def _bg_client(self):
         return HubClient(self.client.hub, dict(self.client.identity), timeout=40)
 
-    def _heartbeat_loop(self):
-        c = self._bg_client()
-        while not self.stop.wait(HEARTBEAT_SECONDS):
+    def _heartbeat_loop(self, stop, events, c, _seq):
+        while not stop.wait(HEARTBEAT_SECONDS):
             try:
                 c.post("/heartbeat", {"doing": "watching in FreeCAD"})
             except HubRequestError as e:
                 if e.code in ("taken_over", "fence_stale", "left", "bad_token"):
-                    self.events.put(("fatal", friendly_error(e)))
+                    events.put(("fatal", friendly_error(e)))
                     return
 
-    def _poll_loop(self):
-        c = self._bg_client()
+    def _poll_loop(self, stop, events, c, seq):
         offline = False
-        while not self.stop.is_set():
+        while not stop.is_set():
             try:
-                r = c.get("/events", since=self.seq, wait=20)
+                r = c.get("/events", since=seq, wait=20)
             except HubRequestError as e:
                 if e.code in ("taken_over", "fence_stale", "left", "bad_token"):
-                    self.events.put(("fatal", friendly_error(e)))
+                    events.put(("fatal", friendly_error(e)))
                     return
                 if not offline:
                     offline = True
-                    self.events.put(("offline", friendly_error(e, c.hub)))
+                    events.put(("offline", friendly_error(e, c.hub)))
                 time.sleep(3)
                 continue
             if offline:
                 offline = False
-                self.events.put(("online", None))
+                events.put(("online", None))
+            if stop.is_set():
+                return  # session ended while we waited: never report into a newer one
             if not r["events"]:
                 continue
-            self.seq = r["seq"]
+            seq = r["seq"]
             changed, deleted = set(), set()
             for ev in r["events"]:
                 if ev["kind"] == "op":
                     changed |= set(ev["created"] + ev["modified"] + ev["recomputed"])
                     deleted |= set(ev["deleted"])
-                self.events.put(("event", ev))
+                events.put(("event", ev))
             if changed:
                 try:
-                    self.events.put(("brep", c.post("/brep", {"names": sorted(changed)})["objects"]))
+                    events.put(("brep", c.post("/brep", {"names": sorted(changed)})["objects"]))
                 except HubRequestError as e:
-                    self.events.put(("offline", str(e)))
+                    events.put(("offline", str(e)))
             if deleted:
-                self.events.put(("deleted", sorted(deleted)))
-            self.events.put(("refresh", None))
+                events.put(("deleted", sorted(deleted)))
+            events.put(("refresh", None))
 
     # ------------------------------------------------------- GUI-thread work
 
