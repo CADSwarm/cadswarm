@@ -363,3 +363,34 @@ clean machine:
 
 **Change control:** if the target bundle changes, record the new hashes and re-check every “observed” claim
 before updating the plan. Do not silently carry conclusions across builds.
+
+---
+
+## 11. Addendum: the Lighten workflow (re-read 2026-10-24, later build)
+
+The bundles had changed since §2: `/` now loads `index-DbJnvFnT.js` (1,142,642 bytes), `hooks-DCBEHMR6.js`
+(1,313,203 bytes) and a new `Panel-DvOaFFGB.js` (23,613 bytes); `index.html` SHA-256 `dc30c0c9…9d9092`. They were
+read over HTTPS as text and searched for strings only; nothing was saved, executed or copied.
+
+Observed (English locale strings and component props):
+
+- `home.title` is "Lighten without losing stiffness."; the lead says the lattice puts material only where it
+  works. It names the whole pipeline, not one control.
+- Simulate guide: supports, a force/pressure/moment load, solve; "With the result you can grade the lattice,
+  optimise the shape or check the lightened part." After a solve: "The lattice gets thicker where the stress is
+  high."
+- Thickness mode `field.optimisedOption` "Optimised (simulation)"; `opt.range` "Optimised thickness between
+  {min} and {max} mm (calibrated cell map)". A simulation tree node "Lattice graded by the stress".
+- A lattice library "choose by stiffness or density" with targets "Effective stiffness" (E*, MPa) and
+  "Relative density"; validation text cites fits `E*/E0 = C·rho^n` per cell family.
+- Verify: repeat the solved case on the lattice; recommends an analysis voxel so the thinnest feature gets a
+  minimum number of voxels and warns when it does not; reports "Lattice / original: stress ×{s}, displacement
+  ×{d}, mass {m} %".
+- SIMP topology optimisation with a minimum-stiffness option exists separately (not the lighten path).
+
+Inferred: grading maps a per-voxel stress field to a wall thickness through per-cell density/stiffness fits,
+within a printable range; verify is a second voxel solve of the latticed geometry.
+
+CadSwarm's implementation (plan 07) reproduces this behaviour with its own code: voxel FEM with multigrid, its
+own calibrated cell map, a stiffness-target search and an explicit verify. No product code, strings or
+assets were used.

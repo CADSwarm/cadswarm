@@ -1,3 +1,5 @@
+import pytest
+
 from cadswarm import helper
 from cadswarm.knowledge import ElasticError
 
@@ -168,3 +170,117 @@ def test_a_finished_brief_relearns_and_mirrors_to_elastic(tmp_path):
             break
         time.sleep(0.02)
     assert fake.bulk == ["/_bulk"]
+
+
+# --------------------------------------------------------------- lighten jobs (fake runner)
+
+def _lighten_project(tmp_path, monkeypatch, runner):
+    from cadswarm import lattice_jobs
+    monkeypatch.setattr(lattice_jobs, "freecad_python", lambda: "freecad-python")
+    p = helper.Project(tmp_path)
+    (tmp_path / "model.FCStd").write_bytes(b"model")
+    p.lattice = lattice_jobs.LatticeJobs(p, runner=runner)
+    return p
+
+
+EVENTS = []
+
+
+def _wait(p, jid):
+    import time
+    deadline = time.time() + 30   # generous: the full suite can keep the machine busy
+    while time.time() < deadline:
+        r = helper.handle(p, {"id": 1, "op": "lattice_status", "args": {"job_id": jid}})
+        assert r["ok"], r
+        s = r["result"]
+        EVENTS.extend(e["kind"] for e in s.get("_events", []))
+        if s["status"] in ("done", "failed", "cancelled"):
+            return s
+        time.sleep(0.02)
+    raise AssertionError(s)
+
+
+def fake_lighten(python, job, work, on_progress, cancelled):
+    import os
+    on_progress({"phase": "simulate", "text": "Solving the solid part", "fraction": 0.2})
+    on_progress({"phase": "mesh", "text": "Meshing", "fraction": 0.9})
+    os.makedirs(job["out_dir"], exist_ok=True)
+    for n in ("result.stl", "result.3mf", "preview.stl"):
+        with open(os.path.join(job["out_dir"], n), "wb") as f:
+            f.write(b"\0" * 84)
+    with open(os.path.join(job["out_dir"], "report.md"), "w") as f:
+        f.write("# report")
+    return {"ok": True, "report": {
+        "status": "passed", "mass": {"solid_g": 10, "lattice_g": 6, "weight_saving_pct": 40.0},
+        "thickness_mm": {"min": 0.8, "max": 1.6, "mean": 1.0}, "verify": {"stiffness_retained": 0.91},
+        "mesh": {"closed": True}, "warnings": [{"code": "closed_skin", "text": "A closed skin traps powder"}],
+        "notes": [], "files": {"stl": "result.stl", "report": "report.md"}}}
+
+
+def test_a_lighten_job_runs_publishes_its_files_and_announces_itself(tmp_path, monkeypatch):
+    p = _lighten_project(tmp_path, monkeypatch, fake_lighten)
+    r = helper.handle(p, {"id": 1, "op": "lattice_start", "args": {
+        "target": "Bracket", "cell": "octet", "stiffness_target_pct": 90, "fixed": ["xmin"],
+        "loads": [{"type": "force", "faces": ["xmax"], "newtons": 100}], "material": "pla", "_actor": AGENT}})
+    assert r["ok"] and r["result"]["status"] in ("queued", "preparing") and r["result"]["recipe"]["stiffness_target"] == 0.9
+    assert r["result"]["_events"][0]["kind"] == "lattice_started"
+    done = _wait(p, r["result"]["job_id"])
+    assert done["status"] == "done" and done["weight_saving_pct"] == 40.0 and done["verdict"] == "passed"
+    assert done["warnings"] == ["A closed skin traps powder"] and "lattice_apply" in done["next_step"]
+    assert (tmp_path / done["folder"] / "result.stl").exists() and (tmp_path / done["folder"] / "report.json").exists()
+    EVENTS.extend(e["kind"] for e in helper.handle(p, {"id": 2, "op": "lattice_list", "args": {}})["result"]
+                  .get("_events", []))
+    assert "lattice_report" in EVENTS and "lattice_progress" in EVENTS
+    res = helper.handle(p, {"id": 3, "op": "lattice_result", "args": {"job_id": r["result"]["job_id"]}})["result"]
+    assert res["file"].startswith("lattice/") and res["file"].endswith("/result.stl") and res["target"] == "Bracket"
+
+
+def test_lighten_requests_are_checked_before_anything_runs(tmp_path, monkeypatch):
+    p = _lighten_project(tmp_path, monkeypatch, fake_lighten)
+    bad = helper.handle(p, {"id": 1, "op": "lattice_start", "args": {"target": "B", "cell": "kelvin"}})
+    assert bad["code"] == "bad_cell"
+    bad = helper.handle(p, {"id": 2, "op": "lattice_start", "args": {"target": "B", "skin_mm": 0,
+                                                                      "open_faces": ["+z"]}})
+    assert bad["code"] == "open_face_without_skin"
+    bad = helper.handle(p, {"id": 3, "op": "lattice_start", "args": {"target": "B", "fea_job_id": "fea_none"}})
+    assert bad["code"] == "not_found"
+    # A partial load case is completed with FEA's flagged placeholders.
+    r = helper.handle(p, {"id": 4, "op": "lattice_start", "args": {"target": "B", "fixed": ["xmin"]}})
+    done = _wait(p, r["result"]["job_id"])
+    assert any("No load given" in x["text"] for x in done["placeholders"])
+
+
+def test_only_the_owner_or_a_person_cancels_a_lighten_job(tmp_path, monkeypatch):
+    import threading
+    gate = threading.Event()
+
+    def slow(python, job, work, on_progress, cancelled):
+        while not cancelled():
+            gate.wait(0.01)
+        return {"ok": False, "code": "cancelled", "error": "Cancelled."}
+    p = _lighten_project(tmp_path, monkeypatch, slow)
+    jid = helper.handle(p, {"id": 1, "op": "lattice_start", "args": {"target": "B", "_actor": AGENT}})["result"]["job_id"]
+    other = {"id": 7, "name": "other", "kind": "agent"}
+    assert helper.handle(p, {"id": 2, "op": "lattice_cancel", "args": {"job_id": jid, "_actor": other}})["code"] == "not_owner"
+    helper.handle(p, {"id": 3, "op": "lattice_cancel", "args": {"job_id": jid, "_actor": HUMAN}})
+    assert _wait(p, jid)["status"] == "cancelled"
+
+
+def test_a_restarted_server_fails_interrupted_lighten_jobs(tmp_path, monkeypatch):
+    from cadswarm import lattice_jobs
+    p = _lighten_project(tmp_path, monkeypatch, fake_lighten)
+    p.db.execute("INSERT INTO lattice_jobs (id, status, target, name, request) VALUES ('lj_dead', 'generating', "
+                 "'B', 'B_lattice', '{}')")
+    jobs = lattice_jobs.LatticeJobs(p, runner=fake_lighten)
+    s = jobs.status("lj_dead")
+    assert s["status"] == "failed" and s["code"] == "host_restarted"
+
+
+def test_lattice_cells_and_estimates_need_no_job(tmp_path, monkeypatch):
+    pytest.importorskip("scipy")
+    p = _lighten_project(tmp_path, monkeypatch, fake_lighten)
+    cells = helper.handle(p, {"id": 1, "op": "lattice_cells", "args": {"target": "stiffness", "value": 0.08}})["result"]
+    assert len(cells["cells"]) == 8 and cells["cells"][0]["printable"]
+    est = helper.handle(p, {"id": 2, "op": "lattice_estimate", "args": {
+        "target": "B", "cell": "schwarzP", "voxel_mm": 0.4, "_bbox": [0, 0, 0, 40, 20, 10]}})["result"]
+    assert est["build_voxels"] == 125000 and {w["code"] for w in est["warnings"]} >= {"closed_skin"}

@@ -29,7 +29,7 @@ from ..client import HubRequestError, load_json, save_json
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, style_ui
+from . import library_ui, lighten_ui, style_ui
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -701,6 +701,7 @@ class TeamPanel(QtGui.QDockWidget):
                           ("Project files…", show_project_files), ("Open project folder", open_project_folder),
                           ("Save a snapshot of the model", save_snapshot),
                           ("Simulation (FEA) reports…", show_fea_reports),
+                          ("Lighten part…", lighten_ui.show_lighten),
                           ("Storage and free up space…", show_storage),
                           ("Components library…", library_ui.show_library),
                           ("Precision settings…", library_ui.show_settings),

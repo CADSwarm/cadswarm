@@ -24,11 +24,13 @@ static char * icon_xpm[] = {
         overlay.install()
         from cadswarm.gui.structural import register_command
         register_command()
+        from cadswarm.gui import lighten_ui
+        lighten_ui.register_command()
         toolbar = ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
                    "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_AddHelper",
                    "CadSwarm_Invite",
-                   "CadSwarm_Interference", "CadSwarm_Export", "CadSwarm_OptimizePart", "CadSwarm_FeaReports",
-                   "CadSwarm_Pointers"]
+                   "CadSwarm_Interference", "CadSwarm_Export", "CadSwarm_Lighten", "CadSwarm_OptimizePart",
+                   "CadSwarm_FeaReports", "CadSwarm_Pointers"]
         self.appendToolbar("CadSwarm", toolbar)
         self.appendMenu("CadSwarm", toolbar + ["CadSwarm_Style", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
                                                "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
@@ -54,7 +56,9 @@ class CadSwarmOptimizationWorkbench(Gui.Workbench):
     def Initialize(self):
         from cadswarm.gui.structural import register_command
         register_command()
-        commands = ["CadSwarm_OptimizationDemo", "CadSwarm_OptimizePart"]
+        from cadswarm.gui import lighten_ui
+        lighten_ui.register_command()
+        commands = ["CadSwarm_OptimizationDemo", "CadSwarm_Lighten", "CadSwarm_OptimizePart"]
         self.appendToolbar("Structural optimization", commands)
         self.appendMenu("Optimization", commands)
 

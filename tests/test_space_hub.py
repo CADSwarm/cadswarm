@@ -417,3 +417,45 @@ def test_a_failed_pointer_move_never_fails_the_op(world):
 
     fake.on_sql = host_finishes
     assert hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})["name"] == "Lid"
+
+
+def test_lighten_start_checks_the_part_and_sends_its_rev_box_and_the_team_min_wall(world):
+    hub, fake = world
+    fake.tables["v_setting"] = [{"setting": "min_wall", "num": 1.2, "text": "", "set_by": 3, "updated_ms": 1}]
+    finish_ops_with(fake, {"job_id": "lj_ab12", "status": "queued"})
+    out = hub.post("/lattice/jobs", {"target": "Plate", "cell": "octet", "stiffness_target_pct": 85})
+    assert out["job_id"] == "lj_ab12"
+    kind, args = fake.calls[-1][1][2], json.loads(fake.calls[-1][1][3])
+    assert kind == "lattice_start" and args["revs"] == {"Plate": 2} and args["_bbox"] == [0, 0, 0, 1, 1, 1]
+    assert args["min_thickness_mm"] == 1.2 and args["cell"] == "octet" and "wait" not in args
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/lattice/jobs", {"target": "Nope"})
+    assert e.value.code == "bad_args"
+
+
+def test_lighten_apply_refuses_a_changed_source_and_inserts_a_mesh_otherwise(world):
+    hub, fake = world
+    finish_ops_with(fake, {"file": "lattice/x/result.stl", "target": "Plate", "name": "Plate_lattice",
+                           "revs": {"Plate": 1}, "verdict": "passed"})
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/lattice/jobs/lj_ab12/apply", {})
+    assert e.value.code == "stale_source" and "rev 1 -> 2" in str(e.value)
+    out = hub.post("/lattice/jobs/lj_ab12/apply", {"force": True})
+    kind, args = fake.calls[-1][1][2], json.loads(fake.calls[-1][1][3])
+    assert kind == "insert_mesh" and args == {"name": "Plate_lattice", "file": "lattice/x/result.stl",
+                                              "label": "Plate_lattice", "source": "Plate", "job": "lj_ab12"}
+    assert "unchanged" in out["note"]
+
+
+def test_lighten_status_waits_by_polling_from_the_client(world, monkeypatch):
+    hub, fake = world
+    states = iter(["generating", "generating", "done"])
+    monkeypatch.setattr("cadswarm.space_hub.time.sleep", lambda s: None)
+
+    def host(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"], o["result_json"] = "done", json.dumps({"job_id": "lj_ab12", "status": next(states)})
+    fake.on_sql = host
+    assert hub.get("/lattice/jobs/lj_ab12", wait=30)["status"] == "done"
+    assert [c[1][2] for c in fake.calls if c[0] == "submit_op"] == ["lattice_status"] * 3
