@@ -1,8 +1,11 @@
 """`cadswarm` command line.
 
-  cadswarm setup --client claude|codex|droid --invite CODE --name NAME [--dir .] [--fresh]
+  cadswarm setup --client claude|codex|droid|opencode|creao --invite CODE --name NAME [--dir .] [--fresh]
       Join the team with an invite (a cadswarm-2: code, a base32 ticket from `cadswarm-host invite`,
       or a phone link with #t=) and wire an agent CLI in a folder: MCP server, prompt hook, instructions.
+
+  cadswarm creao reset [--dir .]
+      Forget the Creao AI helper's conversation (its next task starts a fresh one); keep its Creao agent.
 
   cadswarm brief [--dir .] [--board ID] TEXT
       Submit a design brief from a set-up folder.
@@ -41,12 +44,26 @@ def cmd_setup(a):
         print("Next: open this folder and run `claude`; the cadswarm MCP server joins the team on start.")
     elif a.client == "droid":
         print("Next: run `droid` here; it loads .factory/mcp.json and joins the team on start.")
+    elif a.client == "opencode":
+        print("Next: run `opencode` here; it loads opencode.json and joins the team on start.")
+    elif a.client == "creao":
+        print("Next: open CadSwarm in FreeCAD; the background runner wakes this helper with Creao AI. "
+              "`cadswarm creao reset` starts its next task in a new conversation.")
     else:
         print("Next: run `codex` here. Codex only loads .codex/config.toml for TRUSTED projects: accept the "
               "trust prompt, or add to ~/.codex/config.toml:\n"
               f"  [projects.{json.dumps(project)}]\n  trust_level = \"trusted\"")
         print("Then, in Codex, type /hooks and trust the CadSwarm hook. Codex skips new or changed hooks until "
               "you do, so without this your helper won't see its team's updates. Do it again after updating CadSwarm.")
+
+
+def cmd_creao_reset(a):
+    from .creao import clear_conversation
+    project = os.path.abspath(a.dir)
+    if clear_conversation(project):
+        print(f"Creao AI will start a new conversation for the helper in {project}.")
+    else:
+        print(f"The helper in {project} has no saved Creao conversation yet; nothing to reset.")
 
 
 def cmd_brief(a):
@@ -98,7 +115,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="cadswarm")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("setup", help="join with an invite and connect an agent CLI in a folder")
-    s.add_argument("--client", choices=["claude", "codex", "droid"], required=True)
+    s.add_argument("--client", choices=["claude", "codex", "droid", "opencode", "creao"], required=True)
     s.add_argument("--invite", required=True, help="a cadswarm-2: code, a ticket, or a phone link")
     s.add_argument("--name", required=True)
     s.add_argument("--dir", default=".")
@@ -106,6 +123,11 @@ def main(argv=None):
     s.add_argument("--ephemeral", action="store_true",
                    help="a one-job agent (the host's planners and workers): it leaves the team when its session ends")
     s.set_defaults(fn=cmd_setup)
+    r = sub.add_parser("creao", help="Creao AI helper housekeeping")
+    rs = r.add_subparsers(dest="creao_cmd", required=True)
+    rr = rs.add_parser("reset", help="start the helper's next task in a new Creao conversation")
+    rr.add_argument("--dir", default=".")
+    rr.set_defaults(fn=cmd_creao_reset)
     b = sub.add_parser("brief", help="submit a brief")
     b.add_argument("--dir", default=".")
     b.add_argument("--board")

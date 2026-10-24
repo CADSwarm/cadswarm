@@ -3,9 +3,9 @@
 **Build 3D designs together with your team's AI helpers: no CAD or coding experience needed.**
 
 Describe a part, say "an enclosure for this Raspberry Pi", and a swarm of AI helpers (Claude Code,
-Codex, Droid, or the agent CLI you already use) builds it together in one shared FreeCAD model, live,
-while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts yourself when
-that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one SpacetimeDB
+Codex, Droid, OpenCode, or the agent CLI you already use) builds it together in one shared FreeCAD
+model, live, while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts
+yourself when that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one SpacetimeDB
 database, the hosting computer runs the only copy of the model, Elastic supplies board datasheets and
 design memory, and a Factory Droid reviewer checks fit and printability before the STL is exported.
 
@@ -48,11 +48,13 @@ own after a reboot until you do).
 
 **Good to know**
 - You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup),
-  [Codex](https://learn.chatgpt.com/docs/codex/cli), or
-  [Factory Droid](https://docs.factory.ai/cli/getting-started/quickstart). The guide detects which ones
-  you have and links to install instructions.
-- Your AI helper must be signed in once on this computer (open `claude`, `codex` or `droid` in a terminal
-  and follow its sign-in). After that CadSwarm starts it by itself whenever FreeCAD is open, and wakes it
+  [Codex](https://learn.chatgpt.com/docs/codex/cli),
+  [Factory Droid](https://docs.factory.ai/cli/getting-started/quickstart), or
+  [OpenCode](https://opencode.ai/docs/). The guide detects which ones
+  you have and links to install instructions. ([Creao AI](#creao-ai-optional-helper) is optional and
+  needs an API key instead of an installed CLI.)
+- Your AI helper must be signed in once on this computer (open `claude`, `codex`, `droid` or `opencode`
+  in a terminal and follow its sign-in). After that CadSwarm starts it by itself whenever FreeCAD is open, and wakes it
   when someone messages it or hands it a task. Its log is under **the Tools tab ▸ Show my AI helper's log**.
 - AI helpers always join as ordinary members. The people on the team lead it, and only a person's computer
   hosts it.
@@ -84,7 +86,8 @@ more or less room) and scrolls when the window is short. It has three parts:
 
 - **AI helpers**: every helper on the team in three columns: its name, the **Task** it's on (or `next: …`
   when one is waiting for it) and its status (**◐ Working**, **Ready**, or why it's away). **＋ New helper**
-  starts another one on this computer: pick the AI (Claude Code, Codex or Droid) and, if you like, a name
+  starts another one on this computer: pick the AI (Claude Code, Codex, Droid, OpenCode or Creao AI) and,
+  if you like, a name
   (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
   one of yours to **Rename** it, **Restart** it, see its log or remove it. People are listed underneath.
 - **Chat**: one box for everything.
@@ -338,6 +341,30 @@ That mints a reviewer invite and writes the reviewer's folder under `team-model\
 
 People can also hand work to an agent mid-design: while holding a part, "Hand off now" with a note spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks and tasks), reads their note and recent ops, and continues instead of starting over.
 
+## Creao AI (optional helper)
+
+Creao AI has no command-line tool and can't be given a custom MCP server, so CadSwarm talks to it
+through a small local bridge (`cadswarm/creao_agent.py`). The bridge joins the team exactly like any
+other helper, sends Creao the wake-up prompt, and executes each tool call Creao asks for in-process
+with the same MCP tools, so activity logging and fencing work the same way.
+
+1. Create an account-scoped `cr_sk_` key in Creao's
+   [Developer Console](https://developer.creao.ai) and put `CREAO_API_KEY=cr_sk_...` in
+   `cadswarm.env` (see `.env.example`).
+2. In the setup guide pick **Creao AI**, or run
+   `cadswarm setup --client creao --invite "cadswarm-2:..." --name carol-creao`.
+   The first Creao helper on a computer creates the account's Creao agent (its id is cached in the
+   CadSwarm app folder, `%APPDATA%\CadSwarm\creao.json` on Windows) and every later Creao helper
+   reuses it; the key is never written. Setup also installs the account-level `cadswarm-tools` skill
+   and lets the agent's writes run without approval prompts.
+3. Open CadSwarm in FreeCAD. The background runner wakes it like any other helper.
+
+Each helper keeps its own Creao conversation across tasks (cached in `.cadswarm/creao.json` next to
+its other state) so it remembers the project. `cadswarm creao reset` (or `cadswarm setup --fresh`)
+starts its next task in a new conversation and keeps the shared agent. `CREAO_AGENT_ID` reuses an
+agent you made yourself, as long as it accepts one text input named `message` (the setup guide
+creates one that does), and `CREAO_MODEL` pins a model.
+
 ## Run the demo
 
 On Windows, one command brings up the whole stack on this machine: it builds the host and the web app,
@@ -352,8 +379,8 @@ powershell -File scripts\demo-down.ps1             # stop everything demo-up sta
 ```
 
 Options: `-Data <dir>` (data folder), `-Db <name>` (Maincloud database), `-Python <exe>` (Python with
-the cadswarm package), `-Agent claude|codex|droid`, `-AgentCommand <argv>` (see below), `-WebPort <n>`
-(default 4173), `-WebUrl <url>` (use a fixed public URL instead of a tunnel). Everything it starts is
+the cadswarm package), `-Agent claude|codex|droid|opencode|creao`, `-AgentCommand <argv>` (see below),
+`-WebPort <n>` (default 4173), `-WebUrl <url>` (use a fixed public URL instead of a tunnel). Everything it starts is
 recorded in `<Data>\.cadswarm-team\demo-pids.json`; `demo-down.ps1` stops only those processes, and
 only after checking each one's command line. See [demo/README.md](demo/README.md) for a three-agent
 demo script.
@@ -364,7 +391,7 @@ The agents that build briefs run on whichever agent CLI the host's owner already
 account and model provider. Pick one when you set up the host:
 
 ```powershell
-host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | droid
+host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | droid | opencode | creao
 ```
 
 Or run any other CLI by setting `agent_command` in `team-model\host.json`; `{prompt}` is replaced by the
@@ -374,7 +401,9 @@ task prompt:
 "agent_command": ["aider", "--message", "{prompt}", "--yes"]
 ```
 
-A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX` or `CADSWARM_DROID`.
+A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX`, `CADSWARM_DROID` or
+`CADSWARM_OPENCODE`. Creao AI (`--agent creao`) has no CLI: it needs `CREAO_API_KEY` (see
+[Creao AI](#creao-ai-optional-helper)).
 
 ## For developers: command line
 
@@ -425,7 +454,7 @@ host\target\release\cadswarm-host --data .\team-model invite --kind human --role
 # 3. Each person: join with the invite and wire their own AI helper in their own folder.
 .venv\Scripts\cadswarm setup --client claude --invite "cadswarm-2:..." --name alice --dir ..\alice
 .venv\Scripts\cadswarm setup --client codex  --invite "cadswarm-2:..." --name bob   --dir ..\bob
-#    then run `claude` / `codex` / `droid` in that folder. (Codex: trust the project so
+#    then run `claude` / `codex` / `droid` / `opencode` in that folder. (Codex: trust the project so
 #    .codex/config.toml loads, then type `/hooks` in Codex and trust the CadSwarm hook.)
 
 # 4. Install this checkout into FreeCAD as the CadSwarm add-on (same as the double-click installer).
@@ -470,6 +499,8 @@ files.
 | Claude Code | `.mcp.json` (cadswarm server), `.claude/settings.json` (UserPromptSubmit hook, `enabledMcpjsonServers`, `mcp__cadswarm` allowed), `CLAUDE.md` section |
 | Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CadSwarm hook (again after updating CadSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
 | Droid | `.factory/mcp.json` (cadswarm server), `AGENTS.md` section |
+| OpenCode | `opencode.json` (cadswarm MCP server), `AGENTS.md` section |
+| Creao AI | `.cadswarm/creao.json` (this helper's conversation and the shared Creao agent id, never the key), `AGENTS.md` section. No CLI: the bridge (`cadswarm.creao_agent`) runs through the background runner |
 | all | `.cadswarm/config.json` (uri, db, name, client, role), and after first run `.cadswarm/identity.json` (SpacetimeDB token, git-ignored) |
 
 The prompt hook (Claude Code and Codex) injects a team block before every prompt: who holds which

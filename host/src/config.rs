@@ -18,7 +18,8 @@ pub struct HostConfig {
     pub web_url: String,
     /// The Python that has the `cadswarm` package installed (runs `cadswarm setup`).
     pub cadswarm_python: PathBuf,
-    /// The agent CLI the host runs for briefs: "claude", "codex" or "droid" (whatever the owner uses).
+    /// The agent CLI the host runs for briefs: "claude", "codex", "droid", "opencode" or "creao"
+    /// (whatever the owner uses).
     #[serde(default = "default_agent_client")]
     pub agent_client: String,
     /// Optional full command line for any other agent CLI; the element "{prompt}" is replaced with the prompt.
@@ -30,7 +31,7 @@ fn default_agent_client() -> String {
     "claude".into()
 }
 
-pub const AGENT_CLIENTS: &[&str] = &["claude", "codex", "droid"];
+pub const AGENT_CLIENTS: &[&str] = &["claude", "codex", "droid", "opencode", "creao"];
 
 impl HostConfig {
     pub fn path(data_dir: &Path) -> PathBuf {

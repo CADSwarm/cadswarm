@@ -192,8 +192,8 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 
 SpacetimeDB 2.13.0 (Rust module, Rust and TypeScript clients) · Rust · Python 3.11+ · FreeCAD 1.x ·
 TypeScript · Vite · three.js · Elasticsearch Serverless 9.6 · Kibana · ES|QL
-· Jina embeddings and reranker · Factory Droid (`droid-sdk`) · Claude Code · OpenAI Codex · GitHub
-Actions · Windows
+· Jina embeddings and reranker · Factory Droid (`droid-sdk`) · Claude Code · OpenAI Codex · OpenCode ·
+Creao AI (Developer API) · GitHub Actions · Windows
 
 ## Try it out
 
@@ -216,6 +216,7 @@ Actions · Windows
 | Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-0180`. |
 | Anthropic | `cadswarm/mcp_server.py`; `host/src/agents.rs` (`planner_prompt`, `worker_prompt`, `handoff_prompt`); `host/src/briefs.rs` | Claude Code agents work only through the MCP server's tools and its 13 working rules. The host plans a brief with a planner agent and starts up to three workers, and adds the team's learned design style to each prompt. |
 | Factory | `cadswarm/reviewer.py`; README "Where Droid runs" | The Droid reviewer runs on `droid-sdk` with `restrict_tools` limited to inspection, joins as a `reviewer` member, and the module refuses any write op from that member kind. |
+| Creao AI | `cadswarm/creao.py`, `cadswarm/creao_agent.py`; README "Creao AI (optional helper)" | An optional agent whose model turns arrive over Creao's Developer API. A local bridge asks for one JSON tool call per turn and executes it with the same MCP tools every helper uses, so Creao needs neither a CLI nor a custom connector. |
 | Elastic | `elastic/setup.json`, `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | JINA `semantic_text` hybrid search with the reranker over board datasheets; design memory written back by the host; Agent Builder agents; the `distil-lessons` Workflow. |
 | Best Hardware | The printed enclosure | [TBD — photo of the printed part, from T7d] |
 | Most Technically Complex | `rules/src/lib.rs` (fences, locks, stale sweep, `check_take_over`); `host/src/executor.rs` (`spill`: results over 32 KB become artifacts); `cadswarm/worker/sandbox.py`, `sandbox_win.py`, `script_runner.py` | Fenced leases, object locks and takeover enforced in reducers; handoff of locks and tasks; large results spilled out of the op table; agent part scripts run in a sandbox. |

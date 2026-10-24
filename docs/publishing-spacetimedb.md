@@ -15,6 +15,9 @@ What needs the republish right now (this branch):
 The team database is **`cadswarm-calhacks-0180`** on Maincloud (the default in `scripts/demo-up.ps1`). The
 steps below use PowerShell from the repository's `cadswarm/` folder.
 
+Adding a helper client (`opencode`, `creao`) needs **no republish and no new bindings**: a member's
+`client` is a free-form string in the existing schema, and the new clients reuse the same MCP tools.
+
 ```powershell
 $st = "$env:LOCALAPPDATA\SpacetimeDB\spacetime.exe"   # or just `spacetime` if it is on PATH
 $db = "cadswarm-calhacks-0180"

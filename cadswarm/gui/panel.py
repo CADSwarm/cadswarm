@@ -827,7 +827,7 @@ class TeamPanel(QtGui.QDockWidget):
                                  library_ui.show_settings),
                                 ("Learned design style…", "The design rules CadSwarm learned from your team",
                                  style_ui.show_style))),
-                ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex or Droid",
+                ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex, Droid or OpenCode",
                                  add_helper),
                                 ("Invite a teammate…", "Copy a single-use invite code", invite_teammates),
                                 ("Restart my AI helpers", "Restart the helpers that run on this computer",
@@ -1714,7 +1714,8 @@ def chat_line(at, who, colour, after_name, body, status):
             f"<b style='color:{colour}'>{who}</b>{after_name}{status}<br>{text}</p>")
 
 
-CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper", "droid": "Droid helper"}
+CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper", "droid": "Droid helper",
+                "opencode": "OpenCode helper", "creao": "Creao AI helper"}
 # Readable next to the 3D view, but narrow enough for a laptop screen: the panel scrolls when it's short.
 PANEL_MIN_WIDTH = 300
 PANEL_WIDTH = 520
@@ -2155,12 +2156,12 @@ def local_helper_status(session):
 def start_local_helpers(session, restart=False):
     """Keep this computer's AI helpers running in the background: no terminal to open, nothing to paste.
     A helper whose CLI isn't installed is left alone (the panel says so)."""
-    from ..agent_setup import find_agent_cli
+    from ..agent_setup import agent_ready
     from ..paths import LAUNCHER, freecad_python
     from ..runner import background_on, runner_alive, set_background, start_runner, stop_runner
     started = []
     for name, (folder, cfg) in local_helpers(session).items():
-        if not find_agent_cli(cfg.get("client") or "claude"):
+        if not agent_ready(cfg.get("client") or "claude"):
             continue
         if restart:
             set_background(folder, True)
@@ -2224,7 +2225,7 @@ class NewHelperDialog(QtGui.QDialog):
 
     def __init__(self, session):
         super().__init__(Gui.getMainWindow())
-        from ..agent_setup import CLIENTS, find_agent_cli
+        from ..agent_setup import CLIENTS, agent_ready
         self.session = session
         self.setWindowTitle("CadSwarm: new AI helper")
         fit_to_screen(self, 460, 260)
@@ -2232,7 +2233,7 @@ class NewHelperDialog(QtGui.QDialog):
         form = QtGui.QFormLayout()
         self.client = QtGui.QComboBox()
         for key, info in CLIENTS.items():
-            if find_agent_cli(key):
+            if agent_ready(key):
                 self.client.addItem(info["label"], key)
         form.addRow("AI", self.client)
         self.name = QtGui.QLineEdit()
@@ -2257,7 +2258,8 @@ class NewHelperDialog(QtGui.QDialog):
         if not self.client.count():
             links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values())
             self.note.setText(f"No AI helper is installed on this computer yet. Install {links}, sign in to it "
-                              "once, then try again.")
+                              "once, then try again. (Creao AI works with a CREAO_API_KEY in cadswarm.env "
+                              "instead of an install.)")
             self.note.setOpenExternalLinks(True)
             self.ok.setEnabled(False)
 
@@ -3279,8 +3281,8 @@ def release_selected():
 def register_commands():
     Gui.addCommand("CadSwarm_Connect", Cmd("Get started…", "Start or join a team, step by step",
                                            lambda: connect_dialog(), False))
-    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect an AI helper (Claude Code, Codex or "
-                                                              "Droid) to your team", add_helper))
+    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect an AI helper (Claude Code, Codex, "
+                                                              "Droid or OpenCode) to your team", add_helper))
     Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy a new invite code for a teammate", invite_teammates))
     Gui.addCommand("CadSwarm_StopHosting", Cmd("Stop hosting", "Stop the team server on this computer",
                                                stop_hosting, False))
