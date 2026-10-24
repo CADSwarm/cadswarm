@@ -282,17 +282,6 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
 .foot a:hover { color: var(--text); }
 .copy { margin-top: 40px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
 
-/* ---------- demo access gate ---------- */
-.gate { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: rgba(6,6,6,.72); backdrop-filter: blur(6px); }
-.gate-card { width: min(430px, 100%); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; padding: 26px; display: grid; gap: 14px; text-align: left; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
-.gate-card h2 { margin: 0; font-size: 21px; letter-spacing: -.02em; color: var(--text); }
-.gate-card p { margin: 0; color: var(--muted); font-size: 14px; }
-.gate-card label { font: 500 11px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.gate-card input { font: 15px var(--font-mono); color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 9px; padding: 12px 14px; width: 100%; }
-.gate-card input:focus { outline: none; border-color: var(--bone); }
-.gate-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.gate-msg { min-height: 1.2em; font-size: 13px; color: var(--muted); }
-.gate-msg.err { color: #e5534b; }
 </style>
 </head>
 <body>
@@ -329,7 +318,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
         <p class="hero-sub fade-in d3">CadSwarm is a shared FreeCAD workspace for your team and the AI agents it runs. Everyone's Claude Code and Codex build one live 3D model together, without stepping on each other's parts.</p>
         <div class="hero-actions fade-in d4">
           <a class="btn btn-lg" href="#waitlist">Join the waitlist <span aria-hidden="true">→</span></a>
-          <button class="btn btn-lg btn-ghost" type="button" data-demo-open>Open the live demo <span aria-hidden="true">→</span></button>
+          <a class="btn btn-lg btn-ghost" href="./app/">Open CadSwarm on the web <span aria-hidden="true">→</span></a>
           <span class="fine">FreeCAD 1.0+ · Claude Code and Codex · Free and open source</span>
         </div>
       </div>
@@ -847,70 +836,5 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
   });
 })();
 </script>
-
-<!-- ===== demo access ===== -->
-<div class="gate" id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gate-title" aria-describedby="gate-note">
-  <form class="gate-card" id="gate-form" novalidate>
-    <h2 id="gate-title">Enter the demo code</h2>
-    <p id="gate-note">The live demo opens the CadSwarm panels with a sample build. The code is printed on our Devpost page.</p>
-    <label for="gate-code">Demo code</label>
-    <input id="gate-code" name="code" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="swarm-…">
-    <div class="gate-actions">
-      <button class="btn" type="submit">Open the demo</button>
-      <button class="btn btn-ghost" type="button" data-gate-close>Cancel</button>
-    </div>
-    <p class="gate-msg" id="gate-msg" role="status" aria-live="polite"></p>
-  </form>
-</div>
-<script>
-(function () {
-  // A client-side gate only: it keeps the demo out of search results and casual clicks, not out of view.
-  const CODE = 'swarm-13';
-  const DEMO = './app/?mock';
-  const gate = document.getElementById('gate');
-  const form = document.getElementById('gate-form');
-  const input = document.getElementById('gate-code');
-  const msg = document.getElementById('gate-msg');
-  let opener = null;
-
-  const open = (event) => {
-    opener = event.currentTarget;
-    input.value = '';
-    msg.textContent = '';
-    msg.className = 'gate-msg';
-    gate.hidden = false;
-    input.focus();
-  };
-  const close = () => {
-    gate.hidden = true;
-    if (opener) opener.focus();
-  };
-
-  document.querySelectorAll('[data-demo-open]').forEach((b) => b.addEventListener('click', open));
-  document.querySelectorAll('[data-gate-close]').forEach((b) => b.addEventListener('click', close));
-  gate.addEventListener('click', (e) => { if (e.target === gate) close(); });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !gate.hidden) close();
-    if (e.key === 'Tab' && !gate.hidden) {
-      const focusable = form.querySelectorAll('input, button');
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    }
-  });
-
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (input.value.trim().toLowerCase() === CODE) {
-      location.href = DEMO;
-      return;
-    }
-    msg.textContent = 'That code is not right. It is printed on our Devpost page.';
-    msg.className = 'gate-msg err';
-    input.select();
-  });
-})();
-</script>
-
 </body>
 </html>
