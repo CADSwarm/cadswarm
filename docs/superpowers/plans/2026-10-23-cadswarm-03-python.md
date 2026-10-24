@@ -2,16 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **⚠ Needs revision before executing.** This plan was written against commit `73c500c`. `main` now has
-> `fddfa28` (beginner setup in FreeCAD), which rewrote `cli.py` and `mcp_server.py`, added `invite.py`
-> (`cadswarm-1:` invite codes), `hosting.py` (the FreeCAD wizard starts the FastAPI hub), `paths.py`,
-> `agent_setup.py`, and nine sandboxed file tools backed by `cadswarm/hub/files.py`. Reconcile Tasks 3–4
-> with that code first: SpaceHub must also answer the file-tool routes, the wizard must start
-> `spacetime start` + `cadswarm-host` instead of the hub, and tickets should reuse the `cadswarm-N:` invite style.
+> **Revised 2026-10-24 against `main` `75bcb43`** (fddfa28's beginner setup, the hardening, the script
+> sandbox and the storage policy, plus the module and bindings). Tasks 1–3 are as before, plus the invite v2
+> step in Task 2 and the extra routes in Task 3. Task 4 was rewritten. Tasks 5 (helper) and 6 (FreeCAD guide)
+> are new. The old Tasks 5–7 are now 7–9. Order for the MVP: 1 → 2 → 3 → 4 → 5 → 7 → 8 (M1/M2), then 6, then 9.
 
-**Goal:** Move the Python side of CadSwarm (MCP server, prompt hook, CLI) from the FastAPI hub to SpacetimeDB, add the two new FreeCAD worker queries, the board library and pairing by ticket, and (P1) the Droid reviewer.
+**Goal:** Move the Python side of CadSwarm (MCP server, prompt hook, CLI, FreeCAD guide) from the FastAPI hub to SpacetimeDB. Add the host-side helper for project files and storage, the two new FreeCAD worker queries, the board library and pairing by invite, and (P1) the Droid reviewer.
 
-**Architecture:** `SpaceClient` is a stdlib-only HTTP client for SpacetimeDB (reducer calls, SQL on views, identity creation). `SpaceHub` sits on top and answers the old hub's REST paths (`/model`, `/ops`, `/inbox`, `/context`, ...) with the same JSON shapes, so `mcp_server.py` and `prompt_hook.py` barely change. Ops are queued with `submit_op` and awaited by polling `v_op`. The FastAPI hub is deleted.
+**Architecture:** `SpaceClient` is a stdlib-only HTTP client for SpacetimeDB (reducer calls, SQL on views, identity creation). `SpaceHub` sits on top and answers the old hub's REST paths (`/model`, `/ops`, `/inbox`, `/context`, ...) with the same JSON shapes, so `mcp_server.py` and `prompt_hook.py` barely change. Ops are queued with `submit_op` and awaited by polling `v_op`. The project-file and storage ops run in `cadswarm/helper.py`, which the Rust host drives like the FreeCAD worker. The FastAPI hub is deleted; `files.py` and `storage.py` move out of it unchanged.
 
 **Tech Stack:** Python 3.11+ stdlib (`urllib`, `json`, `hashlib`, `base64`, `secrets`), the existing `mcp` package, pytest; FreeCAD 1.x for worker tests; `droid-sdk` (P1).
 
@@ -25,6 +23,11 @@ Read first: `docs/superpowers/plans/2026-10-23-cadswarm-00-overview.md` (contrac
 - IDs: op `o_` + 12 hex, task `t_` + 8, message `m_` + 12, brief `b_` + 8, review `r_` + 8.
 - Tickets: base32 (uppercase, no padding) of `{"v":1,"uri","db","token","kind","role","host_addr"}`.
 - `.cadswarm/identity.json` holds a SpacetimeDB token: the folder keeps its `*` gitignore.
+- Invite codes for people and the FreeCAD guide are `cadswarm-2:` + base64url of the ticket JSON (plus `p`, the project name). Every reader also accepts the bare base32 ticket and phone links with `#t=`. Invites work once.
+- Over `/sql`, a `Vec<u8>` is a lowercase hex string (`bytes.fromhex`). Reducer calls send bytes as a JSON array of ints.
+- An op result of `{"blob": "<sha256>"}` means the host spilled it (over 32 KB). Read it from `v_artifact_blob WHERE hash = ...`.
+- Polling floors (plan 00): `wait_for_changes` starts at 1 s and backs off to 3 s. Op waits start at 0.5 s and back off to 1 s.
+- `helper.py` and everything it imports use only the standard library: the host may run it with FreeCAD's Python.
 
 ## File structure
 
@@ -35,14 +38,19 @@ Read first: `docs/superpowers/plans/2026-10-23-cadswarm-00-overview.md` (contrac
 | `cadswarm/space_hub.py` | `SpaceHub` (old REST paths over SpacetimeDB), `project_hub()` |
 | `cadswarm/mcp_server.py` | Uses `SpaceHub`; logs activity; new tools |
 | `cadswarm/prompt_hook.py` | Uses `project_hub()` |
-| `cadswarm/cli.py` | `setup --invite` (claude, codex, droid), `brief`; `hub` command removed |
-| `cadswarm/config.py` | `HEARTBEAT_SECONDS = 15` |
+| `cadswarm/cli.py` | `setup --invite` (claude, codex, droid), `brief`; `hub` and `invite` commands removed |
+| `cadswarm/agent_setup.py` | `redeem`, `write_agent_config(project, client, invite, name, ...)`, `setup_droid` |
+| `cadswarm/invite.py` | `cadswarm-2:` codes; also reads base32 tickets and phone links |
+| `cadswarm/helper.py` | Host-side JSON-lines helper: project files, storage, snapshots (plan 05 adds Elastic) |
+| `cadswarm/files.py`, `cadswarm/storage.py` | Moved unchanged from `cadswarm/hub/` |
+| `cadswarm/hosting.py`, `cadswarm/gui/wizard.py`, `cadswarm/gui/panel.py` | FreeCAD guide: start `cadswarm-host`, mint invites, talk through SpaceHub |
+| `cadswarm/config.py` | `HEARTBEAT_SECONDS = 15`, `helper_script()` |
 | `cadswarm/worker_client.py` | Moved from `cadswarm/hub/worker_client.py` (tests use it) |
 | `cadswarm/worker/freecad_worker.py` | New queries `mesh`, `printability` |
 | `cadswarm/reviewer.py` | P1: Droid reviewer |
 | `boards/boards.json` | Board library |
 | `tests/test_space_client.py`, `tests/test_ticket.py`, `tests/test_space_hub.py`, `tests/test_worker_queries.py`, `tests/test_space_live.py`, `tests/test_reviewer.py` | Tests |
-| Deleted | `cadswarm/hub/`, `tests/test_core.py` (ported to `rules/`), `tests/test_integration.py` (replaced) |
+| Deleted | `cadswarm/hub/app.py`, `core.py` (ported to `rules/` and the module), `tests/test_core.py`; `tests/test_integration.py` is rewritten in Task 8 |
 
 ---
 
@@ -325,6 +333,45 @@ Expected: `2 passed`.
 ```powershell
 git add cadswarm/ticket.py tests/test_ticket.py
 git commit -m "feat(python): pairing tickets and ids"
+```
+
+- [ ] **Step 6: Invite codes v2 (`cadswarm-2:`), test first**
+
+`tests/test_invite_v2.py`:
+```python
+import pytest
+
+from cadswarm import ticket
+from cadswarm.invite import InviteError, make_invite, read_invite
+
+T = {"v": 1, "uri": "https://maincloud.spacetimedb.com", "db": "cadswarm-team-1a2b", "token": "ab" * 32,
+     "kind": "human", "role": "member", "host_addr": ""}
+
+
+def test_v2_code_round_trips_through_chat_noise():
+    code = make_invite(T, "Phone stand")
+    assert code.startswith("cadswarm-2:")
+    got = read_invite(f"“{code[:30]}\n{code[30:]}” thanks!")
+    assert got["token"] == T["token"] and got["db"] == T["db"] and got["project"] == "Phone stand"
+
+
+def test_base32_tickets_and_phone_links_are_accepted():
+    b32 = ticket.encode(T)
+    assert read_invite(b32)["token"] == T["token"]
+    assert read_invite(f"https://cadswarm.app/#t={b32}")["uri"] == T["uri"]
+
+
+def test_old_codes_get_a_clear_message():
+    with pytest.raises(InviteError, match="older CadSwarm"):
+        read_invite("cadswarm-1:eyJoIjoiaHR0cDovLzE5Mi4xNjguMS4yMDo4NzY1In0")
+```
+Implement by changing `PREFIX`, `make_invite` and `_decode` in `invite.py`. Keep the lenient chunk scanner. Validate that the decoded dict has `uri` (http or https), `db` and `token`. Route `read_invite` in `cadswarm/cli.py` and `agent_setup` through this module. Update the existing invite tests in `tests/test_setup*.py` to the v2 format.
+
+Run: `python -m pytest tests/test_invite_v2.py tests/test_ticket.py -q`. Expected: all pass.
+
+```powershell
+git add cadswarm/invite.py tests/test_invite_v2.py tests/test_setup*.py
+git commit -m "feat(python): cadswarm-2 invite codes carry the SpacetimeDB ticket"
 ```
 
 ---
@@ -953,77 +1000,274 @@ git add cadswarm/space_hub.py tests/test_space_hub.py
 git commit -m "feat(python): SpaceHub answers the old hub paths over SpacetimeDB"
 ```
 
+- [ ] **Step 6: The routes the beginner UX and the file tools use (added against main `75bcb43`)**
+
+The MCP file tools, the FreeCAD panel and the storage pages call more hub paths than Steps 1–4 cover. Add them now so Task 4 can delete the hub. Every file and storage path becomes a queued op that the host's helper runs (Task 5). Results larger than 32 KB arrive as `{"blob": "<sha256>"}` (plan 02 Task 5, Step 1b) and are read from `v_artifact_blob`. Over `/sql` a `Vec<u8>` is a lowercase hex string.
+
+Append to `tests/test_space_hub.py`:
+```python
+def finish_ops_with(fake, result):
+    def host(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"], o["result_json"] = "done", json.dumps(result)
+    fake.on_sql = host
+
+
+def test_file_routes_become_helper_ops(world):
+    hub, fake = world
+    finish_ops_with(fake, {"path": "notes.md", "version": 1})
+    assert hub.post("/project/files/save", {"path": "notes.md", "text": "hi"})["version"] == 1
+    reducer, args = fake.calls[-1]
+    assert reducer == "submit_op" and args[2] == "save_file" and json.loads(args[3])["text"] == "hi"
+    hub.post("/project/files/move", {"from": "a.md", "to": "b.md"})
+    assert fake.calls[-1][1][2] == "move_file"
+    hub.get("/project/files", prefix="notes")
+    assert json.loads(fake.calls[-1][1][3]) == {"prefix": "notes"}
+
+
+def test_large_results_are_read_from_the_blob_view(world):
+    hub, fake = world
+    big = {"objects": {"Plate": {"brep": "x" * 50}}}
+    fake.tables["v_artifact_blob"] = [{"hash": "ab" * 32, "ws": 1, "bytes": json.dumps(big).encode().hex()}]
+    finish_ops_with(fake, {"blob": "ab" * 32})
+    assert hub.post("/brep", {"names": ["Plate"]}) == {"objects": big["objects"]}
+    assert fake.calls[-1][1][2] == "brep"
+
+
+def test_raw_download_decodes_base64(world):
+    hub, fake = world
+    finish_ops_with(fake, {"path": "a.bin", "base64": "AAE="})
+    assert hub.request("GET", "/project/files/download?path=a.bin", raw=True) == b"\x00\x01"
+    assert json.loads(fake.calls[-1][1][3]) == {"path": "a.bin", "raw": True}
+
+
+def test_health_is_ok_while_a_host_member_is_active(world):
+    hub, fake = world
+    assert hub.get("/health")["ok"] is False
+    fake.tables["v_member"].append(member(9, "host", kind="host"))
+    assert hub.get("/health")["ok"] is True
+
+
+def test_storage_settings_are_host_only(world):
+    hub, _ = world
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/project/storage/settings", {"limit_gb": 5})
+    assert e.value.code == "host_only"
+```
+The fake's `sql` must also filter `WHERE hash = '…'`. Add this branch to `FakeSpace.sql`:
+```python
+        if "WHERE hash =" in query:
+            want = query.rsplit("=", 1)[1].strip().strip("'")
+            rows = [r for r in rows if r["hash"] == want]
+```
+
+Run: `python -m pytest tests/test_space_hub.py -q`. Expected: the five new tests fail with `No route`.
+
+Add to `SpaceHub.routes`:
+```python
+            ("GET", r"/health", self.health), ("POST", r"/join", self.join_route), ("POST", r"/brep", self.brep),
+            ("GET", r"/project", self.project), ("GET", r"/project/files", self.list_files),
+            ("POST", r"/project/files/read", self.read_file), ("POST", r"/project/files/save", self.save_file),
+            ("POST", r"/project/files/folder", self.make_folder), ("POST", r"/project/files/move", self.move_file),
+            ("POST", r"/project/files/delete", self.delete_file), ("POST", r"/project/files/history", self.file_history),
+            ("POST", r"/project/files/restore", self.restore_file), ("GET", r"/project/storage", self.storage_status),
+            ("POST", r"/project/storage/prune", self.prune_storage),
+            ("POST", r"/project/storage/settings", self.storage_settings),
+            ("POST", r"/project/snapshot", self.snapshot),
+```
+In `request`, before the route loop, handle the raw download:
+```python
+        if raw and path.startswith("/project/files/download"):
+            from urllib.parse import parse_qs, urlsplit
+            q = {k: v[0] for k, v in parse_qs(urlsplit(path).query).items()}
+            q.update(params or {})
+            r = self.run_op("read_file", {"path": q.get("path"), "raw": True})
+            return base64.b64decode(r["base64"])
+```
+(add `import base64` at the top). In `run_op`, read results through `_result`:
+```python
+            if rows and rows[0]["status"] == "done":
+                return self._result(rows[0]["result_json"])
+```
+```python
+    def _result(self, result_json):
+        r = _json(result_json, {})
+        if isinstance(r, dict) and set(r) == {"blob"}:
+            rows = self._rows("v_artifact_blob", f"hash = '{r['blob']}'")
+            if not rows:
+                raise HubRequestError(410, {"error": "That result expired; run it again", "code": "expired"})
+            b = rows[0]["bytes"]
+            r = json.loads(bytes.fromhex(b) if isinstance(b, str) else bytes(b))
+        return r
+
+    def health(self):
+        hosts = [m for m in self._rows("v_member") if m["kind"] == "host" and m["status"] == "active"]
+        return {"ok": bool(hosts), "seq": self.latest_seq(), "freecad": None, "script_sandbox": None}
+
+    def join_route(self, body):
+        return self.join(None, body.get("name"), body.get("kind", "agent"), body.get("client"), body.get("role"))
+
+    def brep(self, body):
+        r = self.run_op("brep", {"names": body.get("names")})
+        names = self._names()
+        holder = {l["object"]: names.get(l["holder"]) for l in self._rows("v_lock")}
+        for n, o in (r.get("objects") or {}).items():
+            if o is not None:
+                o["locked_by"] = holder.get(n)
+        return {"objects": r.get("objects") or {}}
+
+    def project(self):
+        return {"root": "", "folders": {"files": "files", "exports": "exports", "snapshots": "snapshots"},
+                "host": True}
+
+    def list_files(self, prefix=""):
+        return self.run_op("list_files", {"prefix": prefix} if prefix else {})
+
+    def read_file(self, body):
+        return self.run_op("read_file", {"path": body.get("path")})
+
+    def save_file(self, body):
+        return self.run_op("save_file", {k: body.get(k) for k in ("path", "text", "base64", "if_exists", "expected_version")
+                                         if body.get(k) is not None})
+
+    def make_folder(self, body):
+        return self.run_op("make_folder", {"path": body.get("path")})
+
+    def move_file(self, body):
+        return self.run_op("move_file", {"from": body.get("from"), "to": body.get("to")})
+
+    def delete_file(self, body):
+        return self.run_op("delete_file", {"path": body.get("path")})
+
+    def file_history(self, body):
+        return self.run_op("file_history", {"path": body.get("path")})
+
+    def restore_file(self, body):
+        return self.run_op("restore_file", {k: body.get(k) for k in ("path", "version", "expected_version")
+                                            if body.get(k) is not None})
+
+    def storage_status(self):
+        return self.run_op("storage_status", {})
+
+    def prune_storage(self, body):
+        return self.run_op("prune_storage", dict(body or {}))
+
+    def snapshot(self, body):
+        return self.run_op("snapshot", {"label": body.get("label", "")})
+
+    def storage_settings(self, body):
+        """Only the computer hosting the team changes its storage limits: it writes them directly."""
+        host_dir = self.cfg.get("host_dir")
+        if not host_dir:
+            raise HubRequestError(403, {"error": "Only the computer hosting the team can change its storage limits.",
+                                        "code": "host_only"})
+        import sqlite3
+        from .files import ProjectFiles
+        from .paths import project_layout
+        lay = project_layout(host_dir)
+        db = sqlite3.connect(lay["db"], isolation_level=None)
+        db.row_factory = sqlite3.Row
+        files = ProjectFiles(lay, db)
+        files.storage.update(body or {})
+        return files.storage.status()
+```
+`cfg["host_dir"]` is set only by the FreeCAD guide on the hosting computer (Task 6). `storage_settings` imports `cadswarm.files`, which Task 4 moves out of `cadswarm/hub/`. Until then, guard the import, or do this step after Task 4 Step 1.
+
+Run: `python -m pytest tests/test_space_hub.py -q`. Expected: `14 passed`.
+
+- [ ] **Step 7: Commit**
+
+```powershell
+git add cadswarm/space_hub.py tests/test_space_hub.py
+git commit -m "feat(python): SpaceHub answers file, storage, brep and health routes; reads spilled results"
+```
+
 ---
 
-### Task 4: Setup by ticket, MCP server and prompt hook on SpaceHub; delete the FastAPI hub
+### Task 4: Setup by invite, MCP server and prompt hook on SpaceHub; retire the FastAPI hub
 
 **Files:**
-- Modify: `cadswarm/cli.py`, `cadswarm/mcp_server.py`, `cadswarm/prompt_hook.py`, `cadswarm/config.py`, `pyproject.toml`
-- Move: `cadswarm/hub/worker_client.py` → `cadswarm/worker_client.py`
-- Delete: `cadswarm/hub/`, `tests/test_core.py`, `tests/test_integration.py`
+- Modify: `cadswarm/cli.py`, `cadswarm/agent_setup.py`, `cadswarm/mcp_server.py`, `cadswarm/prompt_hook.py`, `cadswarm/config.py`, `cadswarm/client.py`, `pyproject.toml`
+- Move: `cadswarm/hub/files.py` → `cadswarm/files.py`, `cadswarm/hub/storage.py` → `cadswarm/storage.py`, `cadswarm/hub/worker_client.py` → `cadswarm/worker_client.py`
+- Delete: `cadswarm/hub/` (app, core, `__init__`), `tests/test_core.py` (ported to `rules/`). Keep `tests/test_files.py`, `tests/test_storage.py`, `tests/test_worker.py`, `tests/test_sandbox.py` and fix their imports; rewrite `tests/test_integration.py` in Task 8.
+- Test: `tests/test_setup_space.py`
 
 **Interfaces:**
 - Consumes: `SpaceHub`, `project_hub`, `SpaceClient.new_identity`, `ticket.decode`.
-- Produces: `cadswarm setup --client claude|codex|droid --invite TICKET --name NAME [--dir .] [--fresh]`; `cadswarm brief --dir DIR [--board ID] TEXT`; MCP tools gain `create_task(..., brief)`, `set_brief_plan(brief_id, plan_json)`, `check_printability(names, min_wall)`, `accept_handoff(handoff_id)`, `report_review(brief_id, round, passed, findings)`; every tool call logs activity with its target objects.
+- Produces:
+  - `agent_setup.redeem(t: dict, name: str, client: str) -> dict`, which returns the identity `{token, participant_id, fence, name, role, kind}`.
+  - `agent_setup.write_agent_config(project, client, invite: dict, name, python=None, fresh=False) -> list[str]`, where `invite` is a decoded ticket. It redeems only when the folder has no identity yet, writes `.cadswarm/config.json` as `{uri, db, name, client, role}`, and dispatches to `setup_claude` / `setup_codex` / `setup_droid`.
+  - CLI: `cadswarm setup --client claude|codex|droid --invite CODE --name NAME [--dir .] [--fresh]` and `cadswarm brief --dir DIR [--board ID] TEXT`. `cadswarm hub` and `cadswarm invite` are removed; `cadswarm-host invite` and the FreeCAD guide mint invites.
+  - New MCP tools: `create_task(..., brief)`, `set_brief_plan`, `check_printability`, `accept_handoff`, `report_review`. Every tool call logs activity with its target objects.
 
-- [ ] **Step 1: Move the worker client and delete the hub**
+- [ ] **Step 1: Move the modules that survive and delete the hub**
 
 ```powershell
+git mv cadswarm/hub/files.py cadswarm/files.py
+git mv cadswarm/hub/storage.py cadswarm/storage.py
 git mv cadswarm/hub/worker_client.py cadswarm/worker_client.py
-git rm -r cadswarm/hub tests/test_core.py tests/test_integration.py
+git rm -r cadswarm/hub tests/test_core.py
 ```
-In `cadswarm/worker_client.py` change `from ..config import find_freecad_python, worker_script` to `from .config import find_freecad_python, worker_script`.
+- In `cadswarm/files.py` keep `from .storage import FileError, Storage`.
+- In `cadswarm/worker_client.py`, change `from ..config import` to `from .config import`.
+- Update the imports in `tests/test_files.py`, `tests/test_storage.py`, `tests/test_worker.py` and `tests/test_sandbox.py`: `cadswarm.hub.files` becomes `cadswarm.files`, and likewise for `storage` and `worker_client`.
+- In `pyproject.toml`, drop `fastapi` and `uvicorn` from the dependencies, keeping `mcp>=2.3`.
+- In `cadswarm/config.py`, set `HEARTBEAT_SECONDS = 15`, delete `DEFAULT_PORT`, and remove `"fastapi"` and `"uvicorn"` from `paths.DEPENDENCIES`.
 
-In `pyproject.toml` replace the dependencies line with:
-```toml
-dependencies = ["mcp>=2.3"]
-```
-and in `cadswarm/config.py` set `HEARTBEAT_SECONDS = 15` and delete `DEFAULT_PORT`.
+Run `python -m pytest tests/test_files.py tests/test_storage.py -q`. Expected: everything that passed before still passes.
 
-- [ ] **Step 2: Rewrite setup in `cadswarm/cli.py`**
+- [ ] **Step 2: Write the failing setup test**
 
-Replace the module docstring, `cmd_setup`, `lan_ip`, `cmd_hub` and `main` with the code below (keep `AGENT_DOC`, `upsert_block`, `python_cmd`, `setup_claude`, `toml_literal`, `setup_codex`, `cmd_install_workbench` as they are), and add `setup_droid`:
+`tests/test_setup_space.py`:
 ```python
-"""`cadswarm` command line.
-
-  cadswarm setup --client claude|codex|droid --invite TICKET --name NAME [--dir .] [--fresh]
-      Join a CadSwarm workspace with an invite ticket and wire an agent CLI in a project folder.
-
-  cadswarm brief --dir DIR [--board BOARD_ID] "what to build"
-      Submit a brief as the member set up in DIR (the phone app does the same).
-
-  cadswarm install-workbench
-      Install the CadSwarm workbench into the local FreeCAD for humans to watch and steer.
-"""
-import argparse
+"""Setting up an agent folder from an invite redeems once and writes the SpacetimeDB config."""
 import json
 import os
-import shutil
-import subprocess
-import sys
 
-from . import ticket
-from .client import load_json, save_json, state_dir
-from .config import find_freecad_python
-from .space import SpaceClient, SpaceError
+from cadswarm import agent_setup
+
+
+def test_write_agent_config_redeems_once_and_writes_the_space_config(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_redeem(t, name, client):
+        calls.append((t["token"], name, client))
+        return {"token": "tok", "participant_id": 4, "fence": 1, "name": name, "role": "member", "kind": "agent"}
+
+    monkeypatch.setattr(agent_setup, "redeem", fake_redeem)
+    t = {"v": 1, "uri": "http://127.0.0.1:3000", "db": "cadswarm", "token": "ab" * 32, "kind": "agent",
+         "role": "member", "host_addr": ""}
+    agent_setup.write_agent_config(str(tmp_path), "claude", t, "alice-claude", python="python")
+    agent_setup.write_agent_config(str(tmp_path), "claude", t, "alice-claude", python="python")
+    assert calls == [("ab" * 32, "alice-claude", "claude")]
+    cfg = json.load(open(tmp_path / ".cadswarm" / "config.json"))
+    assert cfg == {"uri": "http://127.0.0.1:3000", "db": "cadswarm", "name": "alice-claude",
+                   "client": "claude", "role": "member"}
+    ident = json.load(open(tmp_path / ".cadswarm" / "identity.json"))
+    assert ident["participant_id"] == 4 and ident["token"] == "tok"
+    assert open(tmp_path / ".cadswarm" / ".gitignore").read() == "*\n"
+    assert os.path.exists(tmp_path / ".mcp.json")
+
+
+def test_droid_gets_a_factory_mcp_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1, "fence": 1,
+                                                                 "name": n, "role": "member", "kind": "agent"})
+    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
+    written = agent_setup.write_agent_config(str(tmp_path), "droid", t, "bob-droid", python="python")
+    mcp = json.load(open(tmp_path / ".factory" / "mcp.json"))
+    assert mcp["mcpServers"]["cadswarm"]["args"] == ["-m", "cadswarm.mcp_server"]
+    assert str(tmp_path / ".factory" / "mcp.json") in written
 ```
+Run: `python -m pytest tests/test_setup_space.py -q`. Expected: FAIL. `write_agent_config` still has the old `(hub, token, ...)` signature, and `redeem` is missing.
+
+- [ ] **Step 3: Rewrite `write_agent_config` and add `redeem` and `setup_droid` in `cadswarm/agent_setup.py`**
+
+Add `"droid"` to `CLIENTS` (`{"exe": "droid", "label": "Factory Droid"}`). Keep `upsert_block`, `hook_command`, `setup_claude`, `setup_codex`, the Codex trust helpers, `find_agent_cli` and `open_agent_terminal` unchanged. Replace `write_agent_config` with:
 ```python
-def setup_droid(project):
-    py = python_cmd()
-    path = os.path.join(project, ".factory", "mcp.json")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    cfg = load_json(path, {}) or {}
-    cfg.setdefault("mcpServers", {})["cadswarm"] = {
-        "type": "stdio", "command": py, "args": ["-m", "cadswarm.mcp_server"],
-        "env": {"CADSWARM_PROJECT": project}}
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-    upsert_block(os.path.join(project, "AGENTS.md"), AGENT_DOC.format(begin=BEGIN, end=END))
-    return [path, os.path.join(project, "AGENTS.md")]
-
-
 def redeem(t, name, client):
-    """Create a SpacetimeDB identity and become a member with the ticket's invite."""
+    """Create a SpacetimeDB identity and become a member with the invite (single use)."""
+    from .space import SpaceClient
     ident = SpaceClient.new_identity(t["uri"])
     space = SpaceClient(t["uri"], t["db"], ident["token"])
     space.call("redeem_invite", t["token"], name, client, "")
@@ -1032,25 +1276,56 @@ def redeem(t, name, client):
             "role": me["role"], "kind": me["kind"]}
 
 
-def cmd_setup(a):
-    project = os.path.abspath(a.dir)
+def setup_droid(project, python):
+    path = os.path.join(project, ".factory", "mcp.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cfg = _read_config(path)
+    _dict_at(cfg, "mcpServers", path)["cadswarm"] = {
+        "type": "stdio", "command": python, "args": ["-m", "cadswarm.mcp_server"],
+        "env": {"CADSWARM_PROJECT": project}}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    upsert_block(os.path.join(project, "AGENTS.md"), AGENT_DOC)
+    return [path, os.path.join(project, "AGENTS.md")]
+
+
+def write_agent_config(project, client, invite, name, python=None, fresh=False):
+    """Everything an AI helper in `project` needs to join the team. `invite` is a decoded ticket.
+    Redeems the invite only if this folder has no identity yet (invites work once)."""
+    if client not in CLIENTS:
+        raise ValueError(f"client must be one of {sorted(CLIENTS)}")
+    python = python or sys.executable
+    project = os.path.abspath(project)
     os.makedirs(project, exist_ok=True)
-    t = ticket.decode(a.invite)
     ident_path = os.path.join(state_dir(project), "identity.json")
-    if a.fresh and os.path.exists(ident_path):
+    if fresh and os.path.exists(ident_path):
         os.remove(ident_path)
-    if not load_json(ident_path):
-        try:
-            save_json(ident_path, redeem(t, a.name, a.client))
-        except SpaceError as e:
-            raise SystemExit(f"cadswarm: could not join with this invite: {e}")
-    save_json(os.path.join(state_dir(project), "config.json"), {
-        "uri": t["uri"], "db": t["db"], "name": a.name, "client": a.client, "role": t.get("role", "member")})
-    writers = {"claude": setup_claude, "codex": setup_codex, "droid": setup_droid}
-    written = writers[a.client](project)
     with open(os.path.join(state_dir(project), ".gitignore"), "w") as f:
         f.write("*\n")  # identity.json holds a SpacetimeDB token
-    print(f"CadSwarm set up for {a.client} as '{a.name}' in {project}")
+    if not load_json(ident_path):
+        save_json(ident_path, redeem(invite, name, client))
+    save_json(os.path.join(state_dir(project), "config.json"), {
+        "uri": invite["uri"], "db": invite["db"], "name": name, "client": client,
+        "role": invite.get("role", "member")})
+    writers = {"claude": setup_claude, "codex": setup_codex, "droid": setup_droid}
+    return writers[client](project, python)
+```
+`AGENT_DOC` is the existing instructions block constant; if the file names it differently, use that name. `state_dir` must create the folder: check `client.state_dir` and add `os.makedirs(..., exist_ok=True)` if it doesn't.
+
+- [ ] **Step 4: Rewrite the CLI**
+
+In `cadswarm/cli.py`, delete `cmd_hub`, `cmd_invite` and `PROJECT_README`. `PROJECT_README` moves to `hosting.py` in Task 6. Replace `cmd_setup` and `main`:
+```python
+def cmd_setup(a):
+    from .invite import InviteError, read_invite
+    try:
+        t = read_invite(a.invite)
+        written = write_agent_config(os.path.abspath(a.dir), a.client, t, a.name, sys.executable, a.fresh)
+    except (InviteError, ValueError) as e:
+        raise SystemExit(f"cadswarm: {e}")
+    except Exception as e:  # SpaceError from redeeming: used, expired or unreachable
+        raise SystemExit(f"cadswarm: could not join with this invite: {e}")
+    print(f"CadSwarm set up for {a.client} as '{a.name}' in {os.path.abspath(a.dir)}")
     for p in written:
         print(f"  wrote {p}")
 
@@ -1069,7 +1344,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("setup", help="join with an invite and connect an agent CLI in a folder")
     s.add_argument("--client", choices=["claude", "codex", "droid"], required=True)
-    s.add_argument("--invite", required=True, help="the ticket printed by `cadswarm-host invite`")
+    s.add_argument("--invite", required=True, help="a cadswarm-2: code, a ticket, or a phone link")
     s.add_argument("--name", required=True)
     s.add_argument("--dir", default=".")
     s.add_argument("--fresh", action="store_true", help="forget the stored identity and join as a new member")
@@ -1084,20 +1359,13 @@ def main(argv=None):
     a = p.parse_args(argv)
     a.fn(a)
 ```
+Keep the Codex trust and `/hooks` guidance that the old `cmd_setup` printed: print it when `a.client == "codex"`.
 
-- [ ] **Step 3: Switch the MCP server to SpaceHub**
+- [ ] **Step 5: Switch the MCP server to SpaceHub**
 
 In `cadswarm/mcp_server.py`:
-- Change the import line to:
-```python
-from .client import HubRequestError, find_project_dir, load_json, save_json, state_dir
-from .config import HEARTBEAT_SECONDS
-from .space_hub import SpaceHub
-```
-- In `Session.__init__` replace the client line with:
-```python
-        self.client = SpaceHub(self.cfg, load_json(self.ident_path, {}))
-```
+- Replace the import of `HubClient` with `from .space_hub import SpaceHub`. Keep `HubRequestError`, `find_project_dir`, `load_json`, `save_json` and `state_dir` from `.client`.
+- In `Session.__init__`, set `self.client = SpaceHub(self.cfg, load_json(self.ident_path, {}))`.
 - Replace `Session.connect` with:
 ```python
     def connect(self):
@@ -1128,7 +1396,9 @@ def op(name, args, doing, expected_revs=None):
     return call("POST", "/ops", {"op": name, "args": {k: v for k, v in args.items() if v is not None},
                                  "expected_revs": expected_revs}, doing=doing, targets=targets)
 ```
-- Pass targets where a tool names objects: `lock_objects` → `call("POST", "/locks", {"names": names}, doing=f"locking {names}", targets=names)`; `check_interference` → `call("POST", "/interference", {"names": names}, doing="checking interference", targets=names)`.
+- Pass `targets=names` from `lock_objects` and `check_interference`.
+- The file tools and `storage_status` keep their paths; SpaceHub answers them (Task 3).
+- `export_model` keeps its shape: the `url` it returns is now `/artifacts/<sha256>`.
 - Replace `create_task` and add the new tools after `take_over`:
 ```python
 @mcp.tool()
@@ -1168,11 +1438,10 @@ def report_review(brief_id: str, round: int, passed: bool, findings: list[dict])
                                      "findings": findings}, doing="reporting the review")
 ```
 - In `main`, change the error message's `S.cfg['hub']` to `S.cfg['uri']`.
-- In the heartbeat loop the path stays `/heartbeat` (SpaceHub routes it).
 
-- [ ] **Step 4: Switch the prompt hook**
+- [ ] **Step 6: Switch the prompt hook**
 
-In `cadswarm/prompt_hook.py` replace the `try:` body after `start = ...` with:
+In `cadswarm/prompt_hook.py`, replace the `try:` body after `start = ...` with:
 ```python
     try:
         from cadswarm.client import find_project_dir
@@ -1191,22 +1460,351 @@ In `cadswarm/prompt_hook.py` replace the `try:` body after `start = ...` with:
     except Exception:
         return
 ```
+The hook never calls `rejoin`. It reuses the fence the MCP server stored (plan 00).
 
-- [ ] **Step 5: Run the whole suite**
+- [ ] **Step 7: Run the whole suite**
 
-Run: `python -m pytest -q`
-Expected: the new tests pass; nothing imports `cadswarm.hub`. Fix stray imports (`grep -r "cadswarm.hub\|from .hub" cadswarm tests workbench`) — the workbench still uses `HubClient`; leave it (P2).
+Run: `python -m pytest -q --ignore=tests/test_integration.py`
+Expected:
+- The new tests pass, and `test_files`, `test_storage`, `test_worker` and `test_sandbox` still pass.
+- `grep -rn "cadswarm.hub\|from .hub\|HubClient" cadswarm tests` finds only `client.py` and the GUI. `HubClient` stays until Task 6.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```powershell
 git add -A cadswarm tests pyproject.toml
-git commit -m "feat(python): setup by invite ticket; MCP server and prompt hook on SpacetimeDB; remove FastAPI hub"
+git commit -m "feat(python): setup by invite; MCP server and prompt hook on SpacetimeDB; retire the FastAPI hub"
 ```
 
 ---
 
-### Task 5: Worker queries `mesh` and `printability`
+### Task 5: The host's Python helper: project files and storage
+
+The host runs file and storage ops in this helper (plan 02 Task 5, Step 1b). It speaks the FreeCAD worker's JSON-lines protocol, uses `ProjectFiles` and `Storage` unchanged, and keeps their SQLite file history in `.cadswarm-team/hub.sqlite`, just as the hub did. Plan 05 Task 6 later adds the Elastic handlers to the same `HANDLERS` table.
+
+**Files:**
+- Create: `cadswarm/helper.py`, `tests/test_helper_files.py`
+- Modify: `cadswarm/config.py` (add `helper_script()`)
+
+**Interfaces:**
+- Consumes: `files.ProjectFiles`, `files.unique_path`, `files.safe_label`, `storage.FileError`, `paths.project_layout`.
+- Produces:
+  - Running `python <path>/cadswarm/helper.py <project_dir>` prints `{"ready": true}`, then answers `{"id", "op", "args"}` lines with `{"id", "ok": true, "result"}` or `{"id", "ok": false, "code", "error"}`.
+  - `helper.HANDLERS: dict[str, Callable[[Project, dict], dict]]`, `helper.Project(root, clock=time.time)`, `helper.handle(project, request) -> dict`.
+  - `cadswarm.config.helper_script() -> str`, the absolute path of `helper.py`.
+  - `args["_actor"] = {"id", "name", "kind"}` is supplied by the host.
+- Ops:
+  - Reads: `list_files {prefix}`, `read_file {path, raw?}` (`raw` returns `{"path", "base64"}`), `file_history {path}`, `storage_status {}`.
+  - Writes: `save_file {path, text?, base64?, if_exists, expected_version?}`, `make_folder {path}`, `move_file {from, to}`, `delete_file {path}`, `restore_file {path, version, expected_version?}`, `snapshot {label}`, `prune_storage {...}` (people only).
+
+- [ ] **Step 1: Write the failing tests**
+
+`tests/test_helper_files.py`:
+```python
+"""The helper answers the hub's old file and storage calls in the worker's reply format."""
+import base64
+import json
+import subprocess
+import sys
+
+from cadswarm import helper
+from cadswarm.config import helper_script
+
+HUMAN = {"id": 3, "name": "carol", "kind": "human"}
+AGENT = {"id": 4, "name": "alice-claude", "kind": "agent"}
+
+
+def ask(project, op, actor=AGENT, **args):
+    return helper.handle(project, {"id": "1", "op": op, "args": {**args, "_actor": actor}})
+
+
+def test_save_read_list_and_history(tmp_path):
+    p = helper.Project(str(tmp_path))
+    r = ask(p, "save_file", path="notes/plan.md", text="v1")
+    assert r["ok"] and r["result"]["path"] == "notes/plan.md" and r["result"]["version"] == 1
+    assert ask(p, "read_file", path="NOTES/plan.md")["result"]["text"] == "v1"  # case-insensitive keys
+    ask(p, "save_file", path="notes/plan.md", text="v2", if_exists="replace")
+    assert [v["version"] for v in ask(p, "file_history", path="notes/plan.md")["result"]["versions"]][:2] == [2, 1]
+    names = json.dumps(ask(p, "list_files")["result"])
+    assert "plan.md" in names
+
+
+def test_raw_read_returns_base64(tmp_path):
+    p = helper.Project(str(tmp_path))
+    ask(p, "save_file", path="a.bin", base64=base64.b64encode(b"\x00\x01").decode())
+    r = ask(p, "read_file", path="a.bin", raw=True)["result"]
+    assert base64.b64decode(r["base64"]) == b"\x00\x01"
+
+
+def test_errors_keep_their_codes_and_never_raise(tmp_path):
+    p = helper.Project(str(tmp_path))
+    r = ask(p, "read_file", path="../escape.txt")
+    assert r["ok"] is False and r["code"]
+    assert ask(p, "nope")["code"] == "unknown_op"
+
+
+def test_only_people_can_free_up_space(tmp_path):
+    p = helper.Project(str(tmp_path))
+    assert ask(p, "prune_storage", actor=AGENT)["code"] == "humans_only"
+    assert ask(p, "prune_storage", actor=HUMAN)["ok"] is True
+    assert "limit" in json.dumps(ask(p, "storage_status")["result"])
+
+
+def test_snapshot_copies_the_model(tmp_path):
+    p = helper.Project(str(tmp_path))
+    (tmp_path / "model.FCStd").write_bytes(b"PK fake model")
+    r = ask(p, "snapshot", label="before lid")["result"]
+    assert r["file"].startswith("snapshots/") and r["file"].endswith(".FCStd")
+    assert (tmp_path / r["file"]).read_bytes() == b"PK fake model"
+
+
+def test_runs_as_a_script_with_the_worker_protocol(tmp_path):
+    proc = subprocess.Popen([sys.executable, helper_script(), str(tmp_path)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True)
+    assert json.loads(proc.stdout.readline()) == {"ready": True}
+    proc.stdin.write(json.dumps({"id": "7", "op": "list_files", "args": {}}) + "\n")
+    proc.stdin.flush()
+    reply = json.loads(proc.stdout.readline())
+    proc.stdin.close()
+    proc.wait(timeout=10)
+    assert reply["id"] == "7" and reply["ok"] is True
+```
+Run: `python -m pytest tests/test_helper_files.py -q`. Expected: `ImportError`.
+
+Before implementing, read the real return shapes of `ProjectFiles.save`, `read`, `listing`, `history`, `restore`, `move` and `delete`, and of `Storage.status` and `prune` (in `cadswarm/files.py` and `cadswarm/storage.py`). Adjust the assertions above if a key is named differently (for example `versions`); don't change those modules.
+
+- [ ] **Step 2: Implement `cadswarm/helper.py`**
+
+```python
+"""Host-side helper for ops that are not FreeCAD geometry: project files and storage (and the
+Elastic lookups added by plan 05). The Rust host drives it like the FreeCAD worker:
+
+    python cadswarm/helper.py <project_dir>
+
+First line out is {"ready": true}; then one request per line {"id", "op", "args"} and one reply per
+line {"id", "ok": true, "result"} or {"id", "ok": false, "code", "error"}. A bad request never kills
+it. The host adds args["_actor"] = {"id", "name", "kind"} for authorship and people-only actions.
+"""
+import base64
+import json
+import os
+import shutil
+import sqlite3
+import sys
+import time
+
+if __package__ in (None, ""):  # run as a script by the host: make `cadswarm` importable
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from cadswarm.files import ProjectFiles, safe_label, unique_path  # noqa: E402
+from cadswarm.paths import project_layout  # noqa: E402
+from cadswarm.storage import FileError  # noqa: E402
+
+
+class HelperError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+class Project:
+    def __init__(self, root, clock=time.time):
+        self.layout = project_layout(root)
+        os.makedirs(self.layout["internal"], exist_ok=True)
+        for k in ("files", "exports", "snapshots"):
+            os.makedirs(self.layout[k], exist_ok=True)
+        self.db = sqlite3.connect(self.layout["db"], check_same_thread=False, isolation_level=None)
+        self.db.row_factory = sqlite3.Row
+        self.files = ProjectFiles(self.layout, self.db, clock)
+        self.clock = clock
+
+
+def _author(a):
+    return (a.get("_actor") or {}).get("name") or "someone"
+
+
+def _people_only(a, what):
+    if (a.get("_actor") or {}).get("kind") != "human":
+        raise HelperError("humans_only", f"Only a person can {what}. Ask someone on the team to do it.")
+
+
+def read_file(p, a):
+    if a.get("raw"):
+        clean, data = p.files.raw(a.get("path"))
+        return {"path": clean, "base64": base64.b64encode(data).decode()}
+    return p.files.read(a.get("path"))
+
+
+def snapshot(p, a):
+    model = p.layout["model"]
+    if not os.path.exists(model):
+        raise HelperError("not_found", "There is no model to snapshot yet.")
+    p.files.storage.check_add(os.path.getsize(model))
+    stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(p.clock()))
+    dest = unique_path(p.layout["snapshots"], f"{stamp} {safe_label(a.get('label', ''), 'snapshot')}.FCStd")
+    shutil.copy2(model, dest)  # the host runs one op at a time, and the worker saved before acknowledging
+    rel = os.path.relpath(dest, p.layout["root"]).replace("\\", "/")
+    return {"file": rel, "size": os.path.getsize(dest)}
+
+
+def prune_storage(p, a):
+    _people_only(a, "free up space")
+    return p.files.storage.prune({k: v for k, v in a.items() if k != "_actor"})
+
+
+HANDLERS = {
+    "list_files": lambda p, a: p.files.listing(a.get("prefix", "")),
+    "read_file": read_file,
+    "file_history": lambda p, a: p.files.history(a.get("path")),
+    "save_file": lambda p, a: p.files.save(a.get("path"), _author(a), a.get("text"), a.get("base64"),
+                                           a.get("if_exists", "error"), a.get("expected_version")),
+    "make_folder": lambda p, a: p.files.make_folder(a.get("path")),
+    "move_file": lambda p, a: p.files.move(a.get("from"), a.get("to"), _author(a)),
+    "delete_file": lambda p, a: p.files.delete(a.get("path"), _author(a)),
+    "restore_file": lambda p, a: p.files.restore(a.get("path"), a.get("version"), _author(a),
+                                                 a.get("expected_version")),
+    "snapshot": snapshot,
+    "storage_status": lambda p, a: p.files.storage.status(),
+    "prune_storage": prune_storage,
+}
+
+
+def handle(project, req):
+    rid, op, args = req.get("id"), req.get("op"), req.get("args") or {}
+    fn = HANDLERS.get(op)
+    if fn is None:
+        return {"id": rid, "ok": False, "code": "unknown_op", "error": f"The helper has no op {op!r}"}
+    try:
+        return {"id": rid, "ok": True, "result": fn(project, args)}
+    except FileError as e:
+        return {"id": rid, "ok": False, "code": e.code, "error": str(e)}
+    except HelperError as e:
+        return {"id": rid, "ok": False, "code": e.code, "error": str(e)}
+    except Exception as e:  # report, never die: the host keeps one helper for the whole session
+        return {"id": rid, "ok": False, "code": "op_error", "error": f"{type(e).__name__}: {e}"}
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    project = Project(argv[0] if argv else os.getcwd())
+    sys.stdout.reconfigure(encoding="utf-8")
+    print(json.dumps({"ready": True}), flush=True)
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        try:
+            req = json.loads(line)
+        except ValueError:
+            req = {"id": None, "op": None}
+        print(json.dumps(handle(project, req)), flush=True)
+
+
+if __name__ == "__main__":
+    main()
+```
+`FileError` may carry its code under a different attribute name. Read `storage.FileError.__init__(status, code, message, **data)` and use that attribute; it is `code` there. Also return `e.data` merged into the reply if it is non-empty, so details such as `current_version` reach the agent.
+
+In `cadswarm/config.py`, add:
+```python
+def helper_script():
+    """The host runs this file with any Python 3.11+ (stdlib only) to answer file and storage ops."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "helper.py")
+```
+
+- [ ] **Step 3: Run the tests**
+
+Run: `python -m pytest tests/test_helper_files.py tests/test_files.py tests/test_storage.py -q`
+Expected: all pass.
+
+- [ ] **Step 4: Commit**
+
+```powershell
+git add cadswarm/helper.py cadswarm/config.py tests/test_helper_files.py
+git commit -m "feat(python): host-side helper answers project file and storage ops"
+```
+
+---
+
+### Task 6: The FreeCAD guide on SpacetimeDB (keep the beginner UX)
+
+The beginner setup from `fddfa28` (FreeCAD wizard and panel) stays the way people meet CadSwarm. Underneath, it starts `cadswarm-host` (and `spacetime start` in local mode) instead of the hub, it uses `cadswarm-2:` invite codes, and it talks to SpacetimeDB through `SpaceHub`. Do this task after M1 works end to end, since the demo path is phone, host and agents. Read `cadswarm/gui/wizard.py`, `cadswarm/gui/panel.py`, `cadswarm/hosting.py` and `cadswarm/invite.py` before starting.
+
+**Files:**
+- Modify: `cadswarm/invite.py`, `cadswarm/hosting.py`, `cadswarm/space_hub.py`, `cadswarm/gui/wizard.py`, `cadswarm/gui/panel.py`, `cadswarm/client.py`, `cadswarm_launch.py`
+- Test: `tests/test_invite_v2.py`, `tests/test_hosting_space.py`; update `tests/test_setup.py` and `tests/test_setup_hardening.py`
+
+**Interfaces:**
+- `invite.make_invite(ticket: dict, project="") -> str` returns `"cadswarm-2:" + base64url(json(ticket + {"p": project}))`.
+- `invite.read_invite(text) -> dict` returns the ticket dict plus `project`. It stays lenient (quotes, wrapping, invisible characters, trailing chat). It also accepts a bare base32 ticket and a phone link containing `#t=`. A `cadswarm-1:` code raises `InviteError("This invite is from an older CadSwarm. Ask your teammate for a new one.")`.
+- `SpaceHub.create_invite(kind="human", role="member", ttl=86400, project="") -> str` returns a fresh single-use code. Any member may mint human or agent invites; the module enforces that only the host mints host and reviewer invites.
+- `hosting.find_tool(name, env) -> str | None` looks at the `env` variable, then PATH, then the usual install folders: `%LOCALAPPDATA%\SpacetimeDB` for `spacetime`, and `~/.cargo/bin` and the repo's `host/target/release` for `cadswarm-host`.
+- `hosting.start_team(python, data_dir, mode, db) -> dict` returns `{"host_pid", "spacetime_pid"}`. It runs `cadswarm-host init` once, then `cadswarm-host run`, both in the background with no window and with output logged to `.cadswarm-team/host.log`. In local mode it first starts `spacetime start --listen-addr 127.0.0.1:3000` if nothing answers on that port, and publishes the module from `CADSWARM_MODULE_WASM` or the repo's built wasm.
+- `hosting.team_ready(data_dir) -> bool` reads `.cadswarm-team/host-status.json`, written by the host (plan 02 Task 5, Step 1b), and checks its pid is alive.
+- `hosting.stop_team(info) -> bool` stops only processes whose command line names `cadswarm-host` or `spacetime`. It is never a blanket kill.
+
+- [ ] **Step 1: Invite codes v2**
+
+Done in Task 2, Step 6.
+
+- [ ] **Step 2: Minting invites from Python**
+
+Add to `SpaceHub`, with a test in `tests/test_space_hub.py` that checks the reducer call `("create_invite", (fence, sha256(token), "agent", "member", 86400))` and that the code decodes back to a ticket with this hub's uri and db:
+```python
+    def create_invite(self, kind="human", role="member", ttl=86400, project=""):
+        from .invite import make_invite
+        token = ticket.new_token()
+        self._f("create_invite", ticket.hash_token(token), kind, role, int(ttl))
+        return make_invite({"v": 1, "uri": self.cfg["uri"], "db": self.cfg["db"], "token": token,
+                            "kind": kind, "role": role, "host_addr": ""}, project)
+```
+
+- [ ] **Step 3: Hosting starts cadswarm-host**
+
+Write `tests/test_hosting_space.py`, mocking `subprocess.Popen` and `subprocess.run`. Test that:
+- `find_tool` prefers the env var.
+- `start_team` in maincloud mode starts only `cadswarm-host` (init when `host.json` is missing, then run) and never `spacetime start`.
+- In local mode it starts `spacetime start --listen-addr 127.0.0.1:3000` only when nothing answers on the port.
+- `team_ready` is False until `host-status.json` says `ready` with a live pid.
+
+Then replace the following in `hosting.py`, keeping `deps_ready`, `install_deps`, `local_ips`, `lan_ip`, `free_port`, `pid_alive` and `_command_line`:
+
+| Old | New |
+|---|---|
+| `start_hub` | `start_team` |
+| `wait_healthy` | `wait_ready(data_dir, timeout, pids)` (same messages and `log_tail`) |
+| `health` | `team_ready` |
+| `is_our_hub` | `is_our_process(pid, names=("cadswarm-host", "spacetime"))` |
+| `stop_hub` | `stop_team` |
+| `pid_on_port` | `pid_on_port`, now matching `spacetime` |
+
+Move `PROJECT_README` here and write it into new project folders. Add a `helper` subcommand to `cadswarm_launch.py` only if the host needs it; the host runs `helper.py` directly.
+
+For the MVP, the binaries come from the PATH or environment variables (`CADSWARM_HOST_BIN`, `SPACETIME_BIN`, `CADSWARM_MODULE_WASM`). Downloading release assets is P1.
+
+- [ ] **Step 4: Wizard and panel on SpaceHub**
+
+In `gui/wizard.py`:
+- `step_start_hub` becomes `step_start_team`, which calls `hosting.start_team` and then `hosting.wait_ready`. Maincloud is the default mode, with the database name `cadswarm-<slug>-<4 hex>`. Local mode sits behind an "Advanced" choice.
+- The host person's own membership: `step_host_join` mints a human lead invite with `cadswarm-host --data <dir> invite --kind human --role lead`, parses the `ticket: ` line, redeems it with `agent_setup.redeem`, and stores the identity at `<app_dir>/gui/<db>.json`.
+- `join_team` reads a v2 code with `read_invite`, redeems it as a human, and stores the identity the same way.
+- "Invite teammates" mints a fresh code with `SpaceHub.create_invite("human")` each time. Copy text: "This code works once. Make a new one for each teammate."
+- "Add an AI helper" mints `SpaceHub.create_invite("agent")` and passes the decoded ticket to `write_agent_config`.
+
+In `gui/panel.py`:
+- `Session` builds `SpaceHub({"uri", "db", "name"}, identity)` instead of `HubClient`. `connect` becomes `join()`, which rejoins with a new fence.
+- `/model`, `/events` (long-poll), `/brep`, `/project/*` and the storage pages keep their calls; SpaceHub answers them.
+- The storage settings page calls `SpaceHub.storage_settings` (host-only). Any `HubClient`-specific attributes the panel reads (`.hub`, `.identity`, `.timeout`) exist on SpaceHub.
+
+Drive the guide in real FreeCAD: host a team in Maincloud mode, join from a second user profile with the copied code, add a Claude helper, and watch its box appear in both FreeCAD windows. Then commit.
+
+```powershell
+git add -A cadswarm cadswarm_launch.py tests
+git commit -m "feat(python): FreeCAD guide hosts cadswarm-host on SpacetimeDB with cadswarm-2 invites"
+```
+
+---
+
+### Task 7: Worker queries `mesh` and `printability`
 
 **Files:**
 - Modify: `cadswarm/worker/freecad_worker.py`
@@ -1368,7 +1966,7 @@ git commit -m "feat(worker): binary STL preview meshes and a printability check"
 
 ---
 
-### Task 6: Board library and the live end-to-end test
+### Task 8: Board library and the live end-to-end test
 
 **Files:**
 - Create: `boards/boards.json`, `tests/test_space_live.py`
@@ -1511,7 +2109,7 @@ git commit -m "feat: board library and a live SpacetimeDB test for SpaceHub"
 
 ---
 
-### Task 7 (P1): Droid reviewer
+### Task 9 (P1): Droid reviewer
 
 **Files:**
 - Create: `cadswarm/reviewer.py`, `tests/test_reviewer.py`

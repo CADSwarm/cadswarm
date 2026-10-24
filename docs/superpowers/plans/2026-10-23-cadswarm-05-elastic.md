@@ -801,6 +801,8 @@ git commit -m "feat(elastic): scheduled Workflow that distils lessons from past 
 
 ### Task 6: The host's Python helper process
 
+> **Revised 2026-10-24:** plan 03 Task 5 already creates `cadswarm/helper.py`, with `Project`, `handle(project, request)` and `HANDLERS[op](project, args)` for the file and storage ops. Don't create the file again. Add `lookup_board`, `board_spec`, `recall_designs` and `index_design` to its `HANDLERS`. They use `project.elastic`, a `knowledge.Elastic` built lazily from the host's keys on first use. Adapt the tests below to `p = helper.Project(tmp_path); p.elastic = FakeElastic(); helper.handle(p, {...})`. The protocol and error format are the same.
+
 **Files:**
 - Create: `cadswarm/helper.py`, `tests/test_helper.py`
 
