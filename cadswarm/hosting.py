@@ -1,19 +1,27 @@
 """Hosting a team from a normal person's computer: no terminal, no Python install.
 
 The FreeCAD setup guide uses these to (1) download the agent packages once into a private
-folder with FreeCAD's own pip, (2) create the team's SpacetimeDB database and start
-`cadswarm-host` as a quiet background process that survives closing FreeCAD, and (3) check
-on it. Stdlib only.
+folder with FreeCAD's own pip, (2) download the team server, database program and module once
+into the app folder, (3) create the team's SpacetimeDB database and start `cadswarm-host` as a
+quiet background process that survives closing FreeCAD, and (4) check on it. Stdlib only.
 """
+import hashlib
 import json
 import os
+import platform
 import shutil
 import signal
 import socket
 import subprocess
+import sys
+import tarfile
+import tempfile
 import time
+import urllib.error
+import urllib.request
+import zipfile
 
-from .paths import DEPENDENCIES, LAUNCHER, ROOT, deps_dir, project_layout
+from .paths import DEPENDENCIES, LAUNCHER, ROOT, app_dir, deps_dir, project_layout
 
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LOCAL_URI = "http://127.0.0.1:3000"
@@ -21,6 +29,35 @@ LOCAL_PORT = 3000
 MAINCLOUD_URI = "https://maincloud.spacetimedb.com"
 # Only ever stopped or reported on when the command line names one of these (never a blanket kill).
 HOST_PROCESS_NAMES = ("cadswarm-host", "spacetime")
+
+# Download-on-first-use. `CADSWARM_RELEASE_BASE` points at a folder or server during development.
+RELEASE_BASE = "https://github.com/SachchitBalamurugan/cadswarm/releases/latest/download"
+RELEASE_ASSETS = {
+    "windows-x86_64": "cadswarm-host-windows-x86_64.exe",
+    "linux-x86_64": "cadswarm-host-linux-x86_64",
+    "linux-aarch64": "cadswarm-host-linux-aarch64",
+    "macos-x86_64": "cadswarm-host-macos-x86_64",
+    "macos-aarch64": "cadswarm-host-macos-aarch64",
+}
+MODULE_ASSET = "cadswarm_module.wasm"
+SUMS_ASSET = "SHA256SUMS.txt"
+
+# Pinned with the module and host (overview Global Constraints). Hash-verified from the release.
+SPACETIME_VERSION = "2.13.0"
+SPACETIME_BASE = f"https://github.com/clockworklabs/SpacetimeDB/releases/download/v{SPACETIME_VERSION}"
+SPACETIME_ASSETS = {
+    "windows-x86_64": ("spacetime-x86_64-pc-windows-msvc.zip",
+                       "94e26e3e8782e88e2cb676920a7df2faa482724f83253c399cb9e59a5c04b4d3"),
+    "linux-x86_64": ("spacetime-x86_64-unknown-linux-gnu.tar.gz",
+                     "034fe43ebb42e8d291c6ba18b6b3a6ac9a3bb4aa548d37743340362cb021165e"),
+    "linux-aarch64": ("spacetime-aarch64-unknown-linux-gnu.tar.gz",
+                      "47e4ad61f3d5830cf75a0b5b2432f5d9c115ab4e37505f757d7555f3ad1fe8f0"),
+    "macos-x86_64": ("spacetime-x86_64-apple-darwin.tar.gz",
+                     "12268695592b1cd6a7384cc677dad2815a9504ed135a660df75abf7e81c9e6ab"),
+    "macos-aarch64": ("spacetime-aarch64-apple-darwin.tar.gz",
+                      "54bb70971b88821563a1839c0d908edb94ece169e0f3bedc8ffdf8e18083c316"),
+}
+
 
 PROJECT_README = """This folder is a CadSwarm team project.
 
@@ -119,17 +156,35 @@ def port_open(port, host="127.0.0.1", timeout=0.5):
 
 # ------------------------------------------------------------------- programs
 
+def platform_key():
+    """The OS/CPU name used in release assets, e.g. "windows-x86_64"."""
+    if sys.platform.startswith("win"):
+        return "windows-x86_64"  # SpacetimeDB ships x86_64; ARM Windows runs it under emulation
+    machine = (platform.machine() or "").lower()
+    arch = {"x86_64": "x86_64", "amd64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(machine)
+    if not arch:
+        raise RuntimeError(f"CadSwarm doesn't have a build for this computer ({machine or 'unknown CPU'}).")
+    return ("macos-" if sys.platform == "darwin" else "linux-") + arch
+
+
+def tools_dir():
+    """Where downloaded programs live: the private app folder, never a project or FreeCAD itself."""
+    return os.path.join(app_dir(), "bin")
+
+
+def release_base():
+    return (os.environ.get("CADSWARM_RELEASE_BASE") or RELEASE_BASE).rstrip("/")
+
+
 def find_tool(name, env):
-    """Absolute path of `name`, or None: the `env` variable, then PATH, then the usual install folders."""
+    """Absolute path of `name`, or None: the `env` variable, the app folder, PATH, then the usual
+    install folders."""
     explicit = (os.environ.get(env) or "").strip() if env else ""
     if explicit and os.path.isfile(explicit):
         return explicit
-    found = shutil.which(name)
-    if found:
-        return found
     home = os.path.expanduser("~")
     local = os.environ.get("LOCALAPPDATA", "")
-    dirs = [os.path.join(local, "SpacetimeDB"), os.path.join(local, "SpacetimeDB", "bin", "current"),
+    dirs = [tools_dir(), os.path.join(local, "SpacetimeDB"), os.path.join(local, "SpacetimeDB", "bin", "current"),
             os.path.join(home, ".cargo", "bin"), os.path.join(ROOT, "host", "target", "release"),
             "/usr/local/bin", os.path.join(home, ".local", "bin")]
     exts = ("", ".exe") if os.name == "nt" else ("",)
@@ -138,7 +193,7 @@ def find_tool(name, env):
             cand = os.path.join(d, name + ext)
             if os.path.isfile(cand):
                 return cand
-    return None
+    return shutil.which(name)
 
 
 def host_bin():
@@ -150,12 +205,144 @@ def spacetime_bin():
 
 
 def module_wasm():
-    """The built module to publish: the environment's, else this checkout's wasm build."""
+    """The module to publish: the environment's, the downloaded one, else this checkout's build."""
     explicit = os.environ.get("CADSWARM_MODULE_WASM")
     if explicit and os.path.isfile(explicit):
         return explicit
     built = os.path.join(ROOT, "module", "target", "wasm32-unknown-unknown", "release", "cadswarm_module.wasm")
-    return built if os.path.isfile(built) else None
+    if os.path.isfile(built):
+        return built
+    downloaded = os.path.join(app_dir(), "module", MODULE_ASSET)
+    return downloaded if os.path.isfile(downloaded) else None
+
+
+def _unlink(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _release_sums():
+    """The checksums published with the release's CadSwarm assets."""
+    url = f"{release_base()}/{SUMS_ASSET}"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            text = r.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError("Couldn't check the CadSwarm downloads. Check your internet connection and try "
+                           f"again.\n\nDetails:\n{e}")
+    sums = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and len(parts[0]) == 64:
+            sums[parts[1].lstrip("*")] = parts[0].lower()
+    return sums
+
+
+def _download(url, dest, expect=None, on_line=None):
+    """Download `url` to `dest` atomically, verifying sha256 when `expect` is given."""
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    part = dest + ".part"
+    digest, got, mark = hashlib.sha256(), 0, 0
+    try:
+        with urllib.request.urlopen(url, timeout=120) as r, open(part, "wb") as f:
+            while True:
+                chunk = r.read(256 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                digest.update(chunk)
+                got += len(chunk)
+                if on_line and got - mark >= 8 * 1024 * 1024:
+                    mark = got
+                    on_line(f"Downloaded {got // (1024 * 1024)} MB…")
+    except (urllib.error.URLError, OSError) as e:
+        _unlink(part)
+        raise RuntimeError(f"Couldn't download {os.path.basename(dest)}. Check your internet connection and "
+                           f"try again.\n\nDetails:\n{e}")
+    if expect and digest.hexdigest() != expect.lower():
+        _unlink(part)
+        raise RuntimeError(f"{os.path.basename(dest)} downloaded but was damaged, so it was thrown away. "
+                           "Try again; if it keeps happening, download CadSwarm again.")
+    os.replace(part, dest)
+    if os.name != "nt":
+        os.chmod(dest, 0o755)
+    return dest
+
+
+def _install_spacetime(archive):
+    """Put the CLI and its standalone server from the official archive into the app folder."""
+    wanted = {"spacetimedb-cli": "spacetime", "spacetimedb-standalone": "spacetimedb-standalone"}
+    suffix = ".exe" if os.name == "nt" else ""
+    os.makedirs(tools_dir(), exist_ok=True)
+    found = {}
+
+    def take(name, read):
+        base = os.path.basename(name)
+        stem = base[:-4] if base.lower().endswith(".exe") else base
+        if stem not in wanted:
+            return
+        out = os.path.join(tools_dir(), wanted[stem] + suffix)
+        with read() as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        found[stem] = out
+
+    if zipfile.is_zipfile(archive):
+        with zipfile.ZipFile(archive) as z:
+            for member in z.namelist():
+                take(member, lambda m=member: z.open(m))
+    else:
+        with tarfile.open(archive, "r:*") as t:
+            for member in t.getmembers():
+                if member.isfile():
+                    take(member.name, lambda m=member: t.extractfile(m))
+    if "spacetimedb-cli" not in found:
+        raise RuntimeError("The downloaded database program is missing its main file. Try again.")
+    if os.name != "nt":
+        for path in found.values():
+            os.chmod(path, 0o755)
+
+
+def ensure_tools(on_line=None):
+    """Download the team server, SpacetimeDB CLI and module once, into the private app folder.
+
+    Does nothing when all three are already available (a developer checkout, a previous run, or
+    the programs on PATH). Raises RuntimeError in plain words when a download cannot be finished.
+    """
+    log = on_line or (lambda _line: None)
+    key = platform_key()
+    sums = None
+    if not host_bin():
+        asset = RELEASE_ASSETS.get(key)
+        if not asset:
+            raise RuntimeError(f"CadSwarm doesn't have a team server for this computer ({key}) yet.")
+        sums = _release_sums()
+        if asset not in sums:
+            raise RuntimeError(f"The CadSwarm release is missing the checksum for {asset}. Try again later.")
+        log("Downloading the team server")
+        _download(f"{release_base()}/{asset}", os.path.join(tools_dir(), "cadswarm-host" +
+                                                           (".exe" if os.name == "nt" else "")),
+                  sums.get(asset), on_line=log)
+    if not spacetime_bin():
+        entry = SPACETIME_ASSETS.get(key)
+        if not entry:
+            raise RuntimeError(f"CadSwarm doesn't have a database program for this computer ({key}) yet.")
+        name, sha = entry
+        log("Downloading the database program (about 50 MB, one time)")
+        with tempfile.TemporaryDirectory(prefix="cadswarm-") as tmp:
+            archive = os.path.join(tmp, name)
+            _download(f"{SPACETIME_BASE}/{name}", archive, sha, on_line=log)
+            _install_spacetime(archive)
+    if not module_wasm():
+        sums = sums or _release_sums()
+        if MODULE_ASSET not in sums:
+            raise RuntimeError(f"The CadSwarm release is missing the checksum for {MODULE_ASSET}. Try again later.")
+        log("Downloading the team's database module")
+        _download(f"{release_base()}/{MODULE_ASSET}", os.path.join(app_dir(), "module", MODULE_ASSET),
+                  sums.get(MODULE_ASSET), on_line=log)
+    return {"host": host_bin(), "spacetime": spacetime_bin(), "wasm": module_wasm()}
+
 
 
 def host_env():
@@ -250,16 +437,16 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
         raise ValueError("mode must be 'local' or 'maincloud'")
     if not db:
         raise ValueError("a database name is required")
+    log = on_log or (lambda _line: None)
+    ensure_tools(log)  # one-time downloads into the app folder; no-ops when already available
     host = host_bin()
     if not host:
-        raise RuntimeError("CadSwarm needs its team server program (cadswarm-host), and this computer "
-                           "doesn't have it yet. Install the CadSwarm build for your platform, then click "
-                           "“Try again”.")
+        raise RuntimeError("CadSwarm needs its team server program (cadswarm-host), and it isn't available "
+                           "on this computer. Check your internet connection and click “Try again”.")
     lay = project_layout(data_dir)
     for key in ("files", "exports", "snapshots", "internal"):
         os.makedirs(lay[key], exist_ok=True)
     write_project_readme(lay["root"])
-    log = on_log or (lambda _line: None)
     env = host_env()
     info = {"host_pid": None, "spacetime_pid": None, "db": db, "mode": mode,
             "uri": LOCAL_URI if mode == "local" else MAINCLOUD_URI}

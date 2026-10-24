@@ -32,17 +32,18 @@ own after a reboot until you do).
   you have and links to install instructions.
 - The first time you open an AI helper in its folder it may ask whether you trust the folder, and
   may ask to approve the "cadswarm" tools. Say yes to both.
-- **Whoever starts a team** also needs two programs: the
-  [SpacetimeDB CLI](https://spacetimedb.com/install) (2.x) and CadSwarm's `cadswarm-host` (in `host/`;
-  build it once with `cargo build --release`). The guide says so if either is missing. Teammates who
-  join don't need them.
+- **Whoever starts a team** makes one extra download, about 50 MB: CadSwarm's team server plus the
+  [SpacetimeDB](https://spacetimedb.com/) database program (pinned to 2.13.0). The guide fetches them
+  into `%APPDATA%\CadSwarm\bin` the first time you start a team, checks the SHA-256 of each file, and
+  needs nothing installed by hand. Teammates who join don't need them. (If your computer already has
+  both, the guide uses those instead.)
 - The team's database runs on SpacetimeDB's cloud (Maincloud) by default, so teammates can join from
   anywhere. The advanced "keep it on this computer" option is for offline or LAN-only demos; then
   everyone must share a network and Windows may ask to allow access through its firewall.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
   FreeCAD.
-- The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`. Nothing is
-  installed into FreeCAD itself.
+- The first setup downloads about 70 MB of helper software into `%APPDATA%\CadSwarm`, plus the team
+  server download above if you host. Nothing is installed into FreeCAD itself.
 - When you start a team, the guide asks **where to save the project** (default
   `Documents\CadSwarm\<project name>`). If you pick a folder that already has other things in it,
   the project gets its own subfolder there, so your files are never mixed in or overwritten.
@@ -157,8 +158,11 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
 The guide wraps these commands; they still work for scripting and CI.
 
 Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to its
-`bin/python.exe`), Python 3.11+, the [SpacetimeDB CLI](https://spacetimedb.com/install) 2.x, and a
-built `cadswarm-host` (`cargo build --release` in `host/`).
+`bin/python.exe`) and Python 3.11+. When you host, the guide downloads the
+[SpacetimeDB CLI](https://spacetimedb.com/install) 2.13.0, `cadswarm-host` and the module into
+`%APPDATA%\CadSwarm` on first use; from a checkout you can also build them yourself with
+`cargo build --release` in `host/` and `cargo build --release --target wasm32-unknown-unknown` in
+`module/`.
 
 ```powershell
 cd cadswarm
@@ -183,6 +187,23 @@ host\target\release\cadswarm-host --data .\team-model invite --kind human --role
 # 4. Install this checkout into FreeCAD as the CadSwarm add-on (same as the double-click installer).
 .venv\Scripts\cadswarm install-workbench
 ```
+
+### Packaging a release
+
+The guide's first-use download needs three assets per platform. `scripts/package-release.ps1` builds
+and checksums them into `dist\` (add `rustup target add wasm32-unknown-unknown` once):
+
+```powershell
+pwsh scripts\package-release.ps1                            # this computer
+pwsh scripts\package-release.ps1 -Target aarch64-apple-darwin
+pwsh scripts\package-release.ps1 -ModuleOnly                 # cadswarm_module.wasm only
+```
+
+Push a `v*` tag (`git tag v0.1.0; git push origin v0.1.0`) and `.github/workflows/release.yml`
+builds all five host platforms plus the module on GitHub, writes `SHA256SUMS.txt`, and publishes the
+release the guide resolves as `releases/latest/download`. To test the download path without a
+release, point `CADSWARM_RELEASE_BASE` at a local folder (`file:///C:/path/to/dist`) holding the same
+files.
 
 ## Where the team's data lives
 

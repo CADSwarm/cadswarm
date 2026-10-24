@@ -1,5 +1,8 @@
 """The guide starts cadswarm-host (and a local SpacetimeDB) instead of the old Python hub."""
+import hashlib
 import json
+import os
+import zipfile
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +18,7 @@ def test_find_tool_prefers_the_env_var(tmp_path, monkeypatch):
     tool = tmp_path / "cadswarm-host.exe"
     tool.write_text("")
     monkeypatch.setenv("CADSWARM_HOST_BIN", str(tool))
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(tmp_path / "app"))
     monkeypatch.setattr(hosting.shutil, "which", lambda name: "elsewhere/" + name)
     assert hosting.find_tool("cadswarm-host", "CADSWARM_HOST_BIN") == str(tool)
 
@@ -26,12 +30,143 @@ def test_find_tool_falls_back_to_the_install_folders(tmp_path, monkeypatch):
     exe.write_text("")
     monkeypatch.delenv("SPACETIME_BIN", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(tmp_path / "app"))
     monkeypatch.setattr(hosting.shutil, "which", lambda name: None)
     monkeypatch.setattr(hosting, "ROOT", str(tmp_path / "checkout"))
     assert hosting.find_tool("spacetime", "SPACETIME_BIN") == str(exe)
 
 
+def test_platform_key_names_the_release_assets(monkeypatch):
+    monkeypatch.setattr(hosting.sys, "platform", "win32")
+    assert hosting.platform_key() == "windows-x86_64"
+    monkeypatch.setattr(hosting.sys, "platform", "darwin")
+    monkeypatch.setattr(hosting.platform, "machine", lambda: "arm64")
+    assert hosting.platform_key() == "macos-aarch64"
+    monkeypatch.setattr(hosting.sys, "platform", "linux")
+    monkeypatch.setattr(hosting.platform, "machine", lambda: "x86_64")
+    assert hosting.platform_key() == "linux-x86_64"
+
+
+def test_ensure_tools_does_nothing_when_everything_is_available(monkeypatch):
+    monkeypatch.setattr(hosting, "host_bin", lambda: "host")
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "_download", lambda *a, **k: pytest.fail("must not download"))
+    assert hosting.ensure_tools() == {"host": "host", "spacetime": "spacetime", "wasm": "module"}
+
+
+def test_ensure_tools_downloads_the_team_server_into_the_app_folder(tmp_path, monkeypatch):
+    app = tmp_path / "app"
+    state = {"host": None}
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: state["host"])
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "platform_key", lambda: "windows-x86_64")
+    monkeypatch.setattr(hosting, "_release_sums", lambda: {"cadswarm-host-windows-x86_64.exe": "ab" * 32})
+    calls = []
+
+    def download(url, dest, expect=None, on_line=None):
+        calls.append((url, dest, expect))
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        open(dest, "wb").write(b"host")
+        state["host"] = dest
+        return dest
+
+    monkeypatch.setattr(hosting, "_download", download)
+    lines = []
+    info = hosting.ensure_tools(lines.append)
+    expected = app / "bin" / ("cadswarm-host.exe" if os.name == "nt" else "cadswarm-host")
+    assert calls == [(hosting.release_base() + "/cadswarm-host-windows-x86_64.exe", str(expected), "ab" * 32)]
+    assert info["host"] == str(expected)
+    assert any("team server" in line for line in lines)
+
+
+def test_ensure_tools_installs_the_database_program_from_its_archive(tmp_path, monkeypatch):
+    app = tmp_path / "app"
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "host_bin", lambda: "host")
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: None)
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "platform_key", lambda: "windows-x86_64")
+
+    def download(url, dest, expect=None, on_line=None):
+        assert url == hosting.SPACETIME_BASE + "/spacetime-x86_64-pc-windows-msvc.zip"
+        assert expect == hosting.SPACETIME_ASSETS["windows-x86_64"][1]
+        with zipfile.ZipFile(dest, "w") as z:
+            z.writestr("spacetime-x86_64-pc-windows-msvc/spacetimedb-cli.exe", b"cli")
+            z.writestr("spacetime-x86_64-pc-windows-msvc/spacetimedb-standalone.exe", b"server")
+        return dest
+
+    monkeypatch.setattr(hosting, "_download", download)
+    hosting.ensure_tools()
+    assert (app / "bin" / ("spacetime.exe" if os.name == "nt" else "spacetime")).read_bytes() == b"cli"
+    assert (app / "bin" / ("spacetimedb-standalone.exe" if os.name == "nt" else "spacetimedb-standalone")
+            ).read_bytes() == b"server"
+
+
+def test_a_download_with_a_bad_checksum_is_thrown_away(tmp_path):
+    src = tmp_path / "asset.bin"
+    src.write_bytes(b"hello")
+    dest = tmp_path / "downloaded.bin"
+    with pytest.raises(RuntimeError, match="damaged"):
+        hosting._download(src.as_uri(), str(dest), "00" * 32)
+    assert not dest.exists() and not (tmp_path / "downloaded.bin.part").exists()
+
+
+def test_ensure_tools_refuses_an_asset_without_a_published_checksum(tmp_path, monkeypatch):
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(tmp_path / "app"))
+    monkeypatch.setattr(hosting, "host_bin", lambda: None)
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "platform_key", lambda: "windows-x86_64")
+    monkeypatch.setattr(hosting, "_release_sums", lambda: {})
+    monkeypatch.setattr(hosting, "_download", lambda *a, **k: pytest.fail("must not download"))
+    with pytest.raises(RuntimeError, match="checksum"):
+        hosting.ensure_tools()
+
+
+def test_ensure_tools_installs_everything_from_a_release_folder(tmp_path, monkeypatch):
+    """The CI output (host exe, module wasm, SpacetimeDB archive, SHA256SUMS) installs end to end."""
+    app, release = tmp_path / "app", tmp_path / "release"
+    release.mkdir()
+    host_name, wasm_name = "cadswarm-host-windows-x86_64.exe", "cadswarm_module.wasm"
+    zip_name = "spacetime-fake.zip"
+    (release / host_name).write_bytes(b"host")
+    (release / wasm_name).write_bytes(b"wasm")
+    with zipfile.ZipFile(release / zip_name, "w") as z:
+        z.writestr("spacetime-x86_64-pc-windows-msvc/spacetimedb-cli.exe", b"cli")
+        z.writestr("spacetime-x86_64-pc-windows-msvc/spacetimedb-standalone.exe", b"server")
+
+    def sha(name):
+        return hashlib.sha256((release / name).read_bytes()).hexdigest()
+
+    (release / "SHA256SUMS.txt").write_text(
+        f"{sha(host_name)}  {host_name}\n{sha(wasm_name)}  {wasm_name}\n", encoding="ascii")
+    monkeypatch.setattr(hosting, "app_dir", lambda: str(app))
+    monkeypatch.setattr(hosting, "ROOT", str(tmp_path / "checkout"))
+    monkeypatch.setattr(hosting, "platform_key", lambda: "windows-x86_64")
+    monkeypatch.setattr(hosting, "release_base", lambda: release.as_uri())
+    monkeypatch.setattr(hosting, "SPACETIME_BASE", release.as_uri())
+    monkeypatch.setattr(hosting, "SPACETIME_ASSETS", {"windows-x86_64": (zip_name, sha(zip_name))})
+    monkeypatch.setattr(hosting.shutil, "which", lambda name: None)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.delenv("CADSWARM_HOST_BIN", raising=False)
+    monkeypatch.delenv("SPACETIME_BIN", raising=False)
+    monkeypatch.delenv("CADSWARM_MODULE_WASM", raising=False)
+
+    info = hosting.ensure_tools()
+    exe = ".exe" if os.name == "nt" else ""
+    assert info["host"] == str(app / "bin" / ("cadswarm-host" + exe))
+    assert (app / "bin" / ("spacetime" + exe)).read_bytes() == b"cli"
+    assert (app / "bin" / ("spacetimedb-standalone" + exe)).read_bytes() == b"server"
+    assert info["wasm"] == str(app / "module" / wasm_name)
+    assert (app / "module" / wasm_name).read_bytes() == b"wasm"
+
+
+
 def test_start_team_says_what_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(hosting, "ensure_tools", lambda on_line=None: None)
     monkeypatch.setattr(hosting, "find_tool", lambda name, env: None)
     with pytest.raises(RuntimeError, match="cadswarm-host"):
         hosting.start_team("python", str(tmp_path / "p"), "maincloud", "cadswarm-x-0001")
