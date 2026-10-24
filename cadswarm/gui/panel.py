@@ -171,7 +171,7 @@ class Session:
         client = SpaceHub({"uri": cfg["uri"], "db": cfg["db"], "name": name,
                            "host_dir": host_dir_for(cfg["db"])}, dict(identity or {}), timeout=timeout)
         self.ident = client.join(client="freecad")  # a new fence: an older window can no longer act
-        client.timeout = 30
+        client.timeout = client.space.timeout = 30  # the quick rejoin timeout is only for the first call
         client.identity = self.ident
         self.client = client
         p.SetString("Uri", cfg["uri"])

@@ -62,11 +62,11 @@ def ingest(elastic, sources, fetch=urlopen_bytes):
     for s in sources:
         try:
             data, ctype = fetch(s["url"])
-        except Exception as e:  # one dead link must not stop the rest
+            is_pdf = "pdf" in ctype or s["url"].lower().endswith(".pdf")
+            text = pdf_to_text(data) if is_pdf else html_to_text(data.decode("utf-8", "replace"))
+        except Exception as e:  # one dead link or unreadable PDF must not stop the rest
             print(f"skip {s['url']}: {e}", file=sys.stderr)
             continue
-        is_pdf = "pdf" in ctype or s["url"].lower().endswith(".pdf")
-        text = pdf_to_text(data) if is_pdf else html_to_text(data.decode("utf-8", "replace"))
         text = text[:MAX_CHARS]
         if not text.strip():
             # Scanned and vector-only PDFs extract nothing; indexing a blank document only hides that.

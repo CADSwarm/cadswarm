@@ -10,6 +10,12 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{Duration, Instant};
+
+/// A handoff whose agent failed to start waits this long before the next try (each try mints an invite).
+const HANDOFF_RETRY: Duration = Duration::from_secs(30);
+/// The reviewer's verdict reaches the host through the subscription, a moment after the reviewer exits.
+const VERDICT_GRACE: Duration = Duration::from_secs(10);
 
 pub const MAX_WORKERS: usize = 3;
 pub const MAX_REVIEW_ROUNDS: u32 = 3;
@@ -97,6 +103,7 @@ struct Runtime {
     reviewer: Option<Agent>,
     review_round: u32,
     reviewed_round: u32,
+    reviewer_exited: Option<Instant>,
     spawned: usize,
 }
 
@@ -105,6 +112,7 @@ pub struct Orchestrator {
     boards: BTreeMap<String, Board>,
     runs: HashMap<String, Runtime>,
     handoffs: HashMap<String, Agent>,
+    handoff_failed: HashMap<String, Instant>,
     reviewer_enabled: bool,
 }
 
@@ -205,7 +213,7 @@ impl Orchestrator {
         // The reviewer only runs once someone has created its member folder (`init-reviewer`).
         let reviewer_enabled =
             cfg.data_dir.join("agents").join("reviewer").join(".cadswarm").join("config.json").exists();
-        Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), reviewer_enabled }
+        Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), handoff_failed: HashMap::new(), reviewer_enabled }
     }
 
     pub fn tick(&mut self, space: &Space, mut helper: Option<&mut WorkerDriver>) {
@@ -213,7 +221,9 @@ impl Orchestrator {
         // An agent that dies before accepting leaves the handoff open; dropping it here makes the
         // next tick spawn a fresh one.
         for h in space.open_handoffs() {
-            if self.handoffs.contains_key(&h.id) {
+            if self.handoffs.contains_key(&h.id)
+                || self.handoff_failed.get(&h.id).is_some_and(|t| t.elapsed() < HANDOFF_RETRY)
+            {
                 continue;
             }
             let name = format!("handoff-{}", h.id.trim_start_matches("h_"));
@@ -223,9 +233,13 @@ impl Orchestrator {
             match started {
                 Ok(agent) => {
                     eprintln!("[host] handoff {}: started {name}", h.id);
+                    self.handoff_failed.remove(&h.id);
                     self.handoffs.insert(h.id.clone(), agent);
                 }
-                Err(e) => eprintln!("[host] handoff {}: {e:#}", h.id),
+                Err(e) => {
+                    eprintln!("[host] handoff {}: {e:#} (trying again in {}s)", h.id, HANDOFF_RETRY.as_secs());
+                    self.handoff_failed.insert(h.id.clone(), Instant::now());
+                }
             }
         }
         self.handoffs.retain(|_, a| a.alive());
@@ -292,7 +306,10 @@ impl Orchestrator {
         };
 
         // A reviewer that exits without a verdict would leave the brief in `reviewing` forever.
-        if b.status == "reviewing" && rt.review_round > 0 && !state.reviewer_alive && review.map(|(r, _)| r < rt.review_round).unwrap_or(true) {
+        let no_verdict = review.map(|(r, _)| r < rt.review_round).unwrap_or(true);
+        if b.status == "reviewing" && rt.review_round > 0 && !state.reviewer_alive && no_verdict
+            && rt.reviewer_exited.get_or_insert_with(Instant::now).elapsed() >= VERDICT_GRACE
+        {
             eprintln!("[host] brief {}: reviewer round {} exited without a verdict", b.id, rt.review_round);
             space.set_brief(&b.id, "failed", &json!({"error": "the reviewer exited without a verdict"}).to_string())?;
             return Ok(());
@@ -378,6 +395,7 @@ impl Orchestrator {
                     .context("starting cadswarm.reviewer")?;
                 rt.reviewer = Some(Agent::from_child("reviewer", child));
                 rt.review_round = round;
+                rt.reviewer_exited = None;
                 space.set_brief(&b.id, "reviewing", "")?;
             }
             Action::Export => {

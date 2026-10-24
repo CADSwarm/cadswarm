@@ -82,8 +82,11 @@ impl Agent {
     pub fn spawn(cfg: &HostConfig, name: &str, ticket: &str, prompt: &str) -> Result<Agent> {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
+        // PYTHONSAFEPATH, not -I: -I would also drop PYTHONPATH, which is how a guide-hosted team
+        // (FreeCAD's own Python) finds the package; both keep a checkout in the cwd from being imported.
         let setup = Command::new(&cfg.cadswarm_python)
-            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
+            .env("PYTHONSAFEPATH", "1")
+            .args(["-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;
