@@ -32,7 +32,8 @@ CLIENTS = {
     # OpenCode stays opt-in and never displaces someone's Claude Code.
     "opencode": {"label": "OpenCode", "exe": "opencode", "install_url": "https://opencode.ai/docs/"},
     # No local CLI: Creao AI runs through a local bridge (cadswarm.creao_agent) and needs its API key.
-    "creao": {"label": "Creao AI", "exe": None, "install_url": "https://developer.creao.ai/"},
+    "creao": {"label": "Creao AI", "exe": None, "install_url": "https://developer.creao.ai/",
+              "description": "Use various frontier models"},
 }
 
 # OpenCode reads AGENTS.md by itself; this is the schema its config wants.

@@ -131,6 +131,43 @@ def test_the_env_file_supplies_the_key_without_overriding_a_real_one(tmp_path, m
     assert creao.api_key() == "cr_sk_real"
 
 
+def test_the_per_user_env_file_is_read_when_no_checkout_file_exists(tmp_path, monkeypatch):
+    target = tmp_path / "app" / "cadswarm.env"
+    target.parent.mkdir()
+    target.write_text("CREAO_API_KEY=cr_sk_app\n", encoding="utf-8")
+    monkeypatch.delenv("CREAO_API_KEY", raising=False)
+    monkeypatch.delenv("CADSWARM_ENV_FILE", raising=False)
+    monkeypatch.setattr(creao, "env_candidates",
+                        lambda: [None, str(target), str(tmp_path / ".env"), str(tmp_path / "sibling.env")])
+    assert creao.api_key() == "cr_sk_app"
+
+
+def test_saving_a_key_replaces_it_in_place_and_keeps_the_other_keys(tmp_path, monkeypatch):
+    env_file = tmp_path / "cadswarm.env"
+    env_file.write_text("# shared keys\nELASTIC_URL=https://x\nCREAO_API_KEY=cr_sk_old\n", encoding="utf-8")
+    monkeypatch.setenv("CADSWARM_ENV_FILE", str(env_file))
+    monkeypatch.setenv("CREAO_API_KEY", "cr_sk_old")
+    assert creao.save_api_key("  cr_sk_new  ") == str(env_file)
+    text = env_file.read_text(encoding="utf-8")
+    assert "CREAO_API_KEY=cr_sk_new" in text and "cr_sk_old" not in text
+    assert "ELASTIC_URL=https://x" in text and "# shared keys" in text
+    assert creao.api_key() == "cr_sk_new"
+
+
+def test_saving_a_key_creates_the_per_user_env_file(tmp_path, monkeypatch):
+    target = tmp_path / "app" / "cadswarm.env"
+    monkeypatch.delenv("CADSWARM_ENV_FILE", raising=False)
+    monkeypatch.delenv("CREAO_API_KEY", raising=False)
+    monkeypatch.setattr(creao, "env_candidates",
+                        lambda: [None, str(target), str(tmp_path / ".env"), str(tmp_path / "sibling.env")])
+    assert creao.env_file() == str(target)
+    assert creao.save_api_key("cr_sk_new") == str(target)
+    assert target.read_text(encoding="utf-8") == "CREAO_API_KEY=cr_sk_new\n"
+    assert creao.api_key() == "cr_sk_new"
+    with pytest.raises(ValueError, match="Paste"):
+        creao.save_api_key("  ")
+
+
 def test_the_shared_agent_cache_keeps_only_the_agent_id(tmp_path, monkeypatch):
     monkeypatch.setattr(creao, "shared_path", lambda: str(tmp_path / "creao.json"))
     assert creao.load_shared() == {}

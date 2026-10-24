@@ -128,16 +128,72 @@ def api_key():
     return (os.environ.get("CREAO_API_KEY") or "").strip()
 
 
+def env_candidates():
+    """Where a CadSwarm env file may live, in the order the loaders read them."""
+    from .paths import app_dir
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return [os.environ.get("CADSWARM_ENV_FILE"),
+            os.path.join(app_dir(), "cadswarm.env"),  # written by the GUI's API-key dialog
+            os.path.join(root, ".env"),
+            os.path.join(os.path.dirname(root), "cadswarm.env")]
+
+
+def env_file():
+    """The env file to write a key to: the one named explicitly, else the first that exists, else the
+    per-user file the GUI creates."""
+    explicit = os.environ.get("CADSWARM_ENV_FILE")
+    if explicit:
+        return explicit
+    for path in env_candidates()[1:]:
+        if os.path.isfile(path):
+            return path
+    return env_candidates()[1]
+
+
+def save_api_key(key):
+    """Save CREAO_API_KEY in the env file this computer reads (never in a project folder).
+
+    Replaces an existing line in place, keeps every other key and comment, and makes the key visible
+    to this process at once. Returns the file written.
+    """
+    key = (key or "").strip()
+    if not key:
+        raise ValueError("Paste the Creao API key first.")
+    path = env_file()
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        lines = []
+    out, seen = [], False
+    for line in lines:
+        name = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else ""
+        if name == "CREAO_API_KEY":
+            if not seen:
+                out.append(f"CREAO_API_KEY={key}")
+                seen = True
+            continue  # drop an older duplicate
+        out.append(line)
+    if not seen:
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"CREAO_API_KEY={key}")
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(out) + "\n")
+    os.replace(tmp, path)
+    os.environ["CREAO_API_KEY"] = key
+    return path
+
+
 def _load_env_file():
     """Read keys from the same files `scripts/with-env.ps1` uses, without overriding real env vars.
 
     Custom skills run in Creao's sandbox, but the bridge runs here: when FreeCAD was started from the
     desktop (not through the loader) a key in `cadswarm.env` is still found by this.
     """
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    candidates = [os.environ.get("CADSWARM_ENV_FILE"), os.path.join(root, ".env"),
-                  os.path.join(os.path.dirname(root), "cadswarm.env")]
-    for path in candidates:
+    for path in env_candidates():
         if not path or not os.path.isfile(path):
             continue
         try:

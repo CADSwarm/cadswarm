@@ -343,20 +343,23 @@ People can also hand work to an agent mid-design: while holding a part, "Hand of
 
 ## Creao AI (optional helper)
 
-Creao AI has no command-line tool and can't be given a custom MCP server, so CadSwarm talks to it
-through a small local bridge (`cadswarm/creao_agent.py`). The bridge joins the team exactly like any
-other helper, sends Creao the wake-up prompt, and executes each tool call Creao asks for in-process
-with the same MCP tools, so activity logging and fencing work the same way.
+Creao AI gives your helper **various frontier models with one API key**: there is no command-line tool
+to install or sign in to, and it can't be given a custom MCP server, so CadSwarm talks to it through a
+small local bridge (`cadswarm/creao_agent.py`). The bridge joins the team exactly like any other
+helper, sends Creao the wake-up prompt, and executes each tool call Creao asks for in-process with the
+same MCP tools, so activity logging and fencing work the same way.
 
-1. Create an account-scoped `cr_sk_` key in Creao's
-   [Developer Console](https://developer.creao.ai) and put `CREAO_API_KEY=cr_sk_...` in
-   `cadswarm.env` (see `.env.example`).
-2. In the setup guide pick **Creao AI**, or run
-   `cadswarm setup --client creao --invite "cadswarm-2:..." --name carol-creao`.
-   The first Creao helper on a computer creates the account's Creao agent (its id is cached in the
+1. In the setup guide click **Creao AI** (or **Add key…**) and paste the key in the box that opens;
+   **Get a key…** in that box opens Creao's [Developer Console](https://developer.creao.ai) to make
+   an account-scoped `cr_sk_` key. CadSwarm saves the key on this computer only, in the CadSwarm
+   env file this computer already uses (otherwise `%APPDATA%\CadSwarm\cadswarm.env` on Windows), and
+   never in the project folder or the team.
+   For a terminal instead: `cadswarm setup --client creao --invite "cadswarm-2:..." --name carol-creao`
+   with `CREAO_API_KEY=cr_sk_...` in `cadswarm.env` (see `.env.example`).
+2. The first Creao helper on a computer creates the account's Creao agent (its id is cached in the
    CadSwarm app folder, `%APPDATA%\CadSwarm\creao.json` on Windows) and every later Creao helper
-   reuses it; the key is never written. Setup also installs the account-level `cadswarm-tools` skill
-   and lets the agent's writes run without approval prompts.
+   reuses it; the key is never written there. Setup also installs the account-level
+   `cadswarm-tools` skill and lets the agent's writes run without approval prompts.
 3. Open CadSwarm in FreeCAD. The background runner wakes it like any other helper.
 
 Each helper keeps its own Creao conversation across tasks (cached in `.cadswarm/creao.json` next to

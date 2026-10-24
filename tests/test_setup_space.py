@@ -289,6 +289,12 @@ def test_creao_has_no_cli_but_its_bridge_launcher_runs_the_runner(tmp_path, monk
         agent_setup.open_agent_terminal("creao", str(tmp_path))
 
 
+def test_creao_is_described_by_the_models_it_offers():
+    assert agent_setup.CLIENTS["creao"]["description"] == "Use various frontier models"
+    assert agent_setup.CLIENTS["creao"]["exe"] is None
+    assert all(info["label"] for info in agent_setup.CLIENTS.values())
+
+
 def test_nvm_installs_are_ordered_by_version_not_text():
     paths = [f"/h/.nvm/versions/node/v{v}/bin/claude" for v in ("9.11.2", "22.1.0", "18.20.4")]
     newest = sorted(paths, key=agent_setup._node_version, reverse=True)[0]

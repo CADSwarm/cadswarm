@@ -692,13 +692,21 @@ class SetupWizard(QtGui.QDialog):
             row.addWidget(rb)
             path = find_agent_cli(key)
             ready = bool(path) or (key == "creao" and agent_ready(key))
+            if info.get("description"):
+                row.addWidget(label(f"— {info['description']}", "hint"))
             if ready:
                 found_any = found_any or key
-                row.addWidget(label("✓ Found on this computer", "ok"), 1)
+                if key == "creao":
+                    row.addWidget(label("✓ Ready to use", "ok"), 1)
+                    change = QtGui.QPushButton("Change key…")
+                    change.clicked.connect(lambda _=False: self.ask_creao_key(force=True))
+                    row.addWidget(change)
+                else:
+                    row.addWidget(label("✓ Found on this computer", "ok"), 1)
             elif key == "creao":
-                row.addWidget(label("Needs CREAO_API_KEY (see .env.example)", "hint"), 1)
-                how = QtGui.QPushButton("Get a key")
-                how.clicked.connect(lambda _=False, u=info["install_url"]: QtGui.QDesktopServices.openUrl(QtCore.QUrl(u)))
+                row.addWidget(label("Needs an API key", "hint"), 1)
+                how = QtGui.QPushButton("Add key…")
+                how.clicked.connect(lambda _=False: self.ask_creao_key())
                 row.addWidget(how)
             else:
                 row.addWidget(label("Not installed yet", "hint"), 1)
@@ -706,6 +714,8 @@ class SetupWizard(QtGui.QDialog):
                 how.clicked.connect(lambda _=False, u=info["install_url"]: QtGui.QDesktopServices.openUrl(QtCore.QUrl(u)))
                 row.addWidget(how)
             rb.toggled.connect(lambda on, k=key: on and self.pick_client(k))
+            if key == "creao":  # clicking Creao itself offers the key box when it has none
+                rb.clicked.connect(lambda _=False: self.ask_creao_key())
             self.client_buttons[key] = (rb, ready)
             lay.addWidget(card)
         none_card = QtGui.QFrame()
@@ -763,8 +773,8 @@ class SetupWizard(QtGui.QDialog):
             self.folder_label.setText(f"Your helper's workspace folder:<br><b>{getattr(self, 'folder', '')}</b>")
         if key and not installed:
             if key == "creao":
-                self.missing_note.setText("Creao AI runs through CadSwarm's local bridge and needs a <code>CREAO_API_KEY</code> "
-                                          "in cadswarm.env (see .env.example), then click “check again”.")
+                self.missing_note.setText("Creao AI gives your helper various frontier models with one API key. "
+                                          "Click “Add key…” to paste it, then try again.")
             else:
                 self.missing_note.setText(f"Install {CLIENTS[key]['label']} first (click “How to install”), "
                                           "then click “check again”.")
@@ -776,6 +786,15 @@ class SetupWizard(QtGui.QDialog):
         else:
             self.missing_note.setText("You can add an AI helper later from the CadSwarm toolbar (“Add AI helper”).")
             self.buttons("Finish", self.finish)
+
+    def ask_creao_key(self, force=False):
+        """Open the key box when Creao has none (or the person asked to change it), then re-check readiness."""
+        if not force and agent_ready("creao"):
+            return
+        if not panel.ask_creao_key(self):
+            return
+        self.show_page("agent", remember=False)
+        self.client_buttons["creao"][0].setChecked(True)
 
     def change_folder(self):
         d = QtGui.QFileDialog.getExistingDirectory(self, "Choose your helper's workspace folder",

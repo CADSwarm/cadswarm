@@ -2219,6 +2219,81 @@ def create_helper(client, name, team):
     return folder
 
 
+class CreaoKeyDialog(QtGui.QDialog):
+    """Ask for the Creao API key and save it where this computer's helpers read it."""
+
+    def __init__(self, parent=None):
+        from .. import creao
+        super().__init__(parent or Gui.getMainWindow())
+        self.path = ""
+        self.setWindowTitle("CadSwarm: Creao AI key")
+        fit_to_screen(self, 540, 320)
+        lay = QtGui.QVBoxLayout(self)
+        title = QtGui.QLabel("Connect Creao AI")
+        title.setStyleSheet("font-size: 15pt; font-weight: 600;")
+        lay.addWidget(title)
+        lead = QtGui.QLabel("Creao AI gives your helper various frontier models with one API key: there is "
+                            "nothing to install and no terminal to sign in to.")
+        lead.setWordWrap(True)
+        lay.addWidget(lead)
+        form = QtGui.QFormLayout()
+        self.key = QtGui.QLineEdit()
+        self.key.setEchoMode(QtGui.QLineEdit.Password)
+        self.key.setPlaceholderText("cr_sk_…")
+        form.addRow("API key", self.key)
+        lay.addLayout(form)
+        show = QtGui.QCheckBox("Show the key")
+        show.toggled.connect(lambda on: self.key.setEchoMode(
+            QtGui.QLineEdit.Normal if on else QtGui.QLineEdit.Password))
+        lay.addWidget(show)
+        where = QtGui.QLabel(f"Saved only on this computer, in <code>{html.escape(creao.env_file())}</code>. "
+                             "CadSwarm never adds it to a project folder or the team.")
+        where.setWordWrap(True)
+        lay.addWidget(where)
+        self.note = QtGui.QLabel("")
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+        lay.addStretch(1)
+        row = QtGui.QHBoxLayout()
+        get = QtGui.QPushButton("Get a key…")
+        get.setToolTip("Open Creao's Developer Console in your browser")
+        get.clicked.connect(lambda _=False: QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl("https://developer.creao.ai/")))
+        row.addWidget(get)
+        row.addStretch(1)
+        cancel = QtGui.QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        save = QtGui.QPushButton("Save key")
+        save.setDefault(True)
+        save.clicked.connect(self.save)
+        row.addWidget(cancel)
+        row.addWidget(save)
+        lay.addLayout(row)
+        self.key.returnPressed.connect(self.save)
+
+    def save(self):
+        from .. import creao
+        key = self.key.text().strip()
+        if not key:
+            self.note.setText("Paste the key from the Creao Developer Console first.")
+            return
+        if not key.startswith("cr_sk_"):
+            self.note.setText("That doesn't look like a Creao key: they start with <code>cr_sk_</code>.")
+            return
+        try:
+            self.path = creao.save_api_key(key)
+        except OSError as e:
+            self.note.setText(f"Couldn't save the key: {e}")
+            return
+        self.accept()
+
+
+def ask_creao_key(parent=None):
+    """Ask for and save the Creao API key. Returns the env file written, or "" when cancelled."""
+    dlg = CreaoKeyDialog(parent)
+    return dlg.path if dlg.exec_() == QtGui.QDialog.Accepted else ""
+
+
 class NewHelperDialog(QtGui.QDialog):
     """Start one more AI helper on this computer: pick the AI, optionally name it, done. It runs in the
     background and answers in the chat."""
@@ -2232,9 +2307,18 @@ class NewHelperDialog(QtGui.QDialog):
         lay = QtGui.QVBoxLayout(self)
         form = QtGui.QFormLayout()
         self.client = QtGui.QComboBox()
+        installed = []
         for key, info in CLIENTS.items():
-            if agent_ready(key):
-                self.client.addItem(info["label"], key)
+            ready = agent_ready(key)
+            if ready:
+                installed.append(key)
+            if ready or key == "creao":  # Creao only needs a key, which create() can ask for
+                label_ = info["label"] + (f" — {info['description']}" if info.get("description") else "")
+                self.client.addItem(label_, key)
+        try:
+            self.client.activated[int].connect(lambda *_: self.picked_client())
+        except (KeyError, TypeError, IndexError):
+            self.client.activated.connect(lambda *_: self.picked_client())
         form.addRow("AI", self.client)
         self.name = QtGui.QLineEdit()
         self.name.setPlaceholderText("Optional")
@@ -2255,16 +2339,27 @@ class NewHelperDialog(QtGui.QDialog):
         row.addWidget(cancel)
         row.addWidget(self.ok)
         lay.addLayout(row)
-        if not self.client.count():
-            links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values())
+        if not installed:
+            links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values()
+                                if i.get("exe"))
             self.note.setText(f"No AI helper is installed on this computer yet. Install {links}, sign in to it "
-                              "once, then try again. (Creao AI works with a CREAO_API_KEY in cadswarm.env "
-                              "instead of an install.)")
+                              "once, then try again. Creao AI needs only an API key, and CadSwarm asks for it "
+                              "when you start one.")
             self.note.setOpenExternalLinks(True)
-            self.ok.setEnabled(False)
+
+    def picked_client(self):
+        """Choosing Creao without a key asks for it right away, like clicking it in the setup guide."""
+        from ..agent_setup import agent_ready
+        if self.client.currentData() == "creao" and not agent_ready("creao"):
+            if ask_creao_key(self):
+                self.note.setText("")
 
     def create(self):
+        from ..agent_setup import agent_ready
         client = self.client.currentData()
+        if client == "creao" and not agent_ready("creao"):
+            if not ask_creao_key(self):
+                return
         typed = re.sub(r"[^A-Za-z0-9_-]+", "-", self.name.text().strip()).strip("-_")[:40]
         taken = {p["name"].lower() for p in self.session.model.get("participants", [])}
         if typed and typed.lower() in taken:
