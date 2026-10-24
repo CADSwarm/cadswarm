@@ -571,8 +571,13 @@ class LightenDialog(QtGui.QDialog):
                 name, n = f"{self.obj_name}_lattice{n}", n + 1
             obj = doc.addObject("Mesh::Feature", name)
             obj.Mesh = Mesh.Mesh(os.path.join(self.job.job["out_dir"], "result.stl"))
+            # The lattice fills the same space as the part, so showing both makes their faces flicker into each other.
+            source = doc.getObject(self.obj_name)
+            if source is not None and getattr(source, "ViewObject", None):
+                source.ViewObject.Visibility = False
             doc.recompute()
-            _p().say(f"Added {name} next to {self.obj_name}. Save the document to keep it.")
+            _p().say(f"Added {name} in place of {self.obj_name}, which is hidden and unchanged. "
+                     "Save the document to keep it.")
         self.apply_btn.setEnabled(False)
 
     def open_files(self):

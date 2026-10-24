@@ -515,6 +515,19 @@ def test_the_mirror_catches_changes_that_made_no_event_and_retries_failed_fetche
         hub.mirror_changes(applied)  # the caller keeps `applied`, so the next pass fetches Lid again
 
 
+def test_the_mirror_hides_a_part_a_boolean_consumed(world):
+    # A fusion hides its base and tool in the team's document without bumping their revs, bbox or volume.
+    # If the mirror missed that, both stay drawn inside the fusion and their faces z-fight with it.
+    hub, fake = world
+    plate = fake.tables["v_object"][0]
+    hub.post = lambda path, body: {"objects": {n: {"brep": "B", "visible": False} for n in body["names"]}}
+    _, _, applied = hub.mirror_changes({})
+    fake.tables["v_object"] = [{**plate, "visible": False}]
+    breps, gone, applied = hub.mirror_changes(applied)
+    assert list(breps) == ["Plate"] and breps["Plate"]["visible"] is False and gone == []
+    assert hub.mirror_changes(applied)[0] == {}  # and then it stays quiet
+
+
 # ---- printer bed and review rounds
 
 

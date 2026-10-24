@@ -938,9 +938,10 @@ class SpaceHub(LibraryRoutes):
     def mirror_changes(self, applied):
         """What a live mirror must change to match the team's model, given the version of each part it last applied
         ({name: version}): (breps fetched for new or changed parts, names to remove, the versions now applied).
-        Compares rev, bbox, volume and placement, since the host re-syncs objects without bumping revs or making an
-        event. A failed fetch raises, so the caller keeps `applied` and the next pass tries again."""
-        want = {o["name"]: (o["rev"], tuple(o["bbox"] or ()), o["volume"], o["placement_json"])
+        Compares rev, bbox, volume, placement and visibility, since the host re-syncs objects without bumping revs or
+        making an event (a boolean hides its inputs that way). A failed fetch raises, so the caller keeps `applied`
+        and the next pass tries again."""
+        want = {o["name"]: (o["rev"], tuple(o["bbox"] or ()), o["volume"], o["placement_json"], o.get("visible", True))
                 for o in self._rows("v_object")}
         stale = sorted(n for n, v in want.items() if applied.get(n) != v)
         breps = self.post("/brep", {"names": stale})["objects"] if stale else {}
