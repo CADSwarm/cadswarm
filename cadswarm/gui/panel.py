@@ -122,6 +122,7 @@ class Session:
         self.timer = None
         self.fea_dialogs = []  # open report popups (kept referenced so Qt doesn't drop them)
         self.commands = []     # instructions I sent to helpers, with sent/seen/done
+        self.briefs = []       # requests handed to the whole team (the host plans and builds them)
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
         self._moved_hint = 0
@@ -402,6 +403,10 @@ class Session:
             self.model = self.client.get("/model")
             self.tasks = self.client.get("/tasks")["tasks"]
             self.commands = self.client.get("/commands").get("commands", [])
+            try:
+                self.briefs = self.client.get("/briefs").get("briefs", [])
+            except HubRequestError:
+                self.briefs = []  # an older team server without requests
             owners = {o["name"]: o.get("locked_by") for o in self.model["objects"]}
             ids = {p["name"]: p["id"] for p in self.model["participants"]}
             for p in self.model["participants"]:
@@ -502,9 +507,10 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addWidget(QtGui.QLabel("<b>Who's here</b>"))
         self.team = QtGui.QTreeWidget()
         self.team.setHeaderLabels(["Name", "Right now"])
-        self.team.setColumnWidth(0, 150)
+        self.team.setColumnWidth(0, 200)
         self.team.setRootIsDecorated(True)
         self.team.itemDoubleClicked.connect(self.team_double_click)
+        self.team.setMinimumHeight(130)  # at least three teammates visible
         lay.addWidget(self.team, 2)
 
         self.tabs = QtGui.QTabWidget()
@@ -555,6 +561,9 @@ class TeamPanel(QtGui.QDockWidget):
                 menu.addAction(label).triggered.connect(lambda _=False, f=fn: f())
         more.setMenu(menu)
         lay.addWidget(more, 0, QtCore.Qt.AlignRight)
+        w.setObjectName("cadswarmPanel")
+        w.setStyleSheet(PANEL_STYLE)
+        self.setMinimumWidth(PANEL_MIN_WIDTH)
         self.setWidget(w)
         self.spin_timer = QtCore.QTimer(self)
         self.spin_timer.timeout.connect(self.spin)
@@ -573,8 +582,8 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addWidget(new)
         self.task_list = QtGui.QTreeWidget()
         self.task_list.setHeaderLabels(["Task", "Status", "Who"])
-        self.task_list.setColumnWidth(0, 190)
-        self.task_list.setColumnWidth(1, 110)
+        self.task_list.setColumnWidth(0, 240)
+        self.task_list.setColumnWidth(1, 130)
         self.task_list.itemSelectionChanged.connect(self.task_selected)
         self.task_list.itemDoubleClicked.connect(lambda *_: self.task_details())
         lay.addWidget(self.task_list, 1)
@@ -599,8 +608,10 @@ class TeamPanel(QtGui.QDockWidget):
         w = QtGui.QWidget()
         w.setObjectName("commandTab")
         lay = QtGui.QVBoxLayout(w)
-        intro = QtGui.QLabel("<b style='color:#d9822b'>Instructions for an AI helper.</b> It does these before "
-                             "anything else and tells you when it's done. To talk with people, use Team chat.")
+        intro = QtGui.QLabel("<b style='color:#d9822b'>Tell the AI helpers what to do.</b> Pick a helper and it does "
+                             "your instruction before anything else, then tells you when it's done. Pick "
+                             "<b>The whole team</b> to have it planned into tasks and built for you. To talk with "
+                             "people, use Team chat.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
         row = QtGui.QHBoxLayout()
@@ -621,7 +632,7 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addLayout(quick)
         self.cmd_text = QtGui.QPlainTextEdit()
         self.cmd_text.setPlaceholderText("e.g. Make the lid 20 mm tall and check it still clears the posts")
-        self.cmd_text.setMaximumHeight(70)
+        self.cmd_text.setMaximumHeight(85)
         self.cmd_text.setStyleSheet("QPlainTextEdit { border: 1px solid #d9822b; border-radius: 4px; }")
         lay.addWidget(self.cmd_text)
         send_row = QtGui.QHBoxLayout()
@@ -636,9 +647,10 @@ class TeamPanel(QtGui.QDockWidget):
         lay.addWidget(QtGui.QLabel("<b>Your instructions</b>"))
         self.cmd_list = QtGui.QTreeWidget()
         self.cmd_list.setHeaderLabels(["Instruction", "To", "Status"])
-        self.cmd_list.setColumnWidth(0, 170)
-        self.cmd_list.setColumnWidth(1, 90)
+        self.cmd_list.setColumnWidth(0, 230)
+        self.cmd_list.setColumnWidth(1, 110)
         self.cmd_list.setRootIsDecorated(False)
+        self.cmd_list.setMinimumHeight(110)  # at least three instructions visible
         lay.addWidget(self.cmd_list, 1)
         self.cmd_wait = QtGui.QLabel("")
         self.cmd_wait.setWordWrap(True)
@@ -794,8 +806,8 @@ class TeamPanel(QtGui.QDockWidget):
             self.cmd_to.addItem(f"{p['name']} — {text}", p["name"])
         if len(helpers) > 1:
             self.cmd_to.addItem("All helpers", "all")
-        if not helpers:
-            self.cmd_to.addItem("(no AI helpers have joined yet — Team tools ▸ Add an AI helper)", None)
+        # Always there, even before anyone opens a helper: the team server plans it and starts helpers itself.
+        self.cmd_to.addItem("🧠 The whole team — plan it and build it (starts AI helpers for you)", TEAM_REQUEST)
         for combo, want in ((self.to, chat_to), (self.cmd_to, cmd_to)):
             idx = combo.findData(want)
             combo.setCurrentIndex(max(idx, 0))
@@ -834,6 +846,15 @@ class TeamPanel(QtGui.QDockWidget):
 
     def render_commands(self, s):
         self.cmd_list.clear()
+        for b in s.briefs:
+            word = BRIEF_WORDS.get(b["status"], b["status"])
+            if b["status"] in ("building", "reviewing") and b["tasks"]:
+                word += f" ({b['done']}/{b['tasks']} parts done)"
+            item = QtGui.QTreeWidgetItem([b["text"], "whole team", word])
+            item.setToolTip(0, f"{b['text']}\n(asked by {b['by']})")
+            item.setForeground(2, QtGui.QBrush(QtGui.QColor(
+                {"ready": "#1a7f37", "failed": "#cf222e"}.get(b["status"], "#d9822b"))))
+            self.cmd_list.addTopLevelItem(item)
         waiting = []
         team = {p["name"]: p for p in s.model.get("participants", [])}
         for c in s.commands:
@@ -949,6 +970,12 @@ class TeamPanel(QtGui.QDockWidget):
         if not self.session.ensure_connected("give a helper an instruction"):
             return
         to = self.cmd_to.currentData()
+        if to == TEAM_REQUEST:
+            if self.session.act("POST", "/briefs", {"text": text}, purpose="hand the request to the team") is not None:
+                self.cmd_text.clear()
+                say("Handed the request to the team: the team server plans it into tasks and starts AI helpers")
+                self.session.refresh_meta()
+            return
         if not to:
             hint("No AI helper has joined yet. Add one with Team tools ▸ Add an AI helper.")
             return
@@ -1113,6 +1140,24 @@ QUICK_COMMANDS = [
     ("Pause", "Stop after your current step and wait for my next instruction."),
     ("Let go", "Release {parts} so I can edit them by hand."),
 ]
+# Big enough to read at a glance next to the 3D view: larger text, taller buttons and rows.
+PANEL_MIN_WIDTH = 480
+PANEL_WIDTH = 580
+PANEL_STYLE = """
+#cadswarmPanel { font-size: 11pt; }
+#cadswarmPanel QLabel { font-size: 11pt; }
+#cadswarmPanel QPushButton, #cadswarmPanel QToolButton { font-size: 11pt; min-height: 30px; padding: 4px 12px; }
+#cadswarmPanel QTabBar::tab { font-size: 11pt; min-height: 30px; padding: 4px 14px; }
+#cadswarmPanel QTreeWidget, #cadswarmPanel QTextEdit, #cadswarmPanel QPlainTextEdit, #cadswarmPanel QLineEdit,
+#cadswarmPanel QComboBox { font-size: 11pt; }
+#cadswarmPanel QTreeWidget::item { padding: 4px 2px; }
+#cadswarmPanel QComboBox, #cadswarmPanel QLineEdit { min-height: 28px; }
+#cadswarmPanel QGroupBox { font-size: 11pt; font-weight: bold; padding-top: 14px; }
+"""
+TEAM_REQUEST = "__team_request__"
+BRIEF_WORDS = {"new": "⏳ waiting for the team server", "planning": "🧠 planning the parts",
+               "building": "🔨 building", "reviewing": "🔍 checking the result", "ready": "✓ done",
+               "failed": "✗ stopped (see Activity)"}
 COMMAND_WORDS = {"sent": "⏳ not read yet", "seen": "👀 read — working on it", "done": "✓ done"}
 TASK_ORDER = {"claimed": 0, "open": 1, "awaiting_takeover": 2, "blocked": 3, "done": 4}
 TASK_KINDS = [
@@ -1639,7 +1684,12 @@ def confirm(text):
 def show_panel():
     if SESSION.panel is None:
         SESSION.panel = TeamPanel(SESSION)
-        Gui.getMainWindow().addDockWidget(QtCore.Qt.RightDockWidgetArea, SESSION.panel)
+        mw = Gui.getMainWindow()
+        mw.addDockWidget(QtCore.Qt.RightDockWidgetArea, SESSION.panel)
+        try:  # open wide enough to read; people can still drag it narrower down to the minimum
+            mw.resizeDocks([SESSION.panel], [PANEL_WIDTH], QtCore.Qt.Horizontal)
+        except (AttributeError, TypeError):
+            pass
     SESSION.panel.show()
     tidy_task_view()
     if SESSION.connected:

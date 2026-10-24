@@ -83,7 +83,9 @@ impl Agent {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
         let setup = Command::new(&cfg.cadswarm_python)
-            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
+            // No -I: inside FreeCAD the package lives in the add-on folder, which reaches Python through
+            // PYTHONPATH (set by the guide), and -I would drop it (as in config::python_says).
+            .args(["-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;

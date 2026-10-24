@@ -323,3 +323,19 @@ def test_participants_say_what_each_helper_is_working_on(world, monkeypatch):
     assert team["bob-codex"]["task"] == {"id": "t_1", "title": "Base plate"}
     assert team["bob-codex"]["idle_s"] == 12.0
     assert team["alice-claude"]["task"] is None and team["alice-claude"]["idle_s"] is None
+
+
+def test_requests_to_the_whole_team_show_their_progress(world):
+    hub, fake = world
+    fake.tables["v_brief"] = [
+        {"id": "b_old", "by": 3, "text": "a phone stand", "board": "", "status": "ready", "plan_json": "",
+         "stl_hash": "", "created_ms": 1, "updated_ms": 2},
+        {"id": "b_new", "by": 3, "text": "an enclosure for the pico", "board": "", "status": "building", "plan_json": "",
+         "stl_hash": "", "created_ms": 5, "updated_ms": 6}]
+    fake.tables["v_task"] = [dict(fake.tables["v_task"][0], id="t_a", brief="b_new", status="done"),
+                             dict(fake.tables["v_task"][0], id="t_b", brief="b_new", status="claimed")]
+    briefs = hub.get("/briefs")["briefs"]
+    assert [b["id"] for b in briefs] == ["b_new", "b_old"]  # newest first
+    assert (briefs[0]["tasks"], briefs[0]["done"], briefs[0]["by"]) == (2, 1, "carol")
+    r = hub.post("/briefs", {"text": "a lid"})
+    assert fake.calls[-1][0] == "submit_brief" and fake.calls[-1][1][1] == r["brief"]

@@ -66,7 +66,7 @@ class SpaceHub:
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
-            ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief),
+            ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
             ("POST", r"/reviews", self.report_review),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
             # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
@@ -553,6 +553,19 @@ class SpaceHub:
         plan = body.get("plan_json")
         self._f("set_brief", bid, "", plan if isinstance(plan, str) else json.dumps(plan))
         return {"brief": bid, "ok": True}
+
+    def briefs(self, limit=20):
+        """Requests handed to the whole team (the host plans them into tasks and starts helpers), newest first,
+        with how many of each one's tasks are done."""
+        names = self._names()
+        tasks = self._rows("v_task")
+        out = []
+        for b in sorted(self._rows("v_brief"), key=lambda b: b["created_ms"], reverse=True)[:int(limit)]:
+            mine = [t for t in tasks if t.get("brief") == b["id"]]
+            out.append({"id": b["id"], "text": b["text"], "status": b["status"], "by": names.get(b["by"], "?"),
+                        "at": b["created_ms"] / 1000, "tasks": len(mine),
+                        "done": sum(1 for t in mine if t["status"] == "done")})
+        return {"briefs": out}
 
     def submit_brief(self, body):
         bid = ticket.new_id("b_")

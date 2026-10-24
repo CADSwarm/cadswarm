@@ -72,7 +72,8 @@ own after a reboot until you do).
 
 ## Working with your team in FreeCAD
 
-The **CadSwarm Team** panel on the right has four tabs, so talking and giving orders never get mixed up:
+The **CadSwarm Team** panel on the right (wide, with large text and buttons) has four tabs, so talking and
+giving orders never get mixed up:
 
 - **Who's here** (top) shows every person and AI helper. A helper that is busy shows a turning
   **◐ Working on "…"**; one with nothing to do shows **Ready for instructions**.
@@ -83,8 +84,14 @@ The **CadSwarm Team** panel on the right has four tabs, so talking and giving or
 - **Tell a helper**: instructions for one AI helper (or all of them). A helper does these before anything
   else. Each one shows **⏳ not read yet**, **👀 read — working on it** or **✓ done**. The quick buttons fill in
   common ones (check for clashes, run a strength check, give me a status, pause, let go of a part).
-  Helpers read new instructions when they finish a step. If one hasn't read yours after a while, the
-  panel tells you; type *continue* in that helper's Claude Code / Codex window.
+  Helpers read new instructions when they finish a step, and between tasks they wait for new ones, so you
+  don't have to go back to their window. Pick **🧠 The whole team — plan it and build it** instead of a
+  helper to hand over a whole request ("a stand for a 7 mm thick phone"): the team server plans it into
+  tasks and starts AI helpers itself (using the agent CLI on the hosting computer), and the list shows its
+  progress (*planning*, *building (1/3 parts done)*, *done*).
+- **Helpers start themselves.** When the guide connects an AI helper and you click **Open**, it starts
+  with its first instructions already sent; nothing to paste. Opening it again later sends a short
+  "carry on" instead.
 - **Team chat**: people talking to each other. Helpers can read it, and their replies show up here marked
   *(AI helper)*, but they never take chat as an order.
 - **Activity**: what happened, written by CadSwarm (parts added, tasks finished, files saved, reports).
