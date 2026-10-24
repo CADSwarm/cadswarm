@@ -1,4 +1,4 @@
-import type { Brief, Review, State, Store } from '../store';
+import type { Brief, Member, Review, State, Store } from '../store';
 import type { Api } from '../api';
 import { memberColor } from '../color';
 import { mountAsk } from './ask';
@@ -46,11 +46,6 @@ export function findingLines(json: string, max = 3): string[] {
 /** Ask the 3D view to fly to a part (the viewer listens; panels never touch three.js). */
 export function focusPart(name: string) { dispatchEvent(new CustomEvent('cadswarm:focus', { detail: name })); }
 
-function ago(ms: number) {
-  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
-  return s < 45 ? 'now' : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.round(s / 3600)}h`;
-}
-
 function loadTab(): Tab {
   const q = new URLSearchParams(location.search).get('tab');
   if (TABS.some(([id]) => id === q)) return q as Tab;
@@ -60,7 +55,46 @@ function loadTab(): Tab {
 
 const TASK_GROUPS: [string, string[]][] = [['In progress', ['claimed', 'awaiting_takeover']], ['To do', ['open', 'blocked']], ['Done', ['done']]];
 
-export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => []) {
+/** What a member holds, in the words the panel shows: "Base plate, 4 posts". */
+export function heldBy(s: Pick<State, 'locks' | 'objects'>, id: number, max = 2): string {
+  const names = s.locks.filter(l => l.holder === id && l.object !== 'Params')
+    .map(l => s.objects.find(o => o.name === l.object)?.label ?? l.object);
+  if (!names.length) return '';
+  return names.length <= max ? names.join(', ') : `${names.slice(0, max).join(', ')} +${names.length - max}`;
+}
+
+/** The little state pill next to a name: watching, building, away. */
+export function memberPill(s: Pick<State, 'tasks'>, m: Member): { word: string; tone: '' | 'live' | 'warn' } {
+  if (m.status !== 'active') return { word: 'away', tone: 'warn' };
+  if (m.kind === 'human') return { word: 'watching', tone: 'live' };
+  if (m.kind === 'host') return { word: 'hosting', tone: 'live' };
+  if (m.kind === 'reviewer') return { word: 'reviewing', tone: 'live' };
+  if (s.tasks.some(t => t.owner === m.id && t.status === 'claimed')) return { word: 'building', tone: 'live' };
+  return { word: m.statusText && m.statusText !== 'idle' ? 'working' : 'ready', tone: 'live' };
+}
+
+export interface LogRow { at: number; member: number; who: string; text: string; tone: '' | 'refused' | 'steer' }
+
+/** Team chat: what agents did, and what you told them, oldest first. */
+export function teamLog(s: Pick<State, 'activity' | 'messages' | 'meId' | 'members'>, limit = 10): LogRow[] {
+  const name = (id: number) => s.members.find(m => m.id === id)?.name ?? '';
+  const to = (target: string) => target === 'all' ? 'all helpers'
+    : target.startsWith('member:') ? name(Number(target.slice(7))) : target.replace(/^@/, '');
+  const events: LogRow[] = s.activity.map(a => ({
+    at: a.atMs, member: a.member, who: name(a.member), text: a.summary,
+    tone: a.kind === 'refused' || /refus|blocked by|held by/i.test(a.summary) ? 'refused' : '' }));
+  const steers: LogRow[] = s.messages.filter(m => m.from === s.meId && m.kind === 'steer')
+    .map(m => ({ at: m.createdMs, member: m.from, who: name(m.from), text: `→ ${to(m.to)}: ${m.body}`, tone: 'steer' }));
+  return [...events, ...steers].sort((a, b) => a.at - b.at).slice(-limit);
+}
+
+/** 14:02, the way the panel writes times. */
+export function clock(ms: number): string {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '') {
   el.innerHTML = `
     <header class="sidebar-head">
       <span class="brand">CadSwarm</span>
@@ -83,13 +117,27 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     <section class="tab" id="tab-tasks" data-tab="tasks" role="tabpanel">
       <h1 class="large-title">Tasks</h1><div data-tasks></div>
     </section>
-    <section class="tab" id="tab-team" data-tab="team" role="tabpanel">
-      <h1 class="large-title">Team</h1>
-      <ul class="group" data-team></ul>
-      <div class="group" data-handoff></div>
-      <h2 class="group-title">Precision settings</h2><div class="group" data-settings></div>
-      <h2 class="group-title">Activity</h2><ol class="group feed" data-activity></ol>
-      <button type="button" class="text-button" data-more hidden>Show all activity</button>
+    <section class="tab team-tab" id="tab-team" data-tab="team" role="tabpanel">
+      <div class="panel-bar">
+        <b>Team<span class="proj"> · <span data-project></span></span></b>
+        <span class="state" data-team-state></span>
+      </div>
+      <div class="panel-sec">
+        <span class="section-label">Who's here</span>
+        <ul class="who-list" data-team></ul>
+      </div>
+      <div class="panel-sec">
+        <span class="section-label">Team chat</span>
+        <div class="log" data-log></div>
+      </div>
+      <div class="panel-sec"><div class="actions">
+        <button type="button" data-act="task">Add a task</button>
+        <button type="button" data-act="size">Change a shared size</button>
+        <button type="button" data-act="clash">Check for clashes</button>
+        <button type="button" data-act="save">Save as 3D file</button>
+      </div></div>
+      <div class="panel-sec"><div data-handoff></div>
+        <span class="section-label">Precision settings</span><div data-settings></div></div>
     </section>
     <div class="toast" role="status" aria-live="polite" hidden></div>`;
 
@@ -112,7 +160,6 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   select(loadTab());
 
   let selectedPart = '';
-  let allActivity = false;
   const notice = (text: string) => store.set({ notice: { text, at: Date.now() } });
 
   // Actions, delegated so re-rendering never loses a listener.
@@ -141,7 +188,28 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     }
     const part = t.closest<HTMLElement>('[data-focus]');
     if (part) { selectedPart = part.dataset.focus!; focusPart(selectedPart); render(store.state); return; }
-    if (t.closest('[data-more]')) { allActivity = true; render(store.state); }
+    // The four things the site promises you can do from the panel.
+    const act = t.closest<HTMLButtonElement>('[data-act]');
+    if (act) {
+      const which = act.dataset.act;
+      if (which === 'save') {
+        const brief = currentBrief(store.state);
+        if (!api || !brief?.stlHash) { notice('No 3D file yet. Finish a build first.'); return; }
+        act.disabled = true;
+        api.downloadArtifact(brief.stlHash, `cadswarm-${brief.id}.stl`)
+          .catch(err => notice((err as Error).message ?? String(err)))
+          .finally(() => { act.disabled = false; });
+        return;
+      }
+      if (which === 'clash') {
+        if (!api) { notice('Not connected to a team yet.'); return; }
+        api.sendCommand('all', 'Check the model for clashes and fix any in parts you own; ask the owner about the rest.');
+        select('ask');
+        return;
+      }
+      if (which === 'task') { select('ask'); el.querySelector<HTMLTextAreaElement>('.field textarea')?.focus(); return; }
+      if (which === 'size') { select('model'); el.querySelector<HTMLInputElement>('.param input')?.focus(); return; }
+    }
   });
 
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -187,19 +255,26 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         </li>`).join('')}</ul>`;
     }).join('') || '<p class="empty-note">No tasks yet. When the team plans a build, its parts show up here.</p>';
 
-    // Team: who's here and what they're doing; then activity.
-    $('[data-team]').innerHTML = s.members.filter(m => m.status === 'active' || m.status === 'stale').map(m => `<li class="row-item">
+    // Team: the panel the site sells. Who's here, what the team said, what you can do about it.
+    $('[data-project]').textContent = project || 'this build';
+    const conn = $('[data-team-state]');
+    conn.className = `state${s.connected ? ' live' : ''}`;
+    conn.textContent = s.connected ? 'Connected' : 'Reconnecting…';
+    const here = s.members.filter(m => m.status === 'active' || m.status === 'stale' || m.id === s.meId);
+    $('[data-team]').innerHTML = here.map(m => {
+      const holds = heldBy(s, m.id) || (m.kind === 'agent' ? helperNow(s, m) : '');
+      const pill = memberPill(s, m);
+      return `<li>
         <span class="dot" style="--c:${memberColor(m.id, dark())}"></span>
-        <span class="row-main"><span class="row-title">${esc(m.name)}${m.id === s.meId ? ' <span class="row-detail">(you)</span>' : ''}</span>
-          <span class="row-detail">${m.kind === 'human' ? (m.status === 'active' ? 'here' : 'away') : m.kind === 'host' ? 'team server' : esc(helperNow(s, m))}</span></span>
-        <span class="presence${m.status === 'active' ? ' on' : ''}" aria-label="${m.status === 'active' ? 'online' : 'away'}"></span>
-      </li>`).join('');
-    const acts = s.activity.slice().reverse();
-    $('[data-activity]').innerHTML = (allActivity ? acts : acts.slice(0, 15)).map(a =>
-      `<li class="row-item"><span class="row-main"><span class="row-title small">${esc(a.summary)}</span>
-        <span class="row-detail">${who(a.member)} · ${ago(a.atMs)}</span></span></li>`).join('')
-      || '<li class="row-item empty">Quiet so far.</li>';
-    $('[data-more]').hidden = allActivity || acts.length <= 15;
+        <span class="who-main"><span class="name">${esc(m.name)}${m.id === s.meId ? ' <span class="holds">(you)</span>' : ''}</span>${holds ? `<span class="holds"> · ${esc(holds)}</span>` : ''}</span>
+        <span class="pill${pill.tone ? ` ${pill.tone}` : ''}">${esc(pill.word)}</span>
+      </li>`;
+    }).join('') || '<li class="log-empty">Nobody has joined this build yet.</li>';
+
+    $('[data-log]').innerHTML = teamLog(s).map(r => `<div class="log-row${r.tone ? ` ${r.tone}` : ''}">
+        <time>${clock(r.at)}</time>
+        <span class="line">${r.who ? `<b class="who" style="--c:${memberColor(r.member, dark())}">${esc(r.who)}</b> ` : ''}${esc(r.text)}</span>
+      </div>`).join('') || '<p class="log-empty">Nothing said yet. Ask for something in Ask and it lands here.</p>';
 
     const counts: Record<Tab, number> = { ask: 0, model: 0, library: 0,
       team: s.suggestions.filter(g => g.status === 'pending').length,
