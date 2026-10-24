@@ -16,7 +16,7 @@
     "vitest": "^5.0.5"
   },
   "dependencies": {
-    "spacetimedb": "~2.11.0",
+    "spacetimedb": "~2.13.0",
     "three": "^0.186.1"
   }
 }
