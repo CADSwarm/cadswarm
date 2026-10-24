@@ -68,6 +68,7 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/dependents", self.dependents), ("POST", r"/export", self.export),
             ("GET", r"/participants", self.participants_route), ("POST", r"/takeover", self.takeover),
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
+            ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
@@ -469,6 +470,33 @@ class SpaceHub(LibraryRoutes):
     def claim(self, body, tid):
         self._f("claim_task", tid, int(body.get("expected_rev") or 0))
         return self.task(tid)
+
+    def pickup(self, body):
+        """A free helper takes a task off a busy helper's queue; with no task_id the module picks one."""
+        self._f("pick_up_task", body.get("task_id") or "")
+        ev = [e for e in sorted(self._rows("v_event"), key=lambda e: e["seq"])
+              if e["kind"] == "task_claimed" and e["actor"] == self.me_id]
+        data = _json(ev[-1]["data_json"], {}) if ev else {}
+        t = self.task(data.get("task") or body.get("task_id"))
+        t["picked_up_from"] = data.get("from") or None
+        return t
+
+    def spare_tasks(self):
+        """Tasks queued for a helper that is busy with another task (or gone stale) and whose parts nobody else
+        holds: what this helper could pick_up_task. The module's pick_up_task has the final say."""
+        tasks = self._rows("v_task")
+        claimed = {t["owner"] for t in tasks if t["status"] == "claimed"}
+        busy = {m["name"].lower() for m in self._rows("v_member")
+                if m["status"] == "stale" or (m["status"] == "active" and m["id"] in claimed)}
+        held = {l["object"]: l["holder"] for l in self._rows("v_lock")}
+        me = self._names().get(self.me_id, "").lower()
+        return [t for t in sorted(tasks, key=lambda t: t["created_ms"])
+                if t["status"] == "open" and (t["assignee"] or "").lower() not in ("", me)
+                and t["assignee"].lower() in busy and all(held.get(o, self.me_id) == self.me_id for o in t["objects"])]
+
+    def spare_route(self):
+        names = self._names()
+        return {"tasks": [self._task_shape(t, names) for t in self.spare_tasks()]}
 
     def result(self, body, tid):
         self._f("report_task", tid, body.get("status", "done"), body.get("summary", ""), body.get("evidence") or [])

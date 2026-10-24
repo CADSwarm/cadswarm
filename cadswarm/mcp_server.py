@@ -56,7 +56,7 @@ Work like a careful teammate:
    Storage is limited: text files up to 5 MB, binary CAD/media up to 100 MB, and only the last 20
    versions of each file (plus everything from the last day) are kept. If a save fails with
    `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
-   them to free it (FreeCAD: Team tools > Storage and free up space). Never delete files, snapshots
+   them to free it (FreeCAD: the CadSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
    or exports yourself to make room, and don't save big files you can regenerate.
 9. FEA (strength, stiffness, vibration or heat questions: "will it hold / break / bend", stress, load, safety
    factor, natural frequency, temperature). Before running anything, ask your person in ONE message:
@@ -70,6 +70,8 @@ Work like a careful teammate:
 10. Work with the other AI helpers. list_helpers shows who is free and what each one holds. Split a big job
    with delegate_task (it assigns a task to a helper and wakes it); you're told when it's done. Ask a helper
    who holds a part for a change with send_message instead of touching it. Don't hand work back and forth.
+   When you're free and a busy helper has tasks queued (`queued` in list_helpers), call pick_up_task: it
+   takes one off their hands and tells them to skip it.
 11. Components library. Before modelling a screw, nut, washer, insert, bearing, dowel pin, magnet, board or any
    part someone may already have, check the team's library: recommend_components (say what the part must do)
    or search_components. Prefer the team's own parts, then built-in standard parts (add_standard_part), then a
@@ -222,6 +224,11 @@ def wait_for_changes(seconds: float = 20.0) -> dict:
         # People's chat (no @helper) is between people: helpers never see it, not even as an event.
         r["events"] = [e for e in r["events"] if not (e["kind"] == "message" and e.get("message_kind") == "chat")]
         me = my_name()
+        if any(e["kind"] in ("task", "task_claimed") for e in r["events"]):
+            spare = _spare_for_me()
+            if spare:
+                r["spare_work"] = spare
+                r["note"] = "You're free and busy helpers have tasks queued (spare_work): pick_up_task takes one."
         if any(e["kind"] in ("message", "task") and (e.get("to") in ("all", me) or e.get("assignee") == me)
                for e in r["events"]):
             inbox = call("GET", "/inbox")
@@ -471,7 +478,7 @@ def save_snapshot(label: str = "") -> dict:
 @mcp.tool()
 def storage_status() -> dict:
     """How much room the project uses (live files, older versions, snapshots, exports), its limit, the host's
-    free disk space and the history-retention settings. Read-only: only a person can free up space (Team tools >
+    free disk space and the history-retention settings. Read-only: only a person can free up space (the CadSwarm panel's Tools tab >
     Storage and free up space in FreeCAD), so ask one if you are running out."""
     return call("GET", "/project/storage")
 
@@ -660,15 +667,38 @@ def list_helpers() -> dict:
     if "error" in m:
         return m
     me = next((p["name"] for p in m["participants"] if p["id"] == S.client.me_id), my_name())
+    queued = {}
+    for t in call("GET", "/tasks").get("tasks", []):
+        if t["status"] == "open" and t.get("assignee"):
+            queued[t["assignee"].lower()] = queued.get(t["assignee"].lower(), 0) + 1
     out = []
     for p in m["participants"]:
         if p.get("kind") == "human" or p["id"] == S.client.me_id:
             continue
         state = "away" if p.get("status") != "active" else "working" if p.get("task") else "free"
         out.append({"name": p["name"], "state": state, "task": (p.get("task") or {}).get("title"),
-                    "holds": [x for x in p.get("locks", []) if x != "Params"], "client": p.get("client")})
-    return {"helpers": out, "you": me,
+                    "holds": [x for x in p.get("locks", []) if x != "Params"], "client": p.get("client"),
+                    "queued": queued.get(p["name"].lower(), 0)})
+    return {"helpers": out, "you": me, "spare_work": _spare_for_me(),
             "people": [p["name"] for p in m["participants"] if p.get("kind") == "human"]}
+
+
+def _spare_for_me() -> list[dict]:
+    """Busy helpers' queued tasks this helper could pick up; empty while it has a task of its own."""
+    if any(t["status"] == "claimed" and t.get("owner") == S.client.me_id for t in call("GET", "/tasks").get("tasks", [])):
+        return []
+    return [{"id": t["id"], "title": t["title"], "queued_for": t["assignee"]}
+            for t in call("GET", "/tasks/spare").get("tasks", [])]
+
+
+@mcp.tool()
+def pick_up_task(task_id: str | None = None) -> dict:
+    """Free with nothing to do? Take a task queued for a helper that is busy with another one; it's claimed for
+    you and that helper is told to skip it. Leave task_id empty to get the oldest task from the longest queue."""
+    r = call("POST", "/tasks/pickup", {"task_id": task_id or ""}, doing="picking up spare work")
+    if r.get("title"):
+        S.doing = f"working on “{r['title'][:60]}”"
+    return r
 
 
 @mcp.tool()

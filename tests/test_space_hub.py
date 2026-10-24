@@ -427,3 +427,20 @@ def test_a_failed_pointer_move_never_fails_the_op(world):
 
     fake.on_sql = host_finishes
     assert hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})["name"] == "Lid"
+
+
+def test_spare_work_is_a_busy_helpers_queue_and_pickup_returns_the_task_taken(world):
+    hub, fake = world
+    row = fake.tables["v_task"][0]
+    fake.tables["v_task"] = [
+        {**row, "id": "t_now", "status": "claimed", "owner": 2, "assignee": "bob-codex"},
+        {**row, "id": "t_next", "assignee": "bob-codex", "created_ms": 2},
+        {**row, "id": "t_held", "assignee": "bob-codex", "objects": ["Mount"], "created_ms": 3},  # bob holds Mount
+        {**row, "id": "t_mine", "assignee": "alice-claude", "created_ms": 4},
+    ]
+    assert [t["id"] for t in hub.get("/tasks/spare")["tasks"]] == ["t_next"]
+    fake.tables["v_event"].append({"seq": 6, "kind": "task_claimed", "actor": 1, "at_ms": 2000,
+                                   "data_json": json.dumps({"task": "t_next", "name": "alice-claude", "from": "bob-codex"})})
+    t = hub.post("/tasks/pickup", {})
+    assert fake.calls[-1] == ("pick_up_task", (2, ""))
+    assert t["id"] == "t_next" and t["picked_up_from"] == "bob-codex"

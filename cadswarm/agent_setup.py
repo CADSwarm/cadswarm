@@ -48,7 +48,8 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
   you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you
   run out of work, keep calling `wait_for_changes` so new messages and tasks reach you. (If FreeCAD started you in the background, stop instead: you're woken when needed.)
 - Work with the other AI helpers: `list_helpers` shows who is free; `delegate_task` hands one of them a
-  task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it.
+  task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it. Free while
+  a busy helper has tasks queued? `pick_up_task` takes one off its hands (it's told to skip it).
 - Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
   subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
   `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and

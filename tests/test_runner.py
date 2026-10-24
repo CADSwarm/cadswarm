@@ -56,6 +56,28 @@ def test_each_thing_wakes_it_once_and_handled_messages_never():
     assert runner.pending_work(hub(t), seen) == []
 
 
+def test_a_free_helper_wakes_for_a_busy_helpers_queue_once():
+    t = tables()
+    t["v_task"] = [task("t_now", "base", assignee="bob-codex", owner=2, status="claimed"),
+                   task("t_next", "lid", assignee="bob-codex"),
+                   task("t_free", "clip", assignee="carol")]  # carol isn't busy: she'll start it herself
+    work = dict(runner.pending_work(hub(t), set()))
+    assert set(work) == {"m:m_steer", "m:m_ask", "s:t_next"}
+    assert "bob-codex is busy" in work["s:t_next"]
+    assert "s:t_next" not in dict(runner.pending_work(hub(t), {"s:t_next"}))
+
+
+def test_a_helper_with_its_own_work_or_held_parts_isnt_offered_spare_work():
+    t = tables()
+    t["v_task"] = [task("t_now", "base", assignee="bob-codex", owner=2, status="claimed"),
+                   task("t_next", "lid", assignee="bob-codex"), task("t_mine", "clip", assignee="ann-claude")]
+    assert "s:t_next" not in dict(runner.pending_work(hub(t), set()))
+    t["v_task"] = t["v_task"][:2]
+    t["v_task"][1]["objects"] = ["Lid"]
+    t["v_lock"] = [{"object": "Lid", "holder": 2}]
+    assert "s:t_next" not in dict(runner.pending_work(hub(t), set()))
+
+
 def make_runner(tmp_path, client="claude"):
     folder = tmp_path / "helper"
     (folder / ".cadswarm").mkdir(parents=True)

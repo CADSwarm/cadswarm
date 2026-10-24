@@ -131,7 +131,8 @@ def pending_work(hub, seen):
         else:
             what = f"{who} (another AI helper) asks you"
         out.append((key, f"- {what}: \"{m['body'][:600]}\" (message {m['id']})"))
-    for t in hub._rows("v_task"):
+    tasks = hub._rows("v_task")
+    for t in tasks:
         if t["status"] == "open" and (t.get("assignee") or "").lower() == my_name:
             key = f"t:{t['id']}"
             if key not in seen:
@@ -143,6 +144,14 @@ def pending_work(hub, seen):
                 word = "finished" if t["status"] == "done" else "got stuck on"
                 out.append((key, f"- {names.get(t['owner'], 'A teammate')} {word} the task you handed out, "
                                  f"\"{t['title']}\" ({t['id']}). {summary[:300]}".rstrip()))
+    free = not any((t["status"] == "claimed" and t["owner"] == me)
+                   or (t["status"] == "open" and (t.get("assignee") or "").lower() == my_name) for t in tasks)
+    if free:  # rebalancing: a busy helper's queue is work this idle one can take
+        for t in hub.spare_tasks():
+            key = f"s:{t['id']}"
+            if key not in seen:
+                out.append((key, f"- {t['assignee']} is busy and has task {t['id']} queued: \"{t['title']}\". "
+                                 "You're free, so you can pick it up."))
     return out
 
 
@@ -171,7 +180,8 @@ What to do:
    message and stop; their answer wakes you again.
 2. A request from another AI helper: help if it doesn't clash with what a person asked, and answer them
    with send_message. You may say no and explain why.
-3. Tasks waiting for you: claim_task, build, check_interference, report_result.
+3. Tasks waiting for you: claim_task, build, check_interference, report_result. A busy helper's queued task:
+   pick_up_task (no task_id) takes the next one and tells them; if it says no_spare_work, someone was quicker.
 4. Work that splits well can be shared: list_helpers shows who is free, and delegate_task hands one of them
    a task (it wakes them). When they finish, you're woken with the result.
 When everything above is handled, stop. Don't call wait_for_changes: you're woken when something new arrives.
@@ -312,7 +322,7 @@ class Runner:
             self.log(f"the helper finished (exit {code})")
             self.last_error = "" if code == 0 else (
                 f"its last run stopped with an error (exit {code}). If it isn't signed in yet, open it once in a "
-                "terminal and sign in. Details: Team tools ▸ Show my AI helper's log")
+                "terminal and sign in. Details: the Tools tab ▸ Show my AI helper's log")
             self.child = None
             return False
         if self.clock() - self.child_started > RUN_TIMEOUT:

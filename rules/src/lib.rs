@@ -282,6 +282,43 @@ pub fn check_claim(task_id: &str, status: &str, rev: u32, owner_name: &str, expe
     Ok(())
 }
 
+pub const BUSY: &str = "busy: finish the task you claimed before picking up another";
+
+/// What `check_pickup` needs to know about a task queued for another helper.
+#[derive(Clone, Copy)]
+pub struct Pickup<'a> {
+    pub status: &'a str,
+    pub assignee: &'a str,
+    pub caller: &'a str,
+    /// The caller already owns a claimed task.
+    pub caller_busy: bool,
+    /// The assignee owns a claimed task of its own, or has gone stale.
+    pub assignee_busy: bool,
+    /// Someone other than the caller holds one of the task's parts.
+    pub held_by: Option<&'a str>,
+}
+
+/// A free helper may take a task off a busy helper's queue: work the assignee hasn't started because it is
+/// on something else, and whose parts nobody else holds.
+pub fn check_pickup(task_id: &str, p: &Pickup) -> Result<(), String> {
+    if p.status != "open" {
+        return Err(format!("not_claimable: Task {task_id} is {}", p.status));
+    }
+    if p.assignee.is_empty() || p.assignee.eq_ignore_ascii_case(p.caller) {
+        return Err(format!("bad_args: Task {task_id} isn't queued for another helper; claim_task it"));
+    }
+    if p.caller_busy {
+        return Err(BUSY.into());
+    }
+    if !p.assignee_busy {
+        return Err(format!("not_spare: {} isn't busy and will start task {task_id} itself", p.assignee));
+    }
+    if let Some(who) = p.held_by {
+        return Err(format!("not_spare: {who} holds parts of task {task_id}"));
+    }
+    Ok(())
+}
+
 pub fn check_report(task_id: &str, owner: u64, owner_name: &str, caller: u64, status: &str) -> Result<(), String> {
     if status != "done" && status != "blocked" {
         return Err("bad_args: status must be done or blocked".into());
@@ -601,6 +638,18 @@ mod tests {
         assert!(check_report("t_1", 2, "bob", 1, "done").unwrap_err().starts_with("not_owner:"));
         assert!(check_report("t_1", 2, "bob", 2, "finished").unwrap_err().starts_with("bad_args:"));
         assert!(check_report("t_1", 2, "bob", 2, "done").is_ok());
+    }
+
+    #[test]
+    fn a_free_helper_may_pick_up_only_a_busy_helpers_queued_work() {
+        let ok = Pickup { status: "open", assignee: "bob", caller: "ann", caller_busy: false, assignee_busy: true, held_by: None };
+        assert!(check_pickup("t_1", &ok).is_ok());
+        assert!(check_pickup("t_1", &Pickup { status: "claimed", ..ok }).unwrap_err().starts_with("not_claimable:"));
+        assert!(check_pickup("t_1", &Pickup { assignee: "", ..ok }).unwrap_err().starts_with("bad_args:"));
+        assert!(check_pickup("t_1", &Pickup { assignee: "ANN", ..ok }).unwrap_err().starts_with("bad_args:"));
+        assert!(check_pickup("t_1", &Pickup { caller_busy: true, ..ok }).unwrap_err().starts_with("busy:"));
+        assert!(check_pickup("t_1", &Pickup { assignee_busy: false, ..ok }).unwrap_err().starts_with("not_spare:"));
+        assert!(check_pickup("t_1", &Pickup { held_by: Some("bob"), ..ok }).unwrap_err().starts_with("not_spare:"));
     }
 
     #[test]
