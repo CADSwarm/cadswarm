@@ -18,6 +18,9 @@ Read first: `docs/superpowers/plans/2026-10-23-cadswarm-00-overview.md` (contrac
 - Animation: critically damped spring; `prefers-reduced-motion` snaps pointers and replaces pulses with static outlines.
 - Layout works at 360 px wide with 16 px gutters; the 3D view is the main surface; panels collapse into tabs on phones.
 - Member colour = hue from the member id (`(id * 137.508) mod 360`), saturation 70 %, lightness 55 % (light theme) / 65 % (dark).
+- Colour strings use the comma form `hsl(h, s%, l%)`; three.js does not parse the space-separated form (every tint would render white).
+- The Vite 8 / TypeScript 6 scaffold enables `erasableSyntaxOnly`: no constructor parameter properties (`constructor(private x: T)`); declare fields and assign them in the constructor.
+- Status: Tasks 1–4 were built on `feat/web` (a186bce..aeb8010, 11 tests) with these fixes and a static edge outline for reduced motion; Task 5 waits for the M0 bindings.
 
 ## File structure
 
@@ -150,7 +153,8 @@ export function decodeTicket(s: string): Ticket {
 ```ts
 export function memberHue(id: number): number { return (id * 137.508) % 360; }
 export function memberColor(id: number, dark: boolean): string {
-  return `hsl(${memberHue(id).toFixed(1)} 70% ${dark ? 65 : 55}%)`;
+  // Comma form: three.js Color does not parse the space-separated hsl() syntax.
+  return `hsl(${memberHue(id).toFixed(1)}, 70%, ${dark ? 65 : 55}%)`;
 }
 ```
 `web/src/ids.ts`:
@@ -630,7 +634,7 @@ export class Pointers {
       const g = this.glyphs.get(p.member) ?? this.make(p.member);
       this.glyphs.set(p.member, g);
       if (acceptSeq(this.seen, p.member, p.seq) || g.fade === 0) {
-        const target = p.point.length === 3 ? new THREE.Vector3(...p.point) : this.anchor(meshOf(p.object));
+        const target = p.point.length === 3 ? new THREE.Vector3().fromArray(p.point) : this.anchor(meshOf(p.object));
         if (target) g.spring.target = [target.x, target.y, target.z];
         if (reduced()) g.spring.snap();
       }
