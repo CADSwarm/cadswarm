@@ -36,6 +36,11 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    list_files first. Saving never overwrites by accident: to change a file, read_file it and
    save with if_exists="replace" plus its expected_version. Use save_snapshot before risky changes.
    Never write files any other way (part scripts can't).
+   Storage is limited: text files up to 5 MB, binary CAD/media up to 100 MB, and only the last 20
+   versions of each file (plus everything from the last day) are kept. If a save fails with
+   `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
+   them to free it (FreeCAD: Team tools > Storage and free up space). Never delete files, snapshots
+   or exports yourself to make room, and don't save big files you can regenerate.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
@@ -256,7 +261,10 @@ def save_file(path: str, text: str | None = None, base64: str | None = None, if_
     .svg .yaml .toml .html .xml; binary (send base64): .png .jpg .pdf .step .stl .dxf .3mf.
     if_exists: "error" (default) refuses to touch an existing file; "new_name" saves as name-2.md etc.;
     "replace" overwrites ONLY with the expected_version from read_file/list_files, and the old version is
-    kept in history. Nothing outside the project folder can be written."""
+    kept in history (the newest 20 versions of a file, plus everything from the last day). Text files can be
+    5 MB, binary files 100 MB. Nothing outside the project folder can be written. If the project is full
+    (`quota`) or the host's disk is nearly full (`disk_full`), don't delete things to make room: call
+    storage_status and ask a person to free up space."""
     return call("POST", "/project/files/save", {"path": path, "text": text, "base64": base64,
                                                 "if_exists": if_exists, "expected_version": expected_version},
                 doing=f"saving {path}")
@@ -276,13 +284,14 @@ def move_file(from_path: str, to_path: str) -> dict:
 
 @mcp.tool()
 def delete_file(path: str) -> dict:
-    """Delete a shared file. It goes to the project's trash and history, so it can be restored."""
+    """Delete a shared file. Its latest version stays in the project's trash and history, so it can be restored."""
     return call("POST", "/project/files/delete", {"path": path})
 
 
 @mcp.tool()
 def file_history(path: str) -> dict:
-    """Current version plus every older version of a shared file (who saved it, when, why it was replaced)."""
+    """Current version plus the older versions still kept (the newest 20, plus everything from the last day):
+    who saved it, when, why it was replaced."""
     return call("POST", "/project/files/history", {"path": path})
 
 
@@ -296,8 +305,17 @@ def restore_file(path: str, version: int, expected_version: int | None = None) -
 
 @mcp.tool()
 def save_snapshot(label: str = "") -> dict:
-    """Save a copy of the whole shared model in snapshots/ (e.g. before a risky change). Never overwrites."""
+    """Save a copy of the whole shared model in snapshots/ (e.g. before a risky change). Never overwrites, and
+    is never deleted automatically, so save them for moments that matter, not after every step."""
     return call("POST", "/project/snapshot", {"label": label}, doing="saving a snapshot")
+
+
+@mcp.tool()
+def storage_status() -> dict:
+    """How much room the project uses (live files, older versions, snapshots, exports), its limit, the host's
+    free disk space and the history-retention settings. Read-only: only a person can free up space (Team tools >
+    Storage and free up space in FreeCAD), so ask one if you are running out."""
+    return call("GET", "/project/storage")
 
 
 # ------------------------------------------------------------- tasks & chat

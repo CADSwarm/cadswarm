@@ -155,11 +155,48 @@ class Hub:
             self.emit("file_saved", pid, name=self.name_of(pid), path=r["path"], version=r["version"], replaced=True)
             return r
 
+    def _model_bytes(self):
+        try:
+            return os.path.getsize(self.worker.doc_path)
+        except OSError:
+            return 0
+
+    def storage_status(self):
+        with self.lock:
+            return self._files().storage.status()
+
+    def prune_storage(self, pid, options):
+        """'Free up space', on a person's request only: trim old versions, old snapshots, old exports."""
+        self._human_only(pid, "free up space")
+        with self.lock:
+            r = self._file_call(self._files().storage.prune, options or {})
+            self.emit("storage_pruned", pid, name=self.name_of(pid), freed=r["freed"]["total"], removed=r["files_removed"])
+            return r
+
+    def set_storage_settings(self, pid, changes):
+        self._human_only(pid, "change the storage settings")
+        with self.lock:
+            self._file_call(self._files().storage.update, changes)
+            self.emit("storage_settings", pid, name=self.name_of(pid), changes=changes)
+            return self._files().storage.status()
+
+    def _human_only(self, pid, what):
+        row = self.one("SELECT kind FROM participants WHERE id=?", pid)
+        if not row or row["kind"] != "human":
+            raise HubError(403, "humans_only", f"Only a person can {what}. Ask someone on the team to do it "
+                           "(in FreeCAD: Team tools > Storage and free up space).")
+
+    def check_room(self, extra):
+        """Disk guard and project budget for a snapshot or export of about `extra` bytes."""
+        with self.lock:
+            self._file_call(self._files().storage.check_add, extra)
+
     def snapshot(self, pid, label=""):
         """Copy the live model into snapshots/ under a new, never-reused name."""
         if not self.layout:
             raise HubError(501, "no_project_folder", "This team server has no project folder.")
         with self.lock:  # no op can be mid-save while we copy (ops hold this lock)
+            self.check_room(self._model_bytes())
             stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(self.clock()))
             name = f"{stamp} {safe_label(label, 'snapshot')}.FCStd"
             dest = unique_path(self.layout["snapshots"], name)
@@ -169,6 +206,7 @@ class Hub:
             return {"file": rel, "size": os.path.getsize(dest)}
 
     def export_path(self, fmt, label=""):
+        self.check_room(self._model_bytes())  # an export is about the size of the model; the real size is counted afterwards
         stamp = time.strftime("%Y-%m-%d %H.%M", time.localtime(self.clock()))
         return unique_path(self.layout["exports"], f"{safe_label(label, 'model')} {stamp}.{fmt}")
 

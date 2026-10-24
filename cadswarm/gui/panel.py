@@ -459,6 +459,7 @@ class TeamPanel(QtGui.QDockWidget):
         menu = QtGui.QMenu(more)
         for label, fn in (("Project files…", show_project_files), ("Open project folder", open_project_folder),
                           ("Save a snapshot of the model", save_snapshot),
+                          ("Storage and free up space…", show_storage),
                           (None, None),
                           ("Add an AI helper…", add_helper), ("Invite teammates…", invite_teammates),
                           (None, None),
@@ -853,7 +854,7 @@ class ProjectFilesDialog(QtGui.QDialog):
         lay = QtGui.QVBoxLayout(self)
         where = hosted_project_folder()
         lay.addWidget(QtGui.QLabel(
-            "Notes, plans and scripts your team's AI helpers saved. Older versions are always kept."
+            "Notes, plans and scripts your team's AI helpers saved. The last 20 versions of each file are kept."
             + (f"<br><small>On this computer: {where}\\files</small>" if where else
                "<br><small>They live on the computer of the teammate who started the team.</small>")))
         self.tree = QtGui.QTreeWidget()
@@ -925,6 +926,169 @@ def show_project_files():
     if not SESSION.ensure_connected("see the project's files"):
         return
     dlg = ProjectFilesDialog()
+    (getattr(dlg, "exec", None) or dlg.exec_)()
+
+
+def size_text(n):
+    """Bytes the way people say them: '320 MB', '1.5 GB'."""
+    for unit, size in (("GB", 1024 ** 3), ("MB", 1024 ** 2), ("KB", 1024)):
+        if n >= size:
+            v = n / size
+            return f"{v:.1f} {unit}" if v < 10 else f"{v:.0f} {unit}"
+    return f"{n} bytes"
+
+
+class StorageDialog(QtGui.QDialog):
+    """What is using the project's room, and a careful way to free some. Everything runs on the GUI
+    thread through the same blocking client calls the other dialogs use (they are quick)."""
+
+    def __init__(self):
+        super().__init__(Gui.getMainWindow())
+        self.setWindowTitle("CadSwarm — storage")
+        self.resize(560, 520)
+        self.is_host = hosted_project_folder() is not None
+        lay = QtGui.QVBoxLayout(self)
+        self.summary = QtGui.QLabel()
+        self.summary.setWordWrap(True)
+        self.summary.setTextFormat(QtCore.Qt.RichText)
+        lay.addWidget(self.summary)
+
+        box = QtGui.QGroupBox("Free up space (this deletes things for good)")
+        form = QtGui.QFormLayout(box)
+        self.versions = self.spin(1, 1000, 5, " newest")
+        self.snap_days = self.spin(1, 3650, 30, " days")
+        self.snap_keep = self.spin(0, 1000, 3, " newest")
+        self.exp_days = self.spin(1, 3650, 30, " days")
+        self.do_versions = QtGui.QCheckBox("Trim older versions of files, keeping only the")
+        self.do_snaps = QtGui.QCheckBox("Delete model snapshots older than")
+        self.do_exports = QtGui.QCheckBox("Delete exported 3D files older than")
+        for check in (self.do_versions, self.do_snaps, self.do_exports):
+            check.setChecked(True)
+        form.addRow(self.do_versions, self.versions)
+        form.addRow(self.do_snaps, self.snap_days)
+        form.addRow("   …but always keep the", self.snap_keep)
+        form.addRow(self.do_exports, self.exp_days)
+        free = QtGui.QPushButton("Free up space…")
+        free.clicked.connect(self.free_up)
+        form.addRow(free)
+        lay.addWidget(box)
+
+        if self.is_host:  # only the person running the team server sets its limits
+            sbox = QtGui.QGroupBox("Limits (host only)")
+            sform = QtGui.QFormLayout(sbox)
+            self.limit = QtGui.QDoubleSpinBox()
+            self.limit.setRange(0, 100000)
+            self.limit.setDecimals(1)
+            self.limit.setSuffix(" GB")
+            self.limit.setSpecialValueText("No project limit")
+            self.keep = self.spin(1, 1000, 20, " versions per file")
+            self.hours = self.spin(0, 24 * 365, 24, " hours")
+            sform.addRow("Project size limit", self.limit)
+            sform.addRow("Keep older versions of each file:", self.keep)
+            sform.addRow("…and everything saved in the last", self.hours)
+            save = QtGui.QPushButton("Save limits")
+            save.clicked.connect(self.save_limits)
+            sform.addRow(save)
+            lay.addWidget(sbox)
+        row = QtGui.QHBoxLayout()
+        row.addStretch(1)
+        close = QtGui.QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self.load()
+
+    @staticmethod
+    def spin(low, high, value, suffix):
+        box = QtGui.QSpinBox()
+        box.setRange(low, high)
+        box.setValue(value)
+        box.setSuffix(suffix)
+        return box
+
+    def load(self):
+        try:
+            st = SESSION.client.get("/project/storage")
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        u, s = st["usage"], st["settings"]
+        limit, free = st["limit_bytes"], st["free_disk_bytes"]
+        lines = [f"<b>The project uses {size_text(u['total'])}</b>"
+                 + (f" of its {size_text(limit)} limit" if limit else " (no project limit set)"),
+                 f"&bull; Your team's files: {size_text(u['files'])}",
+                 f"&bull; Older versions of those files: {size_text(u['old_versions'])}",
+                 f"&bull; Model snapshots: {size_text(u['snapshots'])}",
+                 f"&bull; Exported 3D files: {size_text(u['exports'])}",
+                 f"&bull; The live model: {size_text(u['model'])} (not counted)"]
+        if free is not None:
+            lines.append(f"<br>The host's drive has {size_text(free)} free; CadSwarm stops saving when less than "
+                         f"{size_text(st['reserve_bytes'])} would be left.")
+        lines.append(f"<small>Older versions: the newest {s['history_keep']} of each file are kept, plus everything from "
+                     f"the last {s['history_hours']} hours. Snapshots and exports are only deleted here, by a person.</small>")
+        self.summary.setText("<br>".join(lines))
+        if self.is_host:
+            self.limit.setValue(s["project_limit_gb"])
+            self.keep.setValue(s["history_keep"])
+            self.hours.setValue(int(s["history_hours"]))
+            if st.get("limit_source") == "env":
+                self.limit.setEnabled(False)
+                self.limit.setToolTip("Set by the CADSWARM_PROJECT_LIMIT_GB environment variable.")
+
+    def options(self):
+        o = {}
+        if self.do_versions.isChecked():
+            o["keep_versions"] = self.versions.value()
+        if self.do_snaps.isChecked():
+            o["snapshots_older_than_days"] = self.snap_days.value()
+            o["keep_newest_snapshots"] = self.snap_keep.value()
+        if self.do_exports.isChecked():
+            o["exports_older_than_days"] = self.exp_days.value()
+        return o
+
+    def free_up(self):
+        o = self.options()
+        if not o:
+            hint("Tick at least one thing to clean up.")
+            return
+        will = []
+        if "keep_versions" in o:
+            will.append(f"- older versions of files: all but the newest {o['keep_versions']} of each file")
+        if "snapshots_older_than_days" in o:
+            will.append(f"- model snapshots older than {o['snapshots_older_than_days']} days "
+                        f"(the newest {o['keep_newest_snapshots']} stay)")
+        if "exports_older_than_days" in o:
+            will.append(f"- exported 3D files older than {o['exports_older_than_days']} days")
+        if not confirm("This will delete, for good:\n\n" + "\n".join(will) +
+                       "\n\nYour current files and the live model are not touched. Continue?"):
+            return
+        try:
+            r = SESSION.client.post("/project/storage/prune", o)
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        f = r["freed"]
+        say(f"Freed {size_text(f['total'])} of project storage")
+        hint(f"Freed {size_text(f['total'])}: older versions {size_text(f['old_versions'])}, "
+             f"snapshots {size_text(f['snapshots'])}, exports {size_text(f['exports'])}.")
+        self.load()
+
+    def save_limits(self):
+        try:
+            SESSION.client.post("/project/storage/settings", {
+                "project_limit_gb": self.limit.value(), "history_keep": self.keep.value(),
+                "history_hours": self.hours.value()})
+        except HubRequestError as e:
+            hint(friendly_error(e))
+            return
+        hint("Saved. The new limits apply to the next save.")
+        self.load()
+
+
+def show_storage():
+    if not SESSION.ensure_connected("see the project's storage"):
+        return
+    dlg = StorageDialog()
     (getattr(dlg, "exec", None) or dlg.exec_)()
 
 
