@@ -32,6 +32,9 @@ pub struct BriefState {
     pub cancelled: usize,
     /// Reported blocked by a helper; nothing can reopen it, so it must not hold the brief open.
     pub blocked: usize,
+    /// The planner has written a plan. A building brief always has one; if its task rows vanish
+    /// the cache is not merely waiting for the first subscription update.
+    pub planned: bool,
     pub exporting: bool,
     pub reviewer_enabled: bool,
     pub reviewer_alive: bool,
@@ -78,7 +81,7 @@ pub fn next_action(s: &BriefState) -> Action {
         "building" if s.open + s.active == 0 && s.blocked > 0 => {
             Action::Fail("every task is blocked; a person needs to steer".into())
         }
-        "building" if s.open + s.active + s.done + s.cancelled + s.blocked == 0 => {
+        "building" if s.planned && s.open + s.active + s.done + s.cancelled + s.blocked == 0 => {
             Action::Fail("every task was removed; a person needs to steer".into())
         }
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
@@ -368,6 +371,7 @@ impl Orchestrator {
             done: tasks.iter().filter(|t| t.status == "done").count(),
             cancelled: tasks.iter().filter(|t| t.status == "cancelled").count(),
             blocked: tasks.iter().filter(|t| t.status == "blocked").count(),
+            planned: !space.brief_plan(&b.id).is_empty(),
             exporting: rt.export_op.is_some(),
             reviewer_enabled: self.reviewer_enabled,
             reviewer_alive: rt.reviewer.as_mut().map(|a| a.alive()).unwrap_or(false),
@@ -534,8 +538,10 @@ mod tests {
     fn a_brief_whose_every_task_was_stopped_fails_instead_of_hanging() {
         assert!(matches!(next_action(&BriefState { cancelled: 2, ..st("building") }), Action::Fail(_)));
         assert!(matches!(next_action(&BriefState { blocked: 2, ..st("building") }), Action::Fail(_)));
-        // The last task was deleted: no rows are left to count.
-        assert!(matches!(next_action(&st("building")), Action::Fail(_)));
+        // The last task was deleted after the plan was written: no rows are left to count.
+        assert!(matches!(next_action(&BriefState { planned: true, ..st("building") }), Action::Fail(_)));
+        // A brief whose task rows have not arrived from the subscription yet must not be failed.
+        assert_eq!(next_action(&st("building")), Action::Wait);
         // A cancelled task does not hide finished work: the build still reviews and exports.
         assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
         // A blocked task does not hide a finished part either.
