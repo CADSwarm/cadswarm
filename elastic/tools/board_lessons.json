@@ -1,0 +1,5 @@
+{"id": "cadswarm.board_lessons", "type": "esql",
+ "description": "Recurring problems found when designing for a board.",
+ "configuration": {
+   "query": "FROM cadswarm-lessons | WHERE board_id == ?board_id | SORT count DESC | KEEP problem, count, lesson | LIMIT 10",
+   "params": {"board_id": {"type": "keyword", "description": "Board id such as raspberry-pi-pico"}}}}

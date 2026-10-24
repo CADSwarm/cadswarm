@@ -1,0 +1,35 @@
+name: distil-lessons
+description: Turn reviewer findings from finished CadSwarm designs into per-board lessons.
+enabled: true
+tags: [cadswarm]
+triggers:
+  - type: scheduled
+    with:
+      every: 10m
+steps:
+  - name: count_problems
+    type: elasticsearch.esql.query
+    with:
+      query: >
+        FROM cadswarm-designs
+        | MV_EXPAND problems
+        | WHERE problems IS NOT NULL
+        | STATS count = COUNT(*) BY board_id, problems
+        | WHERE count >= 1
+        | SORT count DESC
+        | LIMIT 200
+  - name: write_lessons
+    type: foreach
+    foreach: "{{ steps.count_problems.output.values }}"
+    steps:
+      - name: upsert_lesson
+        type: elasticsearch.index
+        with:
+          index: cadswarm-lessons
+          id: "{{ foreach.item[1] }}::{{ foreach.item[2] }}"
+          document:
+            board_id: "{{ foreach.item[1] }}"
+            problem: "{{ foreach.item[2] }}"
+            count: "{{ foreach.item[0] }}"
+            lesson: "Seen {{ foreach.item[0] }} time(s) on {{ foreach.item[1] }}: {{ foreach.item[2] }}. Design to avoid it."
+            updated_at: "{{ execution.startedAt }}"
