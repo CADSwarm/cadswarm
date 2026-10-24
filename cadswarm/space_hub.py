@@ -145,6 +145,15 @@ class SpaceHub:
                               "role": m["role"], "kind": m["kind"], "seq": self.latest_seq()})
         return dict(self.identity)
 
+    def create_invite(self, kind="human", role="member", ttl=86400, project=""):
+        """A fresh single-use code. Any member may mint human or agent invites; the module lets only
+        the host mint host and reviewer invites."""
+        from .invite import make_invite
+        token = ticket.new_token()
+        self._f("create_invite", ticket.hash_token(token), kind, role, int(ttl))
+        return make_invite({"v": 1, "uri": self.cfg["uri"], "db": self.cfg["db"], "token": token,
+                            "kind": kind, "role": role, "host_addr": ""}, project)
+
     def heartbeat(self, body):
         self._f("heartbeat", body.get("doing") or "")
         return {"seq": self.latest_seq(), "unread": len(self._unconsumed()), "locks": self._my_locks()}

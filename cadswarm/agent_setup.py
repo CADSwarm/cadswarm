@@ -27,7 +27,7 @@ CLIENTS = {
 AGENT_DOC = """{begin}
 ## CadSwarm: you are part of a team building one shared FreeCAD model
 
-Your teammates' agents (Claude Code, Codex) are editing the same live model right now.
+Your teammates' agents (Claude Code, Codex, Droid) are editing the same live model right now.
 All CAD work goes through the `cadswarm` MCP tools — never edit .FCStd files directly.
 Your human may be new to CAD: explain what you build in plain words and keep dimensions in mm.
 
@@ -210,7 +210,7 @@ def setup_droid(project, python):
     path = os.path.join(project, ".factory", "mcp.json")
     cfg = _read_config(path)
     _dict_at(cfg, "mcpServers", path)["cadswarm"] = {
-        "type": "stdio", "command": python, "args": ["-m", "cadswarm.mcp_server"],
+        "type": "stdio", "command": python, "args": [LAUNCHER, "mcp"],
         "env": {"CADSWARM_PROJECT": project}}
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:

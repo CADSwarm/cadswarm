@@ -125,22 +125,22 @@ def _sleeper(tmp_path, name):
     return subprocess.Popen([sys.executable, str(script)])
 
 
-def test_stop_hub_refuses_an_unrelated_process(tmp_path):
+def test_stop_team_refuses_an_unrelated_process(tmp_path):
     p = _sleeper(tmp_path, "innocent_bystander.py")
     try:
         time.sleep(0.5)
-        assert hosting.stop_hub(p.pid) is False
+        assert hosting.stop_team({"host_pid": p.pid}) is False
         assert p.poll() is None
     finally:
         p.kill()
 
 
-def test_stop_hub_stops_a_cadswarm_process(tmp_path):
-    p = _sleeper(tmp_path, "cadswarm_launch.py")
+def test_stop_team_stops_a_cadswarm_process(tmp_path):
+    p = _sleeper(tmp_path, "cadswarm-host.py")
     time.sleep(0.5)
     try:
-        assert hosting.is_our_hub(p.pid)
-        assert hosting.stop_hub(p.pid) is True
+        assert hosting.is_our_process(p.pid)
+        assert hosting.stop_team({"host_pid": p.pid}) is True
         assert p.wait(timeout=10) is not None
     finally:
         p.kill()
