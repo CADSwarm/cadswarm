@@ -1,4 +1,4 @@
-//! Headless Claude Code agents the host spawns for a brief. Each gets its own folder and
+//! Headless agents the host spawns for a brief, using the agent CLI the host owner brings. Each gets its own folder and
 //! cadswarm identity (via `cadswarm setup --invite`), so its actions are attributed to it.
 
 use crate::config::HostConfig;
@@ -15,47 +15,66 @@ pub struct Agent {
     started: Instant,
 }
 
-/// Where `claude` might be: $CADSWARM_CLAUDE, then PATH, then the usual install folders, then the
-/// binary bundled with the VS Code extension (newest version first).
-pub fn claude_candidates(env: Option<String>, path_var: &str, home: &Path, appdata: &Path) -> Vec<PathBuf> {
+/// Where `exe` might be: $CADSWARM_{EXE}, then PATH, then the usual install folders, then (for
+/// `claude` only) the binary bundled with the VS Code extension (newest version first).
+pub fn cli_candidates(exe: &str, env: Option<String>, path_var: &str, home: &Path, appdata: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = env.into_iter().map(PathBuf::from).collect();
-    let names: &[&str] = if cfg!(windows) { &["claude.exe", "claude.cmd"] } else { &["claude"] };
+    let names: Vec<String> = if cfg!(windows) { vec![format!("{exe}.exe"), format!("{exe}.cmd")] } else { vec![exe.to_string()] };
     for dir in std::env::split_paths(path_var) {
         out.extend(names.iter().map(|n| dir.join(n)));
     }
     out.extend(names.iter().map(|n| home.join(".local").join("bin").join(n)));
-    out.push(appdata.join("npm").join("claude.cmd"));
-    let ext = home.join(".vscode").join("extensions");
-    let mut bundled: Vec<PathBuf> = std::fs::read_dir(&ext)
-        .map(|rd| {
-            rd.flatten()
-                .map(|e| e.path())
-                .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("anthropic.claude-code-")))
-                .collect()
-        })
-        .unwrap_or_default();
-    // Version-aware order: compare the dotted numbers, not the strings ("2.1.306" > "2.1.31").
-    bundled.sort_by_key(|p| {
-        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        name.trim_start_matches("anthropic.claude-code-")
-            .split(['.', '-'])
-            .map(|part| part.parse::<u64>().unwrap_or(0))
-            .collect::<Vec<u64>>()
-    });
-    for dir in bundled.into_iter().rev() {
-        out.extend(names.iter().map(|n| dir.join("resources").join("native-binary").join(n)));
+    out.push(appdata.join("npm").join(format!("{exe}.cmd")));
+    if exe == "claude" {
+        let ext = home.join(".vscode").join("extensions");
+        let mut bundled: Vec<PathBuf> = std::fs::read_dir(&ext)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("anthropic.claude-code-")))
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Version-aware order: compare the dotted numbers, not the strings ("2.1.306" > "2.1.31").
+        bundled.sort_by_key(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            name.trim_start_matches("anthropic.claude-code-")
+                .split(['.', '-'])
+                .map(|part| part.parse::<u64>().unwrap_or(0))
+                .collect::<Vec<u64>>()
+        });
+        for dir in bundled.into_iter().rev() {
+            out.extend(names.iter().map(|n| dir.join("resources").join("native-binary").join(n)));
+        }
     }
     out
 }
 
-pub fn find_claude() -> Result<PathBuf> {
+pub fn find_cli(exe: &str) -> Result<PathBuf> {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default();
     let appdata = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default();
     let path_var = std::env::var("PATH").unwrap_or_default();
-    claude_candidates(std::env::var("CADSWARM_CLAUDE").ok(), &path_var, &home, &appdata)
+    let env = std::env::var(format!("CADSWARM_{}", exe.to_uppercase())).ok();
+    cli_candidates(exe, env, &path_var, &home, &appdata)
         .into_iter()
         .find(|p| p.is_file())
-        .ok_or_else(|| anyhow!("Claude Code isn't installed (set CADSWARM_CLAUDE to its path)"))
+        .ok_or_else(|| anyhow!(format!("{exe} isn't installed (set CADSWARM_{} to its path)", exe.to_uppercase())))
+}
+
+pub fn agent_command(client: &str, override_cmd: &[String], dir: &Path, prompt: &str) -> Result<(String, Vec<String>)> {
+    if let Some((program, rest)) = override_cmd.split_first() {
+        let args = rest.iter().map(|a| if a == "{prompt}" { prompt.to_string() } else { a.clone() }).collect();
+        return Ok((program.clone(), args));
+    }
+    let p = prompt.to_string();
+    Ok(match client {
+        // Headless runs don't prompt to trust the folder's .mcp.json, so name it explicitly.
+        "claude" => ("claude".into(), vec!["-p".into(), p, "--max-turns".into(), "80".into(), "--allowedTools".into(),
+                     "mcp__cadswarm".into(), "--mcp-config".into(), dir.join(".mcp.json").display().to_string()]),
+        "codex" => ("codex".into(), vec!["exec".into(), "--full-auto".into(), "--skip-git-repo-check".into(), p]),
+        "droid" => ("droid".into(), vec!["exec".into(), "--auto".into(), "low".into(), p]),
+        other => bail!("unknown agent client {other:?}; use claude, codex or droid, or set agent_command"),
+    })
 }
 
 impl Agent {
@@ -64,7 +83,7 @@ impl Agent {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
         let setup = Command::new(&cfg.cadswarm_python)
-            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", "claude", "--invite", ticket, "--name", name, "--dir"])
+            .args(["-I", "-m", "cadswarm.cli", "setup", "--client", cfg.agent_client.as_str(), "--invite", ticket, "--name", name, "--dir"])
             .arg(&dir)
             .output()
             .context("running cadswarm setup")?;
@@ -76,16 +95,16 @@ impl Agent {
             );
         }
         let log = std::fs::File::create(dir.join("agent.log"))?;
-        // Headless runs don't prompt to trust the folder's .mcp.json, so name it explicitly.
-        let child = Command::new(find_claude()?)
-            .args(["-p", prompt, "--max-turns", "80", "--allowedTools", "mcp__cadswarm", "--mcp-config"])
-            .arg(dir.join(".mcp.json"))
+        let (program, args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
+        let exe = if cfg.agent_command.is_empty() { find_cli(&program)? } else { PathBuf::from(&program) };
+        let child = Command::new(exe)
+            .args(&args)
             .current_dir(&dir)
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)
             .spawn()
-            .with_context(|| format!("starting claude for {name}"))?;
+            .with_context(|| format!("starting {program} for {name}"))?;
         Ok(Agent { name: name.into(), child, started: Instant::now() })
     }
 
@@ -146,11 +165,39 @@ mod tests {
         let ext = dir.join(".vscode").join("extensions");
         std::fs::create_dir_all(ext.join("anthropic.claude-code-2.1.31-win32-x64")).unwrap();
         std::fs::create_dir_all(ext.join("anthropic.claude-code-2.1.306-win32-x64")).unwrap();
-        let c = claude_candidates(Some("X:/my/claude.exe".into()), "", &dir, Path::new("A:/appdata"));
+        let c = cli_candidates("claude", Some("X:/my/claude.exe".into()), "", &dir, Path::new("A:/appdata"));
         assert_eq!(c[0], PathBuf::from("X:/my/claude.exe"));
         let bundled: Vec<String> =
             c.iter().map(|p| p.display().to_string()).filter(|s| s.contains("native-binary")).collect();
         assert!(bundled[0].contains("2.1.306"), "newest extension first: {bundled:?}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn each_client_gets_its_headless_command() {
+        let dir = Path::new("D:/agents/w1");
+        let (p, a) = agent_command("claude", &[], dir, "build it").unwrap();
+        assert_eq!(p, "claude");
+        assert!(a.contains(&"build it".to_string()) && a.contains(&"--mcp-config".to_string()));
+        let (p, a) = agent_command("codex", &[], dir, "build it").unwrap();
+        assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("codex", "exec", "build it"));
+        let (p, a) = agent_command("droid", &[], dir, "build it").unwrap();
+        assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("droid", "exec", "build it"));
+        assert!(agent_command("gpt", &[], dir, "x").is_err());
+    }
+
+    #[test]
+    fn an_override_runs_any_cli_with_the_prompt_substituted() {
+        let cmd = vec!["aider".to_string(), "--message".to_string(), "{prompt}".to_string(), "--yes".to_string()];
+        let (p, a) = agent_command("claude", &cmd, Path::new("D:/x"), "make a lid").unwrap();
+        assert_eq!(p, "aider");
+        assert_eq!(a, vec!["--message", "make a lid", "--yes"]);
+    }
+
+    #[test]
+    fn only_claude_looks_in_the_vscode_extension() {
+        let c = cli_candidates("codex", None, "", Path::new("H:/home"), Path::new("A:/appdata"));
+        assert!(c.iter().all(|p| !p.display().to_string().contains("native-binary")));
+        assert!(c.iter().any(|p| p.display().to_string().contains("codex")));
     }
 }

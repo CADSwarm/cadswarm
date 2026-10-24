@@ -42,6 +42,9 @@ enum Cmd {
         /// Python with the cadswarm package installed.
         #[arg(long, default_value = "python")]
         python: PathBuf,
+        /// The agent CLI that builds briefs: claude, codex or droid.
+        #[arg(long, default_value = "claude")]
+        agent: String,
     },
     /// Mint an invite and print its ticket, phone link and QR code.
     Invite {
@@ -57,7 +60,10 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Init { mode, db, web_url, python } => {
+        Cmd::Init { mode, db, web_url, python, agent } => {
+            if !config::AGENT_CLIENTS.contains(&agent.as_str()) {
+                anyhow::bail!("--agent must be one of {:?}", config::AGENT_CLIENTS);
+            }
             let uri = if mode == "maincloud" { "https://maincloud.spacetimedb.com" } else { "http://127.0.0.1:3000" };
             std::fs::create_dir_all(&cli.data)?;
             let cfg = HostConfig {
@@ -71,6 +77,8 @@ fn main() -> Result<()> {
                 worker_script: config::python_says(&python, "c.worker_script()")?,
                 web_url,
                 cadswarm_python: python,
+                agent_client: agent,
+                agent_command: Vec::new(),
             };
             cfg.save()?;
             println!("wrote {}", HostConfig::path(&cfg.data_dir).display());
