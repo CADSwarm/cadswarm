@@ -9,7 +9,7 @@ the agents:
   folder even through symlinks or junctions.
 * No silent overwrites. Saving onto an existing file is refused unless the caller asks for
   `if_exists="new_name"` (a free name like `notes-2.md`) or `if_exists="replace"` with the
-  `expected_version` they last read — the same optimistic check model objects use.
+  `expected_version` they last read, the same optimistic check model objects use.
 * Old versions are kept. Before a file is replaced, moved away or deleted, its current bytes are
   copied into `.cadswarm-team/history/`, including edits someone made outside CadSwarm
   (detected by hash), and any old version can be restored as a new version. History is trimmed
@@ -32,7 +32,7 @@ import unicodedata
 from .storage import FileError, Storage  # FileError is re-exported: callers import it from here
 
 TEXT_EXT = {".md", ".txt", ".json", ".csv", ".py", ".fcmacro", ".svg", ".yaml", ".yml", ".toml", ".html", ".xml"}
-BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".step", ".stp", ".stl", ".fcstd", ".dxf", ".3mf"}
+BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".step", ".stp", ".stl", ".fcstd", ".dxf", ".3mf", ".zip"}
 MAX_TEXT_BYTES = 5 * 1024 * 1024       # agents write text token by token, so it stays small
 MAX_BINARY_BYTES = 100 * 1024 * 1024   # CAD/media files come from programs; see the README for the memory cost
 MAX_DEPTH = 8

@@ -96,7 +96,7 @@ def read_invite(text):
         raise InviteError(f"That doesn't look like a CadSwarm invite code. It should start with “{PREFIX}”. "
                           "Ask your teammate to copy it again with the Copy button.")
     if data is None:
-        raise InviteError("That invite code is incomplete — part of it may have been cut off. "
+        raise InviteError("That invite code is incomplete: part of it may have been cut off. "
                           "Ask your teammate to send it again.")
     uri, db, token = data.get("uri"), data.get("db"), data.get("token")
     if not isinstance(uri, str) or not uri.startswith(("http://", "https://")) or not db or not token:

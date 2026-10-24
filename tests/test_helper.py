@@ -108,3 +108,63 @@ def test_an_unsourced_board_spec_is_reported_as_unverified(tmp_path):
             raise ValueError("pcb has no source_url")
     r = helper.handle(project(tmp_path, Unsourced()), {"id": 9, "op": "board_spec", "args": {"board": "mystery-board"}})
     assert r["ok"] is False and r["code"] == "spec_unverified" and "source_url" in r["error"]
+
+
+# ------------------------------------------------------------- team design style
+
+HUMAN = {"id": 1, "name": "alice", "kind": "human"}
+AGENT = {"id": 9, "name": "worker1", "kind": "agent"}
+
+
+def test_style_learns_locally_without_elastic(tmp_path, monkeypatch):
+    for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    p = helper.Project(tmp_path)
+    r = helper.handle(p, {"id": 1, "op": "observe_op", "args": {
+        "kind": "set_param", "args": {"alias": "wall", "value": "2.4 mm"}, "ok": True, "actor": HUMAN}})
+    assert r["ok"] and r["result"]["recorded"] == 1
+    r = helper.handle(p, {"id": 2, "op": "learn_style", "args": {}})
+    assert r["ok"] and r["result"]["rules"]["candidate"] == 1 and "profile" in r["result"]
+    rules = helper.handle(p, {"id": 3, "op": "list_style", "args": {}})["result"]["rules"]
+    assert rules[0]["type"] == "param_convention"
+
+
+def test_people_teach_style_and_agents_only_propose_it(tmp_path):
+    p = project(tmp_path, FakeElastic())
+    r = helper.handle(p, {"id": 1, "op": "teach_style", "args": {"statement": "Use M2 inserts", "_actor": AGENT}})
+    assert r["ok"] and r["result"]["rule"]["status"] == "candidate" and "M2" not in r["result"]["profile"]
+    r = helper.handle(p, {"id": 2, "op": "teach_style", "args": {"statement": "Use M3 everywhere", "_actor": HUMAN}})
+    assert r["ok"] and r["result"]["rule"]["status"] == "confirmed" and "Use M3 everywhere" in r["result"]["profile"]
+    rid = r["result"]["rule"]["id"]
+    r = helper.handle(p, {"id": 3, "op": "resolve_style", "args": {"rule_id": rid, "decision": "dismiss",
+                                                                    "_actor": AGENT}})
+    assert r["code"] == "humans_only" and "Learned style" in r["error"]
+    r = helper.handle(p, {"id": 4, "op": "resolve_style", "args": {"rule_id": rid, "decision": "nope", "_actor": HUMAN}})
+    assert r["code"] == "bad_args"
+    ctx = helper.handle(p, {"id": 5, "op": "style_context", "args": {"query": "lid screws"}})["result"]
+    assert "[confirmed] Use M3 everywhere" in ctx["text"]
+
+
+def test_a_finished_brief_relearns_and_mirrors_to_elastic(tmp_path):
+    class Mirror(FakeElastic):
+        def __init__(self):
+            super().__init__()
+            self.bulk = []
+
+        def es(self, method, path, body=None, timeout=None):
+            self.bulk.append(path)
+
+        def converse(self, text, timeout=180, agent_id=None):
+            return "{}"
+    fake = Mirror()
+    p = project(tmp_path, fake)
+    r = helper.handle(p, {"id": 1, "op": "observe_brief", "args": {
+        "brief": {"id": "b_1", "text": "case", "board": "pico"},
+        "reviews": [{"round": 1, "findings_json": '[{"object": "Lid", "problem": "lid too thin"}]'}]}})
+    assert r["ok"] and r["result"]["problems"] == 1 and r["result"]["distilled"]["candidate"] == 1
+    import time
+    for _ in range(50):
+        if fake.bulk:
+            break
+        time.sleep(0.02)
+    assert fake.bulk == ["/_bulk"]

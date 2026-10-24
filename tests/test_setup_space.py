@@ -104,8 +104,14 @@ def test_start_script_sends_the_first_message(tmp_path, monkeypatch):
     fake.write_text('#!/bin/sh\necho "ARG=$1"\n')
     fake.chmod(0o755)
     monkeypatch.setattr(agent_setup, "find_agent_cli", lambda client: str(fake))
-    script = agent_setup.write_launcher(str(tmp_path), "claude", "Robot's arm", "lead")
+    script = agent_setup.write_launcher(str(tmp_path), "claude", "Robot's arm")
     first = subprocess.run(["sh", script], capture_output=True, text=True).stdout
-    assert "leading our team's CAD project \"Robot's arm\"" in first
+    assert "joined our team's CAD project \"Robot's arm\"" in first
+    assert "leading" not in first  # an AI helper never leads the team: people do
     again = subprocess.run(["sh", script], capture_output=True, text=True).stdout
     assert "continuing our team's CAD project" in again  # later starts carry on instead of re-planning
+
+def test_nvm_installs_are_ordered_by_version_not_text():
+    paths = [f"/h/.nvm/versions/node/v{v}/bin/claude" for v in ("9.11.2", "22.1.0", "18.20.4")]
+    newest = sorted(paths, key=agent_setup._node_version, reverse=True)[0]
+    assert "v22.1.0" in newest

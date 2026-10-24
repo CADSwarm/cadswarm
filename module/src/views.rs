@@ -51,3 +51,7 @@ ws_view!(v_preview, preview, Preview);
 ws_view!(v_artifact, artifact, Artifact);
 ws_view!(v_artifact_blob, artifact_blob, ArtifactBlob);
 ws_view!(v_handoff, handoff, Handoff);
+ws_view!(v_component, component, Component);
+ws_view!(v_component_preview, component_preview, ComponentPreview);
+ws_view!(v_setting, project_setting, ProjectSetting);
+ws_view!(v_suggestion, setting_suggestion, SettingSuggestion);

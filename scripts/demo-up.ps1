@@ -5,7 +5,7 @@
 #
 #   powershell -File scripts\demo-up.ps1
 #   powershell -File scripts\demo-up.ps1 -SkipBuild
-#   powershell -File scripts\demo-up.ps1 -WebUrl https://<user>.github.io/cadswarm
+#   powershell -File scripts\demo-up.ps1 -WebUrl https://<your-vercel-site>/app/
 #   powershell -File scripts\demo-up.ps1 -AgentCommand C:\path\claude.exe,-p,{prompt},--model,sonnet
 #
 # -Data <dir>          data folder; default $env:USERPROFILE\Documents\Projects\cadswarm-demo
@@ -62,6 +62,33 @@ function ConvertTo-ArgText([string]$Value) {
 $state = Join-Path $Data ".cadswarm-team"
 if (-not (Test-Path -LiteralPath $state)) { New-Item -ItemType Directory -Path $state -Force | Out-Null }
 $pidFile = Join-Path $state "demo-pids.json"
+
+# A stack from an earlier run that is still up: starting another would lose track of it.
+if (Test-Path -LiteralPath $pidFile) {
+    $old = $null
+    try { $old = Get-Content -LiteralPath $pidFile -Raw | ConvertFrom-Json } catch { }
+    foreach ($name in 'preview', 'tunnel', 'host') {
+        $id = 0
+        if ($old -and $old.$name) { $id = [int]$old.$name }
+        if ($id -le 0) { continue }
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$id" -ErrorAction SilentlyContinue
+        if ($proc -and $proc.CommandLine -match 'vite|cloudflared|cadswarm-host|with-env\.ps1') {
+            throw "the demo stack is already running ($name pid $id); stop it first with scripts\demo-down.ps1"
+        }
+    }
+}
+
+# Record what is running after every start, so demo-down can stop it even if a later step fails.
+$viteProc = $null
+$tunnelProc = $null
+$hostProc = $null
+function Save-Pids {
+    $pids = @{ preview = 0; tunnel = 0; host = 0 }
+    if ($viteProc) { $pids.preview = $viteProc.Id }
+    if ($tunnelProc) { $pids.tunnel = $tunnelProc.Id }
+    if ($hostProc) { $pids.host = $hostProc.Id }
+    [System.IO.File]::WriteAllText($pidFile, ($pids | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
+}
 
 # --- tools ---------------------------------------------------------------------------
 $spacetime = ""
@@ -127,9 +154,6 @@ if (-not (Test-Path -LiteralPath $hostExe)) {
 }
 
 # --- web preview + tunnel ------------------------------------------------------------
-$viteProc = $null
-$tunnelProc = $null
-
 if (-not $WebUrl) {
     $viteArgs = @(
         "$root\web\node_modules\vite\bin\vite.js",
@@ -137,6 +161,7 @@ if (-not $WebUrl) {
         '--port',"$WebPort",'--strictPort','--host','127.0.0.1'
     ) | ForEach-Object { ConvertTo-ArgText $_ }
     $viteProc = Start-Process -FilePath $node -ArgumentList $viteArgs -WorkingDirectory $root -WindowStyle Hidden -PassThru
+    Save-Pids
 
     $tunnelLog = Join-Path $state "tunnel.log"
     $tunnelOut = Join-Path $state "tunnel.out.log"
@@ -145,6 +170,7 @@ if (-not $WebUrl) {
         -ArgumentList @('tunnel','--no-autoupdate','--url',"http://127.0.0.1:$WebPort") `
         -RedirectStandardError $tunnelLog -RedirectStandardOutput $tunnelOut `
         -WindowStyle Hidden -PassThru
+    Save-Pids
 
     $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline) {
@@ -202,6 +228,7 @@ $hostArgs = @(
 $hostProc = Start-Process -FilePath $shell -ArgumentList $hostArgs `
     -WorkingDirectory $Data -WindowStyle Hidden `
     -RedirectStandardOutput $hostLog -RedirectStandardError $hostErr -PassThru
+Save-Pids
 
 function Get-ErrTail {
     if (Test-Path -LiteralPath $hostErr) {
@@ -228,18 +255,6 @@ while ((Get-Date) -lt $deadline) {
 if (-not $ready) {
     throw "host did not report ready within 90s ($hostStatus missing or not ready): $(Get-ErrTail)"
 }
-
-# --- record pids ---------------------------------------------------------------------
-$previewPid = 0
-if ($viteProc) { $previewPid = $viteProc.Id }
-$tunnelPid = 0
-if ($tunnelProc) { $tunnelPid = $tunnelProc.Id }
-$pids = @{
-    preview = $previewPid
-    tunnel  = $tunnelPid
-    host    = $hostProc.Id
-}
-[System.IO.File]::WriteAllText($pidFile, ($pids | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
 
 # --- invite --------------------------------------------------------------------------
 $invite = Invoke-Native $hostExe @('--data',$Data,'invite','--kind','human','--role','lead')

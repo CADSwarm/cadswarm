@@ -18,8 +18,10 @@ class ElasticError(Exception):
     def __init__(self, status, text):
         self.status = status
         try:
-            err = json.loads(text).get("error")
-            reason = err.get("reason") if isinstance(err, dict) else err
+            body = json.loads(text)
+            err = body.get("error")
+            # Elasticsearch: {"error": {"reason"}}; Kibana: {"error": "Bad Request", "message": "..."}.
+            reason = err.get("reason") if isinstance(err, dict) else body.get("message") or err
         except (ValueError, AttributeError):
             reason = text
         super().__init__(f"Elastic {status}: {reason or text}")
@@ -38,10 +40,11 @@ class Elastic:
         return cls(os.environ["ELASTIC_URL"], os.environ["KIBANA_URL"], os.environ["ELASTIC_API_KEY"])
 
     def _req(self, base, method, path, body=None, kibana=False, timeout=None):
-        data = json.dumps(body).encode() if body is not None else None
+        ndjson = isinstance(body, str)  # a _bulk body is already newline-delimited JSON
+        data = body.encode() if ndjson else json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(base + path, data=data, method=method)
         req.add_header("authorization", "ApiKey " + self.api_key)
-        req.add_header("content-type", "application/json")
+        req.add_header("content-type", "application/x-ndjson" if ndjson else "application/json")
         if kibana:
             req.add_header("kbn-xsrf", "true")
         try:
@@ -95,27 +98,32 @@ class Elastic:
                     {"size": k, "query": {"term": {"board_id": board_id}}, "sort": [{"count": "desc"}]})
         return [h.get("_source", {}) for h in r.get("hits", {}).get("hits", [])]
 
-    def install_agent(self, folder="elastic"):
+    def install_agent(self, folder="elastic", agents=("agent.json", "style_agent.json")):
         for path in sorted(glob.glob(os.path.join(folder, "tools", "*.json"))):
             tool = json.load(open(path, encoding="utf-8"))
             try:
                 self.kibana("POST", "/api/agent_builder/tools", tool)
             except ElasticError as e:
-                if e.status != 409:
+                if not _already_exists(e):
                     raise
                 body = {k: v for k, v in tool.items() if k not in ("id", "type")}
                 self.kibana("PUT", f"/api/agent_builder/tools/{tool['id']}", body)
-        agent = json.load(open(os.path.join(folder, "agent.json"), encoding="utf-8"))
-        try:
-            self.kibana("POST", "/api/agent_builder/agents", agent)
-        except ElasticError as e:
-            if e.status != 409:
-                raise
-            self.kibana("PUT", f"/api/agent_builder/agents/{agent['id']}", {k: v for k, v in agent.items() if k != "id"})
+        for name in agents:
+            path = os.path.join(folder, name)
+            if not os.path.exists(path):
+                continue
+            agent = json.load(open(path, encoding="utf-8"))
+            try:
+                self.kibana("POST", "/api/agent_builder/agents", agent)
+            except ElasticError as e:
+                if not _already_exists(e):
+                    raise
+                self.kibana("PUT", f"/api/agent_builder/agents/{agent['id']}",
+                            {k: v for k, v in agent.items() if k != "id"})
 
-    def converse(self, text, timeout=180):
+    def converse(self, text, timeout=180, agent_id=AGENT_ID):
         # Agent Builder runs a model and its tools, so it needs far longer than a normal API call.
-        r = self.kibana("POST", "/api/agent_builder/converse", {"input": text, "agent_id": AGENT_ID},
+        r = self.kibana("POST", "/api/agent_builder/converse", {"input": text, "agent_id": agent_id},
                         timeout=timeout)
         # The reply text lives under response.message in the converse API; fall back to the whole body.
         return (r.get("response") or {}).get("message") or json.dumps(r)
@@ -123,6 +131,11 @@ class Elastic:
     def board_spec(self, board_id, question=""):
         ask = (f"Give the board spec JSON for {board_id}." + (f" Context: {question}" if question else ""))
         return validate_spec(_first_json_object(self.converse(ask)))
+
+
+def _already_exists(e):
+    # Agent Builder answers a duplicate id with 400 "... already exists" (older builds used 409).
+    return e.status == 409 or (e.status == 400 and "already exists" in str(e))
 
 
 def search_body(query, k=5, filters=None):

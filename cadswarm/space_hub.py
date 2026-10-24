@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 from . import ticket
 from .client import HubRequestError, load_json, state_dir
 from .space import SpaceClient, SpaceError
+from .space_library import LibraryRoutes
 
 STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over": 403, "left": 403,
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
@@ -25,7 +26,9 @@ OP_WAIT_SECONDS = 150
 # Events that mean a member actually did something (the panel's "working" indicator).
 ACTIVE_KINDS = ("op", "task_claimed", "task_reported", "file_saved", "file_moved", "fea_started", "fea_report",
                 "snapshot", "exported", "message")
-EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed")
+STYLE_PROFILE = "style-profile"  # artifact key the host refreshes whenever the style is re-learned
+EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed",
+                           "library", "setting_changed", "setting_suggested")
 
 
 def _err(e):
@@ -46,7 +49,7 @@ def _num(v):
         return v
 
 
-class SpaceHub:
+class SpaceHub(LibraryRoutes):
     def __init__(self, cfg, identity=None, timeout=60, space=None):
         self.cfg = cfg
         self.identity = identity or {}
@@ -54,8 +57,11 @@ class SpaceHub:
         self.hub = cfg.get("uri", "")
         self.space = space or SpaceClient(cfg["uri"], cfg["db"], self.identity.get("token"), timeout)
         self._seq = 0
+        self._cache = None  # view rows shared by one snapshot(); None = always read fresh
         self.routes = [
             ("POST", r"/heartbeat", self.heartbeat), ("POST", r"/leave", self.leave),
+            ("POST", r"/me/name", self.rename_route),
+            ("POST", r"/pointer", self.pointer_route),
             ("GET", r"/model", self.model), ("GET", r"/objects/(?P<name>[^/]+)", self.get_object),
             ("POST", r"/ops", self.ops), ("POST", r"/locks", self.lock), ("POST", r"/locks/release", self.release),
             ("POST", r"/interference", self.interference), ("POST", r"/printability", self.printability),
@@ -85,6 +91,12 @@ class SpaceHub:
             ("GET", r"/fea/reports", self.fea_reports),
             # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
+            # The team's learned design style (cadswarm/style_memory.py), kept by the host helper.
+            ("GET", r"/style", self.style_get), ("POST", r"/style/rules", self.style_rules),
+            ("POST", r"/style/teach", self.style_teach), ("POST", r"/style/resolve", self.style_resolve),
+            ("POST", r"/style/learn", self.style_learn),
+            # Components library and team precision settings (space_library.py).
+            *self.library_routes(),
         ]
 
     # ---------------------------------------------------------------- plumbing
@@ -108,10 +120,25 @@ class SpaceHub:
         self._call(reducer, self.fence, *args)
 
     def _rows(self, view, where=""):
+        if self._cache is not None and (view, where) in self._cache:
+            return self._cache[(view, where)]
         try:
-            return self.space.sql(f"SELECT * FROM {view}" + (f" WHERE {where}" if where else ""))
+            rows = self.space.sql(f"SELECT * FROM {view}" + (f" WHERE {where}" if where else ""))
         except SpaceError as e:
             raise _err(e)
+        if self._cache is not None:
+            self._cache[(view, where)] = rows
+        return rows
+
+    def panel_snapshot(self, chat_limit=80):
+        """Everything the FreeCAD panel shows, reading each view once (one refresh used to be ~15 round trips
+        to the database, which froze FreeCAD on a slow network)."""
+        self._cache = {}
+        try:
+            return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
+                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"]}
+        finally:
+            self._cache = None
 
     def request(self, method, path, body=None, params=None, timeout=None, raw=False):
         if raw and path.startswith("/artifacts/"):
@@ -167,6 +194,15 @@ class SpaceHub:
         self._f("heartbeat", body.get("doing") or "")
         return {"seq": self.latest_seq(), "unread": len(self._unconsumed()), "locks": self._my_locks()}
 
+    def rename_me(self, name):
+        """Rename this member (not fenced, see the module's rename_me). Open tasks for the old name follow."""
+        self._call("rename_me", name)
+        self.identity["name"] = name
+        return {"name": name}
+
+    def rename_route(self, body):
+        return self.rename_me(body.get("name", ""))
+
     def leave(self, body):
         locks = self._my_locks()
         self._f("leave")
@@ -177,6 +213,28 @@ class SpaceHub:
             self._f("log_activity", kind, (summary or "")[:300], [t for t in (targets or []) if t])
         except HubRequestError:
             pass  # presence is best-effort; never block a tool on it
+
+    def move_pointer(self, obj, point=None, mode="pointing", label=""):
+        """Point at `obj` (at `point` [x, y, z] when given). Best-effort, like log_activity."""
+        try:
+            self._f("move_pointer", obj or "", [float(c) for c in (point or [])][:3], mode, (label or "")[:60])
+        except (HubRequestError, TypeError, ValueError):
+            pass
+
+    def pointer_route(self, body):
+        point, mode = body.get("point") or [], body.get("mode") or "pointing"
+        if point and len(point) != 3:
+            raise HubRequestError(400, {"error": "point must be [x, y, z]", "code": "bad_args"})
+        if not point and body.get("object"):  # no spot given: the part's own anchor vertex
+            point = (self.run_op("get_object", {"name": body["object"]}) or {}).get("anchor") or []
+        self._f("move_pointer", body.get("object") or "", [float(c) for c in point], mode, (body.get("label") or "")[:60])
+        return {"object": body.get("object") or "", "point": point, "mode": mode}
+
+    def _point_after(self, kind, r):
+        """After an op, rest this member's pointer on the vertex the worker picked for it."""
+        target = r.get("pointer") if isinstance(r, dict) else None
+        if isinstance(target, dict) and target.get("object") and len(target.get("point") or []) == 3:
+            self.move_pointer(target["object"], target["point"], "pointing", kind.replace("_", " "))
 
     # ------------------------------------------------------------------ lookups
 
@@ -240,7 +298,9 @@ class SpaceHub:
         while time.time() < deadline:
             rows = self._rows("v_op", f"id = '{op_id}'")
             if rows and rows[0]["status"] == "done":
-                return self._result(rows[0]["result_json"])
+                r = self._result(rows[0]["result_json"])
+                self._point_after(kind, r)
+                return r
             if rows and rows[0]["status"] in ("failed", "rejected"):
                 code = rows[0]["error_code"] or "op_error"
                 raise HubRequestError(409 if rows[0]["status"] == "rejected" else 422,
@@ -253,7 +313,8 @@ class SpaceHub:
     def _result(self, result_json):
         """An op result over 32 KB is spilled by the host as {"blob": sha256}: read that one blob."""
         r = _json(result_json, {})
-        if isinstance(r, dict) and set(r) == {"blob"}:
+        # (a spilled library result also keeps its rows inline for complete_op: see host executor.rs)
+        if isinstance(r, dict) and "blob" in r and set(r) <= {"blob", "_components", "_component_deletes"}:
             sha = str(r["blob"])
             rows = self._rows("v_artifact_blob", f"hash = '{sha}'") if re.fullmatch(r"[0-9a-f]{64}", sha) else []
             if not rows or not rows[0]["bytes"]:
@@ -309,6 +370,8 @@ class SpaceHub:
 
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})
+        if info.get("anchor"):
+            self.move_pointer(name, info["anchor"], "inspecting", f"looking at {name}")
         info["locked_by"] = next((self._names().get(l["holder"]) for l in self._rows("v_lock") if l["object"] == name), None)
         return info
 
@@ -317,7 +380,10 @@ class SpaceHub:
 
     def printability(self, body):
         # The host fills `bed` from v_workspace when it is missing.
-        args = {"names": body.get("names"), "min_wall": body.get("min_wall", 1.2)}
+        # min_wall defaults to the team's setting (the worker reads it from the op's _settings).
+        args = {"names": body.get("names")}
+        if body.get("min_wall"):
+            args["min_wall"] = body["min_wall"]
         if body.get("bed"):
             args["bed"] = body["bed"]
         return self.run_op("printability", args)
@@ -439,8 +505,11 @@ class SpaceHub:
         me = self.me_id
         consumed = {r["message_id"] for r in self._rows("v_receipt") if r["member"] == me and r["state"] == "consumed"}
         rank = {"steer": 0, "handoff": 1, "chat": 3}  # people's chat is background, read last
+        # People's chat (a message with no @helper in FreeCAD) is between people: AI helpers never see it.
+        helper = next((m["kind"] for m in self._rows("v_member") if m["id"] == me), "agent") != "human"
         mine = [m for m in self._rows("v_message")
-                if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed]
+                if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed
+                and not (helper and m["kind"] == "chat")]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
 
     def inbox(self, limit=10):
@@ -508,16 +577,16 @@ class SpaceHub:
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm — shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
-                 "Shared dimensions live in the Params sheet — reference them with expressions "
+                 "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
                  "human 'steer' messages come first.",
                  "Team:"]
         for p in self.participants():
             tag = " (you)" if p["id"] == me["id"] else ""
             lines.append(f"- {p['name']}{tag} [{p['kind']}/{p['client'] or '?'}, {p['status']}] "
-                         f"locks={p['locks'] or '[]'}" + (f" — {p['doing']}" if p["doing"] else ""))
+                         f"locks={p['locks'] or '[]'}" + (f": {p['doing']}" if p["doing"] else ""))
         open_tasks = [t for t in self.tasks() if t["status"] in ("open", "claimed", "awaiting_takeover", "blocked")]
         if open_tasks:
             lines.append("Tasks:")
@@ -535,17 +604,59 @@ class SpaceHub:
                 else:
                     lines.append(f"- {e['kind']}: " + ", ".join(f"{k}={v}" for k, v in e.items()
                                                                if k not in ("seq", "ts", "kind", "actor")))
+        lines += self._library_context()
+        lines += self._style_context()
         unread = self._unconsumed()
         if unread:
-            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
-                         "COMMAND = a person's instruction for you: do it first. chat = people talking: "
-                         "background only, act on it only if it asks you something:")
+            lines.append(f"Unread messages ({len(unread)}): read with get_inbox, then ack_messages. "
+                         "COMMAND = a person's instruction for you: do it first. Anything else is a request "
+                         "from another helper:")
             for m in unread[:5]:
                 tag = {"steer": "COMMAND", "chat": "chat"}.get(m["kind"], m["kind"])
                 lines.append(f"- [{tag}] {names.get(m['from'], '?')}: {m['body'][:200]}")
         self._f("set_context_seq", seq)
         text = "\n".join(lines)
         return {"context": text if len(text) <= max_chars else text[:max_chars - 20] + "\n…(truncated)"}
+
+    def _style_context(self):
+        """The team's learned design style, which the host publishes as the `style-profile` artifact."""
+        try:
+            rows = self._rows("v_artifact_blob", f"hash = '{STYLE_PROFILE}'")
+        except HubRequestError:
+            return []
+        if not rows or not rows[0].get("bytes"):
+            return []
+        b = rows[0]["bytes"]
+        try:
+            text = (bytes.fromhex(b) if isinstance(b, str) else bytes(b)).decode("utf-8")
+        except (ValueError, TypeError):
+            return []
+        return [text[:1500]] if text.strip() else []
+
+    def _library_context(self):
+        """Team settings and a library summary for the context block; empty if the module predates them."""
+        from . import settings as team_settings
+        try:
+            values = team_settings.effective(self._rows("v_setting"))
+            comps = self._rows("v_component")
+            pending = [g for g in self._rows("v_suggestion") if g["status"] == "pending"]
+        except HubRequestError:
+            return []
+        keys = ("tol_clearance", "tol_slip_fit", "tol_press_fit", "hole_clearance_class", "thread_mode",
+                "xy_compensation", "min_wall", "default_material")
+        out = ["Team settings (fits are Params too, e.g. Params.tol_clearance): "
+               + ", ".join(f"{k}={values[k]}" for k in keys)
+               + (f". {len(pending)} setting suggestion(s) await a person." if pending else "")]
+        if comps:
+            top = sorted(comps, key=lambda c: -int(c.get("uses") or 0))[:6]
+            out.append(f"Components library: {len(comps)} team part(s), e.g. "
+                       + ", ".join(f"{c['name']} ({c['id']})" for c in top)
+                       + "; plus standard screws, nuts, washers, inserts, bearings, pins and magnets. "
+                         "Check it (recommend_components) before modelling a part.")
+        else:
+            out.append("Components library: standard screws, nuts, washers, inserts, bearings, pins and magnets "
+                       "(add_standard_part); the team has no parts of its own yet.")
+        return out
 
     # ------------------------------------------------------------- briefs etc.
 
@@ -643,6 +754,21 @@ class SpaceHub:
 
     def recall_designs(self, body):
         return self.run_op("recall_designs", {"query": body.get("query") or "", "board": body.get("board") or ""})
+
+    def style_get(self, topic=None, board=None):
+        return self.run_op("style_context", {"query": topic or "", "board": board or ""})
+
+    def style_rules(self, body):
+        return self.run_op("list_style", {"statuses": body.get("statuses")} if body.get("statuses") else {})
+
+    def style_teach(self, body):
+        return self.run_op("teach_style", {"statement": body.get("statement") or "", "scope": body.get("scope") or "team"})
+
+    def style_resolve(self, body):
+        return self.run_op("resolve_style", {"rule_id": body.get("rule_id") or "", "decision": body.get("decision") or ""})
+
+    def style_learn(self, body):
+        return self.run_op("learn_style", {})
 
     def prune_storage(self, body):
         return self.run_op("prune_storage", dict(body or {}))

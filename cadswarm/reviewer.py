@@ -28,7 +28,11 @@ ALLOWED = (
 REVIEW_TOOLS = [f"{MCP_SERVER}___{t}" for t in ALLOWED]
 
 
-def review_prompt(brief, board_label, bed, round_no):
+def review_prompt(brief, board_label, bed, round_no, style=""):
+    style_check = (
+        "5. Team design style: the rules below are how this team designs. Each part that breaks one is a problem;\n"
+        "   write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n" + style + "\n"
+    ) if style else ""
     return (
         f"You are the design REVIEWER for CadSwarm brief {brief['id']} (review round {round_no}).\n"
         f"The person asked: \"{brief['text']}\". Board: {board_label}. Printer bed: {bed[0]} x {bed[1]} x {bed[2]} mm.\n"
@@ -38,11 +42,20 @@ def review_prompt(brief, board_label, bed, round_no):
         "3. Fit: the enclosure's inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs must sit at\n"
         "   hole_N_x/hole_N_y; each port cutout must be centred on its <port>_pos and <port>_z.\n"
         "4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n"
+        + style_check +
         "For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n"
         "precise fix, brief set to this brief, and send_message to that owner.\n"
         f"Finish by calling report_review(brief_id=\"{brief['id']}\", round={round_no}, passed=<true only if no problems>,\n"
         "findings=[{\"object\", \"problem\", \"task_id\"}])."
     )
+
+
+def team_style(hub, brief):
+    """The style rules for this brief, or "" (a review never waits on, or fails for, the style memory)."""
+    try:
+        return hub.get("/style", topic=brief.get("text") or "", board=brief.get("board") or "").get("text") or ""
+    except Exception:
+        return ""
 
 
 def activity_for(event):
@@ -112,7 +125,7 @@ async def review(project, brief_id, round_no):
     hub.log_activity("say", f"reviewing brief {brief_id}, round {round_no}", [])
     async with Session(cwd=project, config=config) as session:
         await _review_tool_ids(session)
-        prompt = review_prompt(brief, brief.get("board") or "unspecified", bed, round_no)
+        prompt = review_prompt(brief, brief.get("board") or "unspecified", bed, round_no, team_style(hub, brief))
         async with session.stream(prompt) as stream:
             async for ev in stream:
                 if isinstance(ev, (ToolCall, ToolResult, AssistantMessage)):

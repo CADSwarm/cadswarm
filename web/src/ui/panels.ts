@@ -5,17 +5,20 @@ import { mountAsk } from './ask';
 import { mountHandoff } from './handoff';
 import { mountParams } from './params';
 import { freeHelper, helperNow, startInstruction } from './helpers';
+import { mountLibrary } from './library';
+import { mountSettings } from './settings';
 import { esc } from './esc';
 
 const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
-// Four tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
+// Five tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
 const ICON = {
   ask: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',
   model: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+  library: '<path d="M4 4h4v16H4zM10 4h4v16h-4z"/><path d="m15.5 5.2 3.9-1 3.1 14.9-3.9 1z"/>',
   tasks: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="m3.5 6 1.5 1.5L7.5 5M3.5 12l1.5 1.5L7.5 11M3.5 18l1.5 1.5L7.5 17"/>',
   team: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18.5 20a6.5 6.5 0 0 0-3-5.5"/>',
 };
-const TABS = [['ask', 'Ask'], ['model', 'Model'], ['tasks', 'Tasks'], ['team', 'Team']] as const;
+const TABS = [['ask', 'Ask'], ['model', 'Model'], ['library', 'Library'], ['tasks', 'Tasks'], ['team', 'Team']] as const;
 type Tab = typeof TABS[number][0];
 export const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 
@@ -74,6 +77,9 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       <h2 class="group-title">Dimensions</h2><div class="group params" data-params></div>
       <div data-export></div>
     </section>
+    <section class="tab" id="tab-library" data-tab="library" role="tabpanel">
+      <h1 class="large-title">Library</h1><div data-library></div>
+    </section>
     <section class="tab" id="tab-tasks" data-tab="tasks" role="tabpanel">
       <h1 class="large-title">Tasks</h1><div data-tasks></div>
     </section>
@@ -81,6 +87,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       <h1 class="large-title">Team</h1>
       <ul class="group" data-team></ul>
       <div class="group" data-handoff></div>
+      <h2 class="group-title">Precision settings</h2><div class="group" data-settings></div>
       <h2 class="group-title">Activity</h2><ol class="group feed" data-activity></ol>
       <button type="button" class="text-button" data-more hidden>Show all activity</button>
     </section>
@@ -90,6 +97,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   mountAsk($('#tab-ask'), store, api, picked);
   mountParams($('[data-params]'), store, api);
   mountHandoff($('[data-handoff]'), store, api);
+  mountLibrary($('[data-library]'), store, api);
+  mountSettings($('[data-settings]'), store, api);
 
   function select(tab: Tab) {
     el.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
@@ -192,7 +201,8 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
       || '<li class="row-item empty">Quiet so far.</li>';
     $('[data-more]').hidden = allActivity || acts.length <= 15;
 
-    const counts: Record<Tab, number> = { ask: 0, model: 0, team: 0,
+    const counts: Record<Tab, number> = { ask: 0, model: 0, library: 0,
+      team: s.suggestions.filter(g => g.status === 'pending').length,
       tasks: s.tasks.filter(t => t.status === 'open' || t.status === 'claimed').length };
     el.querySelectorAll<HTMLElement>('[data-count]').forEach(c => { const n = counts[c.dataset.count as Tab]; c.textContent = n ? String(n) : ''; });
 

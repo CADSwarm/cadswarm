@@ -64,3 +64,26 @@ def test_stops_a_matching_recorded_process(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+def run_up(data_dir):
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+         str(ROOT / "scripts" / "demo-up.ps1"), "-Data", str(data_dir), "-SkipBuild"],
+        capture_output=True, text=True, timeout=120,
+    )
+
+
+def test_up_refuses_while_a_recorded_stack_is_still_running(tmp_path):
+    script = tmp_path / "cadswarm-host-standin.py"
+    script.write_text("import time; time.sleep(120)", encoding="utf-8")
+    proc = subprocess.Popen([sys.executable, str(script)])
+    try:
+        pid_file = write_pids(tmp_path, {"preview": 0, "tunnel": 0, "host": proc.pid})
+        result = run_up(tmp_path)
+        assert result.returncode != 0
+        assert "already running" in result.stdout + result.stderr
+        assert proc.poll() is None and pid_file.exists()  # nothing stopped, nothing forgotten
+    finally:
+        proc.kill()
+        proc.wait()

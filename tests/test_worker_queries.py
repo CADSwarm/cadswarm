@@ -54,3 +54,11 @@ def test_printability_flags_oversize_parts_and_thin_walls(worker):
     assert by["Thin"]["thin_wall_suspects"], "0.3 mm walls must be flagged"
     assert r["ok"] is False
     assert worker.call("printability", {"names": ["Small"], "bed": [180, 180, 180]})["result"]["ok"] is True
+
+
+def test_an_op_result_names_the_vertex_its_pointer_rests_on(worker):
+    r = worker.call("create_primitive", {"kind": "box", "name": "Corner",
+                                         "props": {"Length": 10, "Width": 6, "Height": 4}})["result"]
+    # Top face, the corner nearest the default isometric camera.
+    assert r["pointer"] == {"object": "Corner", "point": [10.0, 6.0, 4.0]}
+    assert worker.call("get_object", {"name": "Corner"})["result"]["anchor"] == [10.0, 6.0, 4.0]

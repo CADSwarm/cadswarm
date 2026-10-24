@@ -10,3 +10,5 @@ host-data/
 host/target/
 dist/
 .env
+# Secrets: keep keys in ../cadswarm.env (scripts/with-env.ps1 finds it); never commit one here.
+*.env

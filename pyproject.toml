@@ -22,7 +22,7 @@ cadswarm = "cadswarm.cli:main"
 include = ["cadswarm*"]
 
 [tool.setuptools.package-data]
-cadswarm = ["worker/*.py"]
+cadswarm = ["worker/*.py", "settings_spec.json", "library/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

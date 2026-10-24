@@ -2,7 +2,7 @@
 
 Runs inside FreeCAD's bundled Python (NOT the hub's venv) and owns the single
 live shared document. The hub talks to it over JSON lines on stdin/stdout,
-one request at a time, so every mutation of the model is serialized — FreeCAD
+one request at a time, so every mutation of the model is serialized: FreeCAD
 is not thread-safe, and this is the one place the document is ever touched.
 
 Every mutating op runs inside a FreeCAD transaction. After the op and a
@@ -128,7 +128,7 @@ def save():
                 except OSError:
                     pass
                 raise OpError("save_failed", f"Could not write {os.path.basename(DOC_PATH)} ({e}); another "
-                              "program probably has it open. Your change was rolled back — try again.")
+                              "program probably has it open. Your change was rolled back. Try again.")
             time.sleep(SAVE_BACKOFF * (attempt + 1))
 
 
@@ -286,7 +286,7 @@ def op_create_primitive(a):
 
 
 def op_create_extrusion(a):
-    """Closed XY polygon (+ optional round holes) extruded along Z — a static Part::Feature."""
+    """Closed XY polygon (+ optional round holes) extruded along Z: a static Part::Feature."""
     pts = a.get("points") or []
     if len(pts) < 3:
         raise OpError("bad_args", "points needs at least 3 [x, y] pairs")
@@ -410,6 +410,229 @@ def op_run_part_script(a):
     return out
 
 
+
+# --------------------------------------------------------------------------
+# Components library: measure a part file, place it, or build a standard part
+# --------------------------------------------------------------------------
+
+LIB_ID = re.compile(r"^c_[a-z0-9_]{1,46}$")
+STANDARD_PARTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library",
+                              "standard_parts.json")
+LIB_FORMATS = {".step": "step", ".stp": "step", ".fcstd": "fcstd", ".stl": "stl"}
+MAX_STL_FACETS = 60_000  # bigger meshes become a mesh-backed shape too slow to fuse or check
+_standard = None
+
+
+def setting(a, key, default):
+    """A team setting's number from the host's `_settings` rows ({"setting", "num", "text"})."""
+    for r in a.get("_settings") or []:
+        if r.get("setting") == key:
+            try:
+                return float(r.get("num"))
+            except (TypeError, ValueError):
+                return default
+    return default
+
+
+def library_file(cid):
+    """The part file of library component `cid` (library/<id>/part.* next to the model)."""
+    if not isinstance(cid, str) or not LIB_ID.match(cid):
+        raise OpError("bad_args", f"{cid!r} is not a library part id")
+    folder = os.path.join(os.path.dirname(DOC_PATH), "library", cid)
+    if os.path.isdir(folder):
+        for f in sorted(os.listdir(folder)):
+            stem, ext = os.path.splitext(f)
+            if stem == "part" and ext.lower() in LIB_FORMATS:
+                return os.path.join(folder, f), LIB_FORMATS[ext.lower()]
+    raise OpError("not_found", f"Library part {cid} has no file on the host")
+
+
+def load_part_shape(path, fmt):
+    """One shape for a STEP, STL or FreeCAD file (an FCStd contributes its top-level solids)."""
+    if fmt == "step":
+        shape = Part.Shape()
+        shape.read(path)
+    elif fmt == "stl":
+        import Mesh
+        mesh = Mesh.Mesh(path)
+        if mesh.CountFacets > MAX_STL_FACETS:
+            raise OpError("too_complex", f"That STL has {mesh.CountFacets} triangles; CadSwarm places STLs up to "
+                                         f"{MAX_STL_FACETS}. Use the STEP file if there is one.")
+        shape = Part.Shape()
+        shape.makeShapeFromMesh(mesh.Topology, 0.05)
+        try:
+            shape = Part.Solid(Part.Shell(shape.Faces))
+        except Exception:
+            pass  # an open mesh stays a shell: placeable and visible, but has no volume
+    elif fmt == "fcstd":
+        other = FreeCAD.openDocument(path, True)
+        try:
+            tops = [o for o in other.Objects if hasattr(o, "Shape") and not o.Shape.isNull() and o.Shape.Solids
+                    and not [u for u in o.InList if hasattr(u, "Shape")]]
+            if not tops:
+                raise OpError("bad_args", "That FreeCAD file has no solid parts")
+            shape = Part.makeCompound([o.Shape.copy() for o in tops]) if len(tops) > 1 else tops[0].Shape.copy()
+        finally:
+            FreeCAD.closeDocument(other.Name)
+            FreeCAD.setActiveDocument(doc.Name)
+    else:
+        raise OpError("bad_args", f"Unknown part format {fmt!r}")
+    if shape.isNull() or not shape.Faces:
+        raise OpError("bad_args", "The file has no geometry CadSwarm can read")
+    return shape
+
+
+def cylinder_features(shape, limit=400):
+    """Holes (inward-facing cylinders) and bosses (outward) by diameter, counted by axis position."""
+    holes, bosses = {}, {}
+    for face in shape.Faces[:limit]:
+        surf = face.Surface
+        if type(surf).__name__ != "Cylinder":
+            continue
+        d = round(surf.Radius * 2, 3)
+        u0, u1, v0, v1 = face.ParameterRange
+        pt = face.valueAt((u0 + u1) / 2, (v0 + v1) / 2)
+        n = face.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
+        axis, c = surf.Axis, surf.Center
+        radial = (pt - c) - axis * ((pt - c).dot(axis))
+        inward = radial.Length > 0 and n.dot(radial) < 0
+        # A hole's two half faces share an axis; key the axis by where it crosses the plane through the origin.
+        foot = c - axis * c.dot(axis)
+        key = (round(foot.x, 1), round(foot.y, 1), round(foot.z, 1), round(abs(axis.x), 2),
+               round(abs(axis.y), 2), round(abs(axis.z), 2))
+        (holes if inward else bosses).setdefault(d, set()).add(key)
+
+    def listed(m):
+        return sorted(({"d": d, "count": len(k)} for d, k in m.items()), key=lambda x: x["d"])
+    return {"holes": listed(holes), "bosses": listed(bosses)}
+
+
+def preview_mesh(shape, tol, budget):
+    t, data = tol, stl_bytes(shape, tol)
+    for _ in range(6):
+        if len(data) <= budget:
+            break
+        t *= 2
+        data = stl_bytes(shape, t)
+    return base64.b64encode(data).decode()
+
+
+def q_analyze_component(a):
+    """{"id"} or {"path", "format"} -> bbox, volume, holes/bosses and a preview STL (base64)."""
+    if a.get("path"):
+        path = a["path"]
+        fmt = a.get("format") or LIB_FORMATS.get(os.path.splitext(path)[1].lower())
+    else:
+        path, fmt = library_file(a.get("id"))
+    shape = load_part_shape(path, fmt)
+    bb = shape.BoundBox
+    feats = cylinder_features(shape)
+    feats.update({"solids": len(shape.Solids), "faces": len(shape.Faces),
+                  "size": [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]})
+    tol = setting(a, "mesh_deviation", 0.2)
+    return {"bbox": [round(v, 4) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)],
+            "volume": round(shape.Volume, 4) if shape.Solids else 0.0, "features": feats,
+            "mesh": preview_mesh(shape, max(tol, 0.05), int(a.get("max_bytes") or 150_000))}
+
+
+def tag_component(obj, ref, label):
+    obj.addProperty("App::PropertyString", "CadSwarmComponent", "CadSwarm", "Library part this came from")
+    obj.CadSwarmComponent = ref
+    obj.Label = label
+
+
+def op_insert_component(a):
+    """{"component", "name", "placement"?, "label"?} -> a Part::Feature holding the library part's shape."""
+    path, fmt = library_file(a.get("component"))
+    shape = load_part_shape(path, fmt)
+    obj = doc.addObject("Part::Feature", new_name(a.get("name")))
+    obj.Shape = shape
+    tag_component(obj, a["component"], a.get("label") or a["name"])
+    if a.get("placement"):
+        obj.Placement = to_placement(a["placement"])
+    bb = shape.BoundBox
+    return {"name": obj.Name, "component": a["component"],
+            "size": [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]}
+
+
+def standard_catalog():
+    global _standard
+    if _standard is None:
+        with open(STANDARD_PARTS, encoding="utf-8") as f:
+            _standard = json.load(f)
+    return _standard
+
+
+def _hex_prism(across_flats, height, z0=0.0):
+    r = across_flats / math.sqrt(3)
+    pts = [Vector(r * math.cos(math.radians(30 + 60 * i)), r * math.sin(math.radians(30 + 60 * i)), z0)
+           for i in range(6)]
+    return Part.Face(Part.makePolygon(pts + [pts[0]])).extrude(Vector(0, 0, height))
+
+
+def _tube(od, id_, h, z0=0.0):
+    outer = Part.makeCylinder(od / 2, h, Vector(0, 0, z0))
+    return outer.cut(Part.makeCylinder(id_ / 2, h, Vector(0, 0, z0))) if id_ > 0 else outer
+
+
+def build_standard(shape_kind, d, length):
+    """Simplified solid for a standard part. Screws: under-head face at z=0, shank down -Z. Others sit on z=0."""
+    if shape_kind == "socket_head":
+        head = Part.makeCylinder(d["dk"] / 2, d["k"])
+        head = head.cut(_hex_prism(d["s"], d["k"] * 0.6, d["k"] * 0.4 + 1e-3))
+        return head.fuse(Part.makeCylinder(d["d"] / 2, length, Vector(0, 0, -length))).removeSplitter()
+    if shape_kind == "button_head":
+        a, k = d["dk"] / 2, d["k"]
+        r = (a * a + k * k) / (2 * k)
+        cap = Part.makeSphere(r, Vector(0, 0, k - r)).common(Part.makeCylinder(a, k))
+        cap = cap.cut(_hex_prism(d["s"], k * 0.55, k * 0.45 + 1e-3))
+        return cap.fuse(Part.makeCylinder(d["d"] / 2, length, Vector(0, 0, -length))).removeSplitter()
+    if shape_kind == "hex_nut":
+        return _hex_prism(d["s"], d["m"]).cut(Part.makeCylinder(d["d"] * 0.85 / 2, d["m"]))
+    if shape_kind == "washer":
+        return _tube(d["d2"], d["d1"], d["h"])
+    if shape_kind == "insert":
+        return _tube(d["od"], d["d"] * 0.85, d["length"])
+    if shape_kind == "bearing":
+        od, id_, b = d["od"], d["id"], d["b"]
+        ring = (od - id_) / 2
+        body = _tube(od, id_, b)
+        shield = _tube(od - ring * 0.6, id_ + ring * 0.6, 0.25)
+        return body.cut(shield).cut(shield.translated(Vector(0, 0, b - 0.25)))
+    if shape_kind == "pin":
+        return Part.makeCylinder(d["d"] / 2, length)
+    if shape_kind == "disc":
+        return Part.makeCylinder(d["d"] / 2, d["h"])
+    raise OpError("bad_args", f"Unknown standard shape {shape_kind!r}")
+
+
+def op_insert_standard_part(a):
+    """{"family", "size", "length"?, "name", "placement"?} -> a simplified solid of that standard part."""
+    fams = standard_catalog()["families"]
+    fam = fams.get(str(a.get("family", "")))
+    if fam is None:
+        raise OpError("bad_args", f"family must be one of {sorted(fams)}")
+    size = next((k for k in fam["sizes"] if k.lower() == str(a.get("size", "")).lower()), None)
+    if size is None:
+        raise OpError("bad_args", f"{fam['name']} sizes: {', '.join(fam['sizes'])}")
+    length = 0.0
+    if "length" in fam["params"]:
+        try:
+            length = float(a.get("length"))
+        except (TypeError, ValueError):
+            raise OpError("bad_args", f"{fam['name']} needs a length in mm ({fam.get('lengths')})")
+        if length <= 0 or length > 500:
+            raise OpError("bad_args", "length must be between 0 and 500 mm")
+    solid = build_standard(fam["shape"], fam["sizes"][size], length)
+    obj = doc.addObject("Part::Feature", new_name(a.get("name")))
+    obj.Shape = solid
+    label = f"{size}x{length:g} {fam['name']}" if length else f"{size} {fam['name']}"
+    tag_component(obj, f"c_std_{a['family']}:{size}" + (f"x{length:g}" if length else ""), a.get("label") or label)
+    if a.get("placement"):
+        obj.Placement = to_placement(a["placement"])
+    return {"name": obj.Name, "label": obj.Label, "volume": round(solid.Volume, 3)}
+
+
 MUTATIONS = {
     "create_primitive": op_create_primitive,
     "create_extrusion": op_create_extrusion,
@@ -421,6 +644,8 @@ MUTATIONS = {
     "delete": op_delete,
     "set_param": op_set_param,
     "run_part_script": op_run_part_script,
+    "insert_component": op_insert_component,
+    "insert_standard_part": op_insert_standard_part,
 }
 
 
@@ -453,6 +678,14 @@ def mutate(op, args, allowed):
         doc.abortTransaction()
         doc.recompute()
         raise
+    if isinstance(result, dict):
+        # Where the agent's pointer rests after the op: a real vertex of the part it made or changed.
+        for n in created + modified:
+            o = doc.getObject(n)
+            point = anchor_of(getattr(o, "Shape", None)) if o is not None and n != PARAMS else None
+            if point:
+                result.setdefault("pointer", {"object": n, "point": point})
+                break
     return {"result": result, "created": created, "modified": modified,
             "deleted": deleted, "recomputed": recomputed,
             "broken": [o.Name for o in doc.Objects if is_broken(o)]}
@@ -482,6 +715,23 @@ def param_users(alias):
                   if any(needle in expr for _, expr in (o.ExpressionEngine or [])))
 
 
+def pick_anchor(points):
+    """The vertex a pointer should sit on: on the top face, the corner nearest a default isometric
+    camera (largest x + y). None when there are no vertices."""
+    if not points:
+        return None
+    top = max(p[2] for p in points)
+    tol = 1e-3 * max(1.0, max(abs(c) for p in points for c in p))
+    best = max((p for p in points if p[2] >= top - tol), key=lambda p: (round(p[0] + p[1], 6), p[0]))
+    return [round(float(c), 3) for c in best]
+
+
+def anchor_of(shape):
+    if shape is None or shape.isNull():
+        return None
+    return pick_anchor([(v.X, v.Y, v.Z) for v in shape.Vertexes[:5000]])
+
+
 def obj_summary(o):
     info = {"name": o.Name, "label": o.Label, "type": o.TypeId,
             "visible": bool(getattr(o, "Visibility", True)),
@@ -490,11 +740,16 @@ def obj_summary(o):
             "broken": is_broken(o)}
     if hasattr(o, "Placement"):
         info["placement"] = placement_json(o.Placement)
+    if getattr(o, "CadSwarmComponent", ""):
+        info["component"] = o.CadSwarmComponent  # placed from the components library
     shape = getattr(o, "Shape", None)
     if shape is not None and not shape.isNull():
         bb = shape.BoundBox
         info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
         info["volume"] = round(shape.Volume, 3) if shape.Solids else 0.0
+        anchor = anchor_of(shape)
+        if anchor:
+            info["anchor"] = anchor
     return info
 
 
@@ -539,7 +794,7 @@ def q_interference(a):
                                if getattr(o, "Visibility", False) and hasattr(o, "Shape")
                                and not o.Shape.isNull() and o.Shape.Solids]
     shapes = [(n, get_obj(n).Shape) for n in names]
-    tol = float(a.get("min_volume", 1e-3))
+    tol = float(a.get("min_volume") or setting(a, "interference_min_vol", 1e-3))
     clashes = []
     for i in range(len(shapes)):
         for j in range(i + 1, len(shapes)):
@@ -639,7 +894,7 @@ def stl_bytes(shape, tolerance):
 
 def q_mesh(a):
     """{"names", "tolerance", "max_bytes"} -> {"meshes": {name: base64 binary STL}}; shapeless names omitted."""
-    tol = float(a.get("tolerance") or 0.2)
+    tol = float(a.get("tolerance") or setting(a, "mesh_deviation", 0.2))
     budget = int(a.get("max_bytes") or 200_000)
     out = {}
     for name in a.get("names") or [o.Name for o in doc.Objects]:
@@ -683,7 +938,7 @@ def thin_walls(shape, min_wall, limit=20):
 def q_printability(a):
     """{"names" | null, "bed": [x, y, z], "min_wall"} -> {"ok", "objects": [...]} (plan 00 worker additions)."""
     bed = [float(v) for v in (a.get("bed") or [180, 180, 180])]
-    min_wall = float(a.get("min_wall") or 1.2)
+    min_wall = float(a.get("min_wall") or setting(a, "min_wall", 1.2))
     names = a.get("names") or [o.Name for o in doc.Objects if getattr(o, "Visibility", False)
                                and _solid_shape(o) is not None and o.Shape.Solids]
     objects = []
@@ -705,6 +960,7 @@ QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "param_users": q_param_users, "dependents": q_dependents,
            "faces": q_faces,
            "mesh": q_mesh, "printability": q_printability,
+           "analyze_component": q_analyze_component,
            "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],
                               "script_sandbox": sandbox.info(sys.executable)}}
 

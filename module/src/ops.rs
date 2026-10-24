@@ -59,7 +59,7 @@ pub fn submit_op(ctx: &ReducerContext, fence: u32, op_id: String, kind: String, 
     }
     let mode = if mutating { "editing" } else { "inspecting" };
     let first = targets.first().cloned().unwrap_or_default();
-    set_pointer(ctx, ws, m.id, &first, vec![], mode, &kind.replace('_', " "), &op_id);
+    set_pointer(ctx, ws, m.id, &first, point_on(ctx, m.id, &first), mode, &kind.replace('_', " "), &op_id);
     Ok(())
 }
 
@@ -100,8 +100,10 @@ pub fn complete_op(
     let now = now_ms(ctx);
     let (ws, by) = (op.ws, op.by);
     let actor = name_of(ctx, by);
-    // The op is finished: rest the pointer; the agent's next tool call moves it again.
-    set_pointer(ctx, ws, by, "", vec![], "idle", "", "");
+    // The op is finished: rest the pointer where it was; the agent's next tool call (or its client
+    // pointing at what the op made) moves it again.
+    let (object, point) = ctx.db.pointer().member().find(&by).map(|p| (p.object, p.point)).unwrap_or_default();
+    set_pointer(ctx, ws, by, &object, point, "idle", "", "");
 
     if !ok {
         let status = if error_code == "lock_violation" { "rejected" } else { "failed" };
@@ -117,6 +119,11 @@ pub fn complete_op(
                 data["name"] = json!(actor);
             }
             emit(ctx, ws, &kind, by, data);
+        }
+        // Library ops mirror the host's library/ folder into the `component` table.
+        let (added, removed) = crate::library::apply_component_changes(ctx, ws, &op.kind, &worker_result);
+        if !added.is_empty() || !removed.is_empty() {
+            emit(ctx, ws, "library", by, json!({"name": actor, "op": op.kind, "added": added, "removed": removed}));
         }
         ctx.db.op().id().update(Op { status: "done".into(), result_json, finished_ms: now, ..op });
         return Ok(());
@@ -138,6 +145,7 @@ pub fn complete_op(
     }
     let notified = rules::owners_to_notify(&recomputed, by, |n| holder(ctx, ws, n).map(|h| h.id));
     let args: Value = serde_json::from_str(&op.args_json).unwrap_or(Value::Null);
+    crate::library::count_use(ctx, ws, &op.kind, &args);
     let what = if op.kind == "set_param" {
         format!("Params.{}={}", args["alias"].as_str().unwrap_or("?"), args["value"])
     } else {

@@ -44,7 +44,7 @@ def test_new_tools_reach_their_routes(session):
     assert session.client.posts[-1] == ("/tasks", {"title": "lid", "detail": "", "objects": None,
                                                     "assignee": None, "brief": "b_1"})
     mcp_server.check_printability(["Lid"])
-    assert session.client.posts[-1] == ("/printability", {"names": ["Lid"], "min_wall": 1.2})
+    assert session.client.posts[-1] == ("/printability", {"names": ["Lid"], "min_wall": None})
     assert session.client.activity[-1][2] == ["Lid"]
     mcp_server.set_brief_plan("b_1", {"parts": []})
     assert session.client.posts[-1][0] == "/briefs/b_1/plan"

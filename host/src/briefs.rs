@@ -185,8 +185,24 @@ fn index_design(space: &Space, helper: &mut WorkerDriver, b: &crate::space::Brie
         "reviews": space.reviews_json(&b.id),
         "params": space.params_map(),
     });
+    // The style memory learns from every finished brief, Elastic or not.
+    crate::executor::observe(space, helper, "observe_brief", &args);
     if let Err(e) = helper.call("index_design", &args, None) {
         eprintln!("[host] index_design for brief {}: {e}", b.id);
+    }
+}
+
+/// The team's learned design style for this request, as a prompt paragraph ("" when nothing is learned yet).
+fn style_block(helper: Option<&mut WorkerDriver>, text: &str, board: &str) -> String {
+    let Some(h) = helper else { return String::new() };
+    match h.call("style_context", &json!({"query": text, "board": board}), None) {
+        Ok(r) => r["result"]["text"].as_str().filter(|t| !t.is_empty()).map(|t| format!("
+
+{t}")).unwrap_or_default(),
+        Err(e) => {
+            eprintln!("[host] style_context: {e}");
+            String::new()
+        }
     }
 }
 
@@ -227,8 +243,10 @@ impl Orchestrator {
                 continue;
             }
             let name = format!("handoff-{}", h.id.trim_start_matches("h_"));
+            let style = style_block(helper.as_deref_mut(), &h.context_json, "");
             let started = crate::mint_invite(space, &self.cfg, "agent", "member").and_then(|ticket| {
-                Agent::spawn(&self.cfg, &name, &ticket, &crate::agents::handoff_prompt(&h.id, &h.context_json))
+                let prompt = format!("{}{style}", crate::agents::handoff_prompt(&h.id, &h.context_json));
+                Agent::spawn(&self.cfg, &name, &ticket, &prompt)
             });
             match started {
                 Ok(agent) => {
@@ -364,10 +382,12 @@ impl Orchestrator {
                     },
                     None => "{}".into(),
                 };
+                let style = style_block(helper.as_deref_mut(), &b.text, &b.board);
                 let prompt = format!(
                     "{}\n\nWhat earlier CadSwarm designs taught us (designs and lessons, JSON): {memory}\n\
-                     Apply the lessons in your plan.",
-                    crate::agents::planner_prompt(&b.id, &b.text, &label, &params)
+                     Apply the lessons in your plan.{style}{}",
+                    crate::agents::planner_prompt(&b.id, &b.text, &label, &params),
+                    if style.is_empty() { "" } else { "\nWrite these style rules into each task's detail where they apply." }
                 );
                 let ticket = crate::mint_invite(space, &self.cfg, "agent", "lead")?;
                 let name = format!("planner-{}", &b.id[2..]);
@@ -376,12 +396,13 @@ impl Orchestrator {
             }
             Action::Build(n) => {
                 keep_sources(&self.boards, space, b)?;
+                let style = style_block(helper.as_deref_mut(), &b.text, &b.board);
                 for _ in 0..n {
                     rt.spawned += 1;
                     let ticket = crate::mint_invite(space, &self.cfg, "agent", "member")?;
                     let name = format!("worker{}-{}", rt.spawned, &b.id[2..]);
                     eprintln!("[host] brief {}: starting {name}", b.id);
-                    rt.workers.push(Agent::spawn(&self.cfg, &name, &ticket, &crate::agents::worker_prompt(&b.id, rt.spawned))?);
+                    rt.workers.push(Agent::spawn(&self.cfg, &name, &ticket, &format!("{}{style}", crate::agents::worker_prompt(&b.id, rt.spawned)))?);
                 }
                 if let Some((round, false)) = state.review {
                     rt.reviewed_round = round;

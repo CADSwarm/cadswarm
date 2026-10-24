@@ -304,14 +304,14 @@ def test_commands_show_sent_seen_done(world):
     assert {c["body"]: c for c in hub.get("/commands")["commands"]}["make the lid 20 mm"]["state"] == "done"
 
 
-def test_chat_comes_last_and_commands_are_labelled_for_agents(world):
+def test_commands_come_first_and_peoples_chat_never_reaches_agents(world):
     hub, fake = world
     fake.tables["v_message"].append({"id": "m_e", "from": 3, "to": "all", "kind": "chat", "body": "lunch at 1?",
                                      "task_id": "", "created_ms": 0})
     kinds = [m["kind"] for m in hub.get("/inbox")["messages"]]
-    assert kinds[0] == "steer" and kinds[-1] == "chat"
+    assert kinds[0] == "steer" and "chat" not in kinds
     ctx = hub.get("/context")["context"]
-    assert "[COMMAND] carol: use M4 bolts" in ctx and "[chat] carol: lunch at 1?" in ctx
+    assert "[COMMAND] carol: use M4 bolts" in ctx and "lunch at 1?" not in ctx
 
 
 def test_participants_say_what_each_helper_is_working_on(world, monkeypatch):
@@ -349,3 +349,81 @@ def test_the_team_server_is_not_one_of_all_helpers(world):
     fake.tables["v_receipt"] = [{"message_id": "m_9", "member": 2, "state": "consumed"}]
     cmd = hub.get("/commands")["commands"][0]
     assert set(cmd["by_helper"]) == {"alice-claude", "bob-codex"}  # every AI helper, never the host
+
+
+def test_style_routes_become_helper_ops(world):
+    hub, fake = world
+    finish_ops_with(fake, {"text": "", "rules": [], "pending": 0})
+    hub.request("GET", "/style", params={"topic": "lid", "board": "pico"})
+    assert fake.calls[-1][1][2] == "style_context"
+    assert json.loads(fake.calls[-1][1][3]) == {"query": "lid", "board": "pico"}
+    hub.post("/style/teach", {"statement": "Walls are 2.4 mm"})
+    assert fake.calls[-1][1][2] == "teach_style"
+    assert json.loads(fake.calls[-1][1][3]) == {"statement": "Walls are 2.4 mm", "scope": "team"}
+    hub.post("/style/resolve", {"rule_id": "r_1", "decision": "confirm"})
+    assert fake.calls[-1][1][2] == "resolve_style"
+
+
+def test_the_context_carries_the_published_style_profile(world):
+    hub, fake = world
+    text = "Team design style (learned ...):\n- [confirmed] Walls are 2.4 mm"
+    fake.tables["v_artifact_blob"] = [{"hash": "style-profile", "ws": 1, "bytes": text.encode().hex()}]
+    assert "[confirmed] Walls are 2.4 mm" in hub.get("/context")["context"]
+    fake.tables["v_artifact_blob"] = []
+    assert "Team design style" not in hub.get("/context")["context"]
+
+
+def test_people_see_each_others_chat(world):
+    _hub, fake = world
+    fake.tables["v_message"].append({"id": "m_chat", "from": 3, "to": "all", "kind": "chat", "body": "lunch?",
+                                     "task_id": "", "created_ms": 9})
+    fake.tables["v_member"].append(member(4, "dan", kind="human"))
+    dan = SpaceHub({"uri": "http://x", "db": "d"}, {"participant_id": 4, "fence": 1}, space=fake)
+    assert "m_chat" in [m["id"] for m in dan._unconsumed()]
+
+
+def test_an_op_rests_the_pointer_on_the_vertex_the_worker_picked(world):
+    hub, fake = world
+
+    def host_finishes(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"] = "done"
+                o["result_json"] = json.dumps({"name": "Lid", "pointer": {"object": "Lid", "point": [10, 6, 4]}})
+
+    fake.on_sql = host_finishes
+    hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})
+    assert fake.calls[-1] == ("move_pointer", (2, "Lid", [10.0, 6.0, 4.0], "pointing", "create primitive"))
+
+
+def test_point_at_without_a_point_uses_the_parts_anchor(world):
+    hub, fake = world
+
+    def host_finishes(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"] = "done"
+                o["result_json"] = json.dumps({"name": "Plate", "anchor": [1, 1, 1]})
+
+    fake.on_sql = host_finishes
+    r = hub.post("/pointer", {"object": "Plate", "mode": "inspecting", "label": "checking"})
+    assert r["point"] == [1, 1, 1]
+    assert fake.calls[-1] == ("move_pointer", (2, "Plate", [1.0, 1.0, 1.0], "inspecting", "checking"))
+    hub.post("/pointer", {"object": "Plate", "point": [0, 0.5, 1]})
+    assert fake.calls[-1] == ("move_pointer", (2, "Plate", [0.0, 0.5, 1.0], "pointing", ""))
+    with pytest.raises(HubRequestError):
+        hub.post("/pointer", {"object": "Plate", "point": [1, 2]})
+
+
+def test_a_failed_pointer_move_never_fails_the_op(world):
+    hub, fake = world
+    fake.fail["move_pointer"] = "boom"
+
+    def host_finishes(query):
+        for o in fake.tables.get("v_op", []):
+            if o["status"] == "queued":
+                o["status"] = "done"
+                o["result_json"] = json.dumps({"name": "Lid", "pointer": {"object": "Lid", "point": [1, 2, 3]}})
+
+    fake.on_sql = host_finishes
+    assert hub.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": "Lid"}})["name"] == "Lid"

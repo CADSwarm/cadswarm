@@ -19,20 +19,32 @@ export interface Op { id: string; by: number; kind: string; status: string; erro
 export interface Message { id: string; from: number; to: string; kind: string; body: string; taskId: string; createdMs: number }
 /** Who has read (delivered) or handled (consumed) a message. */
 export interface Receipt { messageId: string; member: number; state: string }
+/** A part in the team's components library (the bytes stay on the host; previews are fetched one at a time). */
+export interface Component {
+  id: string; name: string; category: string; tags: string[]; description: string; source: string; sourceUrl: string;
+  license: string; author: string; format: string; size: number; bbox: number[]; volume: number; featuresJson: string;
+  suggestJson: string; uses: number; updatedMs: number;
+}
+/** A team setting a person changed from its default (settings_spec.json); missing = default. */
+export interface Setting { setting: string; num: number; text: string; setBy: number; updatedMs: number }
+export interface Suggestion {
+  id: string; setting: string; num: number; text: string; reason: string; component: string; by: number;
+  status: string; createdMs: number;
+}
 
 export interface State {
   connected: boolean; meId: number | null; workspace: Workspace | null;
   members: Member[]; locks: Lock[]; objects: Obj[]; params: Param[]; tasks: Task[]; ops: Op[];
   activity: Activity[]; pointers: Pointer[]; briefs: Brief[]; reviews: Review[];
   previews: Map<string, Preview>; artifacts: Artifact[]; handoffs: Handoff[];
-  messages: Message[]; receipts: Receipt[];
+  messages: Message[]; receipts: Receipt[]; components: Component[]; settings: Setting[]; suggestions: Suggestion[];
   notice: Notice | null;
 }
 
 export function emptyState(): State {
   return { connected: false, meId: null, workspace: null, members: [], locks: [], objects: [], params: [], tasks: [], ops: [],
     activity: [], pointers: [], briefs: [], reviews: [], previews: new Map(), artifacts: [], handoffs: [],
-    messages: [], receipts: [], notice: null };
+    messages: [], receipts: [], components: [], settings: [], suggestions: [], notice: null };
 }
 
 export class Store {

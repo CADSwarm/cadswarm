@@ -310,3 +310,84 @@ pub struct SweepSchedule {
     pub scheduled_id: u64,
     pub scheduled_at: ScheduleAt,
 }
+
+// ---------------------------------------------------------------------------
+// Components library and team precision settings
+// ---------------------------------------------------------------------------
+
+/// One part in the team's components library. The bytes live on the host under library/<id>/;
+/// only the host writes these rows (from library_* op results, see rules::component_changes).
+#[table(accessor = component)]
+#[derive(Clone)]
+pub struct Component {
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub ws: u64,
+    pub name: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub description: String,
+    pub source: String,
+    pub source_url: String,
+    pub license: String,
+    pub author: String,
+    pub format: String,
+    pub hash: String,
+    pub size: u64,
+    pub version: u32,
+    pub bbox: Vec<f64>,
+    pub volume: f64,
+    pub features_json: String,
+    pub std_json: String,
+    pub suggest_json: String,
+    pub uses: u32,
+    pub created_ms: u64,
+    pub updated_ms: u64,
+}
+
+// Preview meshes live apart from `component` so browsing the library never downloads them.
+#[table(accessor = component_preview)]
+#[derive(Clone)]
+pub struct ComponentPreview {
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub ws: u64,
+    pub mesh: Vec<u8>,
+}
+
+/// A team setting a person changed from its default (cadswarm/settings_spec.json). Missing = default.
+#[table(accessor = project_setting)]
+#[derive(Clone)]
+pub struct ProjectSetting {
+    #[primary_key]
+    pub key: String,
+    #[index(btree)]
+    pub ws: u64,
+    pub setting: String,
+    pub num: f64,
+    pub text: String,
+    pub set_by: u64,
+    pub updated_ms: u64,
+}
+
+/// A setting change an AI helper (or anyone) proposes; a person accepts or dismisses it.
+#[table(accessor = setting_suggestion)]
+#[derive(Clone)]
+pub struct SettingSuggestion {
+    #[primary_key]
+    pub id: String,
+    #[index(btree)]
+    pub ws: u64,
+    pub setting: String,
+    pub num: f64,
+    pub text: String,
+    pub reason: String,
+    pub component: String,
+    pub by: u64,
+    pub status: String,
+    pub created_ms: u64,
+    pub resolved_by: u64,
+    pub resolved_ms: u64,
+}

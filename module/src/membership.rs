@@ -50,25 +50,25 @@ pub fn on_connect(ctx: &ReducerContext) {
     if let Some(m) = latest_member(ctx, ctx.sender()) {
         // Reconnecting is a sign of life: a quiet (stale) member is active again. Members who left
         // or were taken over stay retired; they must rejoin.
-        let (status, stale_since_ms) = if m.status == "stale" { ("active".to_string(), 0) } else { (m.status.clone(), m.stale_since_ms) };
+        let revived = m.status == "stale";
+        let (status, stale_since_ms) = if revived { ("active".to_string(), 0) } else { (m.status.clone(), m.stale_since_ms) };
+        let (ws, id, name) = (m.ws, m.id, m.name.clone());
         ctx.db.member().id().update(Member { online: true, last_seen_ms: now_ms(ctx), status, stale_since_ms, ..m });
+        // As heartbeat does: give back the tasks the sweep set aside (it will never see "stale" now).
+        if revived {
+            resume_tasks(ctx, id);
+            emit(ctx, ws, "resumed", id, json!({"name": name}));
+        }
     }
 }
 
 #[reducer(client_disconnected)]
 pub fn on_disconnect(ctx: &ReducerContext) {
     if let Some(m) = latest_member(ctx, ctx.sender()) {
-        let (ws, id) = (m.ws, m.id);
+        // The pointer is left as it is: every HTTP /call and /sql is a connect and a disconnect,
+        // so resting it here would erase an agent's pointer the moment its request ends. Going
+        // stale (sweep) and leaving rest it instead.
         ctx.db.member().id().update(Member { online: false, last_seen_ms: now_ms(ctx), ..m });
-        // Keep where they were (object, point, label): a handoff snapshot needs it.
-        let (object, point, label) = ctx
-            .db
-            .pointer()
-            .member()
-            .find(&id)
-            .map(|p| (p.object, p.point, p.label))
-            .unwrap_or_default();
-        set_pointer(ctx, ws, id, &object, point, "idle", &label, "");
     }
 }
 
@@ -114,6 +114,33 @@ pub fn redeem_invite(ctx: &ReducerContext, token: String, name: String, client: 
     }
     let member = join_as(ctx, inv.ws, &name, &inv.kind, &client, &inv.role, &endpoint_id)?;
     ctx.db.invite().token_hash().update(Invite { used_by: member.id, ..inv });
+    Ok(())
+}
+
+/// Renames the calling member: a person, or an AI helper through its own sign-in (FreeCAD holds it in the
+/// helper's folder). Not fenced: a name changes nothing in the model, and a helper is renamed while its agent
+/// may be running. Open tasks waiting for the old name follow the member.
+#[reducer]
+pub fn rename_me(ctx: &ReducerContext, name: String) -> Result<(), String> {
+    let m = latest_member(ctx, ctx.sender())
+        .filter(|m| m.status == "active" || m.status == "stale")
+        .ok_or_else(|| "not_member: join with an invite first".to_string())?;
+    let name = name.trim().to_string();
+    if name == m.name {
+        return Ok(());
+    }
+    rules::check_rename(&name, live_by_name(ctx, m.ws, &name).map(|x| x.id), m.id)?;
+    let old = m.name.clone();
+    let waiting: Vec<Task> = ctx.db.task().ws().filter(&m.ws)
+        .filter(|t| t.status != "done" && t.assignee.eq_ignore_ascii_case(&old))
+        .collect();
+    let now = now_ms(ctx);
+    for t in waiting {
+        ctx.db.task().id().update(Task { assignee: name.clone(), updated_ms: now, ..t });
+    }
+    let (ws, id) = (m.ws, m.id);
+    ctx.db.member().id().update(Member { name: name.clone(), ..m });
+    emit(ctx, ws, "renamed", id, json!({"name": name, "from": old}));
     Ok(())
 }
 

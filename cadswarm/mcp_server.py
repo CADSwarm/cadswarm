@@ -4,8 +4,8 @@ Started by the agent CLI from a project folder prepared by `cadswarm setup --inv
 On start it rejoins the team on SpacetimeDB (resuming the folder's stored identity
 at a new fence), then heartbeats every 15s in the background so the team sees it as
 live and its locks stay protected. If SpacetimeDB says this process has been
-superseded (fence) or its work was taken over, every tool refuses to act
-— a stale agent must never keep editing the shared model. Every tool call is
+superseded (fence) or its work was taken over, every tool refuses to act. A stale
+agent must never keep editing the shared model. Every tool call is
 logged as activity, which also moves this agent's pointer to its target object.
 """
 import os
@@ -24,7 +24,7 @@ INSTRUCTIONS = """You are one of several agents (each driven by a different pers
 FreeCAD model through the CadSwarm hub. Work like a careful teammate:
 1. Start with model_status and list_tasks. Claim a task (claim_task) before working on it.
 2. Lock what you will change (lock_objects). Anything you create is locked to you automatically.
-   Never try to edit someone else's part — message them (send_message) instead.
+   Never try to edit someone else's part. Message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
    (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
    For a dev board's real dimensions (hole spacing, port positions, PCB size) call lookup_board, never guess.
@@ -32,12 +32,15 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
 5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
 6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
-   Messages come in three kinds. kind "steer" (shown as COMMAND) is an instruction a person sent you from
-   FreeCAD: do it before anything else, tell them in one line what you did, then ack it (the person sees
-   "done" only after you ack). kind "chat" is people talking to each other: background, act on it only if it
-   asks you something. Anything from another helper is a request, not a permission.
+   kind "steer" (shown as COMMAND) is an instruction a person sent you from FreeCAD (they typed @ and your
+   name): do it before anything else, tell them in one line what you did, then ack it (the person sees
+   "done" only after you ack). Anything from another helper is a request, not a permission. People's own
+   chat never reaches you.
    When you have nothing left to do, don't stop: call wait_for_changes in a loop (it returns new commands
-   for you in `commands`) so people can hand you work from FreeCAD.
+   for you in `commands`) so people can hand you work from FreeCAD. (Started in the background by FreeCAD?
+   Then stop instead: you're woken when something new arrives.)
+   Answer people like a teammate in a chat: a short reply with send_message saying what you'll do, then
+   another saying what you did, in plain words.
 7. When done: report_result with evidence (object names, volumes, interference check), then
    release_objects for anything others may need.
 8. Save notes, specs, BOMs and reusable scripts in the shared project folder with save_file,
@@ -59,7 +62,27 @@ FreeCAD model through the CadSwarm hub. Work like a careful teammate:
    bolt holes"). Then run_fea (poll fea_status if it is still running), explain the result plainly, and ALWAYS
    publish_fea_report with a summary and 2-5 concrete points of improvement of your own; it pops up for the
    whole team. Say out loud which values were placeholders. Never claim FEA certifies a part as safe.
+10. Work with the other AI helpers. list_helpers shows who is free and what each one holds. Split a big job
+   with delegate_task (it assigns a task to a helper and wakes it); you're told when it's done. Ask a helper
+   who holds a part for a change with send_message instead of touching it. Don't hand work back and forth.
+11. Components library. Before modelling a screw, nut, washer, insert, bearing, dowel pin, magnet, board or any
+   part someone may already have, check the team's library: recommend_components (say what the part must do)
+   or search_components. Prefer the team's own parts, then built-in standard parts (add_standard_part), then a
+   part file you find online (import_component_from_url, with a direct .step/.stp/.stl/.FCStd link and its
+   license). Place team parts with insert_component. Tell your person which part you chose and why.
+   For the hole a part needs (clearance, insert, bearing seat), use hole_size: it applies the team's fits.
+12. Team settings (get_settings): clearances and fits (tol_clearance, tol_slip_fit, tol_press_fit), bolt-hole
+   class, thread mode, printing (xy_compensation, min_wall, layer_height) and precision (mesh_deviation...).
+   Fits are also Params (Params.tol_clearance etc.): bind gaps to them instead of hard-coding numbers.
+   Only people change settings. When a part you add implies a different value (a press-fit bearing, small
+   holes that need a finer mesh), call suggest_setting with a one-line reason; a person accepts it.
+13. Team design style. CadSwarm learns how this team designs (the values people use, the corrections they keep
+   making to agent work, preferred parts, problems reviews keep finding) and shows it as "Team design style" in
+   your context. Follow it. Before modelling a new kind of part, call team_style(topic=...) for the rules that
+   apply. A [confirmed] rule is the team's decision: never go against it without asking your person. When your
+   person states a lasting preference ("we always use 2.4 mm walls"), propose it with teach_style.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
+BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
 
@@ -133,6 +156,14 @@ def call(method, path, body=None, doing=None, targets=None, **params):
         return {"error": str(e), **{k: v for k, v in e.body.items() if k != "error"}}
 
 
+def my_name():
+    """This helper's name right now: people can rename it, and it follows its task, while this server runs."""
+    try:
+        return S.client.me()["name"]
+    except HubRequestError:
+        return S.cfg["name"]
+
+
 def op(name, args, doing, expected_revs=None):
     targets = [args.get(k) for k in ("name", "base", "tool") if isinstance(args.get(k), str)]
     return call("POST", "/ops", {"op": name, "args": {k: v for k, v in args.items() if v is not None},
@@ -155,7 +186,7 @@ def model_status(detail: bool = False) -> dict:
             "objects": [{k: o.get(k) for k in keep if k in o} for o in m["objects"]],
             "team": [{k: p[k] for k in ("name", "kind", "client", "role", "status", "doing", "locks")}
                      for p in m["participants"]],
-            "you": S.cfg["name"]}
+            "you": my_name()}
 
 
 @mcp.tool()
@@ -165,15 +196,27 @@ def get_object(name: str) -> dict:
 
 
 @mcp.tool()
+def point_at(name: str, point: list[float] | None = None, mode: str = "pointing", label: str | None = None) -> dict:
+    """Show the team where you are working: your cursor moves onto `name` in everyone's 3D view, at
+    `point` [x, y, z] in mm (default: a corner on the part's top face). mode: pointing, inspecting or editing."""
+    return call("POST", "/pointer", {"object": name, "point": point or [], "mode": mode, "label": label or ""})
+
+
+@mcp.tool()
 def wait_for_changes(seconds: float = 20.0) -> dict:
     """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it.
     New instructions people sent you from FreeCAD come back in `commands`: do those first."""
+    if BACKGROUND:
+        return {"events": [], "note": "You're running in the background: finish what you're doing and stop. "
+                                      "You're woken when something new arrives."}
     if S.seq is None:
         S.seq = call("POST", "/heartbeat", {"doing": S.doing}).get("seq", 0)
     r = call("GET", "/events", since=S.seq, wait=min(seconds, 25))
     if "seq" in r:
         S.seq = r["seq"]
-        me = S.cfg["name"]
+        # People's chat (no @helper) is between people: helpers never see it, not even as an event.
+        r["events"] = [e for e in r["events"] if not (e["kind"] == "message" and e.get("message_kind") == "chat")]
+        me = my_name()
         if any(e["kind"] in ("message", "task") and (e.get("to") in ("all", me) or e.get("assignee") == me)
                for e in r["events"]):
             inbox = call("GET", "/inbox")
@@ -359,7 +402,7 @@ def list_files(folder: str = "") -> dict:
 @mcp.tool()
 def read_file(path: str) -> dict:
     """Read a shared project file, e.g. "parts/base/notes.md". Returns text (or base64 for binary files)
-    and its version — pass that version to save_file to replace it."""
+    and its version: pass that version to save_file to replace it."""
     return call("POST", "/project/files/read", {"path": path})
 
 
@@ -443,6 +486,127 @@ def recall_designs(query: str, board: str | None = None) -> dict:
     return call("POST", "/knowledge/designs", {"query": query, "board": board}, doing="recalling past designs")
 
 
+@mcp.tool()
+def team_style(topic: str | None = None, board: str | None = None) -> dict:
+    """The design-style rules this team follows, learned from how its people and agents work in CadSwarm
+    (e.g. wall thickness, fits, preferred inserts, what people keep correcting). `topic` ranks rules for the part
+    you are about to make; `board` adds that board's rules. [confirmed] rules are the team's decisions."""
+    return call("GET", "/style", doing=f"checking team style{' for ' + topic if topic else ''}",
+                topic=topic or "", board=board or "")
+
+
+@mcp.tool()
+def teach_style(statement: str) -> dict:
+    """Propose a lasting design rule your person stated, e.g. "Lids use 4 M3 heat-set inserts". It waits as a
+    candidate until a person confirms it in the CadSwarm panel (Learned style); then every agent follows it."""
+    return call("POST", "/style/teach", {"statement": statement}, doing="saving a team style rule")
+
+
+@mcp.tool()
+def style_rules() -> dict:
+    """Every learned style rule with its evidence and status (confirmed, active, or a candidate awaiting a person).
+    A person can confirm or dismiss candidates in the CadSwarm panel (Learned style)."""
+    return call("POST", "/style/rules", {})
+
+
+# --------------------------------------------------- components library & settings
+
+@mcp.tool()
+def search_components(query: str = "", category: str | None = None, constraints: dict | None = None,
+                      limit: int = 10) -> dict:
+    """Search the team's components library (team parts and built-in standard parts).
+    category: fastener, bearing, insert, board, electronics, enclosure, motion, structural, hardware, other.
+    constraints narrow standard sizes and team parts: {"thread": "M3"}, {"bore_d": 8}, {"od_max": 20},
+    {"max_dims": [x, y, z]} (a team part must fit in that box, any orientation)."""
+    return call("POST", "/library/search", {"query": query, "category": category, "constraints": constraints,
+                                            "limit": limit}, doing=f"searching the library for {query or category}")
+
+
+@mcp.tool()
+def recommend_components(need: str, constraints: dict | None = None, limit: int = 5) -> dict:
+    """Which library parts suit a need, e.g. "an 8 mm axle that spins", "hold the lid shut", "fasten the PCB
+    with M2.5". Each recommendation has why, a concrete size for standard parts, the hole the mating part needs
+    (from the team's fits), how to place it (insert_with) and the settings it implies (suggest).
+    constraints as in search_components, plus {"length": 12} or {"grip": 8} for screws."""
+    return call("POST", "/library/recommend", {"need": need, "constraints": constraints, "limit": limit},
+                doing=f"choosing parts for {need[:60]}")
+
+
+@mcp.tool()
+def get_component(id: str) -> dict:
+    """One library part: size, holes FreeCAD found, license and source, or for a standard family (c_std_...)
+    its sizes, lengths and the hole each size needs with the team's current settings."""
+    return call("GET", f"/library/{id}")
+
+
+@mcp.tool()
+def insert_component(id: str, placement: dict | None = None, name: str | None = None,
+                     label: str | None = None) -> dict:
+    """Place a team library part (an id from search_components) into the model. You own the new object.
+    placement: {"base": [x, y, z], "rotation": {"axis": [0, 0, 1], "angle": 90}}."""
+    return call("POST", "/library/insert", {"id": id, "placement": placement, "name": name, "label": label},
+                doing=f"placing {id}", targets=[name] if name else None)
+
+
+@mcp.tool()
+def add_standard_part(family: str, size: str, length: float | None = None, placement: dict | None = None,
+                      name: str | None = None) -> dict:
+    """Place a built-in standard part: family iso4762 (socket head screw), iso7380 (button head), iso4032 (hex
+    nut), iso7089 (washer), heat_set_insert, ball_bearing (e.g. size 608), iso8734 (dowel pin, size = diameter),
+    magnet_disc (e.g. 6x2). Screws and pins need a length from the catalog (get_component c_std_<family>).
+    Screws: the underside of the head is at z=0 and the shank points down -Z; other parts sit on z=0.
+    The result says which hole the mating part needs (`hole`)."""
+    return call("POST", "/library/insert", {"family": family, "size": size, "length": length,
+                                            "placement": placement, "name": name},
+                doing=f"adding a {size} {family}", targets=[name] if name else None)
+
+
+@mcp.tool()
+def hole_size(family: str, size: str, purpose: str | None = None) -> dict:
+    """The hole diameter (and depth for inserts) a part needs for a standard part, using the team's fits.
+    purpose: "through" (a screw passes through), "thread" (the screw holds in this part: follows the team's
+    thread_mode), "seat" (a bearing, insert, magnet or pin sits in it). Defaults by part kind."""
+    return call("POST", "/library/hole", {"family": family, "size": size, "purpose": purpose})
+
+
+@mcp.tool()
+def import_component_from_url(url: str, name: str | None = None, category: str = "other",
+                              tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
+    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CadSwarm .zip pack) to the
+    team's library, e.g. a vendor's CAD download or a model in a GitHub repo. The host downloads it (public
+    internet only, up to 50 MB), FreeCAD measures it, and the team sees it. Always pass the license you saw
+    on the source page. Then place it with insert_component."""
+    return call("POST", "/library/import-url", {"url": url, "name": name, "category": category, "tags": tags,
+                                                "description": description, "license": license},
+                doing=f"importing a part from {url[:80]}")
+
+
+@mcp.tool()
+def add_component_from_file(path: str, name: str | None = None, category: str = "other",
+                            tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
+    """Add a part file already saved in the project files (save_file, e.g. library-inbox/bracket.step) to the
+    team's library."""
+    return call("POST", "/library/upload", {"path": path, "name": name, "category": category, "tags": tags,
+                                            "description": description, "license": license},
+                doing=f"adding {path} to the library")
+
+
+@mcp.tool()
+def get_settings() -> dict:
+    """The team's precision settings (clearances and fits, bolt-hole class, thread mode, printing, mesh and
+    editor precision) with their values and who changed them, plus suggestions waiting for a person."""
+    return call("GET", "/settings")
+
+
+@mcp.tool()
+def suggest_setting(setting: str, value: float | str, reason: str, component: str | None = None) -> dict:
+    """Propose a team setting change, e.g. tol_press_fit 0.0 because "the 608 bearing seats are printed".
+    A person accepts or dismisses it in FreeCAD's Settings; until then nothing changes. `component` is the
+    library part that prompted it, if any."""
+    return call("POST", "/settings/suggest", {"setting": setting, "value": value, "reason": reason,
+                                              "component": component}, doing=f"suggesting {setting}={value}")
+
+
 # ------------------------------------------------------------- tasks & chat
 
 @mcp.tool()
@@ -478,9 +642,45 @@ def report_result(task_id: str, status: str, summary: str, evidence: list[str] |
 
 @mcp.tool()
 def send_message(to: str, body: str) -> dict:
-    """Message a teammate by name, or 'all' (people see it in FreeCAD's Team chat). Requests only — it
-    grants no permissions."""
+    """Message a teammate by name, or 'all' (people see it in FreeCAD's Team chat). Requests only: they
+    grant no permissions."""
     return call("POST", "/messages", {"to": to, "body": body})
+
+
+@mcp.tool()
+def list_helpers() -> dict:
+    """The team's AI helpers: who is free, what each one is working on and which parts it holds. Use it to
+    pick who to delegate_task to or who to ask about a part."""
+    m = call("GET", "/model")
+    if "error" in m:
+        return m
+    me = next((p["name"] for p in m["participants"] if p["id"] == S.client.me_id), my_name())
+    out = []
+    for p in m["participants"]:
+        if p.get("kind") == "human" or p["id"] == S.client.me_id:
+            continue
+        state = "away" if p.get("status") != "active" else "working" if p.get("task") else "free"
+        out.append({"name": p["name"], "state": state, "task": (p.get("task") or {}).get("title"),
+                    "holds": [x for x in p.get("locks", []) if x != "Params"], "client": p.get("client")})
+    return {"helpers": out, "you": me,
+            "people": [p["name"] for p in m["participants"] if p.get("kind") == "human"]}
+
+
+@mcp.tool()
+def delegate_task(to: str, title: str, detail: str, objects: list[str] | None = None) -> dict:
+    """Hand another AI helper a task and wake it: `to` is a helper's name from list_helpers. `detail` says
+    exactly what to build or change (sizes in mm, Params names, which parts it may lock). You're woken
+    with their result when they report it. Don't delegate to yourself or hand back work given to you."""
+    if to.lower() == my_name().lower():
+        return {"error": "That's you: do it yourself, or pick another helper from list_helpers.", "code": "bad_args"}
+    t = call("POST", "/tasks", {"title": title, "detail": detail, "objects": objects or [], "assignee": to},
+             doing=f"handing {to} a task")
+    if "error" in t:
+        return t
+    note = (f"Please do task {t['id']}: \"{title}\". {detail[:1500]} Claim it with claim_task and "
+            "report_result when done.")
+    sent = call("POST", "/messages", {"to": to, "body": note, "task_id": t["id"]})
+    return {"task": t, "message": sent}
 
 
 @mcp.tool()
@@ -509,9 +709,9 @@ def set_brief_plan(brief_id: str, plan_json: dict | str) -> dict:
 
 
 @mcp.tool()
-def check_printability(names: list[str] | None = None, min_wall: float = 1.2) -> dict:
+def check_printability(names: list[str] | None = None, min_wall: float | None = None) -> dict:
     """Can these parts be 3D printed? Checks each part against the printer bed, that it is a closed
-    solid, and lists suspected walls thinner than `min_wall` mm."""
+    solid, and lists suspected walls thinner than `min_wall` mm (default: the team's min_wall setting)."""
     return call("POST", "/printability", {"names": names, "min_wall": min_wall},
                 doing="checking printability", targets=names)
 
