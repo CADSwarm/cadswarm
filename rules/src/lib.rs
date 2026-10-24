@@ -270,8 +270,27 @@ pub fn check_report(task_id: &str, owner: u64, owner_name: &str, caller: u64, st
 }
 
 /// A person's words outrank peer requests in every inbox.
-pub fn message_kind(sender_kind: &str, requested: &str) -> String {
-    if sender_kind == "human" && requested == "message" { "steer".into() } else { requested.into() }
+/// Kinds a member may send. "chat" is people talking (agents read it as background, never as an order);
+/// "command" (stored as "steer") is a person's instruction for an AI helper and outranks everything.
+pub const SEND_KINDS: &[&str] = &["message", "chat", "command", "steer", "handoff", "help", "result", "notice"];
+
+/// The stored kind of a message, or an error for a kind nobody may send. `target_kind` is the member kind of
+/// the addressee when it is one live member (None for "all" or someone who hasn't joined yet).
+pub fn message_kind(sender_kind: &str, requested: &str, target_kind: Option<&str>) -> Result<String, String> {
+    if !SEND_KINDS.contains(&requested) {
+        return Err(format!("bad_args: kind must be one of {SEND_KINDS:?}"));
+    }
+    let mut kind = requested;
+    if kind == "command" || (sender_kind == "human" && kind == "message") {
+        kind = "steer"; // a person's instruction outranks peer requests in every inbox
+    }
+    if kind == "steer" && sender_kind != "human" {
+        kind = "message"; // only people give orders; a helper's "command" is a request
+    }
+    if kind == "steer" && target_kind == Some("human") {
+        kind = "chat"; // people can't be commanded: it's a chat message to them
+    }
+    Ok(kind.into())
 }
 
 /// `live` is the id of a live member with that name, if any.
@@ -422,9 +441,14 @@ mod tests {
 
     #[test]
     fn a_humans_message_is_steering_and_unknown_names_are_queued() {
-        assert_eq!(message_kind("human", "message"), "steer");
-        assert_eq!(message_kind("agent", "message"), "message");
-        assert_eq!(message_kind("human", "notice"), "notice");
+        assert_eq!(message_kind("human", "message", None).unwrap(), "steer");
+        assert_eq!(message_kind("agent", "message", None).unwrap(), "message");
+        assert_eq!(message_kind("human", "notice", None).unwrap(), "notice");
+        assert_eq!(message_kind("human", "command", Some("agent")).unwrap(), "steer");
+        assert_eq!(message_kind("agent", "command", Some("agent")).unwrap(), "message");
+        assert_eq!(message_kind("human", "command", Some("human")).unwrap(), "chat");
+        assert_eq!(message_kind("human", "chat", None).unwrap(), "chat");
+        assert!(message_kind("human", "shout", None).is_err());
         assert_eq!(address("all", None), "all");
         assert_eq!(address("", None), "all");
         assert_eq!(address("Bob", Some(4)), "member:4");

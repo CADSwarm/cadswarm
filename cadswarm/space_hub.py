@@ -22,6 +22,9 @@ STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over"
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
           "not_found": 404, "bad_args": 400, "unknown_op": 400, "unreachable": 0}
 OP_WAIT_SECONDS = 150
+# Events that mean a member actually did something (the panel's "working" indicator).
+ACTIVE_KINDS = ("op", "task_claimed", "task_reported", "file_saved", "file_moved", "fea_started", "fea_report",
+                "snapshot", "exported", "message")
 EVENT_KINDS_FOR_CONTEXT = ("op", "taken_over", "stale", "joined", "task", "task_reported", "fea_report", "fea_failed")
 
 
@@ -60,7 +63,7 @@ class SpaceHub:
             ("GET", r"/participants", self.participants_route), ("POST", r"/takeover", self.takeover),
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
-            ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat),
+            ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief),
@@ -195,9 +198,19 @@ class SpaceHub:
         locks = {}
         for l in self._rows("v_lock"):
             locks.setdefault(l["holder"], []).append(l["object"])
+        working = {}  # each member's oldest claimed task: what they're working on
+        for t in sorted(self._rows("v_task"), key=lambda t: t["updated_ms"]):
+            if t["status"] == "claimed":
+                working.setdefault(t["owner"], {"id": t["id"], "title": t["title"]})
+        acted = {}  # when each member last actually did something
+        for e in self._rows("v_event"):
+            if e["kind"] in ACTIVE_KINDS:
+                acted[e["actor"]] = max(acted.get(e["actor"], 0), e["at_ms"])
+        now_ms = time.time() * 1000
         return [{"id": m["id"], "name": m["name"], "kind": m["kind"], "client": m["client"], "role": m["role"],
                  "status": m["status"], "doing": m["status_text"], "last_seen": m["last_seen_ms"] / 1000,
-                 "locks": sorted(locks.get(m["id"], []))}
+                 "locks": sorted(locks.get(m["id"], [])), "task": working.get(m["id"]),
+                 "idle_s": round(max(0.0, now_ms - acted[m["id"]]) / 1000, 1) if m["id"] in acted else None}
                 for m in sorted(self._rows("v_member"), key=lambda m: m["id"])
                 if m["status"] not in ("left", "taken_over")]
 
@@ -425,7 +438,7 @@ class SpaceHub:
     def _unconsumed(self):
         me = self.me_id
         consumed = {r["message_id"] for r in self._rows("v_receipt") if r["member"] == me and r["state"] == "consumed"}
-        rank = {"steer": 0, "handoff": 1}
+        rank = {"steer": 0, "handoff": 1, "chat": 3}  # people's chat is background, read last
         mine = [m for m in self._rows("v_message")
                 if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
@@ -438,6 +451,31 @@ class SpaceHub:
         return {"messages": [{"id": m["id"], "from": names.get(m["from"], "?"), "to": "all" if m["to"] == "all" else "you",
                               "kind": m["kind"], "body": m["body"], "task_id": m["task_id"] or None,
                               "at": m["created_ms"] / 1000} for m in rows]}
+
+    def commands(self, limit=20):
+        """The instructions this person sent to AI helpers and how far each got: sent (not read yet), seen (the
+        helper read it) or done (the helper said it handled it)."""
+        names = self._names()
+        members = [m for m in self._rows("v_member") if m["status"] not in ("left", "taken_over")]
+        agents = [m["id"] for m in members if m["kind"] != "human"]
+        receipts = {(r["message_id"], r["member"]): r["state"] for r in self._rows("v_receipt")}
+        mine = sorted((m for m in self._rows("v_message") if m["from"] == self.me_id and m["kind"] == "steer"),
+                      key=lambda m: m["created_ms"], reverse=True)[:int(limit)]
+        order = ("sent", "seen", "done")
+        out = []
+        for m in mine:
+            if m["to"] == "all":
+                targets = agents
+            elif m["to"].startswith("member:"):
+                targets = [int(m["to"].split(":", 1)[1])]
+            else:
+                targets = []  # addressed to someone who hasn't joined yet
+            states = {names.get(t, str(t)): {"delivered": "seen", "consumed": "done"}.get(receipts.get((m["id"], t)), "sent")
+                      for t in targets}
+            out.append({"id": m["id"], "body": m["body"], "at": m["created_ms"] / 1000, "task_id": m["task_id"] or None,
+                        "to": "all helpers" if m["to"] == "all" else self._to_name(m["to"], names),
+                        "state": min(states.values(), key=order.index) if states else "sent", "by_helper": states})
+        return {"commands": out}
 
     def ack(self, body):
         ids = list(body.get("ids", []))
@@ -499,9 +537,12 @@ class SpaceHub:
                                                                if k not in ("seq", "ts", "kind", "actor")))
         unread = self._unconsumed()
         if unread:
-            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages:")
+            lines.append(f"Unread messages ({len(unread)}) — read with get_inbox, then ack_messages. "
+                         "COMMAND = a person's instruction for you: do it first. chat = people talking: "
+                         "background only, act on it only if it asks you something:")
             for m in unread[:5]:
-                lines.append(f"- [{m['kind']}] {names.get(m['from'], '?')}: {m['body'][:200]}")
+                tag = {"steer": "COMMAND", "chat": "chat"}.get(m["kind"], m["kind"])
+                lines.append(f"- [{tag}] {names.get(m['from'], '?')}: {m['body'][:200]}")
         self._f("set_context_seq", seq)
         text = "\n".join(lines)
         return {"context": text if len(text) <= max_chars else text[:max_chars - 20] + "\n…(truncated)"}

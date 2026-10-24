@@ -4,7 +4,8 @@
 
 Each teammate's AI helper (Claude Code, Codex, Droid, or the CLI you already use) builds part of one
 shared 3D model, live.
-You watch the parts appear in FreeCAD and chat with the helpers to steer them.
+You watch the parts appear in FreeCAD, give the helpers tasks and instructions, and change parts
+yourself when that's quicker.
 
 ## Get started (about 5 minutes)
 
@@ -68,6 +69,33 @@ own after a reboot until you do).
 - When you start a team, the guide asks **where to save the project** (default
   `Documents\CadSwarm\<project name>`). If you pick a folder that already has other things in it,
   the project gets its own subfolder there, so your files are never mixed in or overwritten.
+
+## Working with your team in FreeCAD
+
+The **CadSwarm Team** panel on the right has four tabs, so talking and giving orders never get mixed up:
+
+- **Who's here** (top) shows every person and AI helper. A helper that is busy shows a turning
+  **◐ Working on "…"**; one with nothing to do shows **Ready for instructions**.
+- **Tasks**: click **＋ New task…**, say what kind of task it is (build a part, change one, check strength,
+  fix clashes), describe it, and pick who does it: a helper, "whichever helper is free first", or yourself.
+  Leave **Start right away** ticked and the helper is told to begin. For a task that's already on the
+  list, use **Ask to start**, **I'll do it** or **Mark done**.
+- **Tell a helper**: instructions for one AI helper (or all of them). A helper does these before anything
+  else. Each one shows **⏳ not read yet**, **👀 read — working on it** or **✓ done**. The quick buttons fill in
+  common ones (check for clashes, run a strength check, give me a status, pause, let go of a part).
+  Helpers read new instructions when they finish a step. If one hasn't read yours after a while, the
+  panel tells you; type *continue* in that helper's Claude Code / Codex window.
+- **Team chat**: people talking to each other. Helpers can read it, and their replies show up here marked
+  *(AI helper)*, but they never take chat as an order.
+- **Activity**: what happened, written by CadSwarm (parts added, tasks finished, files saved, reports).
+
+**Changing a part yourself.** Select the part in the 3D view and click **✎ Edit a part…**. While the
+editor is open, the part is held by you, so no helper can change it at the same time. Type a new size
+or position, or move it with FreeCAD's own **Edit ▸ Placement** / **Transform** and the editor picks up the
+move. **Save to team** sends the change to everyone; **Done** hands the part back. A part held by a helper
+offers **Ask … to let go** (or, if it has gone quiet, **Free it anyway**). If you move a part in the 3D view
+without opening the editor, CadSwarm puts it back and explains, so your view never silently differs
+from your team's.
 
 ## Your project folder
 
@@ -303,21 +331,24 @@ through the MCP tools instead.
    (someone who lost their identity file) inherits that participant's own work.
 7. Tasks and messages can be addressed to a teammate who hasn't joined yet. They're delivered when
    that name joins.
-8. Human messages are `steer` messages and always come first in every inbox. Peer messages are
-   requests, never permissions.
+8. A person's instructions to a helper are `steer` messages (shown as COMMAND) and always come first
+   in every inbox; the sender sees sent → seen (delivered) → done (acknowledged). Team chat is `chat`,
+   last in the inbox and never treated as an order. Only people can give commands; a person's
+   "command" to another person is delivered as chat. Peer messages are requests, never permissions.
 
 ## Tests
 
 ```powershell
-.venv\Scripts\python -m pytest        # 255 tests; the integration and sandbox tests drive real FreeCAD
+.venv\Scripts\python -m pytest        # the integration and sandbox tests drive real FreeCAD
 ```
 
 See [demo/README.md](demo/README.md) for a three-agent demo script.
 
 ## Known limits (hackathon MVP)
 
-- The FreeCAD mirror is read-only. Human geometry edits go through the panel (lock, param,
-  takeover) or an agent, not direct GUI modelling.
+- Hand edits go through **✎ Edit a part**: sizes of primitives (box, cylinder, sphere, cone, torus) and
+  position/rotation of any part. Sketch-based or fused parts can be moved but not reshaped by hand; ask a
+  helper for those.
 - `run_part_script` is sandboxed (see "Model scripts run in a sandbox"), but how well depends on the
   platform: strong on Windows with AppContainers, much weaker on macOS/Linux and in the Windows fallback.
   Each script also pays about half a second to start its own FreeCAD process. The sandbox protects your

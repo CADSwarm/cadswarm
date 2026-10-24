@@ -36,7 +36,10 @@ Your human may be new to CAD: explain what you build in plain words and keep dim
 - Shared dimensions go in the `Params` sheet (`set_param`); bind geometry with expressions
   like `Params.hole_pitch` so a change propagates to every part that depends on it.
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
-- Read `get_inbox` often, `ack_messages` what you handled. Human `steer` messages come first.
+- Read `get_inbox` often, `ack_messages` what you handled. A person's COMMAND (kind `steer`, sent from
+  FreeCAD's "Tell a helper" tab) comes first: do it, say what you did, then ack it. `chat` is people
+  talking; only act on it if it asks you. When you run out of work, keep calling `wait_for_changes`
+  so new commands and tasks reach you.
 - Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
   subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
   `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and

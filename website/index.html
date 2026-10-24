@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="CadSwarm is a free, open-source FreeCAD workspace where your team and its AI agents build one live 3D model together. Join the waitlist.">
+<meta property="og:title" content="CadSwarm">
+<meta property="og:description" content="Design hardware as a team. Your team’s Claude Code and Codex build one live FreeCAD model together.">
+<meta name="theme-color" content="#0a0a0a">
+<title>CadSwarm</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+body { margin: 0; } img { max-width: 100%; } [hidden] { display: none !important; }
+/* Layout: one dark sheet, a rounded "viewport" hero card with a live wireframe build,
+   then plain hairline-divided sections at a 1240px measure, closing on the waitlist. */
+:root {
+  --bg: #0a0a0a;
+  --surface: #121212;
+  --surface-2: #181818;
+  --line: rgba(244, 243, 241, .10);
+  --line-strong: rgba(244, 243, 241, .18);
+  --text: #f4f3f1;
+  --body: #d4d2cd;
+  --muted: #8f8d88;
+  --bone: #e8e2d4;
+  --ink-on-light: #0a0a0a;
+  /* owner colours, the same order CadSwarm hands them out in FreeCAD */
+  --own-1: #4c9be0;
+  --own-2: #f0913a;
+  --own-3: #4fb35a;
+  --own-4: #e5534b;
+  --ok: #4fb35a;
+  --warn: #e3b341;
+  --font-body: 'DM Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
+  z-index: 10; background: var(--bg);
+}
+a { color: inherit; text-decoration: none; }
+h1, h2, h3 { color: var(--text); font-weight: 500; margin: 0; text-wrap: balance; }
+h1, h2 { letter-spacing: -.03em; line-height: 1.1; }
+p { margin: 0; }
+:focus-visible { outline: 2px solid var(--bone); outline-offset: 3px; border-radius: 6px; }
+
+.wrap {
+  max-width: 1240px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+@media (min-width: 720px) { .wrap { padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); } }
+
+/* ---------- nav ---------- */
+.nav { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9; padding-block: 12px; background: linear-gradient(var(--bg) 60%, transparent); }
+.nav-inner { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; height: 48px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font-weight: 600; letter-spacing: -.01em; font-size: 17px; }
+.brand svg { width: 22px; height: 22px; flex: none; }
+.links { display: flex; gap: 28px; font-size: 14px; color: var(--muted); }
+.links a:hover { color: var(--text); }
+.nav-cta { justify-self: end; }
+.btn {
+  display: inline-flex; align-items: center; gap: 10px; border: 0; cursor: pointer;
+  font: 500 14px/1 var(--font-body); padding: 11px 16px; border-radius: 9px;
+  background: var(--text); color: var(--ink-on-light); transition: background .15s ease, transform .15s ease;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bone); }
+.btn:active { transform: translateY(1px); }
+.btn-lg { font-size: 17px; padding: 17px 28px; border-radius: 12px; }
+.btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+.btn-ghost:hover { background: var(--surface-2); }
+@media (max-width: 760px) {
+  .links { display: none; }
+  .nav-inner { grid-template-columns: 1fr auto; }
+}
+
+/* ---------- hero ---------- */
+.hero-card {
+  position: relative; overflow: hidden;
+  background: var(--bg);
+  display: grid; justify-items: center; align-content: center; text-align: center;
+  min-height: clamp(560px, 82vh, 860px);
+  padding-block: clamp(64px, 9vw, 120px) clamp(112px, 14vw, 190px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.hero-card canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 22%, #000 68%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 22%, #000 68%, transparent 100%);
+}
+.hero-copy { position: relative; z-index: 1; display: grid; gap: 24px; justify-items: center; max-width: 960px; }
+/* soft shade behind the words: the bee dims as it flies under them */
+.hero-copy::before {
+  content: ""; position: absolute; z-index: -1; inset: -90px -160px; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(10,10,10,.92) 0%, rgba(10,10,10,.78) 45%, rgba(10,10,10,.35) 75%, transparent 100%);
+}
+@media (max-width: 640px) { .hero-copy::before { inset: -60px -40px; } }
+.hero-copy h1, .hero-copy .hero-sub { text-shadow: 0 2px 24px rgba(0,0,0,.85), 0 0 2px rgba(0,0,0,.9); }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--font-mono);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(10,10,10,.7);
+}
+.eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(79,179,90,.2); }
+h1 { font-size: clamp(42px, 7.2vw, 100px); line-height: 1; letter-spacing: -.045em; }
+.hero-sub { max-width: 58ch; font-size: clamp(16px, 1.5vw, 21px); line-height: 1.5; color: rgba(244,243,241,.82); text-wrap: pretty; }
+.hero-actions { display: grid; gap: 12px; justify-items: center; }
+.fine { font: 400 13px/1.4 var(--font-mono); color: var(--muted); }
+.fade-in { animation: up .8s ease both; }
+.fade-in.d2 { animation-delay: .1s; } .fade-in.d3 { animation-delay: .2s; } .fade-in.d4 { animation-delay: .3s; }
+@keyframes up { from { opacity: .001; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fade-in { animation: none; } }
+
+/* ---------- works-with strip ---------- */
+.strip { padding-block: 56px 8px; display: grid; gap: 18px; justify-items: center; text-align: center; }
+.strip p { font-size: 14px; color: var(--muted); }
+.strip ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 36px; }
+.strip li { font: 500 15px/1 var(--font-mono); color: rgba(244,243,241,.6); letter-spacing: -.01em; }
+
+/* ---------- sections ---------- */
+section.block { padding-block: clamp(72px, 9vw, 120px) 0; display: grid; gap: 48px; }
+.head { display: grid; gap: 6px; max-width: 900px; }
+h2 { font-size: clamp(26px, 3vw, 40px); }
+.sub2 { font-size: clamp(20px, 2.4vw, 32px); line-height: 1.2; letter-spacing: -.025em; color: var(--muted); text-wrap: balance; }
+
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 48px 40px; }
+figure { margin: 0; display: grid; gap: 18px; align-content: start; }
+figcaption { font-size: 16px; color: var(--muted); text-wrap: pretty; max-width: 60ch; }
+figcaption strong { color: var(--text); font-weight: 500; }
+.shot {
+  position: relative; aspect-ratio: 16 / 10; max-width: 100%; border-radius: 6px; overflow: hidden;
+  background: #050505; border: 1px solid rgba(244,243,241,.08);
+  display: grid; place-items: center; padding: 24px;
+}
+.shot svg { width: 100%; height: 100%; }
+.shot svg text { font-family: var(--font-mono); }
+
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.cols > div { padding: 26px 26px 30px; display: grid; gap: 8px; align-content: start; }
+.cols > div + div { border-left: 1px solid var(--line); }
+@media (max-width: 860px) { .cols > div + div { border-left: 0; border-top: 1px solid var(--line); } }
+.cols h3 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.cols p { font-size: 15px; color: var(--muted); }
+
+/* ---------- panel mock ---------- */
+.demo { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 48px; align-items: start; }
+@media (max-width: 900px) { .demo { grid-template-columns: minmax(0, 1fr); } }
+.panel { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; font-size: 14px; min-width: 0; }
+.panel-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.panel-bar b { color: var(--text); font-weight: 600; }
+.status { display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--font-mono); color: var(--ok); }
+.status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.panel-sec { padding: 14px 16px; display: grid; gap: 10px; }
+.panel-sec + .panel-sec { border-top: 1px solid var(--line); }
+.label { font: 500 11px/1 var(--font-mono); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.who { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.dot { width: 9px; height: 9px; border-radius: 50%; }
+.who .name { color: var(--text); font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }
+.who .holds { color: var(--muted); font-size: 13px; }
+.pill { font: 500 11px/1 var(--font-mono); padding: 5px 8px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+.pill.warn { color: var(--warn); border-color: rgba(227,179,65,.4); background: rgba(227,179,65,.08); }
+.pill.live { color: var(--ok); border-color: rgba(79,179,90,.35); }
+.log { display: grid; gap: 8px; font-size: 13px; line-height: 1.45; }
+.log div { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; }
+.log time { font-family: var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.log .refused { color: #f0a29d; }
+.log .steer { color: var(--bone); }
+.panel-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.panel-btns span { font-size: 12.5px; padding: 7px 10px; border-radius: 7px; border: 1px solid var(--line-strong); color: var(--body); background: var(--surface-2); }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: s; }
+.steps li { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; counter-increment: s; }
+.steps li::before {
+  content: counter(s); font: 500 13px/1 var(--font-mono); color: var(--text);
+  width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line-strong); display: grid; place-items: center;
+}
+.steps b { color: var(--text); font-weight: 500; display: block; margin-bottom: 2px; }
+.steps p { color: var(--muted); font-size: 15px; }
+.figtag { font: 400 13px/1.4 var(--font-mono); color: var(--muted); }
+
+/* ---------- parallel ---------- */
+.trio { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 28px; }
+.trio > div { display: grid; gap: 10px; align-content: start; padding-top: 20px; border-top: 1px solid var(--line-strong); }
+.trio h3 { font-size: 18px; letter-spacing: -.015em; }
+.trio p { color: var(--muted); font-size: 15px; }
+.trio code { font-family: var(--font-mono); font-size: 13px; color: var(--body); background: var(--surface-2); padding: 2px 6px; border-radius: 5px; overflow-wrap: anywhere; }
+
+/* ---------- waitlist ---------- */
+.wl { margin-top: clamp(72px, 9vw, 120px); border: 1px solid var(--line); border-radius: 20px; background: var(--surface); display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); overflow: hidden; }
+@media (max-width: 900px) { .wl { grid-template-columns: minmax(0, 1fr); } }
+.wl-copy { padding: clamp(28px, 4vw, 56px); display: grid; gap: 18px; align-content: start; border-right: 1px solid var(--line); }
+@media (max-width: 900px) { .wl-copy { border-right: 0; border-bottom: 1px solid var(--line); } }
+.wl-copy ul { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; color: var(--body); font-size: 15px; }
+.wl-copy li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 10px; }
+.wl-copy li::before { content: ""; width: 8px; height: 8px; margin-top: 8px; border-radius: 2px; background: var(--bone); }
+form { padding: clamp(28px, 4vw, 56px); display: grid; gap: 18px; align-content: start; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 18px; }
+.field { display: grid; gap: 8px; min-width: 0; }
+.field label { font-size: 13px; color: var(--body); font-weight: 500; }
+.field label span { color: var(--muted); font-weight: 400; }
+input, select, textarea {
+  width: 100%; font: 400 15px/1.4 var(--font-body); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-strong); border-radius: 9px; padding: 12px 14px;
+  transition: border-color .15s ease;
+}
+textarea { resize: vertical; min-height: 92px; }
+input::placeholder, textarea::placeholder { color: #5f5d59; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--bone); }
+input[aria-invalid="true"] { border-color: var(--own-4); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.chips label { font-size: 14px; color: var(--body); padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line-strong); cursor: pointer; font-weight: 400; transition: background .15s ease, color .15s ease; }
+.chips input:checked + label { background: var(--text); color: var(--ink-on-light); border-color: var(--text); }
+.chips input:focus-visible + label { outline: 2px solid var(--bone); outline-offset: 2px; }
+.form-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 20px; }
+.msg { font-size: 14px; min-height: 1.4em; }
+.msg.err { color: #f0a29d; }
+.msg.ok { color: var(--ok); }
+.done { padding: clamp(28px, 4vw, 56px); display: grid; gap: 14px; align-content: center; }
+.done h3 { font-size: clamp(24px, 2.6vw, 32px); letter-spacing: -.025em; }
+.done p { color: var(--muted); }
+.owner { margin-top: 24px; border: 1px dashed var(--line-strong); border-radius: 12px; padding: 18px; display: grid; gap: 12px; }
+.owner-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline; }
+.owner-head b { color: var(--text); font-weight: 500; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 560px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 11px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+td.mono { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ---------- closing + footer ---------- */
+.closing { padding-block: clamp(72px, 9vw, 120px) 0; display: grid; gap: 22px; justify-items: center; text-align: center; }
+.closing h2 { font-size: clamp(30px, 4vw, 56px); letter-spacing: -.035em; }
+.closing p { color: var(--muted); font-size: 17px; }
+.closing .btns { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line); padding-block: 48px 40px; }
+.foot { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)); gap: 32px; }
+@media (max-width: 760px) { .foot { grid-template-columns: repeat(2, minmax(0, 1fr)); } .foot > div:first-child { grid-column: 1 / -1; } }
+.foot p { color: var(--muted); font-size: 14px; max-width: 36ch; }
+.foot h4 { margin: 0 0 12px; font: 500 12px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.foot ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 14px; }
+.foot a:hover { color: var(--text); }
+.copy { margin-top: 40px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top" aria-label="CadSwarm home">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.6">
+        <path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4Z" stroke="#f4f3f1"/>
+        <path d="M12 12 20 7.4M12 12 4 7.4M12 12v9.2" stroke="#f4f3f1" opacity=".45"/>
+        <circle cx="12" cy="12" r="2.2" fill="#4c9be0" stroke="none"/>
+        <circle cx="17" cy="9.2" r="1.5" fill="#f0913a" stroke="none"/>
+        <circle cx="7" cy="9.2" r="1.5" fill="#4fb35a" stroke="none"/>
+      </svg>
+      CadSwarm
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#panel">In FreeCAD</a>
+      <a href="#safety">Safety</a>
+      <a href="#waitlist">Waitlist</a>
+    </nav>
+    <a class="btn nav-cta" href="#waitlist">Join the waitlist</a>
+  </div>
+</header>
+
+<main id="top">
+    <div class="hero-card">
+      <canvas id="bee" aria-hidden="true"></canvas>
+      <div class="hero-copy">
+        <span class="eyebrow fade-in"><i></i>Open source · Waitlist open</span>
+        <h1 class="fade-in d2">Design hardware<br>as a team.</h1>
+        <p class="hero-sub fade-in d3">CadSwarm is a shared FreeCAD workspace for your team and the AI agents it runs. Everyone's Claude Code and Codex build one live 3D model together, without stepping on each other's parts.</p>
+        <div class="hero-actions fade-in d4">
+          <a class="btn btn-lg" href="#waitlist">Join the waitlist <span aria-hidden="true">→</span></a>
+          <span class="fine">FreeCAD 1.0+ · Claude Code and Codex · Free and open source</span>
+        </div>
+      </div>
+    </div>
+
+  <div class="wrap">
+    <div class="strip">
+      <p>Built on the tools makers already use</p>
+      <ul>
+        <li>FreeCAD</li><li>Claude Code</li><li>Codex</li><li>STEP</li><li>STL</li><li>MCP</li>
+      </ul>
+    </div>
+
+    <!-- ===== how ===== -->
+    <section class="block" id="how">
+      <div class="head">
+        <h2>Give every agent the same model.</h2>
+        <p class="sub2">One live FreeCAD document, many hands on it, nothing overwritten.</p>
+      </div>
+      <div class="figs">
+        <figure>
+          <div class="shot">
+            <svg viewBox="0 0 480 300" role="img" aria-label="Three parts in three owner colours appear in one model">
+              <g fill="none" stroke-width="1.6">
+                <path d="M70 200 240 250 410 200 240 150Z" stroke="#4c9be0"/>
+                <path d="M70 200v14l170 50 170-50v-14" stroke="#4c9be0" opacity=".6"/>
+                <g stroke="#f0913a">
+                  <path d="M128 196v-86M146 201v-86"/><ellipse cx="137" cy="110" rx="9" ry="4"/>
+                  <path d="M334 196v-86M352 191v-86"/><ellipse cx="343" cy="106" rx="9" ry="4"/>
+                </g>
+                <path d="M70 100 240 150 410 100 240 50Z" stroke="#4fb35a" stroke-dasharray="5 5"/>
+              </g>
+              <g font-size="12">
+                <rect x="20" y="20" width="130" height="24" rx="5" fill="#121212" stroke="rgba(244,243,241,.12)"/>
+                <circle cx="34" cy="32" r="4" fill="#4c9be0"/><text x="44" y="36" fill="#d4d2cd">lead-claude</text>
+                <rect x="170" y="20" width="130" height="24" rx="5" fill="#121212" stroke="rgba(244,243,241,.12)"/>
+                <circle cx="184" cy="32" r="4" fill="#f0913a"/><text x="194" y="36" fill="#d4d2cd">posts-codex</text>
+                <rect x="320" y="20" width="130" height="24" rx="5" fill="#121212" stroke="rgba(244,243,241,.12)"/>
+                <circle cx="334" cy="32" r="4" fill="#4fb35a"/><text x="344" y="36" fill="#d4d2cd">lid-claude</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption><strong>Live model.</strong> Every part shows up in your FreeCAD window the moment an agent builds it, coloured by who made it. Nobody passes files around.</figcaption>
+        </figure>
+        <figure>
+          <div class="shot">
+            <svg viewBox="0 0 480 300" role="img" aria-label="An agent's change to a part held by someone else is refused">
+              <rect x="40" y="40" width="400" height="220" rx="8" fill="#0d0d0d" stroke="rgba(244,243,241,.1)"/>
+              <g font-size="13">
+                <text x="64" y="80" fill="#8f8d88">posts-codex</text>
+                <text x="64" y="104" fill="#d4d2cd">set_props Base  Height = 10 mm</text>
+                <rect x="64" y="124" width="352" height="64" rx="6" fill="rgba(229,83,75,.08)" stroke="rgba(229,83,75,.4)"/>
+                <text x="82" y="150" fill="#f0a29d">Refused · held by lead-claude</text>
+                <text x="82" y="172" fill="#8f8d88">Nothing changed. Ask them instead.</text>
+                <text x="64" y="224" fill="#8f8d88">→ send_message @lead-claude</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption><strong>Held parts.</strong> An agent holds the parts it's working on. Anyone else trying to change them is refused, and the change is rolled back before it touches the model.</figcaption>
+        </figure>
+        <figure>
+          <div class="shot">
+            <svg viewBox="0 0 480 300" role="img" aria-label="A shared sizes sheet; changing hole_pitch moves the posts and notifies their owner">
+              <rect x="40" y="40" width="400" height="220" rx="8" fill="#0d0d0d" stroke="rgba(244,243,241,.1)"/>
+              <g font-size="13">
+                <text x="64" y="76" fill="#8f8d88">SHARED SIZES</text>
+                <g fill="#d4d2cd">
+                  <text x="64" y="110">plate_len</text><text x="330" y="110" text-anchor="end">120 mm</text>
+                  <text x="64" y="138">plate_t</text><text x="330" y="138" text-anchor="end">6 mm</text>
+                  <text x="64" y="194">post_h</text><text x="330" y="194" text-anchor="end">30 mm</text>
+                </g>
+                <rect x="56" y="148" width="368" height="28" rx="5" fill="rgba(232,226,212,.08)" stroke="rgba(232,226,212,.3)"/>
+                <text x="64" y="166" fill="#f4f3f1">hole_pitch</text>
+                <text x="330" y="166" text-anchor="end" fill="#f4f3f1">100 → 90 mm</text>
+                <text x="64" y="236" fill="#f0913a">● posts-codex notified · 4 posts moved</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption><strong>Shared sizes.</strong> Key dimensions live in one sheet that every part reads from. Change the hole spacing once, every post moves, and the agent that owns them is told.</figcaption>
+        </figure>
+        <figure>
+          <div class="shot">
+            <svg viewBox="0 0 480 300" role="img" aria-label="Project folder tree with files, exports and snapshots">
+              <rect x="40" y="40" width="400" height="220" rx="8" fill="#0d0d0d" stroke="rgba(244,243,241,.1)"/>
+              <g font-size="13" fill="#d4d2cd">
+                <text x="64" y="76" fill="#f4f3f1">Phone stand/</text>
+                <text x="84" y="102">model.FCStd</text>
+                <text x="84" y="126">files/parts/base/notes.md</text><text x="416" y="126" text-anchor="end" fill="#8f8d88">v2</text>
+                <text x="84" y="150">files/docs/bom.csv</text><text x="416" y="150" text-anchor="end" fill="#8f8d88">v1</text>
+                <text x="84" y="174">exports/Phone stand.step</text>
+                <text x="84" y="198">snapshots/first draft.FCStd</text>
+                <text x="64" y="236" fill="#4fb35a">✓ replaced files kept in history</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption><strong>Safe saving.</strong> Agents save into one project folder you choose. They can't write outside it, can't silently overwrite each other, and every replaced or deleted file can be restored.</figcaption>
+        </figure>
+      </div>
+
+      <div class="cols">
+        <div><h3>Visible</h3><p>See who is building what, which parts each agent holds, and every change as it lands.</p></div>
+        <div><h3>Coordinated</h3><p>Tasks, messages and a lead agent keep the build moving in one direction. Your instructions jump the queue.</p></div>
+        <div><h3>Recoverable</h3><p>If someone's agent crashes, its parts stay protected until a teammate takes over and finishes the job.</p></div>
+      </div>
+    </section>
+
+    <!-- ===== panel ===== -->
+    <section class="block" id="panel">
+      <div class="head">
+        <h2>It lives inside FreeCAD.</h2>
+        <p class="sub2">A team panel beside your model. No terminal required to watch or steer.</p>
+      </div>
+      <div class="demo">
+        <div style="display:grid;gap:12px;min-width:0">
+          <div class="panel" role="img" aria-label="Mock-up of the CadSwarm team panel during a build">
+            <div class="panel-bar"><b>Team · Enclosure</b><span class="status">Connected</span></div>
+            <div class="panel-sec">
+              <span class="label">Who's here</span>
+              <div class="who"><span class="dot" style="background:var(--muted)"></span><span class="name">sam (you)</span><span class="pill live">watching</span></div>
+              <div class="who"><span class="dot" style="background:var(--own-1)"></span><span class="name">lead-claude <span class="holds">· Params, Base plate</span></span><span class="pill live">building</span></div>
+              <div class="who"><span class="dot" style="background:var(--own-2)"></span><span class="name">posts-codex <span class="holds">· 4 posts</span></span><span class="pill warn">no reply 34 s</span></div>
+              <div class="who"><span class="dot" style="background:var(--own-3)"></span><span class="name">lid-claude <span class="holds">· Lid</span></span><span class="pill live">building</span></div>
+            </div>
+            <div class="panel-sec">
+              <span class="label">Team chat</span>
+              <div class="log">
+                <div><time>14:02</time><span>lead-claude set <b style="color:var(--text);font-weight:500">hole_pitch</b> to 100 mm and added 3 tasks</span></div>
+                <div><time>14:05</time><span>posts-codex built Post001 to Post004</span></div>
+                <div><time>14:06</time><span class="refused">lid-claude tried to change Base plate. Refused, held by lead-claude</span></div>
+                <div><time>14:07</time><span class="steer">sam → lid-claude: make the lid 20 mm tall</span></div>
+                <div><time>14:09</time><span>Clash check: none. Lid clears all 4 posts</span></div>
+              </div>
+            </div>
+            <div class="panel-sec">
+              <div class="panel-btns"><span>Add a task</span><span>Change a shared size</span><span>Check for clashes</span><span>Save as 3D file</span></div>
+            </div>
+          </div>
+          <span class="figtag">Fig. 01 · The team panel during a three-agent enclosure build (illustration)</span>
+        </div>
+        <ol class="steps">
+          <li><div><b>Start a team</b><p>Open the CadSwarm workbench in FreeCAD and follow the guide. Name the project and pick a folder. That's the whole setup.</p></div></li>
+          <li><div><b>Share the invite code</b><p>Teammates paste one code to join. Each of them connects their own Claude Code or Codex in a click.</p></div></li>
+          <li><div><b>Split the work</b><p>A lead agent sets the shared sizes and hands out tasks. The other agents claim them and build their parts.</p></div></li>
+          <li><div><b>Steer and export</b><p>Message any agent from the panel, run a clash check, and save the result as STEP or STL.</p></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== safety / parallel ===== -->
+    <section class="block" id="safety">
+      <div class="head">
+        <h2>Everyone's agents build at the same time,</h2>
+        <p class="sub2">on your own machines, in one shared model.</p>
+      </div>
+      <div class="trio">
+        <div><h3>Bring your own agent.</h3><p>Use the Claude Code or Codex subscription you already have. CadSwarm gives each one a set of CAD tools: make shapes, hold parts, read shared sizes, check clashes.</p></div>
+        <div><h3>Hosted by one teammate.</h3><p>The team server runs on the host's computer next to the model file. Your designs stay on your machines unless you choose to share them.</p></div>
+        <div><h3>Guard rails on every change.</h3><p>Each change runs as one undoable step. Agent scripts can build geometry but can't open, write or delete files on your computer. Files go through <code>save_file</code>, which never overwrites by accident.</p></div>
+      </div>
+    </section>
+
+    <!-- ===== waitlist ===== -->
+    <section class="wl" id="waitlist" aria-labelledby="wl-title">
+      <div class="wl-copy">
+        <h2 id="wl-title">Join the waitlist.</h2>
+        <p style="color:var(--muted);font-size:17px">We're opening CadSwarm to small teams first. Leave your details and we'll send you an invite when your spot is ready.</p>
+        <ul>
+          <li>Early builds for Windows, with macOS and Linux to follow</li>
+          <li>Help setting up your first team build</li>
+          <li>A say in what we build next</li>
+        </ul>
+      </div>
+      <div id="wl-side">
+        <form id="wl-form" novalidate>
+          <div class="row2">
+            <div class="field"><label for="wl-name">Name</label><input id="wl-name" name="name" autocomplete="name" placeholder="Sam Rivera" maxlength="80"></div>
+            <div class="field"><label for="wl-email">Email</label><input id="wl-email" name="email" type="email" autocomplete="email" placeholder="sam@example.com" maxlength="120" required></div>
+          </div>
+          <div class="field">
+            <span class="label" style="margin-bottom:2px">I'm a</span>
+            <div class="chips" role="radiogroup" aria-label="I'm a">
+              <input type="radio" name="role" id="r-hob" value="Hobbyist / maker" checked><label for="r-hob">Hobbyist / maker</label>
+              <input type="radio" name="role" id="r-eng" value="Engineer"><label for="r-eng">Engineer</label>
+              <input type="radio" name="role" id="r-stu" value="Student"><label for="r-stu">Student</label>
+              <input type="radio" name="role" id="r-team" value="Team lead"><label for="r-team">Team lead</label>
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field">
+              <label for="wl-team">Team size</label>
+              <select id="wl-team" name="team">
+                <option>Just me</option><option selected>2 to 5</option><option>6 to 20</option><option>More than 20</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="wl-agent">Agent you use</label>
+              <select id="wl-agent" name="agent">
+                <option>Claude Code</option><option>Codex</option><option>Both</option><option>Not yet</option>
+              </select>
+            </div>
+          </div>
+          <div class="field"><label for="wl-build">What would you build? <span>(optional)</span></label><textarea id="wl-build" name="build" maxlength="600" placeholder="A drone frame with my robotics club, an enclosure for a sensor board…"></textarea></div>
+          <div aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden"><label for="wl-website">Website</label><input id="wl-website" name="website" tabindex="-1" autocomplete="off"></div>
+          <div class="form-foot">
+            <button class="btn btn-lg" type="submit" id="wl-submit">Join the waitlist</button>
+            <span class="msg" id="wl-msg" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+        <div class="done" id="wl-done" hidden>
+          <span class="status">You're on the list</span>
+          <h3>Thanks, <span id="wl-done-name">you're in</span>.</h3>
+          <p>We'll email <b id="wl-done-email" style="color:var(--text);font-weight:500"></b> when your invite is ready.</p>
+          <p id="wl-done-note" class="fine"></p>
+          <div><button class="btn btn-ghost" type="button" id="wl-edit">Change my details</button></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="closing">
+      <h2>Build your next part together.</h2>
+      <p>Free and open source. Start a team, share a code, let the agents build.</p>
+      <div class="btns"><a class="btn btn-lg" href="#waitlist">Join the waitlist</a><a class="btn btn-lg btn-ghost" href="#how">See how it works</a></div>
+    </section>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <div class="foot">
+        <div>
+          <a class="brand" href="#top" style="margin-bottom:12px">CadSwarm</a>
+          <p>The shared FreeCAD workspace where your team and its AI agents build one model together.</p>
+        </div>
+        <div><h4>Product</h4><ul><li><a href="#how">How it works</a></li><li><a href="#panel">In FreeCAD</a></li><li><a href="#safety">Safety</a></li></ul></div>
+        <div><h4>Works with</h4><ul><li>FreeCAD 1.0+</li><li>Claude Code</li><li>Codex</li></ul></div>
+        <div><h4>Open source</h4><ul><li>Free to use</li><li><a href="#waitlist">Join the waitlist</a></li><li>Windows first</li></ul></div>
+      </div>
+      <div class="copy"><span>© 2026 CadSwarm</span><span>Free and open source. Your models stay on your machines.</span></div>
+    </div>
+  </footer>
+</main>
+
+<script>
+/* ---------- hero: halftone pixel bee drifting behind the headline ---------- */
+(function () {
+  const canvas = document.getElementById('bee');
+  const ctx = canvas.getContext('2d');
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W = 0, H = 0, dpr = 1, step = 8, cols = 0, rows = 0, seed = new Float32Array(0);
+
+  function size() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.clientWidth; H = canvas.clientHeight;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    step = W < 640 ? 6 : 8;
+    cols = Math.ceil(W / step) + 1; rows = Math.ceil(H / step) + 1;
+    seed = new Float32Array(cols * rows);
+    for (let i = 0; i < seed.length; i++) { const s = Math.sin(i * 12.9898) * 43758.5453; seed[i] = s - Math.floor(s); }
+  }
+
+  // normalised ellipse radius: < 1 inside, 1 on the edge
+  function ell(u, v, cx, cy, rx, ry, rot) {
+    const c = Math.cos(rot), s = Math.sin(rot), x = u - cx, y = v - cy;
+    const a = (x * c + y * s) / rx, b = (-x * s + y * c) / ry;
+    return Math.sqrt(a * a + b * b);
+  }
+  function seg(u, v, ax, ay, bx, by) {
+    const dx = bx - ax, dy = by - ay, t = Math.max(0, Math.min(1, ((u - ax) * dx + (v - ay) * dy) / (dx * dx + dy * dy)));
+    const x = u - ax - t * dx, y = v - ay - t * dy;
+    return Math.sqrt(x * x + y * y);
+  }
+  const soft = (d, w) => Math.max(0, Math.min(1, (1 - d) / w));
+
+  // brightness of the bee at local point (u, v); head faces -u, bee is about 2 units long
+  function bee(u, v, flap) {
+    let I = 0;
+    const body = ell(u, v, 0.1, 0.12, 0.56, 0.36, -0.08);
+    if (body < 1.7) I = 0.32 * (1.7 - body) / 0.7;                      // speckled glow around the bee
+    // wings sit behind the body and beat
+    const w1 = ell(u, v, 0.02, -0.5, 0.26, 0.44 * flap, -0.4);
+    const w2 = ell(u, v, 0.36, -0.44, 0.22, 0.36 * flap, 0.3);
+    for (const w of [w1, w2]) if (w < 1) I = Math.max(I, w > 0.82 ? 0.95 : 0.42);
+    // antennae
+    const ant = Math.min(seg(u, v, -0.7, -0.14, -0.86, -0.46), seg(u, v, -0.86, -0.46, -0.98, -0.5),
+                         seg(u, v, -0.6, -0.18, -0.66, -0.52), seg(u, v, -0.66, -0.52, -0.78, -0.58));
+    if (ant < 0.03) I = Math.max(I, 0.9);
+    // legs
+    const legs = Math.min(seg(u, v, -0.12, 0.42, -0.2, 0.62), seg(u, v, 0.12, 0.46, 0.08, 0.66), seg(u, v, 0.34, 0.42, 0.36, 0.6));
+    if (legs < 0.025) I = Math.max(I, 0.7);
+    // stinger
+    if (u > 0.6 && u < 0.9 && Math.abs(v - 0.14) < (0.9 - u) * 0.32) I = Math.max(I, 0.9);
+    // striped abdomen: the dark bands are where dots go missing
+    if (body < 1) {
+      const stripe = Math.sin((u - 0.12) * 13.5);
+      const val = (stripe > 0.3 && u > -0.3) ? 0.08 : 1;
+      I = val * soft(body, 0.08) + I * (1 - soft(body, 0.08));
+    }
+    // head and eye
+    const head = ell(u, v, -0.58, 0.02, 0.25, 0.25, 0);
+    if (head < 1) I = 0.95;
+    if (ell(u, v, -0.66, -0.04, 0.085, 0.1, 0) < 1) I = 0.06;
+    return I;
+  }
+
+  function frame(now) {
+    const t = reduce ? 0.5 : 0.5 + now / 1000;
+    ctx.clearRect(0, 0, W, H);
+    const S = Math.min(W * 0.17, H * 0.34);
+    // flight path: a slow figure-eight on the right of centre, with a bob
+    const px = (tt) => W * (W < 640 ? 0.5 : 0.7) + W * 0.13 * Math.sin(tt * 0.32);
+    const cx = px(t), cy = H * (W < 640 ? 0.72 : 0.56) + H * 0.1 * Math.sin(t * 0.64) + S * 0.05 * Math.sin(t * 3.1);
+    const vx = (px(t + 0.05) - px(t - 0.05)) / (W * 0.016 + 1);
+    const face = -Math.tanh(vx * 7);                       // turns to face the way it flies
+    const sx = Math.sign(face || 1) * Math.max(0.3, Math.abs(face));
+    const tilt = 0.18 * Math.sin(t * 0.64 + 1.2);
+    const flap = reduce ? 0.8 : 0.35 + 0.65 * Math.abs(Math.sin(t * 16));
+    const c = Math.cos(-tilt), s = Math.sin(-tilt);
+    const dot = step * 0.56, off = (step - dot) / 2;
+    ctx.fillStyle = '#f4f3f1';
+    for (let j = 0; j < rows; j++) {
+      const y = j * step;
+      for (let i = 0; i < cols; i++) {
+        const x = i * step, k = j * cols + i;
+        const dx = x - cx, dy = y - cy;
+        const u = (dx * c - dy * s) / (S * sx), v = (dx * s + dy * c) / S;
+        let a = 0.055;
+        if (u > -1.3 && u < 1.3 && v > -1.2 && v < 1) {
+          const twinkle = 0.78 + 0.22 * Math.sin(t * 2.4 + seed[k] * 6.283);
+          a = Math.max(a, bee(u, v, flap) * twinkle);
+          if (a < 0.4 && seed[k] > 0.82) a *= 0.4;          // drop some dots for the halftone grain
+        }
+        if (a < 0.02) continue;
+        ctx.globalAlpha = Math.round(a * 12) / 12;
+        ctx.fillRect(x + off, y + off, dot, dot);
+      }
+    }
+    ctx.globalAlpha = 1;
+    if (!reduce) requestAnimationFrame(frame);
+  }
+
+  size();
+  window.addEventListener('resize', () => { size(); if (reduce) frame(0); });
+  requestAnimationFrame(frame);
+})();
+
+/* ---------- waitlist ---------- */
+(function () {
+  const form = document.getElementById('wl-form');
+  const msg = document.getElementById('wl-msg');
+  const done = document.getElementById('wl-done');
+  const submit = document.getElementById('wl-submit');
+  const email = document.getElementById('wl-email');
+  const KEY = 'cadswarm-waitlist';
+
+  const say = (text, kind) => { msg.textContent = text; msg.className = 'msg' + (kind ? ' ' + kind : ''); };
+  function showDone(entry, again) {
+    document.getElementById('wl-done-name').textContent = entry.name ? entry.name.split(' ')[0] : 'you’re in';
+    document.getElementById('wl-done-email').textContent = entry.email;
+    document.getElementById('wl-done-note').textContent = again ? 'You were already on the list, so we updated your details.' : '';
+    form.hidden = true; done.hidden = false;
+  }
+  function fill(entry) {
+    document.getElementById('wl-name').value = entry.name || '';
+    email.value = entry.email || '';
+    document.getElementById('wl-build').value = entry.build || '';
+    if (entry.team) document.getElementById('wl-team').value = entry.team;
+    if (entry.agent) document.getElementById('wl-agent').value = entry.agent;
+    const r = [...form.querySelectorAll('input[name=role]')].find(i => i.value === entry.role);
+    if (r) r.checked = true;
+  }
+  try { const saved = JSON.parse(localStorage.getItem(KEY) || 'null'); if (saved && saved.email) { fill(saved); showDone(saved); } } catch (e) {}
+  document.getElementById('wl-edit').addEventListener('click', () => { done.hidden = true; form.hidden = false; say(''); });
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const value = email.value.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) {
+      email.setAttribute('aria-invalid', 'true'); email.focus();
+      return say('Enter an email address like sam@example.com.', 'err');
+    }
+    email.removeAttribute('aria-invalid');
+    const entry = {
+      name: document.getElementById('wl-name').value.trim().slice(0, 80),
+      email: value.slice(0, 120),
+      role: (form.querySelector('input[name=role]:checked') || {}).value || '',
+      team: document.getElementById('wl-team').value,
+      agent: document.getElementById('wl-agent').value,
+      build: document.getElementById('wl-build').value.trim().slice(0, 600),
+      website: document.getElementById('wl-website').value
+    };
+    submit.disabled = true; say('Saving your spot…');
+    try {
+      const r = await fetch('/api/waitlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entry) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'Couldn’t save your spot just now. Try again in a minute.');
+      delete entry.website;
+      try { localStorage.setItem(KEY, JSON.stringify(entry)); } catch (e) {}
+      say('');
+      showDone(entry, data.alreadyJoined);
+    } catch (e) {
+      say(e.message && e.message !== 'Failed to fetch' ? e.message : 'Couldn’t reach the server. Check your connection and try again.', 'err');
+    } finally { submit.disabled = false; }
+  });
+})();
+</script>
+
+</body>
+</html>
