@@ -462,7 +462,21 @@ impl Orchestrator {
                 // and fails the whole op on one missing part, so export only what exists.
                 let wanted: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
                 let objects = space.objects_present(&wanted);
-                if objects.is_empty() {
+                // A stopped or blocked task was abandoned on purpose. A done task whose part is
+                // missing is a broken model, not an omission: say so instead of exporting less.
+                let mut missing: Vec<String> = tasks.iter().filter(|t| t.status == "done")
+                    .flat_map(|t| t.objects.clone())
+                    .filter(|n| !objects.contains(n))
+                    .collect();
+                missing.sort();
+                missing.dedup();
+                if !missing.is_empty() {
+                    space.set_brief(
+                        &b.id,
+                        "failed",
+                        &json!({"error": format!("the model is missing {}", missing.join(", "))}).to_string(),
+                    )?;
+                } else if objects.is_empty() {
                     space.set_brief(
                         &b.id,
                         "failed",
