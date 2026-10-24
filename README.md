@@ -1,4 +1,4 @@
-# CadSwarm
+# CADSwarm
 
 **Build 3D designs together with your team's AI helpers — no CAD or coding experience needed.**
 
