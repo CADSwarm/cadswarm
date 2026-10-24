@@ -247,3 +247,7 @@ See [demo/README.md](demo/README.md) for a three-agent demo script.
 - Locks are per object. Editing a shared upstream object (e.g. a sketch used by two features)
   requires its lock; there is no sub-object locking.
 - Single hub, no TLS, shared workspace token. Put it behind a VPN or tunnel for remote teams.
+
+## Structural optimization
+
+The FreeCAD workbench includes **Optimize Part…** for simulation-guided material removal from supported grid-aligned solids. It runs real CalculiX or explicitly selected SciPy analysis, preserves the original, and shares a new part only after acceptance. See [installation, usage and limits](docs/structural-optimization.md) and the [reproducible numerical demonstration](demo/structural/README.md).

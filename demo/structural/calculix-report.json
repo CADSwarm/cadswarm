@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "status": "improved",
+  "accepted_by_user": false,
+  "solver": "CalculiX C3D8 (2x2x2 integration)",
+  "units": {
+    "length": "mm",
+    "force": "N",
+    "stress": "MPa",
+    "mass": "kg"
+  },
+  "material": {
+    "name": "Demo aluminum (illustrative)",
+    "young_mpa": 70000,
+    "poisson": 0.33,
+    "yield_mpa": 240,
+    "density_kg_mm3": 2.7e-06
+  },
+  "loads": [
+    {
+      "side": "x_max",
+      "force_n": [
+        0,
+        0,
+        -200
+      ]
+    }
+  ],
+  "supports": [
+    {
+      "side": "x_min"
+    }
+  ],
+  "constraints": {
+    "max_stress_mpa": 80,
+    "max_displacement_mm": 0.05,
+    "safety_factor": 2,
+    "target_reduction": 0.1,
+    "max_stress_ratio": 1.25,
+    "max_displacement_ratio": 1.15,
+    "skin_cells": 1,
+    "max_trials": 24
+  },
+  "effective_stress_limit_mpa": 80,
+  "grid": {
+    "shape": [
+      24,
+      8,
+      8
+    ],
+    "pitch_mm": 3,
+    "origin": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "original_volume_mm3": 41472,
+  "optimized_volume_mm3": 36126,
+  "original_mass_kg": 0.1119744,
+  "optimized_mass_kg": 0.0975402,
+  "material_removed_percent": 12.890625,
+  "target_reached": true,
+  "baseline": {
+    "solver": "CalculiX C3D8 (2x2x2 integration)",
+    "max_stress_mpa": 5.816849939168352,
+    "max_displacement_mm": 0.013818718610224465,
+    "compliance_n_mm": 2.68472471875,
+    "residual": 0.0009924749184337816,
+    "reaction_n": [
+      -6.998845947236987e-13,
+      -2.4655832930875476e-12,
+      200.0000199473683
+    ]
+  },
+  "optimized": {
+    "solver": "CalculiX C3D8 (2x2x2 integration)",
+    "max_stress_mpa": 6.275724354139026,
+    "max_displacement_mm": 0.014767224016004313,
+    "compliance_n_mm": 2.862155609375,
+    "residual": 0.0009512806310977122,
+    "reaction_n": [
+      5.852182668064643e-05,
+      6.2814473835715035e-06,
+      199.99999815789465
+    ]
+  },
+  "baseline_failures": [],
+  "protected_cells": 744,
+  "protected_cells_preserved": true,
+  "history": [
+    {
+      "trial": 1,
+      "removed_cells": 22,
+      "accepted": true,
+      "solver_ran": true,
+      "solver": "CalculiX C3D8 (2x2x2 integration)",
+      "max_stress_mpa": 5.8503621788017695,
+      "max_displacement_mm": 0.013880313572504337,
+      "compliance_n_mm": 2.6963795078125,
+      "residual": 0.0010075895896117164,
+      "reaction_n": [
+        3.0056424090929568e-05,
+        1.1560263324383868e-06,
+        199.99998888157901
+      ],
+      "failures": []
+    },
+    {
+      "trial": 2,
+      "removed_cells": 66,
+      "accepted": true,
+      "solver_ran": true,
+      "solver": "CalculiX C3D8 (2x2x2 integration)",
+      "max_stress_mpa": 5.932694331983828,
+      "max_displacement_mm": 0.014106106637844618,
+      "compliance_n_mm": 2.7405382812499997,
+      "residual": 0.0008810349405049611,
+      "reaction_n": [
+        -1.3180567748349858e-12,
+        -1.2594369991347776e-12,
+        200.00003186842093
+      ],
+      "failures": []
+    },
+    {
+      "trial": 3,
+      "removed_cells": 110,
+      "accepted": true,
+      "solver_ran": true,
+      "solver": "CalculiX C3D8 (2x2x2 integration)",
+      "max_stress_mpa": 6.275724354139026,
+      "max_displacement_mm": 0.014767224016004313,
+      "compliance_n_mm": 2.862155609375,
+      "residual": 0.0009512806310977122,
+      "reaction_n": [
+        5.852182668064643e-05,
+        6.2814473835715035e-06,
+        199.99999815789465
+      ],
+      "failures": []
+    }
+  ],
+  "limitations": [
+    "One combined static load case; homogeneous isotropic linear elasticity and small displacement.",
+    "Exact grid-aligned solids only; curved and oblique boundaries are rejected.",
+    "Full integration linear bricks can be too stiff in bending; perform mesh convergence for each part.",
+    "Stress is the peak at eight integration points, not a resolved notch or singular boundary stress.",
+    "No buckling, fatigue, contact, plasticity, thermal or additive-manufacturing anisotropy analysis.",
+    "Internal cavities may be enclosed; printability and machining access are not evaluated.",
+    "Passing these finite-mesh checks is not structural certification or a guarantee of safety."
+  ],
+  "cad": {
+    "original_volume_mm3": 41472.0,
+    "optimized_volume_mm3": 36126.0,
+    "valid_single_solid": true,
+    "step_exported": true
+  }
+}
