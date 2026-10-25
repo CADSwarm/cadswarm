@@ -372,7 +372,7 @@ Brief, typed in the panel:
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer and trace; three findings: missing USB-OTG cutout, cradle inner height 8.0 < 11.1 mm, lid wall 1.0 mm |
 | 11 | Correct + style | 2–3′ | Human sets the lid wall to 2.4 mm and saves; Tools ▸ Learned design style: add the two rules below | Human correction recorded; rules active; later turns carry "Team design style" |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
-| 13 | Snapshot + Lighten | 5–10′ | Save snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | Verifier console; mass saved; cut-open preview; `Add to model` leaves the original |
+| 13 | Snapshot + Lighten | 5–10′ | Save snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin, held at the elbow, loaded at the head.` | Verifier console; mass saved; cut-open preview; `Add to model` leaves the original |
 | 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons`; open Kibana on the board search, the design doc and the Workflow execution | `cadswarm-designs` doc with params + 3 problems; 3 lesson docs; reranked hit, Workflow steps completed, Agent Builder trace if the quota answers |
 | 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | Spacetime counts, Anthropic traces, Creao live again, Factory verdict, Elastic findings |
 
@@ -689,10 +689,16 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 - **No staged failures.** Round 1 findings are the first draft's natural errors. If a round passes,
   the runbook uses a real tight-fit change, not a fake defect.
 - **No schema, host-orchestration or phone-app changes**, and no new module tables, reducers or
-  bindings. The only product changes are the two sponsor cards, and one reviewer-lifetime fix found
-  by rehearsal: `rules::Presence` carries `kind` and `plan_sweep` never orphans a `reviewer` (an
-  HTTP-only member that only connects during a review round). Without it the reviewer is retired
-  after ten quiet minutes and the Factory card and the driver's Probe lose it.
+  bindings. The product changes are the two sponsor cards, one reviewer-lifetime fix found by
+  rehearsal, and one small client-side observability fix for the two beats the module cannot see.
+  Reviewer: `rules::Presence` carries `kind` and `plan_sweep` never orphans a `reviewer` (an HTTP-only
+  member that only connects during a review round). Without it the reviewer is retired after ten
+  quiet minutes and the Factory card and the driver's Probe lose it. Observability: the host's own
+  recall calls `recall_designs` directly and a refused submit returns before any op row exists, so
+  neither leaves an event; `cadswarm/helper.py` logs a `recall` activity row as the host and
+  `cadswarm/space_hub.py` logs a `refused` row before re-raising, both through the existing
+  `log_activity` reducer. The driver reads `v_activity`. No module, orchestration, schema or phone
+  change, and no module publish for the observability fix.
 
 ## Proof ledger
 
@@ -756,8 +762,10 @@ Now:
 | `web/test/sponsors.test.ts` | card tests |
 | `cadswarm/gui/sponsors.py` | Anthropic + Creao cards |
 | `tests/panel_gui_check.py` | Sponsors tab assertions |
-| `rules/src/lib.rs` | `Presence.kind`; `plan_sweep` never orphans a `reviewer` (the one approved product exception, found by rehearsal) |
+| `rules/src/lib.rs` | `Presence.kind`; `plan_sweep` never orphans a `reviewer` (an approved product exception, found by rehearsal) |
 | `module/src/sweep.rs` | passes each member's `kind` into `rules::Presence` |
+| `cadswarm/helper.py` | the host's own recall logs a `recall` activity row (the approved observability exception) |
+| `cadswarm/space_hub.py` | a refused submit logs a `refused` activity row before it re-raises |
 
 Deferred until the demo is rehearsed:
 
@@ -771,7 +779,8 @@ Deferred until the demo is rehearsed:
 If the web UI ships, rebuild `website/app` from `web/dist` once and record the new hashes. No
 release, no module publish, no host restart is required for the cards themselves. The reviewer-lifetime
 fix is module code: publish `module/` keeping data (`docs/publishing-spacetimedb.md`) and restart the
-host before the first run on a machine that still has the old module.
+host before the first run on a machine that still has the old module. The observability fix lives in
+the Python helper and hub client: restart the host and its helpers; no publish.
 
 ## Verification
 
@@ -853,7 +862,9 @@ constraints for them are recorded above so the demo does not have to change when
 
 Out: new CAD operations, new module tables/reducers, new host orchestration, new Elastic indices or
 Workflow changes, voice/Cartesia, a printed part, a public mock/demo mode, pricing or market
-analysis, and any claim of a customer or revenue.
+analysis, and any claim of a customer or revenue. The two approved exceptions are recorded above:
+the reviewer-lifetime fix and the helper/hub activity rows (neither adds a table, reducer, schema,
+orchestration step or phone change).
 
 ## Success criteria
 

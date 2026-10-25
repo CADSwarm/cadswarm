@@ -10,7 +10,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
       The FreeCAD panel on the laptop has its own **Sponsors** tab. They are two separate panels reading
       the same live sponsor state, not one "sponsor tab".
 - [ ] `cadswarm-host … invite --kind human --role lead` printed a fresh presenter invite (or the presenter
-      folder already has an identity).
+      folder already has an identity **for this database**: its `.cadswarm/config.json` `db` matches
+      `host.json` `db`; an identity from another database joins nothing).
 - [ ] Elastic tabs open: the reranked board query, `cadswarm-designs`, the `distil-lessons` execution,
       `cadswarm-board-expert`. These are booth setup, not a slide.
 
@@ -18,7 +19,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 
 - [ ] `lead-claude`, `arm-opencode`, `lid-creao` are joined and `active` in the panel.
 - [ ] The host's planner and up to three workers are enabled.
-- [ ] `droid` is signed in (`droid` once on the host) and `cadswarm-host … init-reviewer` has run.
+- [ ] `droid` is signed in (`droid` once on the host) and `cadswarm-host … init-reviewer` has run against this
+      database: the reviewer folder's `.cadswarm/config.json` `db` matches `host.json` `db`.
 - [ ] Sam's phone is joined and can see the Model, Tasks and Team tabs (Model for the handoff, Tasks for
       Act 2, Team for the handoff switch); the tunnel or the phone invite is live.
 - [ ] The numbers: the last rehearsal's `runs/*.json` summary is open in a second tab.
@@ -28,7 +30,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] `act-1-ready` is restored; the six parts are present (`Clamp_Base`, `Shoulder_Hub`,
       `Arm_Proximal`, `Arm_Distal`, `Cradle_Base`, `Cradle_Lid`).
 - [ ] No `Podium_*`, no `Medallion*`, no lattice mesh left visible.
-- [ ] No open brief, no stale helper, no lock held by a dead member. The reviewer is the one exception:
+- [ ] No open brief, no stale helper, no lock held by a dead member. Act 1's tasks are all `done` or
+      `cancelled`: an `open`, `claimed` or `blocked` task from the last judge refuses Start, and the
+      snapshot does not close tasks. The reviewer is the one exception:
       `init-reviewer` mints an HTTP-only member that never heartbeats, so it is `stale` between rounds.
       The sweep never orphans a reviewer, Probe counts it (with `droid` on PATH), and a stale reviewer
       does not block Start. A stale *helper* does.

@@ -116,7 +116,7 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer, trace, three findings |
 | 11 | Correct + style | 2–3′ | Set the lid wall to 2.4 mm; add the three rules in Learned design style | The correction is recorded; rules are active |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
-| 13 | Snapshot + Lighten | 5–10′ | Snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal …` | Verifier console, mass saved, cut-open preview |
+| 13 | Snapshot + Lighten | 5–10′ | Snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin` | Verifier console, mass saved, cut-open preview |
 | 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons`; open Kibana | Design doc + 3 lessons + Workflow execution |
 | 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | The same five cards, each carrying the work this run gave it |
 
@@ -160,8 +160,9 @@ same owners, same recall. The medallion and its 608 bearing are **booth only**.
 The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` stops the tab).
 
 - **Start** — refuses unless Probe passed and the team is at the timeline's ready state (`act-1-ready`
-  for the table, the empty model for the booth); opens the sequence and shows the brief. At the table
-  Sam sends it from the phone; at the booth you type it in the panel.
+  for the table, the empty model for the booth), with no task still `open`, `claimed` or `blocked`;
+  opens the sequence and shows the brief. At the table Sam sends it from the phone; at the booth you
+  type it in the panel.
 - **Next** — advance now. A manual step is logged `confirmed`; a module step `skipped`. Both say why.
 - **Pause / Resume** — holds the sequence while a judge talks. The build keeps running.
 - **Probe** — Claude, Creao, Droid, Elastic, then every other owner in the timeline's `probe` list.
@@ -172,7 +173,8 @@ The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` 
   idea runs live.
 
 Every step is done when the module says so — a task row, an op, a lock, a review, a bbox, an artifact,
-an event. Never when an agent says it is. Every run appends to `runs/<stamp>-<timeline>.jsonl` and writes
+an event, or an activity row (the host's own recall and a refused submit make no op). Never when an
+agent says it is. Every run appends to `runs/<stamp>-<timeline>.jsonl` and writes
 `runs/<stamp>-<timeline>.json` with `t_recall`, `t_tasks`, `t_first_op`, `t_finish`; those summary
 numbers, not the targets, are what the pitch quotes.
 
@@ -193,13 +195,14 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 |---|---|
 | Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
-| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member). If `init-reviewer` prints `already set up` (the reviewer folder holds an identity), it did nothing: check `v_member` for a retired row (the `left`/`taken_over` row) |
+| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member). If `init-reviewer` prints `already set up` (the reviewer folder holds an identity), check two things: the folder's `.cadswarm/config.json` `db` matches this run's `host.json` `db` (an identity from another database prints the same thing and joins nothing), and `v_member` holds no retired row (the `left`/`taken_over` row) |
 | The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. The sweep never orphans a reviewer, so it stays on the card between rounds. Probe passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
 | The Factory card shows a reviewer that is `left` or `taken_over` | the web card reads every `v_member` row and picks the first reviewer, while FreeCAD and Probe read `participants()`, which hides `left`/`taken_over`. With no live reviewer, Probe says `no reviewer has joined` and Start is refused, so this is not cosmetic. Deleting the reviewer folder and re-running `init-reviewer` joins a second row (a `left` namesake is not inherited), and the web card may still show the old one. Check `v_member` **before** a round: an `active` reviewer mid-round is normal. To clear it, start a new database (`-Db`), publish the module into it, reset the presenter and reviewer folders, and re-invite the whole cast; if there is no time for that, delete the reviewer folder and re-run `init-reviewer` so Probe passes, and say the web card may still name the retired row |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
 | A step hangs | Next; a `confirm` step is logged `confirmed`, a module step `skipped`, and the sequence moves on |
+| The recall or refusal step never closes while the build moves | restart the host, every helper and the driver (no module publish): the helper logs the host's own recall as a `recall` activity row and the hub client logs a refused submit as `refused`, both read from `v_activity`. The panel's Activity tab shows the same rows; if the recall row is missing, Elastic is failing - check the Probe's Elastic line |
 | The page is closed | reopen the URL; the run and the log are unaffected |
 | Creao stalls mid-Act 1 | kill it earlier: that is the takeover beat; restart it for Act 2 |
 | A host worker claims a manual part | cancel that task and re-assign by name; the module only rebalances busy or stale assignees |

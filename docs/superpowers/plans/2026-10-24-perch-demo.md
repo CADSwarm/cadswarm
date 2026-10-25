@@ -14,7 +14,8 @@ Copied from the spec (`docs/superpowers/specs/2026-10-24-perch-showcase-design.m
 
 - No new CAD operations, no new module tables/reducers/bindings/schema, no host-orchestration change, no FreeCAD panel-layout change, no phone-app change.
 - One approved exception, found by the Task 6 rehearsal: a reviewer-lifetime fix. `rules::Presence` gains `kind`, `plan_sweep` excludes `reviewer` from `to_orphan`, and the module passes `kind` through. The reviewer is HTTP-only and connects only during a review round, so the old sweep retired it ten minutes after `init-reviewer` and the Factory card and Probe lost it. The fix comes with a native rules test.
-- Product code changes are limited to the sponsor-card UI (`web/src/ui/sponsors.ts`, `cadswarm/gui/sponsors.py`, and the one docstring in `cadswarm/gui/panel.py:1291`) plus tests, and the approved reviewer-lifetime fix in `rules/src/lib.rs` and `module/src/sweep.rs`. `web/src/style.css` already lays five cards out as 3 + 2, so it does not change. The rest is `demo/perch/` and this plan/spec.
+- A second approved exception, also found by rehearsal: the host's own recall creates no op and a refused submit returns before any op row exists, so neither leaves an event the page could read. `cadswarm/helper.py` logs a `recall` activity row as the host and `cadswarm/space_hub.py` logs a `refused` row before re-raising, both through the existing `log_activity` reducer; the driver reads `v_activity`. No module, rules, schema, host-orchestration or phone change, and no module publish for this one.
+- Product code changes are limited to the sponsor-card UI (`web/src/ui/sponsors.ts`, `cadswarm/gui/sponsors.py`, and the one docstring in `cadswarm/gui/panel.py:1291`) plus tests, and the two approved exceptions: the reviewer-lifetime fix in `rules/src/lib.rs` and `module/src/sweep.rs`, and the activity rows in `cadswarm/helper.py` and `cadswarm/space_hub.py`. `web/src/style.css` already lays five cards out as 3 + 2, so it does not change. The rest is `demo/perch/`, `tests/` and this plan/spec.
 - The browser makes no new network calls and holds no API keys. Every live card field comes from state the panel already subscribes to.
 - No fabricated numbers. A number we checked once is stamped and labelled `checked …`; a live field is labelled live. The Elastic index counts in the footer are never presented as live.
 - Card order is fixed: **SpacetimeDB → Anthropic → Creao → Factory.ai → Elastic**. No card disappears: Anthropic and Creao show `not joined` for an empty client list, and Factory shows `not set up` until `init-reviewer` has run.
@@ -407,11 +408,13 @@ git commit -m "feat(panel): the FreeCAD sponsor window shows the same five cards
 - Produces (Task 4 builds on these exact names):
   - `load_plan(path: str | Path) -> dict`, `validate(plan: dict) -> None`, `PlanError`
   - `Step(id, label, predicate, at, deadline, say="", args={}, on_start={}, guard={})`, `StepState(step, state, detail, started, ended, sent, sent_at, events)`
-  - `View(snapshot, ops, events, run_events, seq, started, after, now)`
+  - `View(snapshot, ops, events, run_events, seq, started, after, now, activity=[], run_started=0.0)`
   - `PREDICATES: dict[str, Callable[[Step, View], tuple[bool, str]]]`
   - `Runner(plan, io, log=None, clock=time.time)` with `start()`, `tick()`, `skip()`, `toggle_pause()`, `say(text)`, `probe()`, `state()`, `reset_ok()`, `probe_ok`, `gate_failed`, `current`, `done`, `status`, `index`
   - `RunLog(folder, name)` with `path`, `summary_path`, `write(at, kind, detail)`, `summary(state)`
-  - The `io` protocol the runner needs: `snapshot() -> dict`, `ops() -> list`, `events(since: int) -> {"seq": int, "events": list}`, `send_brief(text, board)`, `send_steer(name, body)`, `probe() -> list[{"name","ok","detail"}]`.
+  - The `io` protocol the runner needs: `snapshot() -> dict`, `ops() -> list`, `activity() -> list`, `events(since: int) -> {"seq": int, "events": list}`, `send_brief(text, board)`, `send_steer(name, body)`, `probe() -> list[{"name","ok","detail"}]`.
+
+The code blocks in Tasks 3–4 are the plan's first cut. The shipped `recall` and `refusal` predicates also read `view.activity` (the approved observability exception above), `tasks_landed` ignores tasks older than the press, and `reset_ok` refuses open tasks; `tests/test_perch_demo.py` is the authority for the shipped behavior.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2181,7 +2184,7 @@ Expected: FAIL — the files do not exist.
     {
       "id": "recall", "label": "The planner recalls the Perch before it plans",
       "at": 10, "deadline": 25, "predicate": "recall",
-      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "args": {"marker": "clip-on articulated arm", "query": "Make the Podium head", "problems": 3},
       "say": "Before it plans, it looks up what we already built."
     },
     {
@@ -2245,7 +2248,7 @@ Expected: FAIL — the files do not exist.
     {
       "id": "recall", "label": "The planner recalls the Perch before it plans",
       "at": 10, "deadline": 25, "predicate": "recall",
-      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "args": {"marker": "clip-on articulated arm", "query": "Make the Podium lid", "problems": 3},
       "say": "Before it plans, it looks up what we already built."
     },
     {
@@ -2373,7 +2376,7 @@ Expected: FAIL — the files do not exist.
     {
       "id": "lighten", "label": "The lattice report is published",
       "at": 2160, "deadline": 900, "predicate": "report", "args": {"kind": "lattice_report"},
-      "say": "90% stiffness, gyroid, 5 mm cells, held at the elbow: the verifier console and mass saved."
+      "say": "90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin, held at the elbow: the verifier console and mass saved."
     },
     {
       "id": "export", "label": "STEP and STL are exported",
@@ -2393,7 +2396,7 @@ Expected: FAIL — the files do not exist.
     {
       "id": "act2_recall", "label": "Act 2's planner recalls both designs",
       "at": 2820, "deadline": 900, "predicate": "recall",
-      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "args": {"marker": "clip-on articulated arm", "query": "Make the Podium head", "problems": 3},
       "say": "From Sam's phone: the second head starts by recalling the first one, its problems and its lessons."
     }
   ]
@@ -2546,7 +2549,7 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer, trace, three findings |
 | 11 | Correct + style | 2–3′ | Set the lid wall to 2.4 mm; add the three rules in Learned design style | The correction is recorded; rules are active |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
-| 13 | Snapshot + Lighten | 5–10′ | Snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal …` | Verifier console, mass saved, cut-open preview |
+| 13 | Snapshot + Lighten | 5–10′ | Snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin` | Verifier console, mass saved, cut-open preview |
 | 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons`; open Kibana | Design doc + 3 lessons + Workflow execution |
 | 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | The same five cards, each carrying the work this run gave it |
 
@@ -2590,8 +2593,9 @@ same owners, same recall. The medallion and its 608 bearing are **booth only**.
 The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` stops the tab).
 
 - **Start** — refuses unless Probe passed and the team is at the timeline's ready state (`act-1-ready`
-  for the table, the empty model for the booth); opens the sequence and shows the brief. At the table
-  Sam sends it from the phone; at the booth you type it in the panel.
+  for the table, the empty model for the booth), with no task still `open`, `claimed` or `blocked`;
+  opens the sequence and shows the brief. At the table Sam sends it from the phone; at the booth you
+  type it in the panel.
 - **Next** — advance now. A manual step is logged `confirmed`; a module step `skipped`. Both say why.
 - **Pause / Resume** — holds the sequence while a judge talks. The build keeps running.
 - **Probe** — Claude, Creao, Droid, Elastic, then every other owner in the timeline's `probe` list.
@@ -2602,7 +2606,8 @@ The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` 
   idea runs live.
 
 Every step is done when the module says so — a task row, an op, a lock, a review, a bbox, an artifact,
-an event. Never when an agent says it is. Every run appends to `runs/<stamp>-<timeline>.jsonl` and writes
+an event, or an activity row (the host's own recall and a refused submit make no op). Never when an
+agent says it is. Every run appends to `runs/<stamp>-<timeline>.jsonl` and writes
 `runs/<stamp>-<timeline>.json` with `t_recall`, `t_tasks`, `t_first_op`, `t_finish`; those summary
 numbers, not the targets, are what the pitch quotes.
 
@@ -2623,13 +2628,14 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 |---|---|
 | Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
-| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member). If `init-reviewer` prints `already set up` (the reviewer folder holds an identity), it did nothing: check `v_member` for a retired row (the `left`/`taken_over` row) |
+| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member). If `init-reviewer` prints `already set up` (the reviewer folder holds an identity), check two things: the folder's `.cadswarm/config.json` `db` matches this run's `host.json` `db` (an identity from another database prints the same thing and joins nothing), and `v_member` holds no retired row (the `left`/`taken_over` row) |
 | The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. The sweep never orphans a reviewer, so it stays on the card between rounds. Probe passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
 | The Factory card shows a reviewer that is `left` or `taken_over` | the web card reads every `v_member` row and picks the first reviewer, while FreeCAD and Probe read `participants()`, which hides `left`/`taken_over`. With no live reviewer, Probe says `no reviewer has joined` and Start is refused, so this is not cosmetic. Deleting the reviewer folder and re-running `init-reviewer` joins a second row (a `left` namesake is not inherited), and the web card may still show the old one. Check `v_member` **before** a round: an `active` reviewer mid-round is normal. To clear it, start a new database (`-Db`), publish the module into it, reset the presenter and reviewer folders, and re-invite the whole cast; if there is no time for that, delete the reviewer folder and re-run `init-reviewer` so Probe passes, and say the web card may still name the retired row |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
 | A step hangs | Next; a `confirm` step is logged `confirmed`, a module step `skipped`, and the sequence moves on |
+| The recall or refusal step never closes while the build moves | restart the host, every helper and the driver (no module publish): the helper logs the host's own recall as a `recall` activity row and the hub client logs a refused submit as `refused`, both read from `v_activity`. The panel's Activity tab shows the same rows; if the recall row is missing, Elastic is failing - check the Probe's Elastic line |
 | The page is closed | reopen the URL; the run and the log are unaffected |
 | Creao stalls mid-Act 1 | kill it earlier: that is the takeover beat; restart it for Act 2 |
 | A host worker claims a manual part | cancel that task and re-assign by name; the module only rebalances busy or stale assignees |
@@ -2688,7 +2694,7 @@ simulate and lighten.
 | 8 | `take_over("lid-creao")` | `@lead-claude` |
 | 9 | Take `Clamp_Base` in the phone's Model tab, send the handoff note below in Team chat, arm **Continue my work if I leave**, then close the tab | (Sam's phone) |
 | 11 | Tools ▸ Learned design style: add the three rules | (panel) |
-| 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | `@arm-opencode` |
+| 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin, held at the elbow, loaded at the head.` | `@arm-opencode` |
 | 14 | `distil-lessons` | (Elastic workflow) |
 
 Handoff note, sent in Team chat before arming. The handoff's `note` field is empty here; the agent gets this
@@ -2794,7 +2800,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
       The FreeCAD panel on the laptop has its own **Sponsors** tab. They are two separate panels reading
       the same live sponsor state, not one "sponsor tab".
 - [ ] `cadswarm-host … invite --kind human --role lead` printed a fresh presenter invite (or the presenter
-      folder already has an identity).
+      folder already has an identity **for this database**: its `.cadswarm/config.json` `db` matches
+      `host.json` `db`; an identity from another database joins nothing).
 - [ ] Elastic tabs open: the reranked board query, `cadswarm-designs`, the `distil-lessons` execution,
       `cadswarm-board-expert`. These are booth setup, not a slide.
 
@@ -2802,7 +2809,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 
 - [ ] `lead-claude`, `arm-opencode`, `lid-creao` are joined and `active` in the panel.
 - [ ] The host's planner and up to three workers are enabled.
-- [ ] `droid` is signed in (`droid` once on the host) and `cadswarm-host … init-reviewer` has run.
+- [ ] `droid` is signed in (`droid` once on the host) and `cadswarm-host … init-reviewer` has run against this
+      database: the reviewer folder's `.cadswarm/config.json` `db` matches `host.json` `db`.
 - [ ] Sam's phone is joined and can see the Model, Tasks and Team tabs (Model for the handoff, Tasks for
       Act 2, Team for the handoff switch); the tunnel or the phone invite is live.
 - [ ] The numbers: the last rehearsal's `runs/*.json` summary is open in a second tab.
@@ -2812,7 +2820,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] `act-1-ready` is restored; the six parts are present (`Clamp_Base`, `Shoulder_Hub`,
       `Arm_Proximal`, `Arm_Distal`, `Cradle_Base`, `Cradle_Lid`).
 - [ ] No `Podium_*`, no `Medallion*`, no lattice mesh left visible.
-- [ ] No open brief, no stale helper, no lock held by a dead member. The reviewer is the one exception:
+- [ ] No open brief, no stale helper, no lock held by a dead member. Act 1's tasks are all `done` or
+      `cancelled`: an `open`, `claimed` or `blocked` task from the last judge refuses Start, and the
+      snapshot does not close tasks. The reviewer is the one exception:
       `init-reviewer` mints an HTTP-only member that never heartbeats, so it is `stale` between rounds.
       The sweep never orphans a reviewer, Probe counts it (with `droid` on PATH), and a stale reviewer
       does not block Start. A stale *helper* does.
@@ -3147,13 +3157,9 @@ The plan is finished when all of these are true, checked in this order:
    **Rehearsed (a separate gate, on the demo machine):** R1, R2 and R3 are filled from run summaries and
    the table decision is written before the first judge. This plan is code-complete now; it is not
    rehearsed, and no timing number may be quoted until it is.
-7. `git status` is clean on `feat/perch-showcase`, and no file outside `web/`, `cadswarm/gui/`, `tests/`, `demo/perch/`, `docs/superpowers/`, `.gitignore`, and the approved `rules/src/lib.rs`/`module/src/sweep.rs` changed.
+7. `git status` is clean on `feat/perch-showcase`, and no file outside `web/`, `cadswarm/gui/`, `cadswarm/helper.py`, `cadswarm/space_hub.py`, `tests/`, `demo/perch/`, `docs/superpowers/`, `.gitignore`, and the approved `rules/src/lib.rs`/`module/src/sweep.rs` changed.
 
 Nothing in this plan prints a part, claims a finished head at the table, or changes the schema, the host
-orchestration, the phone app or the FreeCAD panel's layout. The one code change outside the cards is the
-reviewer-lifetime fix in `rules` and `module`.
-
-
-
-
-
+orchestration, the phone app or the FreeCAD panel's layout. The two code changes outside the cards are
+the reviewer-lifetime fix in `rules`/`module` and the activity rows in `cadswarm/helper.py` and
+`cadswarm/space_hub.py` (the only place the host's own recall and a refused submit become visible).
