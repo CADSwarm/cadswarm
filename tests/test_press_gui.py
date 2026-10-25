@@ -28,8 +28,10 @@ def test_a_press_is_one_action_and_shows_it(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     checks = json.loads((tmp_path / "press-verified.json").read_text(encoding="utf-8"))
     assert checks["three_fast_presses_run_once"]
-    assert checks["lit_while_busy"] and checks["clears_when_flash_ends"]
+    assert checks["lit_while_busy"] and checks["loading_glyph_while_busy"]
+    assert checks["clears_when_flash_ends"] and checks["loading_glyph_removed"]
     assert checks["later_press_runs_again"]
-    assert checks["held_press_runs_once"] and checks["held_button_is_lit"]
-    assert checks["clears_when_request_ends"] and checks["runs_again_after_finish"]
+    assert checks["held_press_runs_once"] and checks["held_button_is_lit"] and checks["held_button_loads"]
+    assert checks["clears_when_request_ends"] and checks["held_button_glyph_removed"]
+    assert checks["runs_again_after_finish"]
     assert checks["spam_starts_one_look"] and checks["can_run_again_after_answer"]

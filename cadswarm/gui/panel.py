@@ -2114,6 +2114,8 @@ def action_button(label, tip, fn):
 # How long a pressed button stays lit when its action starts no background work: long enough that the
 # press reads as a press, short enough not to get in the way.
 PRESS_FLASH_MS = 400
+# How fast the little loading glyph on a busy button turns.
+SPIN_SPEED_MS = 120
 
 
 class ActionButton(ShrinkButton):
@@ -2121,32 +2123,54 @@ class ActionButton(ShrinkButton):
 
     Every action used to fire on every click, so hammering "Auto-constrain" opened the same "nothing to
     constrain" box once per click. A press now lights the button (and holds it lit) until the work behind
-    it has finished, and clicks landing in that window are dropped: one press, one action."""
+    it has finished, and clicks landing in that window are dropped: one press, one action.
+
+    A busy button also carries a small turning loading glyph, drawn before the action runs, so a slow
+    action reads as "working" rather than "the panel has frozen"."""
 
     def __init__(self, label, tip, fn):
         super().__init__(label)
         self._fn = fn
         self._busy = False
+        self._spin_i = 0
         self.setToolTip(tip)
         self.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
         self.clicked.connect(self._pressed)
+        self._spin = QtCore.QTimer(self)
+        self._spin.setInterval(SPIN_SPEED_MS)
+        self._spin.timeout.connect(self._turn)
 
     def _pressed(self):
         if self._busy:
             return  # this action is already running: the extra click is not a second job
         self._busy = True
         self._set_busy(True)
+        self._turn()      # put the loading glyph on the button...
+        self.repaint()    # ...and draw it now, before an action that blocks the event loop freezes the panel
+        self._spin.start()
         try:
             self._fn()
         except Exception as e:  # a broken action must not leave the button lit and stuck
-            warn(f"{self.text().rstrip('…') or 'that action'} failed: {e}")
+            warn(f"{self._label().rstrip('…') or 'that action'} failed: {e}")
         if SESSION.working():
             SESSION.when_idle(self._clear_busy)
         else:
             QtCore.QTimer.singleShot(PRESS_FLASH_MS, self._clear_busy)
 
+    def _label(self):
+        """The button's own words, without the loading glyph we may have prefixed to them."""
+        text = self.text()
+        return text[2:] if text[:1] in TeamPanel.SPINNER and text[1:2] == " " else text
+
+    def _turn(self):
+        self._spin_i = (self._spin_i + 1) % len(TeamPanel.SPINNER)
+        self.setText(f"{TeamPanel.SPINNER[self._spin_i]} {self._label()}")
+
     def _clear_busy(self):
         self._busy = False
+        self._spin.stop()
+        if self._label() != self.text():
+            self.setText(self._label())  # take the loading glyph back off
         self._set_busy(False)
 
     def _set_busy(self, on):
