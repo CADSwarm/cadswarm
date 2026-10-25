@@ -8,7 +8,7 @@
     "text": "Make the Podium lid for the same Perch: a 2.4 mm back cover for the upright ESP32-S3 head, same fits, same 180 mm bed. Recall the Perch we just built before planning, and use what its review found. Podium_Lid -> lid-creao."
   },
   "gate": {
-    "first_op_by": 105,
+    "first_op_by": 75,
     "if_missed": "No part has started yet. The recall and the task are real; the lid is the smallest job we have and it is still running."
   },
   "ready": {

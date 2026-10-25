@@ -90,12 +90,15 @@ Said while typing, not instead of typing:
 - "That refusal is the lock, not a prompt. Creao cannot edit a part lead-claude holds."
 - "It is still building. Ask me anything and we will watch it answer."
 
-## The two sentences that bound the claims
+## The lines that bound the claims
 
 - Before Start: "The team is back at the state we finished Act 1 in; the build you are about to see is new."
-- If the gate is missed: "No part has started yet. The recall and the tasks are real; the body is the next
-  run." Then show the recall and the task rows, and switch to the labelled replay if the judge wants to
-  see the finished head.
+- If the gate is missed (`table.json`): "No part has started yet. The recall and the tasks are real; the body
+  is the next run." Then show the recall and the task rows, and switch to the labelled replay if the judge
+  wants to see the finished head.
+- If the gate is missed (`table-safe.json`): "No part has started yet. The recall and the task are real; the
+  lid is the smallest job we have and it is still running." Then show the recall and the task row, and
+  switch to the labelled replay if the judge wants to see the finished head.
 
 ## Never say
 

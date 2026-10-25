@@ -1,6 +1,6 @@
 {
   "name": "table",
-  "note": "The two-minute Act 2 run at the judging table. Press at 0:30 of the pitch; the first op must land by 1:45. Nothing here claims a finished head.",
+  "note": "The two-minute Act 2 run at the judging table. Press at 0:30 of the pitch; the first op must land by 1:45, 75 s after the press. Nothing here claims a finished head.",
   "brief": {
     "from": "phone",
     "board": "esp32-s3-devkitc-1",
@@ -8,7 +8,7 @@
     "text": "Make the Podium head for the same Perch: the same ESP32-S3 upright, a 2.4 mm lid, the same fits, the same 180 mm bed. Reuse the arm and the mount. Recall the Perch we just built before planning, and use what its review found. Podium_Body -> lead-claude, Podium_Lid -> lid-creao."
   },
   "gate": {
-    "first_op_by": 105,
+    "first_op_by": 75,
     "if_missed": "No part has started yet. The recall and the tasks are real; the body is the next run."
   },
   "ready": {

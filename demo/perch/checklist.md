@@ -5,7 +5,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 ## T-45 minutes: the stack
 
 - [ ] `powershell -File scripts\demo-up.ps1 -SkipBuild` finished; the host is running.
-- [ ] The web panel is open on the second screen at the sponsor tab; the FreeCAD panel is on the laptop.
+- [ ] The web panel is open on the second screen; its **Sponsors** dialog opens with `?debug` or Shift+D.
+      The FreeCAD panel on the laptop has the **Sponsors** tab. These are two surfaces of the same window,
+      not one "sponsor tab".
 - [ ] `cadswarm-host … invite --kind human --role lead` printed a fresh presenter invite (or the presenter
       folder already has an identity).
 - [ ] Elastic tabs open: the reranked board query, `cadswarm-designs`, the `distil-lessons` execution,
@@ -28,6 +30,10 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] The FEA report and the lattice report are open in the panel for beats 7 and 13.
 - [ ] Act 1's design doc and lessons are in Elastic; the previous podium doc is still there.
 
+These T-15 bullets are the table pre-flight only. For the booth, `timeline.json` starts from an empty
+model (`parts_any: []`): no `Clamp_`/`Shoulder_`/`Arm_`/`Cradle_`/`Podium_`/`Medallion`, no open brief, and
+the manual helpers joined. Act 1 is built live.
+
 ## T-5 minutes: the driver
 
 - [ ] `.venv\Scripts\python demo\perch\driver.py --project demo\perch\presenter` is running.
@@ -37,8 +43,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 
 ## The timeline decision (made now, never mid-pitch)
 
-- [ ] Open the last `runs/*.json`. If `t_first_op` is **under 90 s**, run `table.json`.
-- [ ] If it is **90 s or more**, or the last run missed the gate, run `table-safe.json`.
+- [ ] Open the last `runs/*.json`. If `t_first_op` is **under 60 s** (before 1:30 on the pitch clock), run
+      `table.json`.
+- [ ] If it is **60 s or more** (1:30 or later), or the last run missed the gate, run `table-safe.json`.
 - [ ] Write the choice and the reason on the top line of `rehearsal.md`. Do not change it after the first
       judge arrives.
 
@@ -48,16 +55,19 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 |---|---|---|---|
 | 0:00 | "One bare board, one arm, two heads." | — | — |
 | 0:15 | point at the window: "five services, all live" | — | — |
-| 0:30 | **press Start**; Sam types the brief on the phone | `brief` (10 s) | say the phone line, keep going; Next at 0:45 |
-| 0:45 | "it recalls the first head before it plans" | `recall` (25 s) | Next; the recall is still real, say it is running |
-| 1:00 | "the same owners as Act 1" | `tasks` (30 s) | Next; read the task rows that exist |
-| 1:15 | "the body is held; Creao is asked anyway" | `refusal` (40 s) | Next; say the lock is on the body either way |
-| 1:30 | one artifact each: FEA, lattice, round 1 | `first_part` (45 s) | — |
-| 1:45 | "it is still building" | gate check | say the fallback line; stop claiming a part |
+| 0:30 | **press Start**; Sam types the brief on the phone | `brief` (10 s) | say the phone line, keep going; Next by 0:40 (the brief auto-skips at 0:40) |
+| 0:45 (narration) | "it recalls the first head before it plans" | `recall` (25 s) | Next; the recall is still real, say it is running |
+| 1:00 (narration) | "the same owners as Act 1" | `tasks` (30 s) | Next; read the task rows that exist |
+| 1:15 (narration) | "the body is held; Creao is asked anyway" | `refusal` (40 s) | Next; if the page still shows `lead-claude` holding `Podium_Body`, say the lock is on the body; if it moved, say the lock moved and do not claim the refusal |
+| 1:30 (narration) | one artifact each: FEA, lattice, round 1 | `first_part` (45 s) | — |
+| 1:45 (75 s after the press) | "it is still building" | gate check | say the fallback line; the page shows it in `Runner.status`; stop claiming a part |
 | 2:00 | hand to Q&A; leave the page up | still running | — |
 
-Cue sheet (`table-safe.json`): same first three beats, then `first_part` at 1:15 with 55 s; the presenter
-says "the body is the next run" at 1:30.
+The 0:45, 1:00, 1:15 and 1:30 times are narration cues. The JSON starts `recall`, `tasks`, `refusal` and
+`first_part` at 10, 20, 35 and 45 s after the press, so the page can be a beat ahead of the spoken line.
+
+Cue sheet (`table-safe.json`): same first three beats, then `first_part` (55 s), narration at 1:15; the
+presenter says "the body is the next run" at 1:30.
 
 ## During Q&A
 
@@ -68,12 +78,18 @@ says "the body is the next run" at 1:30.
 
 ## Reset between judges (12 minutes)
 
+This is the single operative reset order; `README.md` mirrors it.
+
 1. **Stop claiming.** Pause the driver. Leave the build running; it is evidence.
 2. **Snapshot.** Restore `act-1-ready`.
-3. **Delete Act 2.** `Podium_*`, `Medallion*`, the lattice mesh; cancel Act 2's tasks and any open brief.
+3. **Delete Act 2.** `Podium_*`, `Medallion*`, the lattice mesh; move the cradle back; cancel Act 2's tasks
+   and any open brief.
 4. **Restart helpers.** Creao bridge, any killed Claude/OpenCode folder; wait for `active`.
-5. **Re-probe.** The page must be all ✓ and `ready — press Start`.
-6. **Log it.** One line in `rehearsal.md`: time the reset took, and anything that had to be skipped.
+5. **Restart the driver.** Stop `driver.py` and start it again with the chosen timeline: the runner refuses
+   a second Start and the page disables Start after a run.
+6. **Re-probe.** Probe must be all ✓; the page must say `ready — press Start`, and the first step must be
+   `pending`.
+7. **Log it.** One line in `rehearsal.md`: time the reset took, and anything that had to be skipped.
 
 If the reset cannot finish before the next judge: start from the running Act 2, say the recall already
 happened, and let the panel carry Act 1. Never present a recorded run as live.

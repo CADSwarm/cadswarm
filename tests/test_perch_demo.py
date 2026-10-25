@@ -752,7 +752,7 @@ def test_the_table_run_is_the_five_beats_in_order():
     assert [s["id"] for s in plan["steps"]] == ["brief", "recall", "tasks", "refusal", "first_part"]
     assert [s["predicate"] for s in plan["steps"]] == [
         "brief_sent", "recall", "tasks_landed", "refusal", "first_part"]
-    assert plan["gate"]["first_op_by"] == 105
+    assert plan["gate"]["first_op_by"] == 75
     assert plan["brief"]["from"] == "phone"
     assert plan["steps"][0]["deadline"] == 10
     assert plan["steps"][-1]["at"] < plan["gate"]["first_op_by"]
@@ -777,7 +777,7 @@ def test_the_safe_timeline_is_lid_only_and_has_no_refusal_beat():
     assert [s["predicate"] for s in plan["steps"]] == [
         "brief_sent", "recall", "tasks_landed", "first_part"]
     assert plan["steps"][-1]["args"]["parts"] == ["Podium_Lid"]
-    assert plan["gate"]["first_op_by"] == 105
+    assert plan["gate"]["first_op_by"] == 75
 
 
 def test_the_booth_timeline_covers_every_beat_the_window_claims():
@@ -787,4 +787,6 @@ def test_the_booth_timeline_covers_every_beat_the_window_claims():
             "confirm", "report", "takeover", "handoff", "review_round", "op_done"} <= predicates
     reports = {s["args"].get("kind") for s in plan["steps"] if s["predicate"] == "report"}
     assert {"fea_report", "lattice_report"} <= reports
+    assert "planner-claude" not in plan["probe"]
+    assert "planner-claude" in plan["cast"]
     assert plan["brief"]["from"] == "panel"

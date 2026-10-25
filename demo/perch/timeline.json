@@ -23,7 +23,7 @@
     "lid-creao": "creao",
     "arm-opencode": "opencode"
   },
-  "probe": ["planner-claude", "lead-claude", "lid-creao", "arm-opencode"],
+  "probe": ["lead-claude", "lid-creao", "arm-opencode"],
   "steps": [
     {
       "id": "brief", "label": "Act 1's brief is typed in the panel",
