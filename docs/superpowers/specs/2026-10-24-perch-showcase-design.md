@@ -646,8 +646,9 @@ client list, SpacetimeDB keeps reading `0 active · 0 joined`, and Factory says 
 
 Web (`web/src/ui/sponsors.ts`): pure functions over the existing `State`; filter `members` by
 `client`, count `tasks` by `owner`, `ops` by `by`, and `activity` by `member`. Add a `traceTitle`
-field so the builder cards say "recent work" while Factory keeps "trace". Change
-`.sponsors-grid` to `repeat(auto-fit, minmax(280px, 1fr))` so five cards fill 3+2.
+field so the builder cards say "recent work" while Factory keeps "trace". No CSS change:
+`web/src/style.css` already sets `.sponsors-grid` to `repeat(3, minmax(0, 1fr))`, which renders five
+cards as 3 + 2.
 
 FreeCAD (`cadswarm/gui/sponsors.py`): the panel snapshot already carries `client` on participants,
 plus tasks; add the two cards with facts only (no trace, matching Factory there). No snapshot or
@@ -752,10 +753,11 @@ Now:
 | `demo/perch/table.json` | the two-minute Act 2 sequence: the phone brief, recall, tasks, refusal, first part |
 | `demo/perch/table-safe.json` | the lid-only sequence used when rehearsal starts no part before 1:30 |
 | `web/src/ui/sponsors.ts` | Anthropic + Creao cards, trace titles |
-| `web/src/style.css` | five-card auto-fit grid |
 | `web/test/sponsors.test.ts` | card tests |
 | `cadswarm/gui/sponsors.py` | Anthropic + Creao cards |
 | `tests/panel_gui_check.py` | Sponsors tab assertions |
+| `rules/src/lib.rs` | `Presence.kind`; `plan_sweep` never orphans a `reviewer` (the one approved product exception, found by rehearsal) |
+| `module/src/sweep.rs` | passes each member's `kind` into `rules::Presence` |
 
 Deferred until the demo is rehearsed:
 
