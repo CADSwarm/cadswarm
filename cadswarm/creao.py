@@ -20,6 +20,7 @@ import urllib.request
 from .client import load_json, save_json, state_dir
 
 DEFAULT_BASE = "https://developer.creao.ai"
+APP_BASE = "https://agent.creao.ai"  # an agent built in the browser, run by its `capi_` key
 TERMINAL = ("completed", "failed", "cancelled")
 
 # What `setup` asks Creao to build for a helper. Natural language, because POST /v1/agents is a
@@ -50,7 +51,8 @@ To finish, reply:
 {"done": true, "summary": "<one or two sentences: what changed, in plain words>"}
 
 The tool result comes back in the next message; then reply with the next JSON object. Use one tool per
-reply. Never invent a tool or an argument. Never ask questions (this helper runs headlessly): make a
+reply. The bridge runs on the teammate's computer, outside your sandbox: don't look for it, don't
+simulate the steps after this one, and don't wait for a connector. Your reply IS the tool call. Never invent a tool or an argument. Never ask questions (this helper runs headlessly): make a
 reasonable choice and say so in your summary."""
 
 # The account-level Creao skill, reinstalled (upserted by name) by every Creao helper's setup. It
@@ -289,6 +291,8 @@ class Creao:
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                # Creao's Cloudflare refuses the default "Python-urllib/x.y" with 403 (error 1010).
+                "User-Agent": "cadswarm/creao-bridge",
             })
             try:
                 status, headers, raw = self.opener(request, self.request_timeout)
@@ -368,6 +372,100 @@ class Creao:
         """Install (or upsert) an account-level skill from SKILL.md content. Name comes from the front matter."""
         return self._request("POST", "/v1/skills", {
             "source": "content", "content": content, "files": files or {}, "enabled": enabled})
+
+
+class AppTrigger(Creao):
+    """An agent built on agent.creao.ai, run through its API Trigger with that agent's `capi_` key.
+
+    Same run/wait shape as the /v1 client, so the bridge drives either. The agent's model, skill and
+    autonomy are set on its page, and its runs (shareable there) continue a thread via `threadId`.
+    """
+
+    def __init__(self, key=None, base_url=None, **kw):
+        super().__init__(key=key, base_url=base_url or os.environ.get("CREAO_APP_BASE_URL") or APP_BASE, **kw)
+        self._apps = {}  # run id -> agent id: polling a run needs both
+
+    def _path(self, agent_id, *rest):
+        return "/".join(["/api/v1/apps", urllib.parse.quote(agent_id, safe="")]
+                        + [urllib.parse.quote(part, safe="") for part in rest])
+
+    def usage(self):
+        return {}  # no account endpoint here; the first run proves the key
+
+    def list_models(self):
+        return []  # the model is the agent's own setting on agent.creao.ai
+
+    def run(self, agent_id, input, conversation_id=None, model=None):
+        body = {"inputs": input}
+        if conversation_id:
+            body["threadId"] = conversation_id
+        run = self._request("POST", self._path(agent_id, "runs"), body)
+        self._apps[run["id"]] = agent_id
+        return run["id"], None  # the thread id arrives with the finished run
+
+    def wait(self, run_id, timeout=15 * 60):
+        path = self._path(self._apps[run_id], "runs", run_id)
+        started = self.clock()
+        delay = FIRST_POLL_SECONDS
+        while True:
+            run = self._request("GET", path)
+            if run.get("status") in TERMINAL:
+                return {"status": run["status"], "conversation_id": run.get("threadId"),
+                        "result": {"text": turn_text(run.get("result"))},
+                        "error": {"code": run.get("errorCode")}}
+            elapsed = self.clock() - started
+            if elapsed >= timeout:
+                raise CreaoError(f"Creao run {run_id} didn't finish within {timeout / 60:.0f} minutes "
+                                 f"({run.get('status') or 'no status'}); it may still be running on Creao.")
+            self.sleep(min(delay, timeout - elapsed))
+            delay = min(MAX_POLL_SECONDS, delay * 1.5)
+
+
+def client(key=None):
+    """The client for this computer's key: an agent.creao.ai `capi_` key runs that agent's API Trigger."""
+    key = (key if key is not None else api_key()).strip()
+    return AppTrigger(key=key) if is_app_key(key) else Creao(key=key)
+
+
+def is_app_key(key):
+    return (key or "").strip().startswith("capi_")
+
+
+def turn_text(result):
+    """The reply's CadSwarm turn. An App Trigger run narrates in `chatText`, which may also quote example
+    turns, and its `text` is a structured echo that names the turn it meant ({"tool": "add_box",
+    "done": "false"}) without its args. So: the chat's turns that match that echo, then one in a json
+    fence, then the last."""
+    result = result or {}
+    chat = str(result.get("chatText") or "")
+    turns = _turns(chat)
+    meant = (_turns(str(result.get("text") or ""), strict=False) or [(None, None, {})])[-1][2]
+    if str(meant.get("done")).lower() == "true" or meant.get("tool") == "done":
+        turns = [t for t in turns if t[2].get("done") is True] or turns
+    elif isinstance(meant.get("tool"), str):
+        turns = [t for t in turns if t[2].get("tool") == meant["tool"]] or turns
+    fenced = [t for t in turns if chat.count("```", 0, t[0]) % 2 == 1]
+    if turns:
+        start, end, _ = (fenced or turns)[-1]
+        return chat[start:end]
+    return str(result.get("text") or chat)
+
+
+def _turns(text, strict=True):
+    """(start, end, object) for each JSON object in text that is a CadSwarm turn (any object if not strict)."""
+    decoder, found, start = json.JSONDecoder(), [], 0
+    while True:
+        start = text.find("{", start)
+        if start < 0:
+            return found
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except ValueError:
+            start += 1
+            continue
+        if isinstance(obj, dict) and (not strict or "tool" in obj or obj.get("done") is True):
+            found.append((start, end, obj))
+        start = end
 
 
 def _json(raw):

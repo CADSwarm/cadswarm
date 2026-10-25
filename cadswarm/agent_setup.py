@@ -307,6 +307,15 @@ def setup_creao(project, python):
     if not key:
         raise ValueError("Creao needs CREAO_API_KEY on this computer: create a cr_sk_ key in Creao's "
                          "Developer Console and add it to cadswarm.env (see .env.example)")
+    if creao.is_app_key(key):
+        # An agent built on agent.creao.ai: its id, model, skill and autonomy all live on its page.
+        agent_id = (os.environ.get("CREAO_AGENT_ID") or "").strip()
+        if not agent_id:
+            raise ValueError("A capi_ key runs one agent built on agent.creao.ai: add that agent's id "
+                             "(shown on its page) to cadswarm.env as CREAO_AGENT_ID")
+        creao.save_config(project, agent_id=agent_id)
+        upsert_block(os.path.join(project, "AGENTS.md"), CREAO_DOC.format(begin=BEGIN, end=END))
+        return [os.path.join(project, "AGENTS.md"), creao.config_path(project)]
     api = creao.Creao(key=key)
     try:
         api.usage()  # a cheap authenticated call: proves the key works before anything is spent
@@ -448,7 +457,7 @@ def list_models(client):
     if client == "creao":
         from . import creao
         try:
-            return creao.Creao().list_models()
+            return creao.client().list_models()
         except (creao.CreaoError, OSError, ValueError, KeyError, AttributeError):
             return []
     return []

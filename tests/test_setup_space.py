@@ -162,13 +162,13 @@ def test_creao_models_come_from_its_api(monkeypatch):
     class Api:
         def list_models(self):
             return ["claude-sonnet", "gpt-5"]
-    monkeypatch.setattr(creao, "Creao", lambda: Api())
+    monkeypatch.setattr(creao, "client", lambda: Api())
     assert agent_setup.list_models("creao") == ["claude-sonnet", "gpt-5"]
 
     class Down:
         def list_models(self):
             raise creao.CreaoError("Couldn't reach Creao")
-    monkeypatch.setattr(creao, "Creao", lambda: Down())
+    monkeypatch.setattr(creao, "client", lambda: Down())
     assert agent_setup.list_models("creao") == []
 
 
@@ -340,3 +340,23 @@ def test_nvm_installs_are_ordered_by_version_not_text():
     paths = [f"/h/.nvm/versions/node/v{v}/bin/claude" for v in ("9.11.2", "22.1.0", "18.20.4")]
     newest = sorted(paths, key=agent_setup._node_version, reverse=True)[0]
     assert "v22.1.0" in newest
+
+
+def test_creao_setup_with_an_app_key_uses_the_agent_built_on_agent_creao_ai(tmp_path, monkeypatch):
+    FakeCreaoApi.instances = []
+    monkeypatch.setattr(creao, "Creao", FakeCreaoApi)
+    monkeypatch.setenv("CREAO_API_KEY", "capi_test")
+    monkeypatch.setenv("CREAO_AGENT_ID", "agent-web")
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1,
+                                                               "fence": 1, "name": n, "role": "member"})
+    agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao", python="python")
+    assert FakeCreaoApi.instances == []  # no /v1 calls: the agent, its skill and autonomy live on its page
+    assert creao.load_config(str(tmp_path)) == {"agent_id": "agent-web"}
+    assert "cadswarm:begin" in open(tmp_path / "AGENTS.md").read()
+
+
+def test_creao_setup_with_an_app_key_needs_the_agent_id(tmp_path, monkeypatch):
+    monkeypatch.setenv("CREAO_API_KEY", "capi_test")
+    monkeypatch.delenv("CREAO_AGENT_ID", raising=False)
+    with pytest.raises(ValueError, match="CREAO_AGENT_ID"):
+        agent_setup.setup_creao(str(tmp_path), "python")

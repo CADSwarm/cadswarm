@@ -157,7 +157,7 @@ async def run_bridge(project, prompt, client=None, tools=None, clock=time.monoto
                 or creao.load_shared().get("agent_id") or "").strip()
     from .agent_setup import helper_model  # the model picked for this helper sticks, over CREAO_MODEL
     model = (helper_model(project) or os.environ.get("CREAO_MODEL") or cfg.get("model") or "").strip() or None
-    api = client or creao.Creao()
+    api = client or creao.client()
     tool_set = tools
     if tool_set is None:
         from . import mcp_server

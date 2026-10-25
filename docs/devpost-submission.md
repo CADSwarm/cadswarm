@@ -194,7 +194,7 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 SpacetimeDB 2.13.0 (Rust module, Rust and TypeScript clients) · Rust · Python 3.11+ · FreeCAD 1.x ·
 TypeScript · Vite · three.js · Elasticsearch Serverless 9.6 · Kibana · ES|QL
 · Jina embeddings and reranker · Factory Droid (`droid-sdk`) · Claude Code · OpenAI Codex · OpenCode ·
-Creao AI (Developer API) · GitHub Actions · Windows
+Creao AI (agent.creao.ai API Trigger) · GitHub Actions · Windows
 
 ## Try it out
 
@@ -218,7 +218,7 @@ Creao AI (Developer API) · GitHub Actions · Windows
 | Spacetime: Best Use of Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-0180`. |
 | Anthropic: Claude for Public Benefit | `cadswarm/mcp_server.py`; `host/src/agents.rs` (`planner_prompt`, `worker_prompt`, `handoff_prompt`); `host/src/briefs.rs` | Who it helps: people who need a physical part (a case, a mount, a bracket) but have no CAD or coding skills, such as students, makers and small hardware teams. Claude Code is the default helper and works only through the MCP server's tools and its 13 working rules. The host plans a brief with a planner agent and starts up to three workers, and adds the team's learned design style to each prompt. Failure modes are handled in the database rather than in a prompt: locks refuse an agent's edit to someone else's part, a stale agent's work is taken over, and a reviewer checks the result. |
 | Factory: Best Use of the Factory Droid SDK | `cadswarm/reviewer.py`; README "Where Droid runs" | The Droid reviewer runs on `droid-sdk` with `restrict_tools` limited to inspection, joins as a `reviewer` member, and the module refuses any write op from that member kind. |
-| Creao AI: Best Team Empowerment | `cadswarm/creao.py`, `cadswarm/creao_agent.py`; README "Creao AI (optional helper)" | An optional agent whose model turns arrive over Creao's Developer API. A local bridge asks for one JSON tool call per turn and executes it with the same MCP tools every helper uses, so Creao needs neither a CLI nor a custom connector. |
+| Creao AI: Best Team Empowerment | `cadswarm/creao.py` (`AppTrigger`), `cadswarm/creao_agent.py`; README "Creao AI" | **CadSwarm Helper**, built on agent.creao.ai (agent ID `ff2a16be-068b-4fbb-a7ca-709bfd97b75f`; run share link: [TBD]), joins the team as a helper and builds parts on the shared model. A local bridge runs it through its API Trigger, one thread per helper, asks for one JSON tool call per turn and executes it with the same MCP tools, locks and fences every helper uses. With `-Agent creao` the host runs it as the planner and workers for a brief. |
 | Elastic: Best use of the Elastic Agent Builder on a Serverless Instance | `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/setup.json`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | Two Agent Builder agents on the Serverless project: `cadswarm-board-expert` answers board questions through its own search tools over the datasheet index (checked live on 2026-10-24: a `converse` call returned in 13.6 s), and `cadswarm-style-analyst` rewords the team's learned design rules. Under them: JINA `semantic_text` hybrid search with the reranker over board datasheets, design memory written back by the host, and the `distil-lessons` Workflow. |
 | Best Hardware | The printed enclosure | [TBD — photo of the printed part, from T7d] |
 | Most Technically Complex | `rules/src/lib.rs` (fences, locks, stale sweep, `check_take_over`); `host/src/executor.rs` (`spill`: results over 32 KB become artifacts); `cadswarm/worker/sandbox.py`, `sandbox_win.py`, `script_runner.py` | Fenced leases, object locks and takeover enforced in reducers; handoff of locks and tasks; large results spilled out of the op table; agent part scripts run in a sandbox. |
@@ -305,11 +305,6 @@ the local library. Its model quota answered `429` earlier on 2026-10-24; a live 
 about 16:30 PT the same day answered in 13.6 s, so show it in the video (ask it about a board, then
 open the agent and its tools in Kibana). The code still degrades to the local library plus datasheet
 search if the model is unavailable, so the build itself never depends on it.
-
-### What the demo does not claim
-
-- **Creao AI** needs a `CREAO_API_KEY` on the host. Without one, the Creao card in the helper picker
-  stays unavailable and nothing else changes.
 
 Everything the video does show — board search, design memory, the Workflow run, the export — ran
 against the live project on 2026-10-24.

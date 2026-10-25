@@ -34,6 +34,14 @@ def test_usage_is_the_cheap_authenticated_call():
     assert (method, url, body) == ("GET", "https://developer.creao.ai/v1/account/usage", None)
 
 
+def test_requests_name_cadswarm_as_the_user_agent():
+    # Creao's Cloudflare refuses Python's default "Python-urllib/x.y" with a 403 (error 1010).
+    seen = []
+    client = creao.Creao(key="cr_sk_test", opener=lambda r, t: seen.append(r) or (200, {}, b"{}"))
+    client.usage()
+    assert seen[0].get_header("User-agent").startswith("cadswarm/")
+
+
 def test_create_agent_polls_its_creation_run_for_the_agent_id():
     client, stub, _ = api([
         (202, {}, {"run_id": "run-1", "status": "pending"}),
@@ -194,3 +202,76 @@ def test_list_models_accepts_the_usual_shapes(payload):
     api._request = lambda method, path, body=None: seen.append((method, path)) or payload
     assert api.list_models() == ["claude-sonnet", "gpt-5"]
     assert seen == [("GET", "/v1/models")]
+
+
+# ---------------------------------------------------------------- agent.creao.ai App Trigger (capi_ keys)
+
+def app(replies):
+    stub = Stub(replies)
+    return creao.AppTrigger(key="capi_test", opener=stub, sleep=lambda s: None), stub
+
+
+def test_a_capi_key_drives_the_agent_through_its_app_trigger():
+    assert isinstance(creao.client(key="capi_x"), creao.AppTrigger)
+    assert type(creao.client(key="cr_sk_x")) is creao.Creao
+
+
+def test_app_trigger_runs_the_agent_and_continues_its_thread():
+    client, stub = app([(202, {}, {"id": "run-1", "status": "pending", "appId": "agent-1"})])
+    run_id, conversation = client.run("agent-1", {"message": "hi"}, conversation_id="thread-1", model="m")
+    assert (run_id, conversation) == ("run-1", None)  # the thread id arrives with the finished run
+    method, url, body, _ = stub.requests[0]
+    assert (method, url) == ("POST", "https://agent.creao.ai/api/v1/apps/agent-1/runs")
+    assert body == {"inputs": {"message": "hi"}, "threadId": "thread-1"}  # the model is set on the agent's page
+
+
+def test_app_trigger_starts_a_new_thread_without_one():
+    client, stub = app([(202, {}, {"id": "run-1", "status": "pending"})])
+    client.run("agent-1", {"message": "hi"})
+    assert stub.requests[0][2] == {"inputs": {"message": "hi"}}
+
+
+def test_app_trigger_wait_reads_the_turn_from_the_chat_text():
+    chat = ('Input validated. The task asks for {"done": true, "summary": "draft"} at the end. '
+            'Done.{"tool": "add_box", "args": {"length": 20}}')
+    client, stub = app([
+        (202, {}, {"id": "run-1", "status": "pending"}),
+        (200, {}, {"id": "run-1", "status": "running"}),
+        (200, {}, {"id": "run-1", "status": "completed", "threadId": "thread-9",
+                   "result": {"text": '{"message": "echo", "tool": "add_box", "done": "false"}', "chatText": chat}}),
+    ])
+    run_id, _ = client.run("agent-1", {"message": "hi"})
+    done = client.wait(run_id)
+    assert stub.requests[1][1] == "https://agent.creao.ai/api/v1/apps/agent-1/runs/run-1"
+    assert done["status"] == "completed" and done["conversation_id"] == "thread-9"
+    assert json.loads(done["result"]["text"]) == {"tool": "add_box", "args": {"length": 20}}  # the last turn
+
+
+def test_app_trigger_wait_reports_creaos_error_code():
+    client, _ = app([
+        (202, {}, {"id": "run-1", "status": "pending"}),
+        (200, {}, {"id": "run-1", "status": "failed", "errorCode": "INSUFFICIENT_CREDITS", "result": None}),
+    ])
+    done = client.wait(client.run("agent-1", {"message": "hi"})[0])
+    assert done["status"] == "failed" and creao._run_code(done) == "INSUFFICIENT_CREDITS"
+
+
+def test_turn_text_falls_back_to_the_text_when_no_turn_is_found():
+    assert creao.turn_text({"chatText": "no json here", "text": "plain"}) == "plain"
+    assert creao.turn_text(None) == ""
+
+
+def test_turn_text_follows_the_structured_text_past_a_quoted_done_example():
+    # A live reply (2026-10-25): the turn is in a json fence, then the narration quotes a done example.
+    chat = ('The correct next step is to emit the `add_box` tool call.## CadSwarm Helper\n\n```json\n'
+            '{"tool": "add_box", "args": {"length": 20, "width": 10, "height": 5}}\n```\n\n'
+            'the `{"done": true, "summary": "…"}` completion signal belongs to the *following* turn.')
+    text = '{"message": "Add one box", "tool": "add_box", "done": "false"}'
+    assert json.loads(creao.turn_text({"text": text, "chatText": chat})) == {
+        "tool": "add_box", "args": {"length": 20, "width": 10, "height": 5}}
+
+
+def test_turn_text_takes_the_done_turn_the_structured_text_names():
+    chat = 'Validated. Previous was {"tool": "add_box", "args": {}}. {"done": true, "summary": "ping"}'
+    text = '{"message": "x", "tool": "done", "done": "true"}'
+    assert json.loads(creao.turn_text({"text": text, "chatText": chat})) == {"done": True, "summary": "ping"}

@@ -357,6 +357,23 @@ small local bridge (`cadswarm/creao_agent.py`). The bridge joins the team exactl
 helper, sends Creao the wake-up prompt, and executes each tool call Creao asks for in-process with the
 same MCP tools, so activity logging and fencing work the same way.
 
+**Our agent on agent.creao.ai:** *CadSwarm Helper*, agent ID `ff2a16be-068b-4fbb-a7ca-709bfd97b75f`.
+A run of it building a part: [TBD — share link from the agent's Recent runs].
+
+### With an agent built on agent.creao.ai (`capi_` key)
+
+1. Build the agent on [agent.creao.ai](https://agent.creao.ai) with one text input named `message` and
+   the reply rule in `cadswarm/creao.py` (`AGENT_DESCRIPTION`), and turn its **Autonomy** to Auto: a
+   bridged run can't stop for approvals.
+2. On the agent's page, create its API key (`capi_...`). Put the key and the agent ID from that page in
+   `cadswarm.env`: `CREAO_API_KEY=capi_...` and `CREAO_AGENT_ID=<id>`.
+3. Set up the helper as below. With a `capi_` key the bridge runs that agent through its API Trigger
+   (`agent.creao.ai/api/v1/apps/<id>/runs`), continues one thread per helper, and every run shows up
+   under the agent's **Recent runs**, where it can be shared. The agent's model, skill and autonomy are
+   its own settings on that page, so setup makes no other Creao calls.
+
+### With a Creao CLI account key (`cr_sk_`)
+
 1. In the setup guide click **Creao AI** (or **Add key…**) and paste the key in the box that opens;
    **Get a key…** in that box opens Creao's [Developer Console](https://developer.creao.ai) to make
    an account-scoped `cr_sk_` key. CadSwarm saves the key on this computer only, in the CadSwarm
