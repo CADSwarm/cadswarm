@@ -5,7 +5,7 @@ import re
 import shutil
 import sys
 
-from .paths import app_dir
+from .paths import app_dir, droid_exe
 
 HEARTBEAT_SECONDS = 15
 STALE_AFTER_SECONDS = 30       # no heartbeat for this long -> stale, work awaits takeover
@@ -153,3 +153,16 @@ def worker_script():
 def helper_script():
     """The host runs this file with any Python 3.11+ (stdlib only) to answer file and storage ops."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "helper.py")
+
+
+def reviewer_can_start():
+    """Whether the host may set up the Droid design reviewer by itself (no `init-reviewer`): Droid is
+    installed and a FACTORY_API_KEY is available, from the environment or cadswarm.env. Without a key the
+    reviewer can't sign in, and one that exits without a verdict fails the brief, so it stays opt-in.
+    CADSWARM_AUTO_REVIEWER=0 turns it off."""
+    if os.environ.get("CADSWARM_AUTO_REVIEWER", "").strip() in ("0", "false", "no"):
+        return False
+    from .creao import load_env_file
+    load_env_file()
+    exe = droid_exe()
+    return bool(os.environ.get("FACTORY_API_KEY", "").strip()) and bool(os.path.isfile(exe) or shutil.which(exe))

@@ -1,6 +1,7 @@
+import os
 from types import SimpleNamespace
 
-from cadswarm import paths
+from cadswarm import paths, reviewer
 from cadswarm.reviewer import REVIEW_TOOLS, activity_for, brief_objects, review_prompt
 
 
@@ -110,3 +111,43 @@ def test_the_reviewer_answers_droids_permission_prompt():
     assert allow_review_tools(ask(mine)).selected_option is droid.ToolConfirmationOutcome.PROCEED_ALWAYS_SERVER
     assert allow_review_tools(ask(theirs)).selected_option is droid.ToolConfirmationOutcome.CANCEL
     assert allow_review_tools(ask(shell)).selected_option is droid.ToolConfirmationOutcome.CANCEL
+
+
+def test_the_reviewer_reads_the_factory_key_from_cadswarm_env(tmp_path, monkeypatch):
+    # The host starts the reviewer from the desktop app, so the key only exists in the env file.
+    from cadswarm import creao
+    env = tmp_path / "cadswarm.env"
+    env.write_text("FACTORY_API_KEY=fk-test\n", encoding="utf-8")
+    monkeypatch.setenv("FACTORY_API_KEY", "")  # recorded, so the loader's write is undone after the test
+    monkeypatch.delenv("FACTORY_API_KEY")
+    monkeypatch.setattr(creao, "env_candidates", lambda: [None, str(env)])
+    seen = {}
+
+    async def fake_review(folder, brief, round_no):
+        seen["key"] = os.environ.get("FACTORY_API_KEY")
+    monkeypatch.setattr(reviewer, "review", fake_review)
+    reviewer.main(["--brief", "b_1", "--dir", str(tmp_path)])
+    assert seen["key"] == "fk-test"
+
+
+def test_the_host_sets_up_the_reviewer_only_with_droid_and_a_factory_key(tmp_path, monkeypatch):
+    from cadswarm import config, creao
+    droid = tmp_path / "droid.exe"
+    droid.write_text("")
+    monkeypatch.setattr(creao, "env_candidates", lambda: [])
+    monkeypatch.setattr(config, "droid_exe", lambda: str(droid))
+    monkeypatch.delenv("CADSWARM_AUTO_REVIEWER", raising=False)
+    monkeypatch.setenv("FACTORY_API_KEY", "fk-test")
+    assert config.reviewer_can_start() is True
+    # Opted out, for a team that does not want reviews.
+    monkeypatch.setenv("CADSWARM_AUTO_REVIEWER", "0")
+    assert config.reviewer_can_start() is False
+    monkeypatch.delenv("CADSWARM_AUTO_REVIEWER")
+    # No Droid on this computer.
+    monkeypatch.setattr(config, "droid_exe", lambda: "droid")
+    monkeypatch.setattr(config.shutil, "which", lambda name: None)
+    assert config.reviewer_can_start() is False
+    # Droid but no key: a reviewer that can't sign in exits without a verdict and fails the brief.
+    monkeypatch.setattr(config, "droid_exe", lambda: str(droid))
+    monkeypatch.delenv("FACTORY_API_KEY")
+    assert config.reviewer_can_start() is False
