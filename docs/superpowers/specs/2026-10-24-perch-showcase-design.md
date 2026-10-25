@@ -329,14 +329,17 @@ no wall under 1.2 mm after the fix. This is the only hardware claim: print-ready
 
 | Who | Client | Job |
 |---|---|---|
-| `planner-claude` | Claude Code, host-spawned | plan the brief into assigned tasks, then stop |
+| `planner-claude` | Claude Code, host-spawned as `planner-<brief>` | plan the brief into assigned tasks, then stop |
 | `lead-claude` | Claude Code, manual | `Shoulder_Hub`, Params, coordination, takeover |
-| `worker-1/2/3-claude` | Claude Code, host-spawned | unassigned tasks: `Clamp_Base`, `Cradle_Base` |
+| `worker-1/2/3-claude` | Claude Code, host-spawned as `worker<n>-<brief>` | unassigned tasks: `Clamp_Base`, `Cradle_Base` |
 | `arm-opencode` | OpenCode | arm segments, FEA, Lighten |
 | `lid-creao` | Creao AI bridge | cradle lid; killed for takeover; returns for Act 2 |
-| `base-claude` | Claude Code, handoff-spawned | finishes the clamp after the human |
+| `base-claude` | Claude Code, handoff-spawned as `handoff-<id>` | finishes the clamp after the human |
 | `reviewer` | Droid | review rounds 1 and 2 |
 | you / Sam | FreeCAD / phone | build, steer, correct, submit Act 2 from the phone |
+
+The host-spawned names above are call-sheet labels; the actual member names are `planner-<brief>`,
+`worker<n>-<brief>` and `handoff-<id>`, as the panel's Team tab shows them.
 
 All manual helpers join before the brief so the planner can assign by name. The host starts up to
 three Claude workers; they take the unassigned clamp and cradle tasks. Every manual task is assigned
@@ -361,11 +364,11 @@ Brief, typed in the panel:
 | 2 | Plan + board | 2′ | Submit the brief | Planner calls `lookup_board`; board Params fill; Elastic card shows `esp32-s3-devkitc-1`; tasks appear with names |
 | 3 | Build | 8–12′ | Let the builders work | Parts in owner colors; Creao's one-call-per-turn trace; Claude workers take clamp/cradle |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused "locked by arm-opencode"; it messages the owner |
-| 5 | Shared size | 1′ | Tools ▸ Set param: `arm_reach = 160 mm` | Arm segments and head positions recompute; owners notified |
-| 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain → preview → apply; then `tol_press_fit = -0.08 mm` | Proposed aliases/pattern/fit; hub bore visibly shrinks |
+| 5 | Shared size | 1′ | Tools ▸ Change a shared size…: `arm_reach = 160 mm` | Arm segments and head positions recompute; owners notified |
+| 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain… → preview → apply; then `tol_press_fit = -0.08 mm` | Proposed aliases/pattern/fit; hub bore visibly shrinks |
 | 7 | FEA | 3–6′ | `@arm-opencode linear static on Arm_Distal: fixed at the elbow, 4.9 N down at the head, PETG. Publish it and tell us if it's overbuilt.` | Report pops up; deflection and safety factor; Elastic indexes it |
 | 8 | Kill + takeover | 2′ | Kill the Creao bridge mid-lid; wait for stale; `@lead-claude take_over("lid-creao")` | Creao card goes stale and its trace stops; Spacetime lock row moves; lead finishes the lid |
-| 9 | Handoff | 2–3′ | Human holds `Clamp_Base`, edits the M8 pocket, **Hand off now** with the note below | `base-claude` joins, accepts the lock, finishes, messages back |
+| 9 | Handoff | 2–3′ | You hold `Clamp_Base`, edit the M8 pocket, and let go; Sam takes the lock in the phone's Model tab, sends the note below in Team chat, arms **Continue my work if I leave**, and closes the tab | Sam goes quiet; the host opens the handoff and spawns `handoff-<id>`; it accepts, finishes, and messages back |
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer and trace; three findings: missing USB-OTG cutout, cradle inner height 8.0 < 11.1 mm, lid wall 1.0 mm |
 | 11 | Correct + style | 2–3′ | Human sets the lid wall to 2.4 mm and saves; Tools ▸ Learned design style: add the two rules below | Human correction recorded; rules active; later turns carry "Team design style" |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |

@@ -19,8 +19,8 @@ Copied from the spec (`docs/superpowers/specs/2026-10-24-perch-showcase-design.m
 - Card order is fixed: **SpacetimeDB → Anthropic → Creao → Factory.ai → Elastic**. The two new cards show `not joined` rather than disappearing.
 - The driver is a human presenter: it never writes geometry, never claims a task, never posts as a helper. It may submit briefs, steers and messages, and read.
 - A step is done when the module says so: task, op, lock, review, bbox, artifact, event. Never an agent's prose.
-- The table run claims only: the recall returned Act 1, the tasks appeared with named owners, a locked body refused a helper, a part started. Never a finished head. One absolute gate: the first op by 1:45 (105 s after the press).
-- The table run uses `table.json`; `table-safe.json` is a pre-flight choice made if the last rehearsal started no part before 1:30 (90 s). Never swapped mid-pitch.
+- The table run claims only: the recall returned Act 1, the tasks appeared with named owners, a locked body refused a helper, a part started. Never a finished head. One absolute gate: the first op by 1:45 on the pitch clock (75 s after the 0:30 press).
+- The table run uses `table.json`; `table-safe.json` is a pre-flight choice made if the last rehearsal started no part before 1:30 (60 s after the 0:30 press). Never swapped mid-pitch.
 - The driver keeps building after 2:00 and after the last step. It never stops the team.
 - Five sponsor cards, one job each; the stamped footer stays visibly stamped.
 - Not printed, no printer assumed, Best Hardware not entered. No pricing, market, customer or revenue claim.
@@ -495,7 +495,7 @@ def a_plan(steps=None, **over):
         "name": "test",
         "brief": {"from": "phone", "board": "esp32-s3-devkitc-1", "marker": "Podium head",
                   "text": "Make the Podium head."},
-        "gate": {"first_op_by": 105, "if_missed": "No part has started yet."},
+        "gate": {"first_op_by": 75, "if_missed": "No part has started yet."},
         "ready": {"parts_any": ["Clamp_Base"], "forbid_prefix": ["Podium_"], "no_open_brief": True},
         "cast": {"lead-claude": "claude"},
         "probe": ["lead-claude"],
@@ -962,7 +962,7 @@ def validate(plan):
     if not isinstance(plan.get("cast"), dict) or not plan["cast"]:
         raise PlanError("a timeline needs cast: owner name -> client")
     # Who must be live before Start. Not every cast member: the booth's `base-claude` joins at the
-    # handoff, twenty minutes in, and must not block the start.
+    # handoff, twenty-five minutes in, and must not block the start.
     probe = plan.get("probe")
     if not isinstance(probe, list) or not probe:
         raise PlanError("a timeline needs probe: the owners that must be live before Start")
@@ -2087,7 +2087,7 @@ def test_the_table_run_is_the_five_beats_in_order():
     assert [s["id"] for s in plan["steps"]] == ["brief", "recall", "tasks", "refusal", "first_part"]
     assert [s["predicate"] for s in plan["steps"]] == [
         "brief_sent", "recall", "tasks_landed", "refusal", "first_part"]
-    assert plan["gate"]["first_op_by"] == 105
+    assert plan["gate"]["first_op_by"] == 75
     assert plan["brief"]["from"] == "phone"
     assert plan["steps"][0]["deadline"] == 10
     assert plan["steps"][-1]["at"] < plan["gate"]["first_op_by"]
@@ -2104,7 +2104,7 @@ def test_the_safe_timeline_is_lid_only_and_has_no_refusal_beat():
     assert "Podium_Lid" in plan["brief"]["text"] and "Podium_Body" not in plan["brief"]["text"]
     assert plan["steps"][2]["args"]["owners"] == {"Podium_Lid": "lid-creao"}
     assert [s["id"] for s in plan["steps"]] == ["brief", "recall", "tasks", "first_part"]
-    assert plan["gate"]["first_op_by"] == 105
+    assert plan["gate"]["first_op_by"] == 75
 
 
 def test_the_booth_timeline_covers_every_beat_the_window_claims():
@@ -2135,7 +2135,7 @@ Expected: FAIL — the files do not exist.
     "text": "Make the Podium head for the same Perch: the same ESP32-S3 upright, a 2.4 mm lid, the same fits, the same 180 mm bed. Reuse the arm and the mount. Recall the Perch we just built before planning, and use what its review found. Podium_Body -> lead-claude, Podium_Lid -> lid-creao."
   },
   "gate": {
-    "first_op_by": 105,
+    "first_op_by": 75,
     "if_missed": "No part has started yet. The recall and the tasks are real; the body is the next run."
   },
   "ready": {
@@ -2199,7 +2199,7 @@ Expected: FAIL — the files do not exist.
     "text": "Make the Podium lid for the same Perch: a 2.4 mm back cover for the upright ESP32-S3 head, same fits, same 180 mm bed. Recall the Perch we just built before planning, and use what its review found. Podium_Lid -> lid-creao."
   },
   "gate": {
-    "first_op_by": 105,
+    "first_op_by": 75,
     "if_missed": "No part has started yet. The recall and the task are real; the lid is the smallest job we have and it is still running."
   },
   "ready": {
@@ -2498,11 +2498,11 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 | 2 | Plan + board | 2′ | Submit the brief | `lookup_board`, board Params, tasks with names |
 | 3 | Build | 8–12′ | Let them work | Parts in owner colours; Creao one call per turn |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused; it messages the owner |
-| 5 | Shared size | 1′ | Tools ▸ Set param `arm_reach = 160 mm` | Segments and head positions recompute |
-| 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain → apply; `tol_press_fit = -0.08 mm` | Aliases, M4 pattern, bearing fit; the bore shrinks |
+| 5 | Shared size | 1′ | Tools ▸ Change a shared size… `arm_reach = 160 mm` | Segments and head positions recompute |
+| 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain… → apply; `tol_press_fit = -0.08 mm` | Aliases, M4 pattern, bearing fit; the bore shrinks |
 | 7 | FEA | 3–6′ | `@arm-opencode linear static …` | Report pops up for the team; Elastic indexes it |
 | 8 | Kill + takeover | 2′ | Kill the Creao bridge; `@lead-claude take_over("lid-creao")` | Creao goes stale, its trace stops, the lock moves |
-| 9 | Handoff | 2–3′ | Hold `Clamp_Base`, edit the M8 pocket, **Hand off now** | `base-claude` joins, accepts, finishes, messages back |
+| 9 | Handoff | 2–3′ | You hold `Clamp_Base`, edit the M8 pocket, let go; Sam takes the lock on the phone, sends the note, arms **Continue my work if I leave**, closes the tab | Sam goes quiet; the handoff opens; `handoff-<id>` accepts, finishes, messages back |
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer, trace, three findings |
 | 11 | Correct + style | 2–3′ | Set the lid wall to 2.4 mm; add the three rules in Learned design style | The correction is recorded; rules are active |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
@@ -2549,7 +2549,7 @@ The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` 
 - **Next** — advance now. A manual step is logged `confirmed`; a module step `skipped`. Both say why.
 - **Pause / Resume** — holds the sequence while a judge talks. The build keeps running.
 - **Probe** — Claude, Creao, Droid, Elastic, then every other owner in the timeline's `probe` list.
-  The booth's `base-claude` joins at the handoff, twenty minutes in, so it is not probed at Start.
+  The booth's `base-claude` joins at the handoff, twenty-five minutes in, so it is not probed at Start.
   Re-run Probe after touching any helper.
 - **Say box** — `@lid-creao …` is a real steer; anything else is a real brief. This is how a judge's own
   idea runs live.
@@ -2621,16 +2621,16 @@ simulate and lighten.
 | Beat | Send | To |
 |---|---|---|
 | 4 | `thicken Arm_Distal by 2 mm; it flexes.` | `@lid-creao` |
-| 5 | Tools ▸ Set param: `arm_reach = 160` | (panel) |
-| 6 | Tools ▸ Auto-constrain → Apply, then Tools ▸ Set param: `tol_press_fit = -0.08` | (panel) |
+| 5 | Tools ▸ Change a shared size…: `arm_reach = 160` | (panel) |
+| 6 | Tools ▸ Auto-constrain… → Apply, then Tools ▸ Change a shared size…: `tol_press_fit = -0.08` | (panel) |
 | 7 | `linear static on Arm_Distal: fixed at the elbow, 4.9 N down at the head, PETG. Publish it and tell us if it's overbuilt.` | `@arm-opencode` |
 | 8 | `take_over("lid-creao")` | `@lead-claude` |
-| 9 | Hand off now, then the handoff note below | (panel) |
+| 9 | Take `Clamp_Base` on the phone, send the handoff note below in Team chat, arm **Continue my work if I leave**, close the tab | (Sam's phone) |
 | 11 | Tools ▸ Learned design style: add the three rules | (panel) |
 | 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | `@arm-opencode` |
 | 14 | `distil-lessons` | (Elastic workflow) |
 
-Handoff note, pasted into **Hand off now**:
+Handoff note, sent in Team chat before arming (the handoff snapshot carries the last five messages):
 
 ```
 Jaw opening is 34 mm; the M8 nut pocket is 0.2 mm tight. Finish the insert pocket, add 0.4 mm clearance,
@@ -2748,8 +2748,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 
 ## The timeline decision (made now, never mid-pitch)
 
-- [ ] Open the last `runs/*.json`. If `t_first_op` is **under 90 s**, run `table.json`.
-- [ ] If it is **90 s or more**, or the last run missed the gate, run `table-safe.json`.
+- [ ] Open the last `runs/*.json`. If `t_first_op` is **under 60 s**, run `table.json`.
+- [ ] If it is **60 s or more**, or the last run missed the gate, run `table-safe.json`.
 - [ ] Write the choice and the reason on the top line of `rehearsal.md`. Do not change it after the first
       judge arrives.
 
@@ -2849,7 +2849,7 @@ Rules:
 ## The table decision (fill before the first judge, never change mid-pitch)
 
 - Last rehearsal's `t_first_op`: ______ s
-- Rule: under 90 s → `table.json`; 90 s or more, or the gate failed → `table-safe.json`.
+- Rule: under 60 s → `table.json`; 60 s or more, or the gate failed → `table-safe.json`.
 - **Chosen timeline:** ______
 - Reason, one line: ______
 - Decided at (time): ______
@@ -2966,8 +2966,8 @@ than `table.json`, say that in the sheet — it is a reason to prefer it.
 
 Apply the rule from Step 1's first section using R2's and R3's `t_first_op`:
 
-- `t_first_op` **under 90 s** and the gate passed → `table.json`.
-- `t_first_op` **90 s or more**, or the gate failed in either run → `table-safe.json`.
+- `t_first_op` **under 60 s** and the gate passed → `table.json`.
+- `t_first_op` **60 s or more**, or the gate failed in either run → `table-safe.json`.
 
 Fill the decision block and commit it before the first judge. If a later rehearsal changes the numbers,
 the decision is re-made **before** the next pitch and the previous line is kept, struck through by hand in
