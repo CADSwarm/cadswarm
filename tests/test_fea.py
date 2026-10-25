@@ -434,3 +434,10 @@ def test_lighten_hint_detects_requests_to_save_weight():
         assert "lighten_part" in lattice_hint(text), text
     for text in ("what colour is it", "move the light switch", "add a fillet"):
         assert lattice_hint(text) == "", text
+
+
+def test_the_plot_keeps_a_thin_parts_short_axis_readable():
+    from cadswarm.worker.fea_runner import box_aspect
+    assert box_aspect([240, 240, 20]) == [240, 240, 60.0]  # a 20 mm plate gets room for its z ticks
+    assert box_aspect([100, 80, 60]) == [100, 80, 60]  # chunky parts keep their true proportions
+    assert box_aspect([0, 0, 0]) == [0.25e-6, 0.25e-6, 0.25e-6]  # degenerate input never divides by zero
