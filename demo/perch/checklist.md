@@ -29,8 +29,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
       `Arm_Proximal`, `Arm_Distal`, `Cradle_Base`, `Cradle_Lid`).
 - [ ] No `Podium_*`, no `Medallion*`, no lattice mesh left visible.
 - [ ] No open brief, no stale helper, no lock held by a dead member. The reviewer is the one exception:
-      `init-reviewer` mints an HTTP-only member that never heartbeats, so the sweep will mark it `stale`
-      by T-5. Probe still counts it (with `droid` on PATH), and a stale reviewer does not block Start.
+      `init-reviewer` mints an HTTP-only member that never heartbeats, so it is `stale` between rounds.
+      The sweep never orphans a reviewer, Probe counts it (with `droid` on PATH), and a stale reviewer
+      does not block Start. A stale *helper* does.
 - [ ] The FEA report and the lattice report are open in the panel for beats 7 and 13.
 - [ ] Act 1's design doc and lessons are in Elastic; the previous podium doc is still there.
 
@@ -51,8 +52,8 @@ the manual helpers joined. Act 1 is built live.
 - [ ] Open the last `runs/*.json`. If `t_first_op` is **under 60 s** (before 1:30 on the pitch clock), run
       `table.json`.
 - [ ] If it is **60 s or more** (1:30 or later), or the last run missed the gate, run `table-safe.json`.
-- [ ] Write the choice and the reason on the top line of `rehearsal.md`. Do not change it after the first
-      judge arrives.
+- [ ] Write the choice and the reason in `rehearsal.md`'s **Decision:** line at the top. Do not change it
+      after the first judge arrives.
 
 ## Cue sheet (table, `table.json`)
 

@@ -38,6 +38,11 @@ Jaw opening is 34 mm; the M8 nut pocket is 0.2 mm tight. Finish the insert pocke
 keep 2.4 mm walls. I've left the lock on the clamp for you.
 ```
 
+## If the booth gate is missed (40 minutes in)
+
+The `timeline.json` line, word for word: "Forty minutes in, no part has started. Stop the build, say so,
+and show the Act 1 recording labelled as a replay."
+
 ## Style rules (Learned design style, beat 11)
 
 1. Printed enclosure walls are 2.4 mm.

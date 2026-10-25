@@ -360,7 +360,8 @@ Brief, typed in the panel:
 
 | # | Beat | Time | Action / line | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | The five cards are already live (the manual helpers join at T-30) and the board is bare; Act 1 starts now |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | The five cards are in place and reading live state (the helpers join at T-30; the reviewer reads `stale`
+between rounds) and the board is bare; Act 1 starts now |
 | 2 | Plan + board | 2′ | Submit the brief | Planner calls `lookup_board`; board Params fill; Elastic card shows `esp32-s3-devkitc-1`; tasks appear with names |
 | 3 | Build | 8–12′ | Let the builders work | Parts in owner colors; Creao's one-call-per-turn trace; Claude workers take clamp/cradle |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused "locked by arm-opencode"; it messages the owner |
@@ -591,8 +592,8 @@ a smaller live job or a labelled replay, never a recorded run passed off as live
 
 #### Reset between judges
 
-Restore `act-1-ready`, restart the helpers and the host, and leave Act 1's design doc and lessons in
-Elastic. A previous table run's podium document stays too; if it ranks first for the next recall, say
+Restore `act-1-ready`, restart the helpers, and restart `driver.py` (the runner refuses a second Start),
+and leave Act 1's design doc and lessons in Elastic. A previous table run's podium document stays too; if it ranks first for the next recall, say
 so out loud — the system is returning our own earlier run, which is the point. The reset order and its
 timing are in `checklist.md`, and the driver refuses to Start until the state is back.
 
@@ -638,7 +639,8 @@ answer to "is this real?"
   line with index counts and Droid versions is a **stamped snapshot**, labelled "checked …"; it is
   never presented as live. Index counts, Agent Builder and Workflow executions are shown in Kibana.
 
-The two new cards show "not joined" rather than disappearing, so the window is stable at five.
+The two new cards never disappear, so the window is stable at five: SpacetimeDB says `not joined` when
+nobody has joined, and Factory says `not set up` until `init-reviewer` has run.
 
 ### Data and layout
 
@@ -671,7 +673,9 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 - **No IP claim.** The object is the team's design; the board belongs to Espressif; the build uses
   stock 608, M8, M4 and M3 hardware.
 - **The reviewer is optional in the product, live in this run.** If Droid is not signed in, the
-  brief still finishes; the Factory card is then empty.
+  brief still finishes; the Factory card is then empty. `init-reviewer` mints an HTTP-only member, so
+  it reads `stale` between rounds by design; the sweep never orphans a reviewer, and a stale reviewer
+  does not block the demo driver's Start.
 - **Agent Builder is quota-limited.** It is probed in pre-flight and shown live when it answers; when
   the trial model returns `429`, the demo shows the agent definition, its four tools and the last
   successful trace, and says the quota is the limit. The other three Elastic criteria are unaffected.
@@ -683,8 +687,11 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
   Perch.
 - **No staged failures.** Round 1 findings are the first draft's natural errors. If a round passes,
   the runbook uses a real tight-fit change, not a fake defect.
-- **No module, rules, schema, host-orchestration or phone-app changes.** The only product change is
-  the two sponsor cards.
+- **No schema, host-orchestration or phone-app changes**, and no new module tables, reducers or
+  bindings. The only product changes are the two sponsor cards, and one reviewer-lifetime fix found
+  by rehearsal: `rules::Presence` carries `kind` and `plan_sweep` never orphans a `reviewer` (an
+  HTTP-only member that only connects during a review round). Without it the reviewer is retired
+  after ten quiet minutes and the Factory card and the driver's Probe lose it.
 
 ## Proof ledger
 

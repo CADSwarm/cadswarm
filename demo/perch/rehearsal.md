@@ -18,6 +18,8 @@ Rules:
 - One rehearsal per row. Three rows are required before the judging table: the booth run, the table run,
   the safe run.
 
+**Decision:** ______ — decided ______, before the first judge, from R2 and R3.
+
 ## The table decision (fill before the first judge, never change mid-pitch)
 
 - Last rehearsal's `t_first_op`: ______ s

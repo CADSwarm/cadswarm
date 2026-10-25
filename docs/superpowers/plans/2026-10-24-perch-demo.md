@@ -13,6 +13,7 @@
 Copied from the spec (`docs/superpowers/specs/2026-10-24-perch-showcase-design.md`); every task includes them.
 
 - No new CAD operations, no new module tables/reducers/bindings/schema, no host-orchestration change, no FreeCAD panel-layout change, no phone-app change.
+- One approved exception, found by the Task 6 rehearsal: a reviewer-lifetime fix. `rules::Presence` gains `kind`, `plan_sweep` excludes `reviewer` from `to_orphan`, and the module passes `kind` through. The reviewer is HTTP-only and connects only during a review round, so the old sweep retired it ten minutes after `init-reviewer` and the Factory card and Probe lost it. The fix comes with a native rules test.
 - Product code changes are limited to the sponsor-card UI (`web/src/ui/sponsors.ts`, `cadswarm/gui/sponsors.py`, and the one docstring in `cadswarm/gui/panel.py:1291`) plus tests. `web/src/style.css` already lays five cards out as 3 + 2, so it does not change. Everything else is `demo/perch/`.
 - The browser makes no new network calls and holds no API keys. Every live card field comes from state the panel already subscribes to.
 - No fabricated numbers. A number we checked once is stamped and labelled `checked …`; a live field is labelled live. The Elastic index counts in the footer are never presented as live.
@@ -2497,11 +2498,15 @@ host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects
 .venv\Scripts\cadswarm setup --client claude   --invite "cadswarm-2:..." --name lead-claude  --dir demo\perch\lead-claude
 .venv\Scripts\cadswarm setup --client opencode --invite "cadswarm-2:..." --name arm-opencode --dir demo\perch\arm-opencode
 .venv\Scripts\cadswarm setup --client creao    --invite "cadswarm-2:..." --name lid-creao    --dir demo\perch\lid-creao
+
+# 5. The reviewer member and its folder. Run once per workspace: after this the host starts the review
+#    rounds by itself. The member is HTTP-only, so it reads `stale` between rounds and stays valid.
+host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects\cadswarm-demo init-reviewer
 ```
 
 `you` (FreeCAD) does not use `setup`: open the CadSwarm workbench in FreeCAD and use its join/invite flow;
-the panel registers `client = "freecad"`. `cadswarm setup` only has the CLI clients:
-`--client <claude|opencode|creao>` covers the three helpers above.
+the panel registers `client = "freecad"`. `cadswarm setup --client` takes `claude`, `codex`, `droid`,
+`opencode` or `creao`; the three helpers above are `claude`, `opencode` and `creao`.
 
 `demo/perch/presenter/.cadswarm/` holds the presenter's SpacetimeDB token; `.cadswarm/` is already
 ignored. The driver's `--project` points at that folder, **not** at the repo root.
@@ -2612,8 +2617,8 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 |---|---|
 | Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
-| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env` |
-| The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. Probe still passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
+| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member) |
+| The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. The sweep never orphans a reviewer, so it stays on the card between rounds. Probe passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
@@ -2686,6 +2691,11 @@ send it as one short message.
 Jaw opening is 34 mm; the M8 nut pocket is 0.2 mm tight. Finish the insert pocket, add 0.4 mm clearance,
 keep 2.4 mm walls. I've left the lock on the clamp for you.
 ```
+
+## If the booth gate is missed (40 minutes in)
+
+The `timeline.json` line, word for word: "Forty minutes in, no part has started. Stop the build, say so,
+and show the Act 1 recording labelled as a replay."
 
 ## Style rules (Learned design style, beat 11)
 
@@ -2795,8 +2805,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
       `Arm_Proximal`, `Arm_Distal`, `Cradle_Base`, `Cradle_Lid`).
 - [ ] No `Podium_*`, no `Medallion*`, no lattice mesh left visible.
 - [ ] No open brief, no stale helper, no lock held by a dead member. The reviewer is the one exception:
-      `init-reviewer` mints an HTTP-only member that never heartbeats, so the sweep will mark it `stale`
-      by T-5. Probe still counts it (with `droid` on PATH), and a stale reviewer does not block Start.
+      `init-reviewer` mints an HTTP-only member that never heartbeats, so it is `stale` between rounds.
+      The sweep never orphans a reviewer, Probe counts it (with `droid` on PATH), and a stale reviewer
+      does not block Start. A stale *helper* does.
 - [ ] The FEA report and the lattice report are open in the panel for beats 7 and 13.
 - [ ] Act 1's design doc and lessons are in Elastic; the previous podium doc is still there.
 
@@ -2817,8 +2828,8 @@ the manual helpers joined. Act 1 is built live.
 - [ ] Open the last `runs/*.json`. If `t_first_op` is **under 60 s** (before 1:30 on the pitch clock), run
       `table.json`.
 - [ ] If it is **60 s or more** (1:30 or later), or the last run missed the gate, run `table-safe.json`.
-- [ ] Write the choice and the reason on the top line of `rehearsal.md`. Do not change it after the first
-      judge arrives.
+- [ ] Write the choice and the reason in `rehearsal.md`'s **Decision:** line at the top. Do not change it
+      after the first judge arrives.
 
 ## Cue sheet (table, `table.json`)
 
@@ -2935,6 +2946,8 @@ Rules:
   1:45) are **targets**. Only the measured column is quotable.
 - One rehearsal per row. Three rows are required before the judging table: the booth run, the table run,
   the safe run.
+
+**Decision:** ______ — decided ______, before the first judge, from R2 and R3.
 
 ## The table decision (fill before the first judge, never change mid-pitch)
 
@@ -3121,11 +3134,15 @@ The plan is finished when all of these are true, checked in this order:
 3. `demo/perch/driver.py --help` exits 0, and a driver started against the live team shows `ready — press Start` with a passing probe and `act-1-ready` detected.
 4. `Start` refuses (HTTP 409 with the reason) when the probe fails or the team is not at `act-1-ready`.
 5. Each of `table.json`, `table-safe.json`, `timeline.json` validates, its brief is verbatim in `prompts.md`, and every owner it names is in its `cast`.
-6. `rehearsal.md` has R1, R2 and R3 filled from run summaries, and the table decision is written before the first judge.
-7. `git status` is clean on `feat/perch-showcase`, and no file outside `web/`, `cadswarm/gui/`, `tests/`, `demo/perch/` and `.gitignore` changed.
+6. **Code-complete:** `rehearsal.md` exists with R1, R2 and R3 explicitly unrun and blank, and says why.
+   **Rehearsed (a separate gate, on the demo machine):** R1, R2 and R3 are filled from run summaries and
+   the table decision is written before the first judge. This plan is code-complete now; it is not
+   rehearsed, and no timing number may be quoted until it is.
+7. `git status` is clean on `feat/perch-showcase`, and no file outside `web/`, `cadswarm/gui/`, `tests/`, `demo/perch/`, `rules/src/lib.rs`, `module/src/sweep.rs` and `.gitignore` changed.
 
-Nothing in this plan prints a part, claims a finished head at the table, or changes the module, the host,
-the phone app or the FreeCAD panel's layout.
+Nothing in this plan prints a part, claims a finished head at the table, or changes the schema, the host
+orchestration, the phone app or the FreeCAD panel's layout. The one code change outside the cards is the
+reviewer-lifetime fix in `rules` and `module`.
 
 
 

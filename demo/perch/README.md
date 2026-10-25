@@ -70,11 +70,15 @@ host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects
 .venv\Scripts\cadswarm setup --client claude   --invite "cadswarm-2:..." --name lead-claude  --dir demo\perch\lead-claude
 .venv\Scripts\cadswarm setup --client opencode --invite "cadswarm-2:..." --name arm-opencode --dir demo\perch\arm-opencode
 .venv\Scripts\cadswarm setup --client creao    --invite "cadswarm-2:..." --name lid-creao    --dir demo\perch\lid-creao
+
+# 5. The reviewer member and its folder. Run once per workspace: after this the host starts the review
+#    rounds by itself. The member is HTTP-only, so it reads `stale` between rounds and stays valid.
+host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects\cadswarm-demo init-reviewer
 ```
 
 `you` (FreeCAD) does not use `setup`: open the CadSwarm workbench in FreeCAD and use its join/invite flow;
-the panel registers `client = "freecad"`. `cadswarm setup` only has the CLI clients:
-`--client <claude|opencode|creao>` covers the three helpers above.
+the panel registers `client = "freecad"`. `cadswarm setup --client` takes `claude`, `codex`, `droid`,
+`opencode` or `creao`; the three helpers above are `claude`, `opencode` and `creao`.
 
 `demo/perch/presenter/.cadswarm/` holds the presenter's SpacetimeDB token; `.cadswarm/` is already
 ignored. The driver's `--project` points at that folder, **not** at the repo root.
@@ -185,8 +189,8 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 |---|---|
 | Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
-| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env` |
-| The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. Probe still passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
+| Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member) |
+| The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. The sweep never orphans a reviewer, so it stays on the card between rounds. Probe passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
