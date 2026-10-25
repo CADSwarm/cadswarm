@@ -79,6 +79,7 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
     members.length ? members.map(m => `${m.name} · ${m.status}`).join(', ') : 'not joined';
   const claude = byClient('claude');
   const creao = byClient('creao');
+  const claudeActive = claude.filter(m => m.status === 'active').length;
   const claudeTasks = claude.flatMap(owned);
   const claudeOps = claude.flatMap(opsBy);
   const creaoTasks = creao.flatMap(owned);
@@ -103,12 +104,12 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
       name: 'Anthropic',
       role: 'the planners and builders (Claude Code)',
       facts: [
-        ['agents', `${people(claude)} · ${claude.filter(m => m.status === 'active').length}/${claude.length} active`.replace(' · 0/0 active', '')],
+        ['agents', claude.length ? `${people(claude)} · ${claudeActive}/${claude.length} active` : 'not joined'],
         ['tasks done', `${doneOf(claudeTasks)}/${claudeTasks.length}`],
         ['mcp ops', `${claudeOps.length} submitted · ${doneOf(claudeOps)} done`],
         ['surface', 'Claude Code → MCP over stdio → the host runs the op'],
       ],
-      trace: traceOf(claude),
+      trace: list(traceOf(claude).slice(-7), 7),
       traceTitle: 'recent work',
       calls: ['Session(mcp_servers=[cadswarm]) → model_status, ops, tasks, recall_designs',
         'claude → MCP over stdio → submit_op → host → complete_op'],
@@ -124,7 +125,7 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
         ['mcp ops', `${creaoOps.length} submitted · ${doneOf(creaoOps)} done`],
         ['thread', 'one Creao conversation per helper folder'],
       ],
-      trace: traceOf(creao),
+      trace: list(traceOf(creao).slice(-7), 7),
       traceTitle: 'recent work',
       calls: ['cadswarm.creao_agent → CREAO_API_KEY → one tool call per turn',
         'a stale card is the takeover proof: the fence moved and the old thread stops'],

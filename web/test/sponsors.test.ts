@@ -131,6 +131,7 @@ describe('five sponsor cards', () => {
     expect(c.facts).toContainEqual(['agents', 'lead-claude · active · 1/1 active']);
     expect(c.facts).toContainEqual(['tasks done', '1/2']);
     expect(c.facts).toContainEqual(['mcp ops', '2 submitted · 2 done']);
+    expect(c.facts).toContainEqual(['surface', 'Claude Code → MCP over stdio → the host runs the op']);
     expect(c.traceTitle).toBe('recent work');
     expect(c.trace).toEqual(['modelling the podium body']);
   });
@@ -140,16 +141,51 @@ describe('five sponsor cards', () => {
     expect(c.facts).toContainEqual(['helper', 'lid-creao · stale']);
     expect(c.facts).toContainEqual(['mode', 'local bridge · one JSON tool call per turn']);
     expect(c.facts).toContainEqual(['tasks done', '1/1']);
+    expect(c.facts).toContainEqual(['mcp ops', '1 submitted · 0 done']);
+    expect(c.facts).toContainEqual(['thread', 'one Creao conversation per helper folder']);
     expect(c.trace).toEqual(['thickening the lid']);
   });
 
-  it('keeps both cards when nobody has joined', () => {
+  it('keeps the two team cards when nobody has joined', () => {
     const alone = { ...(team as object), members: [], tasks: [], ops: [], activity: [] } as never;
     const cards = sponsorCards(alone, 'perch');
     expect(cards.map(c => c.id)).toEqual(['spacetime', 'anthropic', 'creao', 'factory', 'elastic']);
     expect(cards.find(c => c.id === 'anthropic')!.facts[0]).toEqual(['agents', 'not joined']);
     expect(cards.find(c => c.id === 'creao')!.facts[0]).toEqual(['helper', 'not joined']);
     expect(cards.find(c => c.id === 'creao')!.trace).toEqual([]);
+  });
+
+  it('tallies a team of Claude helpers in one agents fact', () => {
+    const pair = {
+      ...(team as object),
+      members: [
+        { id: 2, name: 'lead-claude', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: true },
+        { id: 6, name: 'worker-1-claude', kind: 'agent', client: 'claude', role: 'member', status: 'stale', statusText: '', fence: 2, online: false },
+      ],
+    } as never;
+    const agents = sponsorCards(pair, 'perch').find(x => x.id === 'anthropic')!
+      .facts.find(([k]) => k === 'agents')![1];
+    expect(agents).toBe('lead-claude · active, worker-1-claude · stale · 1/2 active');
+    expect(agents).toContain('lead-claude');
+    expect(agents).toContain('worker-1-claude');
+    expect(agents).toContain('· active');
+    expect(agents).toContain('· stale');
+    expect(agents).toContain('1/2 active');
+  });
+
+  it('shows only the newest, truncated seven rows of recent work', () => {
+    const long = 'x'.repeat(200);
+    const busy = {
+      ...(team as object),
+      activity: [
+        ...Array.from({ length: 8 }, (_, i) => ({ id: i + 1, member: 2, kind: 'tool_call', summary: `work ${i + 1}`, atMs: i + 1 })),
+        { id: 9, member: 2, kind: 'tool_call', summary: long, atMs: 9 },
+      ],
+    } as never;
+    const trace = sponsorCards(busy, 'perch').find(x => x.id === 'anthropic')!.trace!;
+    expect(trace).toHaveLength(7);
+    expect(trace[0]).toBe('work 3');
+    expect(trace[6]).toBe(`${'x'.repeat(167)}…`);
   });
 
   it('leaves Factory with the plain trace label', () => {
