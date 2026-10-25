@@ -1,4 +1,4 @@
-"""The FreeCAD Sponsors tab: the same three services as the web panel, from the snapshot the panel already has."""
+"""The FreeCAD Sponsors tab: the same five services as the web panel, from the snapshot the panel already has."""
 from types import SimpleNamespace
 
 from cadswarm.gui.sponsors import cards, evidence_line
@@ -84,3 +84,44 @@ def test_says_so_when_nothing_is_set_up_yet():
 def test_the_stamped_evidence_stays_labelled_checked():
     line = evidence_line()
     assert line.startswith("checked ") and "Elastic 6 board docs" in line and "Droid 0.249.0" in line
+
+
+def test_the_window_is_five_cards_in_the_same_order_as_the_web():
+    assert [c["id"] for c in cards(session())] == ["spacetime", "anthropic", "creao", "factory", "elastic"]
+
+
+def test_anthropic_is_the_claude_helpers_and_their_finished_work():
+    s = session()
+    s.model["participants"] += [
+        {"id": 7, "name": "lid-creao", "kind": "agent", "client": "creao", "status": "stale", "locks": []},
+    ]
+    s.tasks += [
+        {"id": "t_7", "status": "done", "owner": 2, "assignee": "ann-claude", "created_by_name": "carol"},
+        {"id": "t_8", "status": "open", "owner": 2, "assignee": "ann-claude", "created_by_name": "carol"},
+        {"id": "t_9", "status": "done", "owner": 7, "assignee": "lid-creao", "created_by_name": "carol"},
+    ]
+    ann = card(cards(s), "Anthropic")
+    assert ("agents", "ann-claude · active") in ann["facts"]
+    assert ("tasks done", "1/2") in ann["facts"]
+    assert ("live trace", "the web panel") in ann["facts"]
+    assert "trace" not in ann
+
+
+def test_creao_shows_stale_and_its_mode():
+    s = session()
+    s.model["participants"] += [
+        {"id": 7, "name": "lid-creao", "kind": "agent", "client": "creao", "status": "stale", "locks": []},
+    ]
+    s.tasks += [{"id": "t_9", "status": "done", "owner": 7, "assignee": "lid-creao", "created_by_name": "carol"}]
+    creao = card(cards(s), "Creao AI")
+    assert ("helper", "lid-creao · stale") in creao["facts"]
+    assert ("mode", "local bridge · one JSON tool call per turn") in creao["facts"]
+    assert ("tasks done", "1/1") in creao["facts"]
+
+
+def test_both_cards_stay_when_neither_helper_has_joined():
+    s = session(model={"seq": 1, "params": {}, "objects": [], "participants": []}, tasks=[], briefs=[], reviews=[])
+    names = [c["name"] for c in cards(s)]
+    assert names == ["SpacetimeDB", "Anthropic", "Creao AI", "Factory.ai", "Elastic"]
+    assert card(cards(s), "Anthropic")["facts"][0] == ("agents", "not joined")
+    assert card(cards(s), "Creao AI")["facts"][0] == ("helper", "not joined")

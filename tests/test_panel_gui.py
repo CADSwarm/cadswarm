@@ -46,7 +46,8 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "256 x 256 x 256" in r["review"]
     # The Sponsors tab is a first-class tab, built only from the snapshot this refresh already read.
     assert "Sponsors" in r["sponsors_tab"]
-    assert "SpacetimeDB" in r["sponsors"] and "Factory.ai" in r["sponsors"] and "Elastic" in r["sponsors"]
+    assert "SpacetimeDB" in r["sponsors"] and "Anthropic" in r["sponsors"] and "Creao AI" in r["sponsors"]
+    assert "Factory.ai" in r["sponsors"] and "Elastic" in r["sponsors"]
     assert "team-db" in r["sponsors"] and "checked " in r["sponsors"]
     # The Remote tab hands a phone one code: its link opens the public site, and the QR is that link.
     assert r["remote"]["link"].startswith("https://cadswarm.design/app/#t="), r["remote"]

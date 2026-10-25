@@ -1288,7 +1288,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.render_sponsors(s)
 
     def render_sponsors(self, s):
-        """The three outside services, from the snapshot this refresh already read, plus the stamped evidence."""
+        """The five outside services, from the snapshot this refresh already read, plus the stamped evidence."""
         database = (getattr(s.client, "cfg", {}) or {}).get("db", "")
         parts = []
         for card in sponsors_ui.cards(s, database):
