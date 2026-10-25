@@ -487,3 +487,104 @@ def test_a_skipped_step_is_not_a_number_for_the_pitch(tmp_path):
     assert r.steps[0].state == "skipped"
     out = json.loads(log.summary_path.read_text(encoding="utf-8"))
     assert out["t_first_op"] is None
+
+
+# --------------------------------------------------------------------------- the presenter, the page, the cli
+
+import threading
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
+
+from cadswarm.client import load_json
+
+
+def test_the_presenter_writes_the_same_files_setup_does(tmp_path):
+    ticket = {"uri": "https://maincloud.spacetimedb.com/", "db": "team-db", "role": "member"}
+    written = driver.write_presenter_config(
+        tmp_path, ticket, "presenter", {"token": "t_demo", "participant_id": 9, "fence": 1})
+    assert len(written) == 2
+    cfg = load_json(tmp_path / ".cadswarm" / "config.json")
+    assert cfg["client"] == "presenter" and cfg["db"] == "team-db"
+    assert cfg["uri"] == "https://maincloud.spacetimedb.com"
+    assert load_json(tmp_path / ".cadswarm" / "identity.json")["participant_id"] == 9
+    hub, cfg = driver.project_hub(tmp_path)
+    assert hub is not None and cfg["client"] == "presenter"
+
+
+def test_the_probe_names_every_owner_and_the_four_partners():
+    members = [
+        {"id": 1, "name": "lead-claude", "client": "claude", "kind": "agent", "status": "active", "last_seen": 1_000},
+        {"id": 2, "name": "lid-creao", "client": "creao", "kind": "agent", "status": "stale", "last_seen": 900},
+        {"id": 3, "name": "arm-opencode", "client": "opencode", "kind": "agent", "status": "active", "last_seen": 1_000},
+        {"id": 4, "name": "dee-droid", "client": "droid", "kind": "reviewer", "status": "away", "last_seen": 700},
+    ]
+    cast = {"lead-claude": "claude", "lid-creao": "creao", "arm-opencode": "opencode"}
+    checks = driver.probe_checks(cast, members, now=1_050, which=lambda name: "C:/bin/droid.exe",
+                                elastic=lambda: True)
+    by = {c["name"]: c for c in checks}
+    assert by["Claude"]["ok"] is True
+    assert by["Creao"]["ok"] is False and "stale" in by["Creao"]["detail"]
+    assert by["Droid"]["ok"] is True
+    assert by["Elastic"]["ok"] is True
+    assert by["arm-opencode"]["ok"] is True
+    assert len(checks) == 5
+
+
+def test_a_missing_helper_or_an_elastic_failure_fails_the_probe():
+    checks = driver.probe_checks({"lead-claude": "claude"}, [], now=1_000,
+                                 which=lambda name: None, elastic=lambda: (_ for _ in ()).throw(RuntimeError("no key")))
+    by = {c["name"]: c for c in checks}
+    assert by["Claude"]["ok"] is False and "not joined" in by["Claude"]["detail"]
+    assert by["Droid"]["ok"] is False
+    assert by["Elastic"]["ok"] is False and "no key" in by["Elastic"]["detail"]
+
+
+def test_the_page_shows_the_brief_and_the_buttons():
+    html = driver.page(a_plan())
+    assert "Start" in html and "Next" in html and "Probe" in html
+    assert "Make the Podium head." in html
+    assert "fetch('/status')" in html
+
+
+def test_the_status_endpoint_answers_and_start_is_a_post():
+    io = FakeIO(snapshot=ready_snapshot())
+    r = a_runner(io, Clock())
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), driver.make_handler(r))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        html = urllib.request.urlopen(base + "/", timeout=5).read().decode()
+        assert "Make the Podium head." in html
+        status = json.loads(urllib.request.urlopen(base + "/status", timeout=5).read())
+        assert status["probe_ok"] is True and status["steps"][0]["state"] == "pending"
+        req = urllib.request.Request(base + "/start", data=b"{}", method="POST",
+                                     headers={"content-type": "application/json"})
+        assert json.loads(urllib.request.urlopen(req, timeout=5).read())["started"] is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_refused_start_answers_409_with_the_reason():
+    snap = ready_snapshot(model={"objects": [], "participants": [], "params": {}})
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), driver.make_handler(r))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        req = urllib.request.Request(base + "/start", data=b"{}", method="POST",
+                                     headers={"content-type": "application/json"})
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(req, timeout=5)
+        assert err.value.code == 409
+        assert "act-1-ready" in json.loads(err.value.read())["error"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_cli_takes_the_timeline_and_the_laptop_fallback():
+    a = driver.parse_args(["--timeline", "table-safe.json", "--laptop", "--port", "8899"])
+    assert a.timeline == "table-safe.json" and a.laptop is True and a.port == 8899
+    assert driver.parse_args([]).timeline == "table.json"

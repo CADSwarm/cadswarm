@@ -10,11 +10,23 @@ the host or the module: the sequence is `table.json` (judging), `table-safe.json
 """
 from __future__ import annotations
 
+import argparse
+import html
 import json
+import os
 import re
+import shutil
+import threading
 import time
+import webbrowser
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from cadswarm.agent_setup import redeem
+from cadswarm.client import load_json, save_json, state_dir
+from cadswarm.invite import read_invite
+from cadswarm.space_hub import project_hub
 
 HERE = Path(__file__).resolve().parent
 
@@ -621,3 +633,369 @@ class RunLog:
         }
         self.summary_path.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
         return out
+
+
+# --------------------------------------------------------------------------- the presenter
+
+def write_presenter_config(project, ticket, name, identity):
+    """The same two files `cadswarm setup` writes, for a client the CLI does not offer.
+
+    `client = "presenter"` is stored on the member and sent on every rejoin, so the team can see that
+    this human is the demo's presenter and not a helper. The folder's identity is a SpacetimeDB token:
+    it stays under .cadswarm/, which the repo already ignores.
+    """
+    folder = state_dir(project)
+    os.makedirs(folder, exist_ok=True)
+    Path(folder, ".gitignore").write_text("*\n", encoding="utf-8")
+    ident_path = os.path.join(folder, "identity.json")
+    save_json(ident_path, identity)
+    save_json(os.path.join(folder, "config.json"), {
+        "uri": ticket["uri"].rstrip("/"), "db": ticket["db"], "name": name,
+        "client": "presenter", "role": ticket.get("role") or "member"})
+    return [ident_path, os.path.join(folder, "config.json")]
+
+
+def connect(project, invite="", name="presenter"):
+    """Join once with an invite, then reuse this folder's identity — the same rule as `cadswarm brief`.
+
+    A rejoin at start is what the MCP server does too: it takes a fresh fence so a crashed run cannot
+    keep acting. Nothing here is special-cased in the module or the host.
+    """
+    if invite:
+        ticket = read_invite(invite)
+        if not load_json(os.path.join(state_dir(project), "identity.json")):
+            write_presenter_config(project, ticket, name, redeem(ticket, name, "presenter"))
+    hub, _cfg = project_hub(project)
+    if not hub:
+        raise SystemExit("driver: run this once with --invite '<cadswarm-2:...>' "
+                         "(mint one on the host: cadswarm-host --data <dir> invite --kind human --role lead)")
+    hub.join()
+    return hub
+
+
+class TeamIO:
+    """The team as the driver sees it: the same reducers and the same reads the panel uses."""
+
+    def __init__(self, hub, cast=None, probe=None):
+        self.hub = hub
+        self.cast = cast or {}
+        self.probe_cast = {n: c for n, c in self.cast.items() if probe is None or n in probe}
+
+    def snapshot(self):
+        s = self.hub.panel_snapshot()
+        return {"model": s["model"], "tasks": s["tasks"], "briefs": s["briefs"], "reviews": s["reviews"]}
+
+    def ops(self):
+        """The op rows the panel's views hold. SpaceHub has no public ops() reader; the demo reads
+        `v_op` directly and resolves only the results it needs (a recall's designs and lessons)."""
+        rows = sorted(self.hub._rows("v_op"), key=lambda o: o.get("created_ms") or 0)[-60:]
+        out = []
+        for r in rows:
+            result = {}
+            if r.get("kind") == "recall_designs" and r.get("status") == "done":
+                try:
+                    result = self.hub._result(r.get("result_json") or "")
+                except Exception:
+                    result = {}
+            out.append({"id": r.get("id"), "kind": r.get("kind"), "status": r.get("status"),
+                        "by": r.get("by"), "finished_ms": r.get("finished_ms") or 0, "result": result})
+        return out
+
+    def events(self, since):
+        return self.hub.events(since, wait=0)
+
+    def send_brief(self, text, board):
+        return self.hub.post("/briefs", {"text": text, "board": board or ""})
+
+    def send_steer(self, to, body):
+        # The module matches a bare name (`live_by_name`); an "@" here would address a member that
+        # never joins and the steer would wait forever.
+        return self.hub.send({"to": str(to).lstrip("@"), "kind": "steer", "body": body})
+
+    def probe(self):
+        snap = self.snapshot()
+        return probe_checks(self.probe_cast, snap["model"].get("participants") or [], time.time(),
+                            which=shutil.which, elastic=elastic_ready)
+
+
+def helper_checks(cast, members, now, fresh_s=180):
+    """Every owner the timeline names: joined as the right client, active, and heartbeating."""
+    by_name = {str(m.get("name") or "").lower(): m for m in members}
+    out = {}
+    for name, client in cast.items():
+        m = by_name.get(name.lower())
+        if not m or (m.get("client") or "") != client:
+            out[name] = {"name": name, "ok": False, "detail": f"not joined as a {client} helper"}
+            continue
+        why = []
+        if m.get("status") != "active":
+            why.append(f"status {m.get('status')}")
+        if now - float(m.get("last_seen") or 0) > fresh_s:
+            why.append(f"no heartbeat in {int(fresh_s)}s")
+        out[name] = {"name": name, "ok": not why,
+                     "detail": "; ".join(why) or f"{m.get('name')} · {client} · active"}
+    return out
+
+
+def elastic_ready():
+    from cadswarm.knowledge import Elastic
+    Elastic.from_env().search("cadswarm-designs", "perch", 1)
+    return True
+
+
+def probe_checks(cast, members, now, which=shutil.which, elastic=elastic_ready):
+    """The four partners the window claims, then any owner those four do not already name."""
+    helpers = helper_checks(cast, members, now)
+    out = []
+    for partner, client in (("Claude", "claude"), ("Creao", "creao")):
+        mine = [helpers[n] for n, c in cast.items() if c == client]
+        if not mine:
+            continue
+        bad = [c for c in mine if not c["ok"]]
+        out.append({"name": partner, "ok": not bad,
+                    "detail": "; ".join(f"{c['name']}: {c['detail']}" for c in bad) if bad
+                              else ", ".join(c["name"] for c in mine) + " · active"})
+    reviewer = next((m for m in members if (m.get("kind") or "") == "reviewer"), None)
+    droid_cli = bool(which("droid"))
+    detail = (f"{reviewer.get('name')} · {reviewer.get('status')}" if reviewer else "no reviewer has joined")
+    out.append({"name": "Droid", "ok": bool(reviewer) and droid_cli,
+                "detail": detail + ("" if droid_cli else " · droid CLI is not on PATH")})
+    try:
+        elastic()
+        out.append({"name": "Elastic", "ok": True, "detail": "design memory reachable"})
+    except Exception as e:
+        out.append({"name": "Elastic", "ok": False, "detail": str(e)[:160]})
+    for name, client in cast.items():
+        if client not in ("claude", "creao"):
+            out.append(helpers[name])
+    return out
+
+
+# --------------------------------------------------------------------------- the button page
+# One screen the presenter can hit without aiming: Start, Next, Pause, Probe, the brief to copy, and a
+# Say box that runs a judge's own idea. It polls /status; every word on it comes from Runner.state().
+
+PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<style>
+:root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --line:#30363d; --body:#e6edf3;
+        --muted:#8b949e; --ok:#3fb950; --bad:#f85149; --wait:#d29922; --accent:#58a6ff; }
+* { box-sizing: border-box; }
+body { margin:0; padding:24px; background:var(--bg); color:var(--body);
+       font:16px/1.45 ui-sans-serif, -apple-system, "Segoe UI", sans-serif; }
+h1 { font-size:26px; margin:0 0 4px; }
+.muted { color:var(--muted); }
+#status { font-size:18px; margin:2px 0 14px; }
+#clock { font:600 40px/1 ui-monospace, monospace; margin:10px 0 4px; }
+#gate { color:var(--bad); font-weight:600; }
+button { font:600 17px/1 inherit; color:#0d1117; background:var(--accent); border:0; border-radius:8px;
+         padding:14px 22px; cursor:pointer; }
+button.quiet { background:var(--panel); color:var(--body); border:1px solid var(--line); }
+button:disabled { opacity:.45; cursor:not-allowed; }
+.controls { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+ol#steps { list-style:none; padding:0; margin:18px 0; display:grid; gap:8px; }
+ol#steps li { background:var(--panel); border:1px solid var(--line); border-left:6px solid var(--line);
+              border-radius:8px; padding:10px 14px; }
+li.waiting { border-left-color:var(--wait); } li.done, li.confirmed { border-left-color:var(--ok); }
+li.skipped { border-left-color:var(--bad); }
+.detail { color:var(--muted); font:13px/1.4 ui-monospace, monospace; }
+fieldset { border:1px solid var(--line); border-radius:8px; padding:14px; margin:18px 0; }
+legend { padding:0 6px; color:var(--muted); }
+#brief { font:15px/1.5 ui-monospace, monospace; white-space:pre-wrap; margin:0 0 10px; }
+#probe { display:grid; gap:4px; font:13px/1.4 ui-monospace, monospace; }
+input[type=text] { width:min(560px, 90%); font:16px/1.4 ui-monospace, monospace; padding:10px 12px;
+                   border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--body); }
+</style>
+</head>
+<body>
+<h1>__TITLE__</h1>
+<p class="muted">__NOTE__</p>
+<p id="status">loading…</p>
+<div id="clock">0:00</div>
+<div class="controls">
+  <button id="start">Start</button>
+  <button id="next" class="quiet">Next</button>
+  <button id="pause" class="quiet">Pause</button>
+  <button id="probe" class="quiet">Probe</button>
+</div>
+<p id="gate" hidden></p>
+<ol id="steps"></ol>
+<fieldset><legend>the brief on Sam's phone</legend>
+  <pre id="brief">__BRIEF__</pre>
+  <button id="copy" class="quiet">Copy the brief</button>
+</fieldset>
+<fieldset><legend>say it live (a judge's own idea)</legend>
+  <form id="say"><input id="text" type="text" placeholder="@lid-creao thicken Podium_Body by 2 mm">
+  <button>Send</button></form>
+  <p class="muted">A line that starts with @name is a steer to that helper; anything else is a real brief.</p>
+</fieldset>
+<fieldset><legend>probe</legend><div id="probe"></div></fieldset>
+<script>
+const $ = s => document.querySelector(s);
+const mmss = s => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+function paint(s) {
+  $('#status').textContent = s.status;
+  $('#clock').textContent = mmss(s.clock || 0);
+  $('#start').disabled = s.started || !s.probe_ok || !s.reset.ok;
+  $('#next').disabled = !s.started || s.done;
+  $('#pause').textContent = s.paused ? 'Resume' : 'Pause';
+  $('#pause').disabled = !s.started;
+  $('#gate').hidden = !s.gate.failed;
+  $('#gate').textContent = s.gate.failed ? s.gate.if_missed : '';
+  $('#steps').innerHTML = s.steps.map((st, i) => `<li class="${st.state}">
+    <b>${i+1}. ${st.label}</b> <span class="muted">cue ${mmss(st.at)} · deadline ${st.deadline}s</span>
+    <div class="detail">${st.state}${st.waited !== null ? ` · ${st.waited}s` : ''}${st.detail ? ` · ${st.detail}` : ''}</div>
+    ${st.say ? `<div class="detail">${st.say}</div>` : ''}</li>`).join('');
+  $('#probe').innerHTML = s.probe.map(c => `<div>${c.ok ? '✓' : '✗'} <b>${c.name}</b> — ${c.detail}</div>`).join('');
+  $('#start').title = s.reset.ok ? '' : s.reset.why;
+}
+async function poll() { try { paint(await (await fetch('/status')).json()); } catch (e) {} }
+async function post(path, body) {
+  const r = await fetch(path, {method:'POST', headers:{'content-type':'application/json'},
+                               body: JSON.stringify(body || {})});
+  const j = await r.json();
+  if (j.error) { $('#status').textContent = j.error; } else { paint(j); }
+}
+$('#start').onclick = () => post('/start');
+$('#next').onclick = () => post('/next');
+$('#pause').onclick = () => post('/pause');
+$('#probe').onclick = () => post('/probe');
+$('#copy').onclick = async () => { await navigator.clipboard.writeText($('#brief').textContent); };
+$('#say').onsubmit = e => { e.preventDefault(); const t = $('#text').value;
+  if (t.trim()) { post('/say', {text: t}); $('#text').value = ''; } };
+setInterval(poll, 1000); poll();
+</script>
+</body>
+</html>"""
+
+
+def page(plan):
+    return (PAGE.replace("__TITLE__", html.escape(f"The Perch · {plan['name']} run"))
+                .replace("__NOTE__", html.escape(plan.get("note") or ""))
+                .replace("__BRIEF__", html.escape(plan["brief"]["text"])))
+
+
+# --------------------------------------------------------------------------- serving
+
+def make_handler(runner):
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code, body, ctype):
+            raw = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("content-type", ctype)
+            self.send_header("content-length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _json(self, value, code=200):
+            self._send(code, json.dumps(value), "application/json")
+
+        def _body(self):
+            n = int(self.headers.get("content-length") or 0)
+            try:
+                return json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                return {}
+
+        def do_GET(self):
+            if self.path.startswith("/status"):
+                self._json(runner.state())
+            elif self.path in ("/", "/index.html"):
+                self._send(200, page(runner.plan), "text/html; charset=utf-8")
+            else:
+                self._json({"error": "not found"}, 404)
+
+        def do_POST(self):
+            body = self._body()
+            try:
+                if self.path == "/start":
+                    runner.start()
+                elif self.path == "/next":
+                    runner.skip()
+                elif self.path == "/pause":
+                    runner.toggle_pause()
+                elif self.path == "/probe":
+                    runner.probe()
+                elif self.path == "/say":
+                    runner.say(body.get("text") or "")
+                else:
+                    return self._json({"error": "not found"}, 404)
+            except RunnerError as e:
+                return self._json({"error": str(e)}, 409)
+            self._json(runner.state())
+
+        def log_message(self, *args):
+            pass  # one page, one laptop: no access log on the console the presenter is reading
+
+    return Handler
+
+
+def serve(runner, port, open_browser=True):
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(runner))
+    url = f"http://127.0.0.1:{port}/"
+    print(f"perch driver: {url}  ({runner.plan['name']})")
+    if open_browser:
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+
+
+def _heartbeat(hub, every=10.0):
+    """The presenter is a member: without a heartbeat it goes stale and the panel says so."""
+    while True:
+        try:
+            hub.heartbeat({"doing": "presenting"})
+        except Exception:
+            return
+        time.sleep(every)
+
+
+def _loop(runner, every=2.0):
+    while True:
+        try:
+            runner.tick()
+        except Exception as e:  # a demo must never die in silence
+            runner.status = f"driver error: {e}"
+            runner._log("driver", "error", str(e)[:400])
+        time.sleep(every)
+
+
+# --------------------------------------------------------------------------- cli
+
+def parse_args(argv=None):
+    a = argparse.ArgumentParser(description="The Perch demo driver: one button, a real build.")
+    a.add_argument("--project", default=".", help="the folder cadswarm setup wrote to (holds .cadswarm/)")
+    a.add_argument("--timeline", default="table.json", help="table.json, table-safe.json or timeline.json")
+    a.add_argument("--invite", default="", help="a cadswarm-2: invite for the presenter (first run only)")
+    a.add_argument("--name", default="presenter", help="the name the team sees")
+    a.add_argument("--port", type=int, default=8765)
+    a.add_argument("--laptop", action="store_true", help="send the brief from this laptop (the tunnel is down)")
+    a.add_argument("--no-browser", action="store_true")
+    return a.parse_args(argv)
+
+
+def main(argv=None):
+    a = parse_args(argv)
+    project = Path(a.project).expanduser().resolve()
+    hub = connect(project, a.invite, a.name)
+    plan_path = Path(a.timeline)
+    plan = load_plan(plan_path if plan_path.is_absolute() else HERE / plan_path)
+    if a.laptop:
+        plan["brief"]["from"] = "laptop"
+    log = RunLog(HERE, plan["name"])
+    runner = Runner(plan, TeamIO(hub, plan["cast"], plan["probe"]), log=log)
+    runner.probe()
+    threading.Thread(target=_heartbeat, args=(hub,), daemon=True).start()
+    threading.Thread(target=_loop, args=(runner,), daemon=True).start()
+    serve(runner, a.port, open_browser=not a.no_browser)
+
+
+if __name__ == "__main__":
+    main()
