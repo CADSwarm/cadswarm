@@ -31,7 +31,7 @@ from ..invite import InviteError, read_invite
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, lighten_ui, overlay, panes, sponsors as sponsors_ui, style_ui
+from . import library_ui, lighten_ui, overlay, panes, sponsors as sponsors_ui, style_ui, theme
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -983,7 +983,8 @@ class TeamPanel(QtGui.QDockWidget):
         self.tab_changed(0)
 
         w.setObjectName("cadswarmPanel")
-        w.setStyleSheet(PANEL_STYLE)
+        # Style the dock itself (self), so the sheet reaches the dock, the scroll area and the page.
+        self.setStyleSheet(PANEL_STYLE)
         # A small screen scrolls instead of squashing or cropping anything.
         scroll = QtGui.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1420,7 +1421,7 @@ class TeamPanel(QtGui.QDockWidget):
             item = QtGui.QTreeWidgetItem([f"🧠 {b['text']}", word])
             item.setToolTip(0, f"{b['text']}\n(asked by {b['by']})")
             item.setForeground(1, QtGui.QBrush(QtGui.QColor(
-                {"ready": "#1a7f37", "failed": "#cf222e", "cancelled": "#8b949e"}.get(b["status"], "#d9822b"))))
+                {"ready": "#4fb35a", "failed": "#ff7b72", "cancelled": "#8b949e"}.get(b["status"], "#d9822b"))))
             item.setData(0, QtCore.Qt.UserRole, None)
             item.setData(0, QtCore.Qt.UserRole + 1, b["id"])
             self.task_list.addTopLevelItem(item)
@@ -1440,8 +1441,8 @@ class TeamPanel(QtGui.QDockWidget):
             item.setData(0, QtCore.Qt.UserRole, t["id"])
             item.setToolTip(0, (t.get("detail") or t["title"])[:600])
             item.setToolTip(1, f"{word}, {who}")
-            colour = {"claimed": "#d9822b", "done": "#1a7f37", "blocked": "#cf222e",
-                      "awaiting_takeover": "#9a6700", "cancelled": "#8b949e"}.get(t["status"])
+            colour = {"claimed": "#d9822b", "done": "#4fb35a", "blocked": "#ff7b72",
+                      "awaiting_takeover": "#e3b341", "cancelled": "#8b949e"}.get(t["status"])
             if colour:
                 item.setForeground(1, QtGui.QBrush(QtGui.QColor(colour)))
             if parent is not None:
@@ -1476,7 +1477,7 @@ class TeamPanel(QtGui.QDockWidget):
             mine = m["from"] == me
             sender = s.participant(m["from"])
             helper = sender is not None and sender.get("kind") != "human"
-            colour = "#1a7f37" if mine else "#a371f7" if helper else "#3e9be9"
+            colour = "#4fb35a" if mine else "#a371f7" if helper else "#3e9be9"
             who = "You" if mine else html.escape(m["from"] or "?")
             to = ""
             if m["to"] not in ("all", None, me) and not (mine and f"@{m['to']}".lower() in m["body"].lower()):
@@ -1485,7 +1486,7 @@ class TeamPanel(QtGui.QDockWidget):
             status = ""
             c = states.get(m["id"])
             if c:
-                status = (f" <span style='color:{ {'sent': '#9a6700', 'seen': '#d9822b', 'done': '#1a7f37'}[c['state']] }'>"
+                status = (f" <span style='color:{ {'sent': '#e3b341', 'seen': '#d9822b', 'done': '#4fb35a'}[c['state']] }'>"
                           f"{COMMAND_WORDS[c['state']]}</span>")
             if panes.is_refusal(m["body"]):
                 stamp = time.strftime('%H:%M', time.localtime(m["at"]))
@@ -2034,53 +2035,8 @@ CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper", "droid"
 PANEL_MIN_WIDTH = 300
 PANEL_WIDTH = 520
 PANEL_SHARE = 0.3   # of the FreeCAD window's width, until someone drags the panel wider or narrower
-PANEL_STYLE = """
-#cadswarmPanel { font-size: 10pt; }
-#cadswarmPanel QPushButton { min-width: 0px; padding: 6px 12px; border: 1px solid palette(mid); border-radius: 6px;
-    background: palette(button); }
-#cadswarmPanel QPushButton:hover { border-color: #d9822b; }
-#cadswarmPanel QPushButton:pressed { background: palette(midlight); }
-#cadswarmPanel QPushButton:disabled { color: #8b949e; border-color: palette(midlight); }
-#cadswarmPanel QPushButton#primary { background: #d9822b; border-color: #d9822b; color: white; font-weight: bold; }
-#cadswarmPanel QPushButton#primary:hover { background: #e8913a; border-color: #e8913a; }
-#cadswarmPanel QPushButton#primary:disabled { background: #e8b98a; border-color: #e8b98a; }
-#cadswarmPanel QPushButton#quiet, #cadswarmPanel QPushButton#danger { border: none; background: transparent;
-    color: #d9822b; font-weight: bold; padding: 3px 4px; }
-#cadswarmPanel QPushButton#danger { color: #cf222e; font-weight: normal; text-align: left; }
-#cadswarmPanel QPushButton#quiet:hover, #cadswarmPanel QPushButton#danger:hover { text-decoration: underline; }
-#cadswarmPanel QPushButton#jump { background: #d9822b; border: none; border-radius: 14px; color: white;
-    font-weight: bold; padding: 4px 10px; min-height: 20px; }
-#cadswarmPanel QPushButton#jump:hover { background: #e8913a; }
-#cadswarmPanel QPushButton#tool { text-align: left; padding: 4px 10px; border: none; background: transparent; }
-#cadswarmPanel QPushButton#tool:hover { background: palette(window); color: #d9822b; }
-#cadswarmPanel QToolButton { padding: 6px 10px; }
-#cadswarmPanel QFrame#card { background: palette(base); border: 1px solid palette(mid); border-radius: 10px; }
-#cadswarmPanel QFrame#suggest { background: palette(base); border: 1px solid #d9822b; border-radius: 10px; }
-#cadswarmPanel QLabel#title { font-size: 12pt; font-weight: bold; }
-#cadswarmPanel QTabWidget::pane { border: none; border-top: 1px solid palette(mid); }
-#cadswarmPanel QTabBar::tab { background: transparent; border: none; border-bottom: 2px solid transparent;
-    padding: 6px 9px; margin-right: 2px; min-height: 20px; }
-#cadswarmPanel QTabBar::tab:!selected { color: #8b949e; }
-#cadswarmPanel QTabBar::tab:selected { border-bottom: 2px solid #d9822b; font-weight: bold; }
-#cadswarmPanel QTabBar QToolButton { padding: 0; background: palette(window); }
-#cadswarmPanel QTreeWidget, #cadswarmPanel QTextBrowser { border: 1px solid palette(mid); border-radius: 8px;
-    background: palette(base); }
-#cadswarmPanel QTextBrowser { padding: 4px; }
-#cadswarmPanel QTreeWidget::item { padding: 4px 2px; }
-#cadswarmPanel QHeaderView { background: transparent; border: none; }
-#cadswarmPanel QHeaderView::section { background: transparent; color: #8b949e; font-weight: bold; border: none;
-    border-bottom: 1px solid palette(mid); padding: 5px 8px; }
-#cadswarmPanel QLabel#toast { background: palette(base); color: palette(text); border: 1px solid #1a7f37;
-    border-left: 4px solid #1a7f37; border-radius: 6px; padding: 6px 10px; }
-#cadswarmPanel QLineEdit { min-height: 28px; border: 1px solid palette(mid); border-radius: 6px; padding: 0 8px;
-    background: palette(base); }
-#cadswarmPanel QLineEdit:focus { border-color: #d9822b; }
-#cadswarmPanel QComboBox { min-height: 26px; }
-#cadswarmPanel QPlainTextEdit { border: 1px solid #d9822b; border-radius: 4px; }
-#cadswarmPanel QGroupBox { font-weight: bold; margin-top: 14px; padding-top: 6px; }
-#cadswarmPanel QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 8px;
-    padding: 0 4px; }
-"""
+# CadSwarm's own dark surface, so the panel reads the same on a light FreeCAD theme (see theme.py).
+PANEL_STYLE = theme.PANEL
 SUGGEST_SECONDS = 20     # how often the panel re-reads what AI helpers suggested
 SUGGESTIONS_SHOWN = 4    # cards on the Team tab; any more wait in Tools
 
@@ -2274,6 +2230,7 @@ class NewTaskDialog(QtGui.QDialog):
 
     def __init__(self, session):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.session = session
         self.setWindowTitle("CADSwarm: new task")
         fit_to_screen(self, 520, 480)
@@ -2349,7 +2306,7 @@ class NewTaskDialog(QtGui.QDialog):
         p = self.session.participant(name) if name else None
         local = local_helper_status(self.session)
         if kind == "helper" and p and helper_state(p, local.get(name))[0] == "away":
-            self.note.setText(f"<small style='color:#9a6700'>{away_tip(p, local.get(name))}</small>")
+            self.note.setText(f"<small style='color:#e3b341'>{away_tip(p, local.get(name))}</small>")
         elif kind == "team":
             self.note.setText("<small>The team server plans it into parts, starts AI helpers and builds it. "
                               "Progress shows in Tasks.</small>")
@@ -2558,6 +2515,7 @@ class CreaoKeyDialog(QtGui.QDialog):
     def __init__(self, parent=None):
         from .. import creao
         super().__init__(parent or Gui.getMainWindow())
+        theme.apply(self)
         self.path = ""
         self.setWindowTitle("CadSwarm: Creao AI key")
         fit_to_screen(self, 540, 320)
@@ -2633,6 +2591,7 @@ class NewHelperDialog(QtGui.QDialog):
 
     def __init__(self, session):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         from ..agent_setup import CLIENTS, agent_ready
         self.session = session
         self.setWindowTitle("CADSwarm: new AI helper")
@@ -2696,7 +2655,7 @@ class NewHelperDialog(QtGui.QDialog):
         typed = re.sub(r"[^A-Za-z0-9_-]+", "-", self.name.text().strip()).strip("-_")[:40]
         taken = {p["name"].lower() for p in self.session.model.get("participants", [])}
         if typed and typed.lower() in taken:
-            self.note.setText(f"<span style='color:#cf222e'>Someone on the team is already called {typed}.</span>")
+            self.note.setText(f"<span style='color:#ff7b72'>Someone on the team is already called {typed}.</span>")
             return
         name = typed
         if not name:
@@ -2755,6 +2714,7 @@ class EditPartDialog(QtGui.QDialog):
 
     def __init__(self, session, name):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.session, self.name = session, name
         self.decimals, self.step = library_ui.editor_precision(session)  # the team's editing precision
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Tool)
@@ -2901,7 +2861,7 @@ class EditPartDialog(QtGui.QDialog):
         props, moved = self.changes()
         bits = ([f"size ({', '.join(props)})"] if props else []) + (["position"] if moved else [])
         self.state.setText(f"<small style='color:#d9822b'>Not saved yet: {', '.join(bits)}</small>" if bits else
-                           "<small style='color:#1a7f37'>Everyone sees the same as you.</small>")
+                           "<small style='color:#4fb35a'>Everyone sees the same as you.</small>")
         self.save_b.setEnabled(bool(bits))
         self.revert_b.setEnabled(bool(bits))
 
@@ -3219,6 +3179,7 @@ class BedDialog(QtGui.QDialog):
 
     def __init__(self, bed):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: printer bed")
         fit_to_screen(self, 430, 260)
         lay = QtGui.QVBoxLayout(self)
@@ -3424,6 +3385,7 @@ class ProjectFilesDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: project files")
         fit_to_screen(self, 640, 460)
         lay = QtGui.QVBoxLayout(self)
@@ -3519,6 +3481,7 @@ class StorageDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: storage")
         fit_to_screen(self, 560, 520)
         self.is_host = hosted_project_folder() is not None
@@ -3676,6 +3639,7 @@ class FeaReportDialog(QtGui.QDialog):
 
     def __init__(self, folder):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.folder = folder
         self.report = json.loads(SESSION.client.post("/project/files/read", {"path": f"{folder}/report.json"})["text"])
         page = SESSION.client.post("/project/files/read", {"path": f"{folder}/report.html"})["text"]
@@ -3695,7 +3659,7 @@ class FeaReportDialog(QtGui.QDialog):
                             f"<span style='color:#8b949e'>{html.escape(r['analysis_name'])} by {html.escape(r['by'])}"
                             f"</span><br><span style='background:{color};color:white;font-weight:bold'>&nbsp;{word}&nbsp;"
                             f"</span>&nbsp; {html.escape(r['headline'])}"
-                            + ("<br><span style='color:#9a6700'><b>Uses placeholder values</b>: see the yellow box"
+                            + ("<br><span style='color:#e3b341'><b>Uses placeholder values</b>: see the yellow box"
                                "</span>" if r["inputs"]["placeholders"] else ""))
         head.setTextFormat(QtCore.Qt.RichText)
         lay.addWidget(head)
@@ -3773,6 +3737,7 @@ class FeaReportsDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: simulation reports")
         fit_to_screen(self, 720, 400)
         lay = QtGui.QVBoxLayout(self)

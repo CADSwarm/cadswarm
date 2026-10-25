@@ -109,11 +109,11 @@ def refusal_html(stamp, who, colour, body, status="", op=""):
     title, detail, holder = parse_refusal(body)
     what = f"<span style='color:#8b949e'>{html.escape(op)}</span><br>" if op else ""
     return (f"<table width='100%' cellspacing='0' cellpadding='8' style='margin:0 0 8px 0;"
-            f" border:1px solid #f0a29d; background:#fdf2f1'>"
+            f" border:1px solid #f0a29d; background:#2a1414'>"
             f"<tr><td><span style='color:#8b949e'>{html.escape(stamp)}</span> "
             f"<b style='color:{colour}'>{who}</b>{status}<br>{what}"
-            f"<b style='color:#cf222e'>{html.escape(title)}</b><br>"
-            f"<span style='color:#57606a'>{html.escape(detail)}</span>"
+            f"<b style='color:#ff7b72'>{html.escape(title)}</b><br>"
+            f"<span style='color:#b9b5af'>{html.escape(detail)}</span>"
             + (f"<br><span style='color:#8b949e'>Message {html.escape(holder)} if you need it changed.</span>"
                if holder else "")
             + "</td></tr></table>")
@@ -309,7 +309,7 @@ class SharedSizesTab(QtGui.QWidget):
         def done(r):
             changed = (r or {}).get("recomputed") or 0
             self.shown[alias] = value_text(value)
-            self.last_change = (f"<span style='color:#1a7f37'>✓</span> <b>{html.escape(pretty_alias(alias))}</b> "
+            self.last_change = (f"<span style='color:#4fb35a'>✓</span> <b>{html.escape(pretty_alias(alias))}</b> "
                                 f"is now <b>{html.escape(value)}</b>"
                                 + (f" · {changed} part{'s' if changed != 1 else ''} updated" if changed else ""))
             self.note.setText(self.last_change)
@@ -321,7 +321,7 @@ class SharedSizesTab(QtGui.QWidget):
                     self.restore(item, alias, before)
                 except RuntimeError:  # the row was rebuilt while the request was away
                     pass
-            self.note.setText(f"<span style='color:#cf222e'>Couldn't change "
+            self.note.setText(f"<span style='color:#ff7b72'>Couldn't change "
                               f"{html.escape(pretty_alias(alias))}. The sheet is still "
                               f"{html.escape(before or 'unchanged')}.</span>")
 
