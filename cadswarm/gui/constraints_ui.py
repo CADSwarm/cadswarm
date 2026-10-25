@@ -136,14 +136,23 @@ class AutoConstrainDialog(QtGui.QDialog):
         self.accept()
 
 
+_looking = False  # a look is already in flight; a second press must not start another
+
+
 def show():
+    global _looking
     p = _p()
     session = p.SESSION
+    if _looking:
+        return  # already looking for shared sizes: one press, one answer
     if not session.ensure_connected("bind the model's shared sizes"):
         return
     names, label = _scope_names(session)
+    _looking = True
 
     def preview(result):
+        global _looking
+        _looking = False
         plan = (result or {}).get("plan") or {}
         if not plan.get("constraints"):
             p.say("Auto-constrain: nothing to add — every repeated size already follows a shared size.")
@@ -157,8 +166,12 @@ def show():
         dlg = AutoConstrainDialog(session, result, label)
         (getattr(dlg, "exec", None) or dlg.exec_)()
 
+    def gave_up():
+        global _looking
+        _looking = False
+
     body = {"apply": False}
     if names:
         body["names"] = names
-    session.run_async(lambda c: c.post("/constrain", body), done=preview,
+    session.run_async(lambda c: c.post("/constrain", body), done=preview, failed=gave_up,
                       purpose="look for shared sizes")

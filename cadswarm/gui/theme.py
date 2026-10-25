@@ -43,21 +43,27 @@ PANEL = Template("""
 #cadswarmPanel QPushButton { min-width: 0px; padding: 6px 12px; border: 1px solid $LINE_STRONG;
     border-radius: 6px; background: $SURFACE_2; color: $TEXT; }
 #cadswarmPanel QPushButton:hover { border-color: $ACCENT; }
-#cadswarmPanel QPushButton:pressed { background: $LINE; }
+#cadswarmPanel QPushButton:pressed { background: $LINE; border-color: $ACCENT; }
 #cadswarmPanel QPushButton:disabled { color: #6f6c66; border-color: $LINE; }
+#cadswarmPanel QPushButton[busy="true"] { background: $ACCENT; border-color: $ACCENT; color: white; }
 #cadswarmPanel QPushButton#primary { background: $ACCENT; border-color: $ACCENT; color: white; font-weight: bold; }
 #cadswarmPanel QPushButton#primary:hover { background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
+#cadswarmPanel QPushButton#primary:pressed, #cadswarmPanel QPushButton#primary[busy="true"] {
+    background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
 #cadswarmPanel QPushButton#primary:disabled { background: #6b4a20; border-color: #6b4a20; color: #b9b5af; }
 #cadswarmPanel QPushButton#quiet, #cadswarmPanel QPushButton#danger { border: none; background: transparent;
     color: $ACCENT; font-weight: bold; padding: 3px 4px; }
 #cadswarmPanel QPushButton#danger { color: $ERR; font-weight: normal; text-align: left; }
 #cadswarmPanel QPushButton#quiet:hover, #cadswarmPanel QPushButton#danger:hover { text-decoration: underline; }
+#cadswarmPanel QPushButton#quiet[busy="true"], #cadswarmPanel QPushButton#danger[busy="true"] { color: $MUTED; }
 #cadswarmPanel QPushButton#jump { background: $ACCENT; border: none; border-radius: 14px; color: white;
     font-weight: bold; padding: 4px 10px; min-height: 20px; }
 #cadswarmPanel QPushButton#jump:hover { background: $ACCENT_HOVER; }
 #cadswarmPanel QPushButton#tool { text-align: left; padding: 4px 10px; border: none; background: transparent;
     color: $TEXT; }
 #cadswarmPanel QPushButton#tool:hover { background: $SURFACE_2; color: $ACCENT; }
+#cadswarmPanel QPushButton#tool:pressed, #cadswarmPanel QPushButton#tool[busy="true"] {
+    background: $SURFACE_2; color: $ACCENT; border-left: 3px solid $ACCENT; padding-left: 7px; }
 #cadswarmPanel QToolButton { padding: 6px 10px; color: $TEXT; }
 #cadswarmPanel QFrame#card { background: $SURFACE; border: 1px solid $LINE; border-radius: 10px; }
 #cadswarmPanel QFrame#suggest { background: $SURFACE; border: 1px solid $ACCENT; border-radius: 10px; }
@@ -120,9 +126,11 @@ QFrame#card { border: 1px solid $LINE; border-radius: 8px; background: $SURFACE;
 QPushButton { border: 1px solid $LINE_STRONG; border-radius: 6px; background: $SURFACE_2; color: $TEXT;
     padding: 6px 12px; min-height: 24px; }
 QPushButton:hover { border-color: $ACCENT; }
+QPushButton:pressed { background: $LINE; border-color: $ACCENT; }
 QPushButton:disabled { color: #6f6c66; border-color: $LINE; }
 QPushButton#primary { background: $ACCENT; border-color: $ACCENT; color: white; font-weight: 600; padding: 7px 18px; }
 QPushButton#primary:hover { background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
+QPushButton#primary:pressed { background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
 QPushButton#primary:disabled { background: #6b4a20; border-color: #6b4a20; color: #b9b5af; }
 QPushButton#quiet { border: none; background: transparent; color: $ACCENT; }
 QPlainTextEdit { background: $SURFACE; color: $TEXT; border: 1px solid $LINE; border-radius: 6px;

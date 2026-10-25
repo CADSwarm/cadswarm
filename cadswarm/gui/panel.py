@@ -165,6 +165,8 @@ class Session:
         self._moved_hint = 0
         # What the panel's banner tells the user: disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
+        self._working = 0        # requests this session started and hasn't finished (holds buttons down)
+        self._idle_waiters = []  # callbacks to run when the last one finishes
 
     # ------------------------------------------------------------ lifecycle
 
@@ -516,12 +518,15 @@ class Session:
         if not self.ensure_connected(purpose):
             return None
         QtGui.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        self._begin_work()
         try:
             r = self.client.request(method, path, body if method != "GET" else None)
         except HubRequestError as e:
             QtGui.QApplication.restoreOverrideCursor()
             QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm", friendly_error(e, self.client.hub if self.client else ""))
             return None
+        finally:
+            self._end_work()
         QtGui.QApplication.restoreOverrideCursor()
         if done:
             say(done if isinstance(done, str) else done(r))
@@ -546,6 +551,7 @@ class Session:
                 failed()
             return
         client, events = self.client, self.events
+        self._begin_work()
 
         def go():
             try:
@@ -567,6 +573,31 @@ class Session:
             except Exception as e:
                 warn(f"after that step: {e}")
         self.request_refresh()
+        self._end_work()
+
+    def working(self):
+        """True while a request this session started is still running (a pressed button waits on this)."""
+        return self._working > 0
+
+    def when_idle(self, cb):
+        """Run `cb` on the GUI thread once no request this session started is still running."""
+        if self._working <= 0:
+            QtCore.QTimer.singleShot(0, cb)
+        else:
+            self._idle_waiters.append(cb)
+
+    def _begin_work(self):
+        self._working += 1
+
+    def _end_work(self):
+        self._working = max(0, self._working - 1)
+        if self._working == 0 and self._idle_waiters:
+            waiters, self._idle_waiters = self._idle_waiters, []
+            for cb in waiters:
+                try:
+                    cb()
+                except Exception as e:
+                    warn(f"after background work: {e}")
 
     def selected_names(self):
         names = []
@@ -2077,11 +2108,52 @@ class ShrinkButton(QtGui.QPushButton):
 
 def action_button(label, tip, fn):
     """A button that never makes the panel wider than its dock (on a very narrow panel its words clip)."""
-    b = ShrinkButton(label)
-    b.setToolTip(tip)
-    b.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
-    b.clicked.connect(lambda _=False: fn())
-    return b
+    return ActionButton(label, tip, fn)
+
+
+# How long a pressed button stays lit when its action starts no background work: long enough that the
+# press reads as a press, short enough not to get in the way.
+PRESS_FLASH_MS = 400
+
+
+class ActionButton(ShrinkButton):
+    """A panel button that shows it was pressed and ignores a second press while its action is running.
+
+    Every action used to fire on every click, so hammering "Auto-constrain" opened the same "nothing to
+    constrain" box once per click. A press now lights the button (and holds it lit) until the work behind
+    it has finished, and clicks landing in that window are dropped: one press, one action."""
+
+    def __init__(self, label, tip, fn):
+        super().__init__(label)
+        self._fn = fn
+        self._busy = False
+        self.setToolTip(tip)
+        self.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Fixed)
+        self.clicked.connect(self._pressed)
+
+    def _pressed(self):
+        if self._busy:
+            return  # this action is already running: the extra click is not a second job
+        self._busy = True
+        self._set_busy(True)
+        try:
+            self._fn()
+        except Exception as e:  # a broken action must not leave the button lit and stuck
+            warn(f"{self.text().rstrip('…') or 'that action'} failed: {e}")
+        if SESSION.working():
+            SESSION.when_idle(self._clear_busy)
+        else:
+            QtCore.QTimer.singleShot(PRESS_FLASH_MS, self._clear_busy)
+
+    def _clear_busy(self):
+        self._busy = False
+        self._set_busy(False)
+
+    def _set_busy(self, on):
+        self.setProperty("busy", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.repaint()  # draw the lit state now, even when the action blocks the event loop
 
 
 def qr_pixmap(rows, pixels=240, ratio=1.0):
