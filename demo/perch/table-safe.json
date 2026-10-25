@@ -1,0 +1,51 @@
+{
+  "name": "table-safe",
+  "note": "The lid-only table run, chosen before the pitch when rehearsal started no part before 1:30. One small part one helper can start fast; the presenter says the body is the next run.",
+  "brief": {
+    "from": "phone",
+    "board": "esp32-s3-devkitc-1",
+    "marker": "Podium lid for the same Perch",
+    "text": "Make the Podium lid for the same Perch: a 2.4 mm back cover for the upright ESP32-S3 head, same fits, same 180 mm bed. Recall the Perch we just built before planning, and use what its review found. Podium_Lid -> lid-creao."
+  },
+  "gate": {
+    "first_op_by": 105,
+    "if_missed": "No part has started yet. The recall and the task are real; the lid is the smallest job we have and it is still running."
+  },
+  "ready": {
+    "parts_any": ["Clamp_Base", "Shoulder_Hub", "Arm_Proximal", "Arm_Distal", "Cradle_Base", "Cradle_Lid"],
+    "forbid_prefix": ["Podium_", "Medallion"],
+    "no_open_brief": true
+  },
+  "cast": {
+    "lead-claude": "claude",
+    "lid-creao": "creao",
+    "arm-opencode": "opencode"
+  },
+  "probe": ["lead-claude", "lid-creao"],
+  "steps": [
+    {
+      "id": "brief", "label": "Sam sends the lid-only brief from the phone",
+      "at": 0, "deadline": 10, "predicate": "brief_sent",
+      "args": {"marker": "Podium lid for the same Perch", "by_not": "presenter", "phone": true},
+      "say": "Same phone, one small part."
+    },
+    {
+      "id": "recall", "label": "The planner recalls the Perch before it plans",
+      "at": 10, "deadline": 25, "predicate": "recall",
+      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "say": "Before it plans, it looks up what we already built."
+    },
+    {
+      "id": "tasks", "label": "The lid task appears with its owner",
+      "at": 20, "deadline": 30, "predicate": "tasks_landed",
+      "args": {"owners": {"Podium_Lid": "lid-creao"}},
+      "say": "One part, one owner."
+    },
+    {
+      "id": "first_part", "label": "The lid starts to land",
+      "at": 35, "deadline": 55, "predicate": "first_part",
+      "args": {"parts": ["Podium_Lid"]},
+      "say": "It is still building."
+    }
+  ]
+}

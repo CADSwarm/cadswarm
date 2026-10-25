@@ -1,0 +1,131 @@
+{
+  "name": "booth",
+  "note": "The 40-50 minute Act 1 + Act 2 run. Every step waits on the module; the cues are for the presenter, not for the driver. The medallion and its 608 bearing are this run's, never the table's.",
+  "brief": {
+    "from": "panel",
+    "board": "esp32-s3-devkitc-1",
+    "marker": "clip-on articulated arm",
+    "text": "Build The Perch: a clip-on articulated arm that holds an ESP32-S3-DevKitC-1 at eye level, with a cradle head. I'll edit the clamp myself. Plan: Clamp_Base (unassigned), Shoulder_Hub -> lead-claude, Arm_Proximal + Arm_Distal -> arm-opencode, Cradle_Base (unassigned), Cradle_Lid -> lid-creao. Look up the ESP32-S3 with lookup_board and use its measured Params. Two printable arm segments joined by M4 screws and heat-set inserts, a 608 bearing at the shoulder, a dovetail head mount. Both USB-C ports must be reachable. Every part must fit a 180 mm bed and follow our walls and fits. The distal arm is what we'll simulate and lighten."
+  },
+  "gate": {
+    "first_op_by": 2400,
+    "if_missed": "Forty minutes in, no part has started. Stop the build, say so, and run the smaller job in table-safe.json."
+  },
+  "ready": {
+    "parts_any": [],
+    "forbid_prefix": ["Clamp_", "Shoulder_", "Arm_", "Cradle_", "Podium_", "Medallion"],
+    "no_open_brief": true
+  },
+  "cast": {
+    "planner-claude": "claude",
+    "lead-claude": "claude",
+    "base-claude": "claude",
+    "lid-creao": "creao",
+    "arm-opencode": "opencode"
+  },
+  "probe": ["planner-claude", "lead-claude", "lid-creao", "arm-opencode"],
+  "steps": [
+    {
+      "id": "brief", "label": "Act 1's brief is typed in the panel",
+      "at": 0, "deadline": 300, "predicate": "brief_sent",
+      "args": {"marker": "clip-on articulated arm"},
+      "say": "The cold open: sponsor window first, then this brief."
+    },
+    {
+      "id": "board", "label": "The planner looks the board up",
+      "at": 60, "deadline": 300, "predicate": "op_done", "args": {"kind": "lookup_board"},
+      "say": "Board Params fill from the library; the Elastic card shows the board."
+    },
+    {
+      "id": "tasks", "label": "The plan's tasks appear with named owners",
+      "at": 120, "deadline": 300, "predicate": "tasks_landed",
+      "args": {"owners": {"Shoulder_Hub": "lead-claude", "Arm_Proximal": "arm-opencode",
+                          "Arm_Distal": "arm-opencode", "Cradle_Lid": "lid-creao"}},
+      "say": "Clamp_Base and Cradle_Base stay unassigned: a host worker takes them."
+    },
+    {
+      "id": "protect", "label": "A request on the held distal arm is refused",
+      "at": 240, "deadline": 240, "predicate": "refusal",
+      "args": {"target": "Arm_Distal", "by": "lid-creao"},
+      "guard": {"held_by": {"object": "Arm_Distal", "name": "arm-opencode"}},
+      "on_start": {"steer": {"to": "lid-creao", "body": "thicken Arm_Distal by 2 mm; it flexes."}},
+      "say": "The lock is the rule: the holder's part is not yours to change."
+    },
+    {
+      "id": "build", "label": "All six Act 1 parts are in the model",
+      "at": 360, "deadline": 1200, "predicate": "parts_landed",
+      "args": {"parts": ["Clamp_Base", "Shoulder_Hub", "Arm_Proximal", "Arm_Distal",
+                         "Cradle_Base", "Cradle_Lid"]},
+      "say": "Build. The Creao trace is one call per turn; the Claude workers take the clamp and cradle."
+    },
+    {
+      "id": "shared_size", "label": "arm_reach is steered to 160 mm",
+      "at": 600, "deadline": 300, "predicate": "param_changed",
+      "args": {"alias": "arm_reach", "value": 160},
+      "say": "One shared size; every part bound to it recomputes and the owners are told."
+    },
+    {
+      "id": "constrain", "label": "Auto-constrain is previewed and applied",
+      "at": 900, "deadline": 600, "predicate": "confirm",
+      "say": "Tools > Auto-constrain: alias, pattern and fit proposals; apply, then tol_press_fit = -0.08 mm."
+    },
+    {
+      "id": "fea", "label": "The FEA report is published",
+      "at": 1080, "deadline": 600, "predicate": "report", "args": {"kind": "fea_report"},
+      "say": "4.9 N at the head, fixed at the elbow, PETG; the report pops for the whole team."
+    },
+    {
+      "id": "takeover", "label": "The killed Creao helper is taken over",
+      "at": 1260, "deadline": 300, "predicate": "takeover",
+      "say": "Kill the bridge, wait for stale, then ask lead-claude to take the lid over."
+    },
+    {
+      "id": "handoff", "label": "The clamp handoff is accepted",
+      "at": 1500, "deadline": 400, "predicate": "handoff",
+      "say": "Sam holds the clamp, edits the M8 pocket, and hands it to base-claude with the note."
+    },
+    {
+      "id": "review1", "label": "Round 1 comes back with findings",
+      "at": 1680, "deadline": 400, "predicate": "review_round",
+      "args": {"round": 1, "passed": false},
+      "say": "Droid's pointer and trace; the three findings go to tasks."
+    },
+    {
+      "id": "style", "label": "The lid wall is corrected and the rules are added",
+      "at": 1860, "deadline": 300, "predicate": "confirm",
+      "say": "2.4 mm wall by hand, then Learned design style: the three rules."
+    },
+    {
+      "id": "review2", "label": "Round 2 is approved",
+      "at": 2040, "deadline": 300, "predicate": "review_round",
+      "args": {"round": 2, "passed": true},
+      "say": "The Factory card says approved; that is the quality gate."
+    },
+    {
+      "id": "lighten", "label": "The lattice report is published",
+      "at": 2160, "deadline": 900, "predicate": "report", "args": {"kind": "lattice_report"},
+      "say": "90% stiffness, gyroid, 5 mm cells, held at the elbow: the verifier console and mass saved."
+    },
+    {
+      "id": "export", "label": "STEP and STL are exported",
+      "at": 2400, "deadline": 300, "predicate": "op_done", "args": {"kind": "export"},
+      "say": "Print-ready on a 180 mm bed; nothing is printed here."
+    },
+    {
+      "id": "memory", "label": "The design doc and the lessons are in Kibana",
+      "at": 2520, "deadline": 300, "predicate": "confirm",
+      "say": "cadswarm-designs, the Workflow execution, and the lessons that Act 2 will recall."
+    },
+    {
+      "id": "close", "label": "Act 1 closes on the sponsor window",
+      "at": 2700, "deadline": 600, "predicate": "confirm",
+      "say": "Leave the window up, restart Creao, and hand the phone to Sam for Act 2."
+    },
+    {
+      "id": "act2_recall", "label": "Act 2's planner recalls both designs",
+      "at": 2820, "deadline": 900, "predicate": "recall",
+      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "say": "From Sam's phone: the second head starts by recalling the first one, its problems and its lessons."
+    }
+  ]
+}

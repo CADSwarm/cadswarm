@@ -1,0 +1,59 @@
+{
+  "name": "table",
+  "note": "The two-minute Act 2 run at the judging table. Press at 0:30 of the pitch; the first op must land by 1:45. Nothing here claims a finished head.",
+  "brief": {
+    "from": "phone",
+    "board": "esp32-s3-devkitc-1",
+    "marker": "Podium head for the same Perch",
+    "text": "Make the Podium head for the same Perch: the same ESP32-S3 upright, a 2.4 mm lid, the same fits, the same 180 mm bed. Reuse the arm and the mount. Recall the Perch we just built before planning, and use what its review found. Podium_Body -> lead-claude, Podium_Lid -> lid-creao."
+  },
+  "gate": {
+    "first_op_by": 105,
+    "if_missed": "No part has started yet. The recall and the tasks are real; the body is the next run."
+  },
+  "ready": {
+    "parts_any": ["Clamp_Base", "Shoulder_Hub", "Arm_Proximal", "Arm_Distal", "Cradle_Base", "Cradle_Lid"],
+    "forbid_prefix": ["Podium_", "Medallion"],
+    "no_open_brief": true
+  },
+  "cast": {
+    "lead-claude": "claude",
+    "lid-creao": "creao",
+    "arm-opencode": "opencode"
+  },
+  "probe": ["lead-claude", "lid-creao"],
+  "steps": [
+    {
+      "id": "brief", "label": "Sam sends the table brief from the phone",
+      "at": 0, "deadline": 10, "predicate": "brief_sent",
+      "args": {"marker": "Podium head for the same Perch", "by_not": "presenter", "phone": true},
+      "say": "The brief is on Sam's phone. It goes out from the phone, not from this laptop."
+    },
+    {
+      "id": "recall", "label": "The planner recalls the Perch before it plans",
+      "at": 10, "deadline": 25, "predicate": "recall",
+      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "say": "Before it plans, it looks up what we already built."
+    },
+    {
+      "id": "tasks", "label": "Tasks appear with named owners",
+      "at": 20, "deadline": 30, "predicate": "tasks_landed",
+      "args": {"owners": {"Podium_Body": "lead-claude", "Podium_Lid": "lid-creao"}},
+      "say": "Two parts, the same owners as Act 1."
+    },
+    {
+      "id": "refusal", "label": "The mention is refused on the held body",
+      "at": 35, "deadline": 40, "predicate": "refusal",
+      "args": {"target": "Podium_Body", "by": "lid-creao"},
+      "guard": {"held_by": {"object": "Podium_Body", "name": "lead-claude"}},
+      "on_start": {"steer": {"to": "lid-creao", "body": "thicken Podium_Body by 2 mm"}},
+      "say": "The body is held. Creao is asked to change it anyway."
+    },
+    {
+      "id": "first_part", "label": "The first part starts to land",
+      "at": 45, "deadline": 45, "predicate": "first_part",
+      "args": {"parts": ["Podium_Body", "Podium_Lid"]},
+      "say": "It is still building."
+    }
+  ]
+}

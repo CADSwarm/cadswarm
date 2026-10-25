@@ -722,3 +722,61 @@ def test_serve_prints_and_opens_the_port_it_actually_bound(monkeypatch, capsys):
                  open_browser=False, stop=stop)
     assert "http://127.0.0.1:54321/" in capsys.readouterr().out
     assert httpd.closed and stop.is_set()
+
+
+# --------------------------------------------------------------------------- the shipped timelines
+
+TIMELINES = ["table.json", "table-safe.json", "timeline.json"]
+
+
+@pytest.mark.parametrize("name", TIMELINES)
+def test_every_shipped_timeline_validates(name):
+    plan = driver.load_plan(ROOT / "demo" / "perch" / name)
+    assert plan["steps"] and plan["cast"]
+
+
+@pytest.mark.parametrize("name", TIMELINES)
+def test_every_named_owner_and_steer_is_in_the_cast(name):
+    plan = driver.load_plan(ROOT / "demo" / "perch" / name)
+    assert plan["probe"] and set(plan["probe"]) <= set(plan["cast"])
+    for s in plan["steps"]:
+        for owner in (s.get("args") or {}).get("owners", {}).values():
+            assert owner in plan["cast"], f"{s['id']} names {owner}"
+        steer = ((s.get("on_start") or {}).get("steer") or {}).get("to")
+        if steer:
+            assert steer in plan["cast"], f"{s['id']} steers {steer}"
+
+
+def test_the_table_run_is_the_five_beats_in_order():
+    plan = driver.load_plan(ROOT / "demo" / "perch" / "table.json")
+    assert [s["id"] for s in plan["steps"]] == ["brief", "recall", "tasks", "refusal", "first_part"]
+    assert [s["predicate"] for s in plan["steps"]] == [
+        "brief_sent", "recall", "tasks_landed", "refusal", "first_part"]
+    assert plan["gate"]["first_op_by"] == 105
+    assert plan["brief"]["from"] == "phone"
+    assert plan["steps"][0]["deadline"] == 10
+    assert plan["steps"][-1]["at"] < plan["gate"]["first_op_by"]
+
+
+def test_the_table_brief_asks_for_two_parts_and_recalls_act1():
+    text = driver.load_plan(ROOT / "demo" / "perch" / "table.json")["brief"]["text"]
+    assert "Podium_Body" in text and "Podium_Lid" in text and "Medallion" not in text
+    assert "Recall the Perch" in text and "180 mm bed" in text
+
+
+def test_the_safe_timeline_is_lid_only_and_has_no_refusal_beat():
+    plan = driver.load_plan(ROOT / "demo" / "perch" / "table-safe.json")
+    assert "Podium_Lid" in plan["brief"]["text"] and "Podium_Body" not in plan["brief"]["text"]
+    assert plan["steps"][2]["args"]["owners"] == {"Podium_Lid": "lid-creao"}
+    assert [s["id"] for s in plan["steps"]] == ["brief", "recall", "tasks", "first_part"]
+    assert plan["gate"]["first_op_by"] == 105
+
+
+def test_the_booth_timeline_covers_every_beat_the_window_claims():
+    plan = driver.load_plan(ROOT / "demo" / "perch" / "timeline.json")
+    predicates = {s["predicate"] for s in plan["steps"]}
+    assert {"brief_sent", "recall", "tasks_landed", "refusal", "parts_landed", "param_changed",
+            "confirm", "report", "takeover", "handoff", "review_round", "op_done"} <= predicates
+    reports = {s["args"].get("kind") for s in plan["steps"] if s["predicate"] == "report"}
+    assert {"fea_report", "lattice_report"} <= reports
+    assert plan["brief"]["from"] == "panel"
