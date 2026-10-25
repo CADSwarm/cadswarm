@@ -36,7 +36,11 @@ class Elastic:
 
     @classmethod
     def from_env(cls):
-        missing = [k for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY") if not os.environ.get(k)]
+        # The desktop app starts the host without scripts/with-env.ps1, so read cadswarm.env too
+        # (never overriding a real env var), exactly like the Creao key.
+        from .creao import load_env_file
+        load_env_file()
+        missing =[k for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY") if not os.environ.get(k)]
         if missing:
             raise ElasticError(0, f"Elastic is not configured on this host (missing {', '.join(missing)})")
         return cls(os.environ["ELASTIC_URL"], os.environ["KIBANA_URL"], os.environ["ELASTIC_API_KEY"])

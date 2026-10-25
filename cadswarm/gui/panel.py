@@ -2489,9 +2489,10 @@ def helpers_base():
                                                                  safe_folder(prefs().GetString("ProjectName")))
 
 
-def create_helper(client, name, team):
+def create_helper(client, name, team, model=""):
     """Set up a new AI helper folder signed in to the team as `name` (a plain member) and return the folder.
-    Runs off the GUI thread: the first one may download the helper software (about 70 MB)."""
+    Runs off the GUI thread: the first one may download the helper software (about 70 MB). `model` pins
+    the helper's model ("" = the AI's own default)."""
     from .. import hosting
     from ..agent_setup import trust_in_codex, write_agent_config, write_launcher
     from ..invite import read_invite
@@ -2505,7 +2506,7 @@ def create_helper(client, name, team):
         folder, n = f"{base}-{n}", n + 1
     project = prefs().GetString("ProjectName")
     invite = read_invite(team.create_invite("agent", "member", 86400, project))
-    write_agent_config(folder, client, invite, name, python=python)
+    write_agent_config(folder, client, invite, name, python=python, model=model)
     write_launcher(folder, client, project)
     if client == "codex":
         trust_in_codex(folder)
@@ -2588,6 +2589,15 @@ def ask_creao_key(parent=None):
     return dlg.path if dlg.exec_() == QtGui.QDialog.Accepted else ""
 
 
+MODEL_PICKER_CLIENTS = ("opencode", "creao")
+MODEL_DEFAULT_TEXT = "Default (the AI's own choice)"
+
+
+def list_models_for(client):
+    from ..agent_setup import list_models
+    return list_models(client)
+
+
 class NewHelperDialog(QtGui.QDialog):
     """Start one more AI helper on this computer: pick the AI, optionally name it, done. It runs in the
     background and answers in the chat."""
@@ -2615,6 +2625,14 @@ class NewHelperDialog(QtGui.QDialog):
         except (KeyError, TypeError, IndexError):
             self.client.activated.connect(lambda *_: self.picked_client())
         form.addRow("AI", self.client)
+        # OpenCode and Creao reach many models: the pick is saved in the helper's folder and sticks.
+        self.model = QtGui.QComboBox()
+        self.model.setEditable(True)
+        self.model.setInsertPolicy(QtGui.QComboBox.NoInsert)
+        self.model.setToolTip("The model this helper always runs on. Type a model id if it isn't listed.")
+        self.model_label = QtGui.QLabel("Model")
+        form.addRow(self.model_label, self.model)
+        self.models_for = None
         self.name = QtGui.QLineEdit()
         self.name.setPlaceholderText("Optional")
         self.name.setMaxLength(40)
@@ -2641,6 +2659,7 @@ class NewHelperDialog(QtGui.QDialog):
                               "once, then try again. Creao AI needs only an API key, and CadSwarm asks for it "
                               "when you start one.")
             self.note.setOpenExternalLinks(True)
+        self.show_models()
 
     def picked_client(self):
         """Choosing Creao without a key asks for it right away, like clicking it in the setup guide."""
@@ -2648,6 +2667,47 @@ class NewHelperDialog(QtGui.QDialog):
         if self.client.currentData() == "creao" and not agent_ready("creao"):
             if ask_creao_key(self):
                 self.note.setText("")
+        self.show_models()
+
+    def show_models(self):
+        """The model picker, for the AIs that offer a choice. Starts on the last model picked for this AI
+        and fills in the full list in the background (`opencode models` can take a few seconds)."""
+        client = self.client.currentData()
+        pickable = client in MODEL_PICKER_CLIENTS
+        self.model.setVisible(pickable)
+        self.model_label.setVisible(pickable)
+        if not pickable or self.models_for == client:
+            return
+        self.models_for = client
+        self.fill_models(client, [])
+
+        def listed(models):
+            try:
+                if self.models_for == client:
+                    self.fill_models(client, models or [], keep_typed=True)
+            except RuntimeError:  # the dialog was closed before the list arrived
+                pass
+        self.session.run_async(lambda _c: list_models_for(client), done=listed, purpose="list the models")
+
+    def fill_models(self, client, models, keep_typed=False):
+        last = prefs().GetString(f"HelperModel_{client}")
+        typed = self.model.currentText().strip() if keep_typed else ""
+        self.model.clear()
+        self.model.addItem(MODEL_DEFAULT_TEXT, "")
+        for m in ([last] if last and last not in models else []) + list(models):
+            self.model.addItem(m, m)
+        pick = typed if typed and typed != MODEL_DEFAULT_TEXT else last
+        i = self.model.findData(pick) if pick else 0
+        if i >= 0:
+            self.model.setCurrentIndex(i)
+        else:
+            self.model.setEditText(pick)
+
+    def picked_model(self):
+        if self.client.currentData() not in MODEL_PICKER_CLIENTS:
+            return ""
+        text = self.model.currentText().strip()
+        return "" if text == MODEL_DEFAULT_TEXT else text
 
     def create(self):
         from ..agent_setup import agent_ready
@@ -2670,6 +2730,8 @@ class NewHelperDialog(QtGui.QDialog):
         self.note.setText("Setting it up… The first helper on a computer downloads its software (about 70 MB), "
                           "which can take a minute or two.")
         team = self.session.client
+        model = self.picked_model()
+        prefs().SetString(f"HelperModel_{client}", model)  # the next new helper of this AI starts on it
 
         def started(folder):
             from ..paths import LAUNCHER, freecad_python
@@ -2684,7 +2746,7 @@ class NewHelperDialog(QtGui.QDialog):
         def failed():
             self.ok.setEnabled(True)
             self.note.setText("")
-        self.session.run_async(lambda _c: create_helper(client, name, team), done=started,
+        self.session.run_async(lambda _c: create_helper(client, name, team, model), done=started,
                                purpose="start an AI helper", failed=failed)
 
 

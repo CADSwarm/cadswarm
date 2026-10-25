@@ -363,11 +363,12 @@ def identity_matches(project, invite):
         and cfg.get("db") == invite.get("db") and cfg.get("uri", "").rstrip("/") == invite.get("uri", "").rstrip("/")
 
 
-def write_agent_config(project, client, invite, name, python=None, fresh=False, ephemeral=False):
+def write_agent_config(project, client, invite, name, python=None, fresh=False, ephemeral=False, model=None):
     """Everything an AI helper in `project` needs to join the team. Returns the files written.
     `invite` is a decoded ticket (see invite.read_invite). The invite is redeemed only when this
     folder has no identity yet (invites work once), and only after the agent CLI's own config
-    files were validated and written, so a config file we refuse to touch never burns the invite."""
+    files were validated and written, so a config file we refuse to touch never burns the invite.
+    `model` pins the helper's model (see save_helper_model); None keeps the folder's earlier pick."""
     if client not in CLIENTS:
         raise ValueError(f"client must be one of {sorted(CLIENTS)}")
     python = python or sys.executable
@@ -388,10 +389,69 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False, 
         if not invite.get("token"):
             raise ValueError("This helper folder isn't signed in to this team yet; it needs a fresh invite code.")
         save_json(ident_path, redeem(invite, name, client))
+    kept = helper_model(project)
     save_json(os.path.join(state_dir(project), "config.json"), {
         "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
         "role": invite.get("role") or "member", **({"ephemeral": True} if ephemeral else {})})
+    save_helper_model(project, kept if model is None else model)
     return written
+
+
+def helper_model(project):
+    """The model this helper folder was pinned to, or "" for the AI's own default."""
+    return (load_json(os.path.join(state_dir(project), "config.json")) or {}).get("model") or ""
+
+
+def save_helper_model(project, model):
+    """Pin (or with "" unpin) the model this helper runs on. It sticks: the runner and the Creao bridge
+    prefer it over CADSWARM_HELPER_MODEL / CREAO_MODEL, and OpenCode's own opencode.json gets it too,
+    so the helper opened in a terminal uses the same model."""
+    model = (model or "").strip()
+    path = os.path.join(state_dir(project), "config.json")
+    cfg = load_json(path) or {}
+    if model:
+        cfg["model"] = model
+    else:
+        cfg.pop("model", None)
+    os.makedirs(state_dir(project), exist_ok=True)
+    save_json(path, cfg)
+    oc_path = os.path.join(project, "opencode.json")
+    if cfg.get("client") == "opencode" and os.path.isfile(oc_path):
+        oc = _read_config(oc_path)
+        if model:
+            oc["model"] = model
+        else:
+            oc.pop("model", None)
+        with open(oc_path, "w", encoding="utf-8") as f:
+            json.dump(oc, f, indent=2)
+
+
+def list_models(client):
+    """Models to offer in the picker: OpenCode's `opencode models` (provider/model ids) or the Creao
+    account's models. [] when the list can't be had (the picker then takes a typed id)."""
+    if client == "opencode":
+        exe = find_agent_cli("opencode")
+        if not exe:
+            return []
+        try:
+            out = subprocess.run([exe, "models"], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=60, stdin=subprocess.DEVNULL,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError):
+            return []
+        ids = []
+        for line in (out.stdout or "").splitlines():
+            line = line.strip()
+            if re.fullmatch(r"[\w.-]+/[\w.:@/-]+", line) and line not in ids:
+                ids.append(line)
+        return ids
+    if client == "creao":
+        from . import creao
+        try:
+            return creao.Creao().list_models()
+        except (creao.CreaoError, OSError, ValueError, KeyError, AttributeError):
+            return []
+    return []
 
 
 def _node_version(path):

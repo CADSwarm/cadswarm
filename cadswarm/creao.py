@@ -124,7 +124,7 @@ def api_key():
     key = (os.environ.get("CREAO_API_KEY") or "").strip()
     if key:
         return key
-    _load_env_file()
+    load_env_file()
     return (os.environ.get("CREAO_API_KEY") or "").strip()
 
 
@@ -187,11 +187,12 @@ def save_api_key(key):
     return path
 
 
-def _load_env_file():
+def load_env_file():
     """Read keys from the same files `scripts/with-env.ps1` uses, without overriding real env vars.
 
     Custom skills run in Creao's sandbox, but the bridge runs here: when FreeCAD was started from the
-    desktop (not through the loader) a key in `cadswarm.env` is still found by this.
+    desktop (not through the loader) a key in `cadswarm.env` is still found by this. The host helper's
+    Elastic client (`knowledge.Elastic.from_env`) reads its keys through this too.
     """
     for path in env_candidates():
         if not path or not os.path.isfile(path):
@@ -308,6 +309,19 @@ class Creao:
     def usage(self):
         """A cheap authenticated call: proves the key works without spending credits on a run."""
         return self._request("GET", "/v1/account/usage")
+
+    def list_models(self):
+        """Model ids this account can run, for the helper's model picker (in Creao's order, no repeats).
+        Accepts {"data": [...]}, {"models": [...]} or a bare list, of ids or {"id"/"name"} objects."""
+        payload = self._request("GET", "/v1/models")
+        items = payload if isinstance(payload, list) else (payload.get("data") or payload.get("models") or [])
+        ids = []
+        for item in items:
+            mid = item if isinstance(item, str) else (item.get("id") or item.get("name") or "") \
+                if isinstance(item, dict) else ""
+            if mid and mid not in ids:
+                ids.append(mid)
+        return ids
 
     def create_agent(self, description, model=None, timeout=15 * 60):
         """Start Creao's agent-creation run and wait for the new agent's id."""

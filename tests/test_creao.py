@@ -181,3 +181,16 @@ def test_creao_reset_forgets_the_conversation_and_keeps_the_agent(tmp_path, caps
     cli.main(["creao", "reset", "--dir", str(tmp_path)])
     assert creao.load_config(str(tmp_path)) == {"agent_id": "agent-9"}
     assert "new conversation" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("payload", [
+    {"data": [{"id": "claude-sonnet"}, {"id": "gpt-5"}]},
+    {"models": [{"name": "claude-sonnet"}, "gpt-5"]},
+    ["claude-sonnet", "gpt-5", "claude-sonnet"],
+])
+def test_list_models_accepts_the_usual_shapes(payload):
+    api = creao.Creao(key="cr_sk_x")
+    seen = []
+    api._request = lambda method, path, body=None: seen.append((method, path)) or payload
+    assert api.list_models() == ["claude-sonnet", "gpt-5"]
+    assert seen == [("GET", "/v1/models")]

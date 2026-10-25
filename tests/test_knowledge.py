@@ -169,3 +169,26 @@ def test_kibana_errors_carry_their_message_and_a_duplicate_counts_as_existing():
     assert "already exists" in str(e) and _already_exists(e)
     assert _already_exists(ElasticError(409, "{}"))
     assert not _already_exists(ElasticError(400, json.dumps({"error": "Bad Request", "message": "bad query"})))
+
+
+def test_from_env_reads_the_shared_env_file_when_the_process_has_none(tmp_path, monkeypatch):
+    # The desktop app starts the host without scripts/with-env.ps1, so the keys only exist in the file.
+    from cadswarm import creao
+    env = tmp_path / "cadswarm.env"
+    env.write_text("ELASTIC_URL=https://es.example\nKIBANA_URL='https://kb.example'\nELASTIC_API_KEY=k1\n",
+                   encoding="utf-8")
+    for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
+        monkeypatch.setenv(k, "")  # recorded, so the loader's writes are undone after the test
+        monkeypatch.delenv(k)
+    monkeypatch.setattr(creao, "env_candidates", lambda: [None, str(env)])
+    es = Elastic.from_env()
+    assert (es.es_url, es.kibana_url, es.api_key) == ("https://es.example", "https://kb.example", "k1")
+
+
+def test_from_env_still_says_what_is_missing(tmp_path, monkeypatch):
+    from cadswarm import creao
+    for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(creao, "env_candidates", lambda: [])
+    with pytest.raises(ElasticError, match="missing ELASTIC_URL"):
+        Elastic.from_env()

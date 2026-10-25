@@ -171,6 +171,24 @@ def test_each_cli_gets_a_headless_command_with_the_prompt_on_stdin_where_it_can(
     assert stdin == "do it"
 
 
+def test_a_helpers_picked_model_beats_the_environment(monkeypatch):
+    monkeypatch.setenv("CADSWARM_HELPER_MODEL", "env/model")
+    argv, _ = runner.agent_command("opencode", "opencode", "/h", "x", resume=False, model="anthropic/claude-sonnet-5-5")
+    assert argv[argv.index("--model") + 1] == "anthropic/claude-sonnet-5-5"
+    argv, _ = runner.agent_command("opencode", "opencode", "/h", "x", resume=False)
+    assert argv[argv.index("--model") + 1] == "env/model"
+
+
+def test_the_runner_wakes_opencode_with_the_folders_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    r, _clock, spawned = make_runner(tmp_path, client="opencode")
+    r.cfg["model"] = "openai/gpt-5.1"
+    assert r.wake([("m:x", "- hi")], first=True)
+    argv = spawned[-1][0]
+    assert argv[argv.index("--model") + 1] == "openai/gpt-5.1"
+
+
 def test_runner_alive_follows_its_heartbeat_file(tmp_path):
     (tmp_path / ".cadswarm").mkdir()
     assert not runner.runner_alive(str(tmp_path))

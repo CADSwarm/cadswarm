@@ -93,9 +93,16 @@ def test_elastic_errors_are_reported_with_their_own_code(tmp_path):
     assert r["ok"] is False and r["code"] == "elastic_error" and "busy" in r["error"]
 
 
+def no_env_file(monkeypatch):
+    """Keep a developer's own cadswarm.env (next to the checkout) out of an "unconfigured" test."""
+    from cadswarm import creao
+    monkeypatch.setattr(creao, "env_candidates", lambda: [])
+
+
 def test_unconfigured_host_reports_not_configured_but_files_still_work(tmp_path, monkeypatch):
     for var in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
         monkeypatch.delenv(var, raising=False)
+    no_env_file(monkeypatch)
     p = helper.Project(tmp_path)
     assert helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "x"}})["code"] == "not_configured"
     assert helper.handle(p, {"id": 2, "op": "list_files", "args": {}})["ok"] is True
@@ -123,6 +130,7 @@ AGENT = {"id": 9, "name": "worker1", "kind": "agent"}
 def test_style_learns_locally_without_elastic(tmp_path, monkeypatch):
     for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
         monkeypatch.delenv(k, raising=False)
+    no_env_file(monkeypatch)
     p = helper.Project(tmp_path)
     r = helper.handle(p, {"id": 1, "op": "observe_op", "args": {
         "kind": "set_param", "args": {"alias": "wall", "value": "2.4 mm"}, "ok": True, "actor": HUMAN}})
