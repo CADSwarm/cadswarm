@@ -7,6 +7,7 @@ non-2xx response (530 on 2.13) whose body is the module's `"<code>: <message>"` 
 """
 import http.client
 import json
+import select
 import threading
 import time
 import urllib.error
@@ -51,6 +52,22 @@ def decode_sql(body):
     return out
 
 
+def _dropped(sock):
+    """An idle kept-alive socket with something to read has been closed by the server (an EOF or a TLS
+    close_notify). Sending on it can still "succeed" and only the reply fail, and a reducer is never
+    retried after it went out, so it must not be reused."""
+    try:
+        return bool(select.select([sock], [], [], 0)[0])
+    except (OSError, ValueError):
+        return True
+
+
+def _proxied(scheme, host):
+    """Whether urllib would send this request through a proxy (environment, Windows or macOS settings).
+    Kept-alive sockets go straight to the server, so a proxied client keeps using urllib."""
+    return bool(urllib.request.getproxies().get(scheme)) and not urllib.request.proxy_bypass(host)
+
+
 class SpaceClient:
     def __init__(self, uri, db, token=None, timeout=30):
         self.uri = uri.rstrip("/")
@@ -60,6 +77,7 @@ class SpaceClient:
         parts = urlsplit(self.uri)
         self._host, self._port = parts.hostname, parts.port
         self._secure = parts.scheme != "http"
+        self._proxied = _proxied("https" if self._secure else "http", self._host)
         self._idle = []  # [(connection, when it went idle)]: a reused socket skips the TLS handshake
         self._idle_lock = threading.Lock()
 
@@ -74,7 +92,7 @@ class SpaceClient:
         with self._idle_lock:
             while self._idle:
                 conn, since = self._idle.pop()
-                if now - since < IDLE_SECONDS and conn.sock is not None:
+                if now - since < IDLE_SECONDS and conn.sock is not None and not _dropped(conn.sock):
                     return conn
                 conn.close()
         return self._open()
@@ -101,7 +119,12 @@ class SpaceClient:
 
         A socket the server closed while it sat idle is safe to retry while sending (the request never
         arrived). After the request went out only a repeatable read is retried: repeating a reducer could
-        post the same message twice."""
+        post the same message twice. A pooled socket the server already closed is dropped before use, so
+        that case rarely costs a reducer.
+
+        Behind a proxy every request goes through urllib, which knows the proxy, on a fresh connection."""
+        if self._proxied:
+            return self._request(self.uri + path, data, self.token, content_type, self.timeout)
         headers = {"content-type": content_type}
         if self.token:
             headers["authorization"] = "Bearer " + self.token
