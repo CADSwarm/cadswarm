@@ -444,7 +444,11 @@ class Runner:
                         if (b.get("status") or "") in ("open", "planning", "working")]
             if open_ids:
                 problems.append("brief still open: " + ", ".join(open_ids))
-        stale = [m.get("name") for m in model.get("participants") or [] if m.get("status") == "stale"]
+        # The reviewer is HTTP-only: `init-reviewer` mints it, then it never heartbeats, so the sweep marks
+        # it stale by T-5 with no work at risk. Probe still shows it (and Droid on PATH); only a stale
+        # *helper* can strand a part, so only helpers block Start.
+        stale = [m.get("name") for m in model.get("participants") or []
+                 if m.get("status") == "stale" and (m.get("kind") or "") != "reviewer"]
         if stale:
             problems.append("stale helpers: " + ", ".join(stale))
         self.reset_why = "; ".join(problems)

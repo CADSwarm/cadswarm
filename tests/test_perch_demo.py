@@ -274,6 +274,21 @@ def test_a_leftover_act2_part_also_refuses_start():
     assert not r.reset_ok() and "Podium_Body" in r.reset_why
 
 
+def test_a_stale_helper_refuses_start_but_a_stale_reviewer_does_not():
+    # `init-reviewer` mints an HTTP-only member that never heartbeats: it is stale by T-5 either way.
+    snap = ready_snapshot()
+    snap["model"]["participants"] = [
+        {"id": 1, "name": "presenter", "client": "presenter", "kind": "human", "status": "active"},
+        {"id": 2, "name": "dee-droid", "client": "droid", "kind": "reviewer", "status": "stale"},
+    ]
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    assert r.reset_ok(), r.reset_why
+    snap["model"]["participants"].append(
+        {"id": 3, "name": "lead-claude", "client": "claude", "kind": "agent", "status": "stale"})
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    assert not r.reset_ok() and "lead-claude" in r.reset_why and "dee-droid" not in r.reset_why
+
+
 def test_laptop_mode_sends_the_brief_and_says_the_tunnel_is_down():
     io = FakeIO(snapshot=ready_snapshot())
     r = a_runner(io, Clock(), brief={**a_plan()["brief"], "from": "laptop"})

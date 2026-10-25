@@ -29,7 +29,9 @@ simulate and lighten.
 | 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | `@arm-opencode` |
 | 14 | `distil-lessons` | (Elastic workflow) |
 
-Handoff note, sent in Team chat before arming (the handoff snapshot carries the last five messages):
+Handoff note, sent in Team chat before arming. The handoff's `note` field is empty here; the agent gets this
+text through the snapshot's `recent_messages`, which keeps Sam's last five messages, 300 characters each, so
+send it as one short message.
 
 ```
 Jaw opening is 34 mm; the M8 nut pocket is 0.2 mm tight. Finish the insert pocket, add 0.4 mm clearance,

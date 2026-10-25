@@ -28,7 +28,9 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] `act-1-ready` is restored; the six parts are present (`Clamp_Base`, `Shoulder_Hub`,
       `Arm_Proximal`, `Arm_Distal`, `Cradle_Base`, `Cradle_Lid`).
 - [ ] No `Podium_*`, no `Medallion*`, no lattice mesh left visible.
-- [ ] No open brief, no stale helper, no lock held by a dead member.
+- [ ] No open brief, no stale helper, no lock held by a dead member. The reviewer is the one exception:
+      `init-reviewer` mints an HTTP-only member that never heartbeats, so the sweep will mark it `stale`
+      by T-5. Probe still counts it (with `droid` on PATH), and a stale reviewer does not block Start.
 - [ ] The FEA report and the lattice report are open in the panel for beats 7 and 13.
 - [ ] Act 1's design doc and lessons are in Elastic; the previous podium doc is still there.
 
@@ -57,7 +59,7 @@ the manual helpers joined. Act 1 is built live.
 | Time | Presenter | Driver step | If it has not landed |
 |---|---|---|---|
 | 0:00 | "One bare board, one arm, two heads." | — | — |
-| 0:15 | point at the window: "five services, all live" | — | — |
+| 0:15 | point at the window: "five services, all wired in" | — | — |
 | 0:30 | **press Start**; Sam types the brief on the phone | `brief` (10 s) | say the phone line, keep going; Next by 0:40 (the brief auto-skips at 0:40) |
 | 0:45 (narration) | "it recalls the first head before it plans" | `recall` (25 s) | Next; the recall is still real, say it is running |
 | 1:00 (narration) | "the same owners as Act 1" | `tasks` (30 s) | Next; read the task rows that exist |

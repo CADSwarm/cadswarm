@@ -110,7 +110,7 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
 | 13 | Snapshot + Lighten | 5–10′ | Snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal …` | Verifier console, mass saved, cut-open preview |
 | 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons`; open Kibana | Design doc + 3 lessons + Workflow execution |
-| 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | Five cards, all live again |
+| 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | The same five cards, each carrying the work this run gave it |
 
 Set the snapshot name `act-1-ready` exactly: `reset_ok()` and every table run depend on the six parts
 being present and no `Podium_`/`Medallion` object being left behind.
@@ -186,6 +186,7 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 | Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
 | Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env` |
+| The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. Probe still passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
