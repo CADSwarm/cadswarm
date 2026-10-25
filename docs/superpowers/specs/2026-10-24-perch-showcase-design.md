@@ -146,7 +146,8 @@ marketing estimate.
 | Access | the whole build is driven from a brief, a phone and corrections — no CAD commands typed by a person | the live demo and the panel's guide |
 
 The last one is the impact claim that matters most for this community: a person who cannot model can
-still end up with a part an engineer would sign.
+still end up with a part an engineer would sign. The video adds outside voices — people outside the
+team, each naming one concrete thing they did or saw — because our own claims are not evidence.
 
 ## What makes it technically hard
 
@@ -427,17 +428,78 @@ claim the demo makes, and the card on screen is the evidence that it happened.
 
 The guide's judging loop sets the shapes: judges walk the tables between 10:30 and 12:30, each team
 gets about two minutes plus a live demo, and projects are judged on impact, quality, technical
-complexity and creativity.
+complexity and creativity. There is no poster: the laptop, the second screen and a one-page evidence
+card on the table do that job.
 
 | Format | Length | Act 1 | Act 2 | FEA/Lighten | Elastic |
 |---|---|---|---|---|---|
-| **Judging table** | 2′ + Q&A | restore `act-1-ready`, open the reports | live from the phone if time allows, else the snapshot | pre-run, show reports | recall live, lessons pre-run |
+| **Judging table** | 2′ + Q&A | `table-ready` snapshot, reports open | three live driver steps (below) | pre-run, show reports | recall live, lessons pre-run |
 | **Full live** (booth) | 40–50′ | live | live | live | Workflow run live |
-| **Video** | 2:00 | timelapse | live or recorded | cutaways | Kibana cutaways |
+| **Video** | 2:45 | timelapse | live or recorded | cutaways | Kibana cutaways |
 
-The two-minute pitch runs **problem → who it is for → live proof → what was measured → what's next**,
-with one artifact per claim: the part, an FEA report, a lattice, a review finding, a recall result.
-It is not a feature tour; the full walkthrough of every tool is the booth format.
+The two-minute run of show:
+
+| Time | Beat |
+|---|---|
+| 0:00–0:15 | the problem, one sentence, bare board in hand |
+| 0:15–0:35 | The Perch on screen; one artifact each from FEA, the lattice and a review finding |
+| 0:35–1:15 | **press the button**: steer → refusal → recall or one Creao turn; the cards move |
+| 1:15–1:40 | what the reviewer caught and what the simulation says |
+| 1:40–2:00 | who it is for, the video QR, the sponsor strip |
+
+The video is **2:45, including 30 seconds of testimonials from people outside the team**. The build
+is a timelapse; the takeover and the second brief get real time. Each testimonial names one specific
+thing that person actually did or saw; the clips do not call them customers, and we do not script
+their words.
+
+### Demo driver: one button, live models
+
+Two minutes cannot be eight live beats, and a canned video cannot answer a judge's "try this". The
+answer is a thin local driver with a big button: a person starts a real sequence against the real
+models, and the sequence is a file that can change between runs.
+
+#### Why it lives outside the product
+
+`demo/perch/driver.py` joins as a human presenter and calls the same reducers the panel does —
+submit a brief, set a param, say something — and reads the same snapshot the cards read. The host
+prints one extra human invite for it, and it appears in the team as a normal human member, so
+nothing in the state is special-cased. Nothing ships with FreeCAD, the host or the module. The
+sequence is `timeline.json`, editable the night before or between judging visits.
+
+#### The sequence waits on state, not seconds
+
+| Step | Action | Done when |
+|---|---|---|
+| 1 | steer `arm_reach = 160 mm` | the parts' bbox changes and the owners are notified |
+| 2 | `@lid-creao thicken Arm_Distal by 2 mm` | an op is refused for `Arm_Distal` (locked by `arm-opencode`) and the refusal shows on Creao's card |
+| 3 | recall the Podium, or one Creao turn | the recall row or the helper's reply appears and the card's trace moves |
+
+The two-minute run uses those three. The booth run uses the long timeline — brief, build, refusal,
+takeover, handoff, review, fix, FEA, lighten, export, recall — on the same engine.
+
+#### Controls
+
+- **Start** — begins at step 1.
+- **Next / Skip** — advance now; the driver logs the step as skipped and moves on.
+- **Pause / Resume** — hold the sequence while answering a judge.
+- **Say box** — free text that submits a real brief or steer, so a judge's own scenario runs live.
+- **Probe** — checks Claude, Creao, Droid and Elastic before Start and refuses to begin if one fails.
+
+#### Rules
+
+- **State is the checkpoint.** A step is done when the module says so: task, op, lock, review, bbox,
+  artifact. Never treat an agent's prose as evidence.
+- **Every wait has a deadline.** A timed-out step is logged and skipped out loud, not waited on in
+  silence.
+- **The driver is a presenter, not an agent.** It never writes geometry, claims a task or posts as a
+  helper; all model work is the real helpers'.
+- **Every run is logged** with step, wait and outcome, and those logs are where the measured impact
+  numbers come from.
+
+#### If it stops
+
+The fallback is `table-ready` plus the exported STL, the FEA and lattice reports, and the video —
+shown and labelled as a replay, never passed off as live.
 
 ### Fallbacks
 
@@ -511,6 +573,9 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 - **Agent Builder is quota-limited.** It is probed in pre-flight and shown live when it answers; when
   the trial model returns `429`, the demo shows the agent definition, its four tools and the last
   successful trace, and says the quota is the limit. The other three Elastic criteria are unaffected.
+- **Testimonials are outside voices, not customers.** The clips are from people outside the team;
+  each says what that person actually did or saw, and no clip implies a paying customer or production
+  use.
 - **No staged failures.** Round 1 findings are the first draft's natural errors. If a round passes,
   the runbook uses a real tight-fit change, not a fake defect.
 - **No module, rules, schema, host-orchestration or phone-app changes.** The only product change is
@@ -566,8 +631,11 @@ equally: the impact, the engineering, the stack.
 | `demo/perch/README.md` | runbook: cast, setup, Act 1/2, formats, fallbacks |
 | `demo/perch/prompts.md` | copy-paste briefs, steers, handoff note, phone lines, style rules |
 | `demo/perch/checklist.md` | pre-flight, live cue sheet, reset order |
-| `demo/perch/pitch.md` | the two-minute judge pitch (problem → who it is for → live proof → what was measured → what's next), the 60-second Q&A answers, and the table card |
+| `demo/perch/pitch.md` | the two-minute judge script and the 60-second Q&A answers |
 | `demo/perch/rehearsal.md` | measured wall clock, human minutes and defects caught per act — the source of every number the pitch quotes |
+| `demo/perch/driver.py` | the local driver: presenter join, button page, timeline runner, probes, run log |
+| `demo/perch/timeline.json` | the editable sequence: steps, state predicates, deadlines, skip labels |
+| `demo/perch/table-card.html` | the one-page evidence card that stands in for a poster |
 | `web/src/ui/sponsors.ts` | Anthropic + Creao cards, trace titles |
 | `web/src/style.css` | five-card auto-fit grid |
 | `web/test/sponsors.test.ts` | card tests |
@@ -603,6 +671,12 @@ release, no module publish, no host restart is required for the cards.
   - the Elastic checklist is complete: a reranked board hit, the design document, a Workflow
     execution with both steps completed, and Agent Builder either live or shown with its labelled
     fallback;
+  - the driver's Probe passes for Claude, Creao, Droid and Elastic, and a failed probe refuses to
+    start;
+  - each two-minute step lands inside its deadline, Skip advances the run, and the log records the
+    step, the wait and the outcome;
+  - every testimonial clip is from someone outside the team and names one specific thing that
+    person did or saw;
   - each of the five cards is visibly doing its own job during the beat that claims it.
 
 ## Risks
@@ -624,11 +698,14 @@ release, no module publish, no host restart is required for the cards.
 | The demo machine dies mid-run | `act-1-ready`, the STL and the reports live on disk, so the second machine can show the same artifacts |
 | The impact claim sounds generic | A named community, the before/after table, and only measured numbers |
 | Agent Builder's trial quota returns 429 at judging | Probe it in pre-flight; keep the agent definition, tool list and last trace open; the other three Elastic criteria carry the track |
+| A driver step stalls at the table | Every step has a deadline; Skip advances and says so; the labelled replay is the fallback |
+| A testimonial reads as a customer claim | Each clip names the person's role and what they actually did; the copy says "outside tester", never customer |
 
 ## Scope
 
 In: the object family, the two-act runbook, the impact case and judging map, the rigor and
-failure-mode tables, the five-card sponsor window, tests, the three-column proof ledger.
+failure-mode tables, the demo driver and its timeline, the table card, the five-card sponsor window,
+tests, the three-column proof ledger.
 
 Out: new CAD operations, new module tables/reducers, new host orchestration, new Elastic indices or
 Workflow changes, voice/Cartesia, a printed part, a public mock/demo mode, pricing or market
