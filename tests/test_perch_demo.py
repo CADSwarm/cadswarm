@@ -756,6 +756,11 @@ def test_the_table_run_is_the_five_beats_in_order():
     assert plan["brief"]["from"] == "phone"
     assert plan["steps"][0]["deadline"] == 10
     assert plan["steps"][-1]["at"] < plan["gate"]["first_op_by"]
+    assert plan["steps"][3]["guard"] == {"held_by": {"object": "Podium_Body",
+                                                    "name": "lead-claude"}}
+    assert plan["steps"][4]["args"]["parts"] == ["Podium_Body", "Podium_Lid"]
+    assert plan["steps"][0]["args"]["phone"] is True
+    assert plan["steps"][0]["args"]["by_not"] == "presenter"
 
 
 def test_the_table_brief_asks_for_two_parts_and_recalls_act1():
@@ -769,6 +774,9 @@ def test_the_safe_timeline_is_lid_only_and_has_no_refusal_beat():
     assert "Podium_Lid" in plan["brief"]["text"] and "Podium_Body" not in plan["brief"]["text"]
     assert plan["steps"][2]["args"]["owners"] == {"Podium_Lid": "lid-creao"}
     assert [s["id"] for s in plan["steps"]] == ["brief", "recall", "tasks", "first_part"]
+    assert [s["predicate"] for s in plan["steps"]] == [
+        "brief_sent", "recall", "tasks_landed", "first_part"]
+    assert plan["steps"][-1]["args"]["parts"] == ["Podium_Lid"]
     assert plan["gate"]["first_op_by"] == 105
 
 
