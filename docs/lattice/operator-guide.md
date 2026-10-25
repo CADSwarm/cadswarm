@@ -11,11 +11,15 @@
    **Use selected faces**; give the force in newtons (10 N ≈ 1 kg). Or choose **No load case** for an even,
    unchecked lattice.
 5. **Lattice**: the cell (**Help me choose…** ranks them), cell size, wall range, solid skin, openings, and how
-   much stiffness to keep (90 % by default). **Check these settings** shows warnings and a rough time.
-6. **Run and review**: **Lighten it**. It runs in the background; **Stop** cancels. You get the weight saving,
-   the verified stiffness, how much more it bends, and any warnings. **Show it** opens a preview next to the
-   original; **Cut in half (view only)** shows the inside. **Add to model** puts the lattice in as a mesh;
-   the original part is not changed. **Open files** shows the STL, 3MF and report.
+   much stiffness to keep (90 % by default). **Check these settings** shows warnings, a rough time, and warns
+   when the STL would be too big to save (the project files take at most 512 MB per file: use a larger
+   **Detail** voxel, a larger cell, or a smaller part).
+6. **Run and review**: **Lighten it**. It runs in the background; **Stop** cancels. A progress console shows
+   each step with the time, including the verify's solver iterations, and the elapsed time since the last
+   update. You get the weight saving, the verified stiffness, how much more it bends, and any warnings.
+   **Show it** opens a preview next to the original; **Cut in half (view only)** shows the inside. **Add to
+   model** puts the lattice in as a mesh; the original part is not changed. **Open files** shows the STL,
+   3MF and report.
 
 ## What it needs
 
@@ -39,6 +43,9 @@ A 40 × 12 × 12 mm bracket takes about 40 s; a 60 × 20 × 20 mm part about 70 
 
 `files/lattice/<date> <name>/` in the project: `result.stl`, `result.3mf` (millimetres), `preview.stl`,
 `report.json`, `report.md`. They are ordinary project files: versioned, shared, and counted against storage.
+Project files take at most 512 MB each; a big part at a fine **Detail** can make a larger STL, so check the
+warning in **Check these settings** before a long run. If saving still fails, the job is marked failed but
+its files stay in the job folder (the message says where), so a long run is never silently thrown away.
 
 ## Troubleshooting
 
@@ -49,7 +56,9 @@ A 40 × 12 × 12 mm bracket takes about 40 s; a 60 × 20 × 20 mm part about 70 
 | `load_off_part` | The loaded faces aren't connected to the held faces through material (check the selectors). |
 | `verify_coarse` warning | The thinnest wall gets under two verify voxels: the verified numbers are indicative. Use a thicker minimum wall or a smaller part. |
 | `stale_source` on Add to model | The part changed after the job started. Run it again, or add it anyway. |
+| `too_big` / `publish_failed` | The mesh is over the project's 512 MB per-file limit (the 276 MB STL at 0.36 mm detail fits; a finer **Detail** or a bigger part can exceed it). The job keeps its files in the job folder and says where; rerun with a larger **Detail** voxel or a larger cell. |
 | `timeout`, `out_of_memory` | Use a larger voxel (**Detail**) or a larger cell. |
 | `lattice_unavailable` | The team server can't find FreeCAD's Python. |
 
 Set `CADSWARM_LATTICE_KEEP=1` on the host to keep each job's working folder (job.json, progress, runner.log).
+A job that could not be saved into project files keeps its output folder automatically.

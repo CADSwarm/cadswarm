@@ -225,9 +225,14 @@ def test_the_whole_job_writes_a_closed_lattice_and_an_honest_report(tmp_path, mo
     v, f = box_mesh(24, 12, 12)
     recipe = build.normalize({"cell": "octet", "cell_size_mm": 6, "min_thickness_mm": 1.0, "skin_mm": 1.0,
                               "stiffness_target": 0.7, "voxel_mm": 0.5, "open_faces": ["+y", "-y"]})
-    phases = []
+    phases, lines = [], []
+
+    def progress(phase, text, fraction):
+        phases.append(phase)
+        lines.append((phase, text, fraction))
+
     r = pipeline.run(v, f, cantilever_case(24, 12, 12), ALU, recipe, str(tmp_path), name="Bracket",
-                     progress=lambda ph, text, fr: phases.append(ph))
+                     progress=progress)
     assert {"prepare", "simulate", "lighten", "lattice", "mesh", "done"} <= set(phases)
     assert r["mesh"]["closed"] and r["mesh"]["oriented"]
     assert np.allclose(r["mesh"]["bbox"], [0, 0, 0, 24, 12, 12], atol=0.6)
@@ -250,6 +255,11 @@ def test_the_whole_job_writes_a_closed_lattice_and_an_honest_report(tmp_path, mo
     assert saved["schema"] == "cadswarm.lattice/1" and "not a certification" in saved["disclaimer"]
     if saved["status"] == "passed":
         assert saved["verify"]["stiffness_retained"] >= 0.7
+        # A verify can take minutes: it reports each solve and its iterations, not one silent 60 %.
+        assert any(ph == "verify" and "solving the solid reference" in text for ph, text, _ in lines)
+        assert any(ph == "verify" and "solving the lattice" in text for ph, text, _ in lines)
+        fractions = [f for ph, _, f in lines if ph == "verify"]
+        assert fractions == sorted(fractions) and 0.6 <= fractions[0] <= fractions[-1] <= 0.79
     assert "Weight saving" in (tmp_path / "report.md").read_text(encoding="utf-8")
 
 

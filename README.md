@@ -149,7 +149,7 @@ The team server enforces these rules; it doesn't just ask the AI helpers to foll
 
 - **Sandboxed.** Helpers can only write inside `files/`. Paths with `..`, absolute or drive paths,
   hidden or Windows-reserved names, and symlinks or junctions that point outside are refused. File
-  types are on an allow-list, with size limits per file: 5 MB for text (notes, scripts, CSV), 100 MB
+  types are on an allow-list, with size limits per file: 5 MB for text (notes, scripts, CSV), 512 MB
   for binary CAD and media files (STEP, STL, 3MF, FCStd, DXF, PDF, images).
 - **No silent overwrites.** Saving onto an existing file is refused unless the helper asks for
   `new_name` (saves as `notes-2.md`) or `replace` with the version it last read. If someone changed
@@ -194,8 +194,9 @@ Big projects are welcome, but the host's computer is protected and a project can
   delete old snapshots (always keeping the newest few) and old exports. Snapshots and exports are never
   deleted automatically, and AI helpers can look (`storage_status`) but can't delete: they're told to ask
   a person.
-- Binary files up to 100 MB are accepted over HTTP; a 100 MB save briefly needs about 500 MB of RAM on the
-  host while it is decoded.
+- Binary files up to 512 MB are accepted over HTTP; a save sent as base64 (what helpers do) briefly needs
+  about 2.5 GB of RAM on the host while it is decoded. The host's own saves (lattice results) pass raw
+  bytes and only need the file's size.
 
 ### Strength checks (FEA)
 

@@ -84,17 +84,25 @@ def run(vertices, faces, case, material, recipe, out_dir, *, name="lattice", pro
             vg, vap = _geometry(vertices, faces, bbox, h_v, case, rho_kg, recipe)
             n_e = calibration.table()["cells"][recipe.cell]["stiffness"]["n"]
             scale = design.scale
+            verify_lo = 0.6
             for attempt in range(3):
                 check()
                 rho_v = grade.resample(design.rho_at(scale, recipe, material.get("yield_mpa")), ana.grid, vg.grid)
+                verify_hi = min(0.79, verify_lo + 0.18)
+
+                def on_verify(text, fraction, lo=verify_lo, hi=verify_hi):
+                    say("verify", text, lo + (hi - lo) * fraction)
+
                 ver = optimize.verify(vg, vap, material, recipe, grade.thickness(rho_v, recipe.cell,
-                                                                                 recipe.cell_size_mm), cancel=stop)
+                                                                                 recipe.cell_size_mm), cancel=stop,
+                                      progress=on_verify)
+                verify_lo = verify_hi
                 ver["density_level"] = scale
                 if ver["stiffness_retained"] >= recipe.stiffness_target or attempt == 2:
                     break
                 scale *= (recipe.stiffness_target / ver["stiffness_retained"]) ** (1 / n_e) * 1.03
                 say("verify", f"The real lattice kept {ver['stiffness_retained']:.0%}: thickening and checking "
-                              "again", 0.65 + 0.05 * attempt)
+                              "again", verify_lo)
             design.scale = scale
             across = recipe.min_thickness_mm / h_v
             ver["voxels_across_thinnest"] = round(across, 2)

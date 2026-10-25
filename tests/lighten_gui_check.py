@@ -64,6 +64,10 @@ s = dlg.last
 assert s["status"] == "done", s
 text = dlg.summary.text()
 assert "lighter" in text and "not a certification" in text
+# The console shows the job's own lines and ends with how long it took.
+log_lines = dlg.log_view.toPlainText().splitlines()
+assert len(log_lines) >= 3 and "Started on this computer" in log_lines[0], log_lines
+assert dlg.activity.text().startswith("finished in"), dlg.activity.text()
 if s["verdict"] == "passed":
     assert "Stiffness kept" in text and s["verify"]["stiffness_retained"] >= 0.7
 assert App.listDocuments().get(lighten_ui.PREVIEW_DOC), "no preview document"

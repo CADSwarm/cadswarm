@@ -55,7 +55,7 @@ Work like a careful teammate:
    list_files first. Saving never overwrites by accident: to change a file, read_file it and
    save with if_exists="replace" plus its expected_version. Use save_snapshot before risky changes.
    Never write files any other way (part scripts run in a sandbox that can't).
-   Storage is limited: text files up to 5 MB, binary CAD/media up to 100 MB, and only the last 20
+   Storage is limited: text files up to 5 MB, binary CAD/media up to 512 MB, and only the last 20
    versions of each file (plus everything from the last day) are kept. If a save fails with
    `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
    them to free it (FreeCAD: the CADSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
@@ -478,7 +478,7 @@ def save_file(path: str, text: str | None = None, base64: str | None = None, if_
     if_exists: "error" (default) refuses to touch an existing file; "new_name" saves as name-2.md etc.;
     "replace" overwrites ONLY with the expected_version from read_file/list_files, and the old version is
     kept in history (the newest 20 versions of a file, plus everything from the last day). Text files can be
-    5 MB, binary files 100 MB. Nothing outside the project folder can be written. If the project is full
+    5 MB, binary files 512 MB. Nothing outside the project folder can be written. If the project is full
     (`quota`) or the host's disk is nearly full (`disk_full`), don't delete things to make room: call
     storage_status and ask a person to free up space."""
     return call("POST", "/project/files/save", {"path": path, "text": text, "base64": base64,
