@@ -13,7 +13,6 @@ like run_fea. Without either, the lattice is uniform and unverified, and the rep
 
 Stdlib only here; the numerical work happens in FreeCAD's Python.
 """
-import base64
 import json
 import os
 import shutil
@@ -30,16 +29,40 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS lattice_jobs (
   id TEXT PRIMARY KEY, owner INTEGER, owner_name TEXT, status TEXT NOT NULL, target TEXT NOT NULL,
   name TEXT NOT NULL, request TEXT NOT NULL, fea TEXT, revs TEXT, progress TEXT, result TEXT, folder TEXT,
-  cancel INTEGER DEFAULT 0, work TEXT, created_at REAL, started_at REAL, finished_at REAL);
+  cancel INTEGER DEFAULT 0, work TEXT, log TEXT, created_at REAL, started_at REAL, finished_at REAL);
 """
 EVENT_KINDS = ("lattice_started", "lattice_progress", "lattice_report", "lattice_failed")
 TIMEOUT = int(os.environ.get("CADSWARM_LATTICE_TIMEOUT", "2400"))
 CANCEL_GRACE = 20
+LOG_LINES = 400   # enough for a long verify; status sends the newest 120 of them
 CELLS = ("gyroid", "diamond", "schwarzP", "iwp", "bcc", "fcc", "octet", "cubic")
 RECIPE_KEYS = ("cell", "cell_size_mm", "min_thickness_mm", "max_thickness_mm", "skin_mm", "open_faces", "voxel_mm",
                "analysis_voxel_mm", "grading", "thickness_mm", "stiffness_target", "min_safety_factor",
                "auto_skin", "keep_radius_mm", "preserve")
 TERMINAL = ("done", "failed", "cancelled", "expired")
+
+
+def _log_entries(row, limit=120):
+    """The rows' progress lines, oldest first. Bad JSON (an older build) is skipped, never fatal."""
+    out = []
+    for line in (row["log"] or "").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict):
+            out.append(entry)
+    return out[-limit:]
+
+
+def _out_files(out_dir):
+    """The result files that survived a failed publish, as 'name (N MB)' strings."""
+    out = []
+    for name in ("result.stl", "result.3mf", "preview.stl", "report.md", "report.json"):
+        path = os.path.join(out_dir, name)
+        if os.path.exists(path):
+            out.append(f"{name} ({os.path.getsize(path) / 1e6:.0f} MB)")
+    return out
 
 
 class LatticeJobError(Exception):
@@ -134,6 +157,8 @@ class LatticeJobs:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(lattice_jobs)")}
         if "work" not in cols:  # a table made by an earlier build
             self.db.execute("ALTER TABLE lattice_jobs ADD COLUMN work TEXT")
+        if "log" not in cols:  # a table made before the dialog showed progress lines
+            self.db.execute("ALTER TABLE lattice_jobs ADD COLUMN log TEXT")
         self.db.execute("UPDATE lattice_jobs SET status='failed', result=? WHERE status NOT IN "
                         "('done','failed','cancelled','expired')",
                         (json.dumps({"ok": False, "code": "host_restarted",
@@ -184,6 +209,11 @@ class LatticeJobs:
             row = self._row(jid)
         out = {"job_id": jid, "status": row["status"], "target": row["target"], "name": row["name"],
                "by": row["owner_name"], "recipe": json.loads(row["request"])}
+        log = _log_entries(row)
+        ended = row["finished_at"] or self.clock()
+        out.update(log=log, started_at=row["started_at"], finished_at=row["finished_at"],
+                   updated_at=log[-1].get("at") if log else None,
+                   elapsed_s=round(ended - row["started_at"], 1) if row["started_at"] else None)
         prog = json.loads(row["progress"] or "{}")
         if row["status"] not in TERMINAL:
             out.update(phase=prog.get("phase"), progress=prog.get("fraction"), note=prog.get("text"),
@@ -191,7 +221,8 @@ class LatticeJobs:
             return out
         res = json.loads(row["result"] or "{}")
         if row["status"] != "done":
-            out.update(code=res.get("code"), error=res.get("error"))
+            out.update(code=res.get("code"), error=res.get("error"), out_dir=res.get("out_dir"),
+                       out_files=res.get("files"))
             return out
         rep = res.get("report") or {}
         out.update({
@@ -317,7 +348,13 @@ class LatticeJobs:
 
             def on_progress(p):
                 status = "packaging" if p.get("phase") in ("mesh", "done") else "generating"
-                self._set(jid, status=status, progress=json.dumps(p))
+                entry = {"at": p.get("at") or self.clock(), "phase": p.get("phase"),
+                         "text": p.get("text") or "", "fraction": p.get("fraction")}
+                with self.lock:
+                    prev = self.db.execute("SELECT log FROM lattice_jobs WHERE id=?", (jid,)).fetchone()
+                    lines = (prev["log"] or "").splitlines() if prev else []
+                    lines.append(json.dumps(entry))
+                    self._set(jid, status=status, progress=json.dumps(p), log="\n".join(lines[-LOG_LINES:]))
                 if p.get("phase") != last_phase[0]:
                     last_phase[0] = p.get("phase")
                     self._event("lattice_progress", {"name": row["owner_name"], "job_id": jid,
@@ -354,13 +391,21 @@ class LatticeJobs:
             for row in rows:
                 result = json.loads(row["result"])
                 rep = result["report"]
+                out_dir = os.path.join(row["work"], "out")
                 try:
-                    folder = self._publish(row["id"], row, os.path.join(row["work"], "out"), rep)
+                    folder = self._publish(row["id"], row, out_dir, rep)
                 except Exception as e:  # a full disk or quota must not leave the job hanging
-                    self._set(row["id"], status="failed", work=None, finished_at=self.clock(),
+                    # Minutes of compute are in out_dir: keep it (and say where) instead of deleting it.
+                    kept = _out_files(out_dir)
+                    self._set(row["id"], status="failed", folder=None, work=row["work"],
+                              finished_at=self.clock(),
                               result=json.dumps({"ok": False, "code": "publish_failed",
-                                                 "error": f"The lattice was made but could not be saved: {e}"}))
-                    self._cleanup(row["work"])
+                                                 "out_dir": out_dir, "files": kept,
+                                                 "error": f"The lattice was made but could not be saved: {e} "
+                                                          f"Nothing was deleted: "
+                                                          + (f"the files are still in {out_dir} "
+                                                             f"({', '.join(kept)})." if kept else
+                                                             f"the job folder is {out_dir}.")}))
                     continue
                 self._set(row["id"], status="done", folder=folder, work=None, finished_at=self.clock())
                 self._event("lattice_report", {
@@ -381,7 +426,8 @@ class LatticeJobs:
             path = os.path.join(out_dir, name)
             if os.path.exists(path):
                 with open(path, "rb") as f:
-                    files.save(f"{folder}/{name}", author, base64_data=base64.b64encode(f.read()).decode())
+                    # Raw bytes: a 300 MB STL would need over a gigabyte of RAM as base64.
+                    files.save(f"{folder}/{name}", author, data=f.read())
         report = dict(report, job_id=jid)
         files.save(f"{folder}/report.json", author, text=json.dumps(report, indent=1, default=float))
         md = os.path.join(out_dir, "report.md")

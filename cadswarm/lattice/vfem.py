@@ -376,7 +376,7 @@ def solve(mask, pitch, young, poisson, fixed_nodes, loads, *, body_force=None, u
         p *= rz_new / rz
         p += z
         rz = rz_new
-        if progress is not None and it % 200 == 0:
+        if progress is not None and it % 50 == 0:
             progress(it, res)
     if res > tol * 50:
         raise SolveError("not_converged", f"The solver did not converge (residual {res:.2g} after {it} "

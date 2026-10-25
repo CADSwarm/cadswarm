@@ -150,16 +150,23 @@ def test_settings_persist_in_the_team_folder_and_are_validated(env):
 
 # ------------------------------------------------------------- per-type limits
 
-def test_binary_cad_files_may_be_100mb_but_text_stays_5mb(env):
+def test_binary_cad_files_may_be_512mb_but_text_stays_5mb(env, monkeypatch):
+    from cadswarm import files
+
     hub, _, _, a, _ = env
+    assert files.MAX_BINARY_MB == 512
     with pytest.raises(HubError) as e:
         hub.save_file(a, "huge.md", text="x" * (5 * MB + 1))
     assert e.value.code == "too_big" and "5 MB" in str(e.value)
+    # Check the boundary with a small binary limit: testing 512 MB would cost gigabytes of RAM.
+    monkeypatch.setattr(files, "MAX_BINARY_BYTES", 6 * MB)
     big = base64.b64encode(b"s" * (6 * MB)).decode()
     assert hub.save_file(a, "assembly.step", base64_data=big)["size"] == 6 * MB  # fine for a CAD file
+    # The host's own saves pass raw bytes, so a big lattice result isn't base64-encoded in memory.
+    assert hub.files.save("raw.stl", hub.name_of(a), data=b"r" * (6 * MB))["size"] == 6 * MB
     with pytest.raises(HubError) as e:
-        hub.save_file(a, "toobig.stl", base64_data=base64.b64encode(b"s" * (100 * MB + 1)).decode())
-    assert e.value.code == "too_big" and "100 MB" in str(e.value)
+        hub.save_file(a, "toobig.stl", base64_data=base64.b64encode(b"s" * (6 * MB + 1)).decode())
+    assert e.value.code == "too_big" and "6 MB" in str(e.value)
     with pytest.raises(HubError) as e:  # a text format can't dodge its limit by arriving as base64
         hub.save_file(a, "sneaky.json", base64_data=base64.b64encode(b"s" * (5 * MB + 1)).decode())
     assert e.value.code == "too_big"

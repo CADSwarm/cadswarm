@@ -139,16 +139,35 @@ def _lighten_at(geom, applied, material, recipe, base=None, *, cancel=None, log=
                   lattice, fs_target)
 
 
-def verify(geom, applied, material, recipe, thickness, *, cancel=None):
-    """Real walls/struts on `geom.grid`: solve the design and the solid part, return ratios."""
+def verify(geom, applied, material, recipe, thickness, *, cancel=None, progress=None):
+    """Real walls/struts on `geom.grid`: solve the design and the solid part, return ratios.
+
+    `progress(text, fraction)` gets a line when each solve starts and every 50 iterations,
+    so a verify that takes many minutes shows that it is working. Fractions are 0..1 within verify.
+    """
     from .build import compose
     E, nu = material["youngs_mpa"], material["poisson"]
     h = geom.grid.pitch
     mask = compose(geom, recipe, thickness) < 0
-    solve = lambda m: vfem.solve(m, h, E, nu, applied.fixed, (applied.load_ids, applied.load_vecs),
-                                 body_force=applied.body, cancel=cancel, tol=1e-6)
-    solid = solve(geom.part)
-    design = solve(mask)
+
+    def speak(text, fraction):
+        if progress is not None:
+            progress(text, max(0.0, min(1.0, fraction)))
+
+    def reporter(what, elements, lo, hi):
+        speak(f"Verifying the real lattice: solving {what} ({elements:,} elements)", lo)
+
+        def on_iterations(it, res):
+            # The solve may stop early or run to maxiter: creep towards `hi`, never claim it is done.
+            done = min(1.0, it / 1200.0)
+            speak(f"  {what} solver: iteration {it:,}, residual {res:.2e}", lo + 0.98 * (hi - lo) * done)
+        return on_iterations
+
+    def solve(m, report):
+        return vfem.solve(m, h, E, nu, applied.fixed, (applied.load_ids, applied.load_vecs),
+                          body_force=applied.body, cancel=cancel, tol=1e-6, progress=report)
+    solid = solve(geom.part, reporter("the solid reference", int(geom.part.sum()), 0.0, 0.5))
+    design = solve(mask, reporter("the lattice", int(mask.sum()), 0.5, 1.0))
     exclude = _exclusion(geom, applied)
     sy = material.get("yield_mpa")
 
