@@ -266,6 +266,46 @@ def test_a_download_with_a_bad_checksum_is_thrown_away(tmp_path):
     assert not dest.exists() and not (tmp_path / "downloaded.bin.part").exists()
 
 
+def test_a_running_program_is_set_aside_so_the_update_still_lands(tmp_path, monkeypatch):
+    """Windows won't replace a running host's file; the old copy steps aside and the new one lands."""
+    src, folder = tmp_path / "asset.exe", tmp_path / "bin"
+    folder.mkdir()
+    dest = folder / "cadswarm-host.exe"
+    dest.write_bytes(b"old")  # the copy an old team server is running from
+    leftover = folder / "cadswarm-host.exe.old-999-1"  # set aside by an earlier update
+    leftover.write_bytes(b"older")
+    src.write_bytes(b"new")
+    real, blocked = os.replace, []
+
+    def replace(a, b):
+        if b == str(dest) and not blocked:
+            blocked.append(True)
+            raise OSError(32, "The process cannot access the file because it is being used by another process")
+        real(a, b)
+
+    monkeypatch.setattr(hosting.os, "replace", replace)
+    hosting._download(src.as_uri(), str(dest))
+    assert dest.read_bytes() == b"new"
+    assert sorted(p.name for p in folder.iterdir()) == ["cadswarm-host.exe"]  # no .part, no set-aside
+
+
+def test_an_unreplaceable_program_names_the_team_still_running_it(tmp_path, monkeypatch):
+    src, folder = tmp_path / "asset.exe", tmp_path / "bin"
+    folder.mkdir()
+    dest = folder / "cadswarm-host.exe"
+    dest.write_bytes(b"old")
+    src.write_bytes(b"new")
+    monkeypatch.setattr(hosting.os, "replace", lambda a, b: (_ for _ in ()).throw(OSError(32, "in use")))
+    monkeypatch.setattr(hosting, "_runs_from", lambda path: [4242])
+    monkeypatch.setattr(hosting, "_command_line",
+                        lambda pid: 'cadswarm-host.exe --data "C:\\Users\\waves\\Documents\\CadSwarm\\Racing Drone" run')
+    with pytest.raises(RuntimeError) as e:
+        hosting._download(src.as_uri(), str(dest))
+    assert "Racing Drone" in str(e.value) and "4242" in str(e.value)
+    assert dest.read_bytes() == b"old"  # the running team's program is left alone
+    assert not (folder / "cadswarm-host.exe.part").exists()
+
+
 def test_ensure_tools_refuses_an_asset_without_a_published_checksum(tmp_path, monkeypatch):
     monkeypatch.setattr(hosting, "app_dir", lambda: str(tmp_path / "app"))
     monkeypatch.setattr(hosting, "host_bin", lambda: None)
