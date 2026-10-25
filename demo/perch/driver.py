@@ -374,6 +374,10 @@ class Runner:
         self.run_events = []
         self.reset_why = "not checked yet"
         self._reset = (False, "not checked yet")
+        # The tick thread and the threaded HTTP handlers both drive this runner. One lock keeps two
+        # presses (or a press and a tick) from finishing the same step twice and skipping the next.
+        # `state()` and the read-only properties stay lock-free: they only read plain attributes.
+        self._lock = threading.Lock()
 
     # ---- what the page reads ------------------------------------------------
     @property
@@ -416,10 +420,11 @@ class Runner:
 
     # ---- the controls -------------------------------------------------------
     def probe(self):
-        self.checks = [dict(c) for c in self.io.probe()]
-        self._log("probe", "ok" if self.probe_ok else "failed",
-                  " · ".join(f"{c.get('name')}: {c.get('detail')}" for c in self.checks))
-        return self.checks
+        with self._lock:
+            self.checks = [dict(c) for c in self.io.probe()]
+            self._log("probe", "ok" if self.probe_ok else "failed",
+                      " · ".join(f"{c.get('name')}: {c.get('detail')}" for c in self.checks))
+            return self.checks
 
     def reset_ok(self):
         """act-1-ready: Act 1's parts are on the arm, nothing Act 2 is left over, no brief or helper is open."""
@@ -447,97 +452,102 @@ class Runner:
         return not problems
 
     def start(self):
-        if self.started_at is not None:
-            raise RunnerError("this run has already started")
-        if not self.probe_ok:
-            why = " · ".join(f"{c.get('name')}: {c.get('detail')}" for c in self.checks if not c.get("ok"))
-            raise RunnerError("Probe has not passed: " + (why or "run Probe first"))
-        if not self.reset_ok():
-            raise RunnerError("The team is not back at act-1-ready: " + self.reset_why)
-        # Events from before the press are not this run's evidence: the between-judge reset never
-        # prunes the hub's log, so a previous run's brief or op would satisfy this one's first steps.
-        # `model.seq` is the hub's latest event seq (SpaceHub.latest_seq() reads v_event).
-        self.seq = int((self.io.snapshot().get("model") or {}).get("seq") or 0)
-        self.started_at = self.clock()
-        self._log("run", "start", self.plan["name"])
-        self._begin(self.current)
-        if (self.plan["brief"].get("from") or "") == "laptop":
-            self.io.send_brief(self.plan["brief"]["text"], self.plan["brief"].get("board") or "")
-            self._log("run", "brief", "the tunnel is down: the driver sent the brief from the laptop")
-            first = self.current
-            if first is not None and first.step.predicate == "brief_sent":
-                self._finish(first, "done", "the driver sent it from the laptop; the tunnel is down")
+        with self._lock:
+            if self.started_at is not None:
+                raise RunnerError("this run has already started")
+            if not self.probe_ok:
+                why = " · ".join(f"{c.get('name')}: {c.get('detail')}" for c in self.checks if not c.get("ok"))
+                raise RunnerError("Probe has not passed: " + (why or "run Probe first"))
+            if not self.reset_ok():
+                raise RunnerError("The team is not back at act-1-ready: " + self.reset_why)
+            # Events from before the press are not this run's evidence: the between-judge reset never
+            # prunes the hub's log, so a previous run's brief or op would satisfy this one's first steps.
+            # `model.seq` is the hub's latest event seq (SpaceHub.latest_seq() reads v_event).
+            self.seq = int((self.io.snapshot().get("model") or {}).get("seq") or 0)
+            self.started_at = self.clock()
+            self._log("run", "start", self.plan["name"])
+            self._begin(self.current)
+            if (self.plan["brief"].get("from") or "") == "laptop":
+                self.io.send_brief(self.plan["brief"]["text"], self.plan["brief"].get("board") or "")
+                self._log("run", "brief", "the tunnel is down: the driver sent the brief from the laptop")
+                first = self.current
+                if first is not None and first.step.predicate == "brief_sent":
+                    self._finish(first, "done", "the driver sent it from the laptop; the tunnel is down")
 
     def toggle_pause(self):
-        self.paused = not self.paused
-        self._log("run", "paused" if self.paused else "resumed", "")
-        return self.paused
+        with self._lock:
+            self.paused = not self.paused
+            self._log("run", "paused" if self.paused else "resumed", "")
+            return self.paused
 
     def skip(self):
-        st = self.current
-        if self.started_at is None or st is None:
-            return
-        kind = "confirmed" if st.step.predicate == "confirm" else "skipped"
-        self._finish(st, kind, st.detail or kind)
+        with self._lock:
+            st = self.current
+            if self.started_at is None or st is None:
+                return
+            kind = "confirmed" if st.step.predicate == "confirm" else "skipped"
+            self._finish(st, kind, st.detail or kind)
 
     def say(self, text):
         text = (text or "").strip()
         if not text:
             return
-        m = re.match(r"@([\w.-]+)\s+(.+)", text, re.S)
-        if m:
-            self.io.send_steer(m.group(1), m.group(2).strip())
-            self._log("say", "steer", text)
-        else:
-            self.io.send_brief(text, self.plan["brief"].get("board") or "")
-            self._log("say", "brief", text)
+        with self._lock:
+            m = re.match(r"@([\w.-]+)\s+(.+)", text, re.S)
+            if m:
+                self.io.send_steer(m.group(1), m.group(2).strip())
+                self._log("say", "steer", text)
+            else:
+                self.io.send_brief(text, self.plan["brief"].get("board") or "")
+                self._log("say", "brief", text)
 
     # ---- the loop -----------------------------------------------------------
     def tick(self):
-        if self.started_at is None:
-            self.reset_ok()
-            return
-        now = self.clock()
-        # Poll even while paused: the build keeps going, and a part that started during a pause is
-        # evidence the gate must not ignore.
-        fresh = self.io.events(self.seq)
-        self.seq = int(fresh.get("seq") or self.seq)
-        self.run_events.extend(fresh.get("events") or [])
-        st = self.current
-        if st is not None:
-            st.events.extend(fresh.get("events") or [])
-        if self.paused:
-            return
-        if (not self.gate_failed and now - self.started_at > float(self.plan["gate"]["first_op_by"])
-                and not self._part_started()):
-            self.gate_failed = True
-            self.status = self.plan["gate"]["if_missed"]
-            self._log("gate", "failed", self.plan["gate"]["if_missed"])
-        if st is None:
-            return
-
-        view = View(snapshot=self.io.snapshot(), ops=self.io.ops(), events=st.events,
-                    run_events=self.run_events, seq=self.seq, started=st.started or self.started_at,
-                    after=st.sent_at or st.started or self.started_at, now=now)
-
-        guard = (st.step.guard or {}).get("held_by")
-        if guard and not st.sent:
-            holder = _holder(view.snapshot, guard["object"])
-            if (holder or "").lower() != (guard.get("name") or "").lower():
-                st.detail = f"{guard['object']} is held by {holder or 'nobody'}"
-                if now - (st.started or now) > st.step.deadline:
-                    self._finish(st, "skipped", st.detail + f" (no result in {st.step.deadline}s)")
+        with self._lock:
+            if self.started_at is None:
+                self.reset_ok()
                 return
-            self._fire(st)
-            st.detail = "the mention is out"
+            now = self.clock()
+            # Poll even while paused: the build keeps going, and a part that started during a pause is
+            # evidence the gate must not ignore.
+            fresh = self.io.events(self.seq)
+            self.seq = int(fresh.get("seq") or self.seq)
+            self.run_events.extend(fresh.get("events") or [])
+            st = self.current
+            if st is not None:
+                st.events.extend(fresh.get("events") or [])
+            if self.paused:
+                return
+            if (not self.gate_failed and now - self.started_at > float(self.plan["gate"]["first_op_by"])
+                    and not self._part_started()):
+                self.gate_failed = True
+                self.status = self.plan["gate"]["if_missed"]
+                self._log("gate", "failed", self.plan["gate"]["if_missed"])
+            if st is None:
+                return
 
-        ok, detail = PREDICATES[st.step.predicate](st.step, view)
-        st.detail = detail
-        if ok:
-            self._finish(st, "done", detail)
-            return
-        if now - (st.started or now) > st.step.deadline:
-            self._finish(st, "skipped", f"{detail} (no result in {st.step.deadline}s)")
+            view = View(snapshot=self.io.snapshot(), ops=self.io.ops(), events=st.events,
+                        run_events=self.run_events, seq=self.seq, started=st.started or self.started_at,
+                        after=st.sent_at or st.started or self.started_at, now=now)
+
+            guard = (st.step.guard or {}).get("held_by")
+            if guard and not st.sent:
+                holder = _holder(view.snapshot, guard["object"])
+                if (holder or "").lower() != (guard.get("name") or "").lower():
+                    st.detail = f"{guard['object']} is held by {holder or 'nobody'}"
+                    if now - (st.started or now) > st.step.deadline:
+                        self._finish(st, "skipped", st.detail + f" (no result in {st.step.deadline}s)")
+                    return
+                self._fire(st)
+                st.detail = "the mention is out"
+
+            ok, detail = PREDICATES[st.step.predicate](st.step, view)
+            st.detail = detail
+            if ok:
+                self._finish(st, "done", detail)
+                return
+            if now - (st.started or now) > st.step.deadline:
+                self._finish(st, "skipped", f"{detail} (no result in {st.step.deadline}s)")
 
     def _part_started(self):
         """The gate's own question: has any op named one of the parts this timeline says must start?"""
@@ -655,6 +665,17 @@ def write_presenter_config(project, ticket, name, identity):
     return [ident_path, os.path.join(folder, "config.json")]
 
 
+def _require_presenter_folder(cfg):
+    """A folder set up for a helper is not the presenter's: reusing its identity would join as that
+    helper, inflate a partner's card and make `helper_checks` believe a fake helper is live."""
+    owner = (cfg or {}).get("client")
+    if owner and owner != "presenter":
+        raise RunnerError(
+            f"this folder belongs to another client ({owner}), not the presenter: point --project at "
+            f"the presenter folder, or pass a fresh --invite into a new folder")
+    return cfg
+
+
 def connect(project, invite="", name="presenter"):
     """Join once with an invite, then reuse this folder's identity — the same rule as `cadswarm brief`.
 
@@ -663,12 +684,15 @@ def connect(project, invite="", name="presenter"):
     """
     if invite:
         ticket = read_invite(invite)
+        # Refuse before `write_presenter_config`: another client's config is not ours to rewrite.
+        _require_presenter_folder(load_json(os.path.join(state_dir(project), "config.json")))
         if not load_json(os.path.join(state_dir(project), "identity.json")):
             write_presenter_config(project, ticket, name, redeem(ticket, name, "presenter"))
-    hub, _cfg = project_hub(project)
+    hub, cfg = project_hub(project)
     if not hub:
         raise SystemExit("driver: run this once with --invite '<cadswarm-2:...>' "
                          "(mint one on the host: cadswarm-host --data <dir> invite --kind human --role lead)")
+    _require_presenter_folder(cfg)
     hub.join()
     return hub
 
@@ -925,6 +949,13 @@ def make_handler(runner):
                     return self._json({"error": "not found"}, 404)
             except RunnerError as e:
                 return self._json({"error": str(e)}, 409)
+            except Exception as e:
+                # A dead hub, Elastic or socket is not the presenter's fault and must not drop the
+                # connection: the page clears the Say box on submit, so a lost request loses the
+                # judge's idea. Answer with the failure and keep the page talking.
+                msg = f"{type(e).__name__}: {e}"[:400]
+                runner._log("page", "error", f"{self.path}: {msg}")
+                return self._json({"error": msg}, 502)
             self._json(runner.state())
 
         def log_message(self, *args):
@@ -933,9 +964,10 @@ def make_handler(runner):
     return Handler
 
 
-def serve(runner, port, open_browser=True):
+def serve(runner, port, open_browser=True, stop=None):
+    stop = stop or threading.Event()
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(runner))
-    url = f"http://127.0.0.1:{port}/"
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
     print(f"perch driver: {url}  ({runner.plan['name']})")
     if open_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
@@ -944,17 +976,28 @@ def serve(runner, port, open_browser=True):
     except KeyboardInterrupt:
         pass
     finally:
+        stop.set()
         httpd.server_close()
 
 
-def _heartbeat(hub, every=10.0):
-    """The presenter is a member: without a heartbeat it goes stale and the panel says so."""
-    while True:
+def _heartbeat(hub, every=10.0, stop=None):
+    """The presenter is a member: without a heartbeat it goes stale and the panel says so.
+
+    One blip on venue Wi-Fi must not make the presenter stale for the rest of the run: retry with a
+    bounded backoff (1 s, 2 s, 4 s … 30 s) until a beat succeeds, and stop quietly once the server is
+    shutting down. A transient failure is not worth a traceback on the console the presenter reads.
+    """
+    stop = stop or threading.Event()
+    delay = 1.0
+    while not stop.is_set():
         try:
             hub.heartbeat({"doing": "presenting"})
         except Exception:
-            return
-        time.sleep(every)
+            stop.wait(delay)
+            delay = min(delay * 2, 30.0)
+            continue
+        delay = 1.0
+        stop.wait(every)
 
 
 def _loop(runner, every=2.0):
@@ -992,9 +1035,10 @@ def main(argv=None):
     log = RunLog(HERE, plan["name"])
     runner = Runner(plan, TeamIO(hub, plan["cast"], plan["probe"]), log=log)
     runner.probe()
-    threading.Thread(target=_heartbeat, args=(hub,), daemon=True).start()
+    stop = threading.Event()
+    threading.Thread(target=_heartbeat, args=(hub,), kwargs={"stop": stop}, daemon=True).start()
     threading.Thread(target=_loop, args=(runner,), daemon=True).start()
-    serve(runner, a.port, open_browser=not a.no_browser)
+    serve(runner, a.port, open_browser=not a.no_browser, stop=stop)
 
 
 if __name__ == "__main__":

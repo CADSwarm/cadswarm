@@ -588,3 +588,137 @@ def test_the_cli_takes_the_timeline_and_the_laptop_fallback():
     a = driver.parse_args(["--timeline", "table-safe.json", "--laptop", "--port", "8899"])
     assert a.timeline == "table-safe.json" and a.laptop is True and a.port == 8899
     assert driver.parse_args([]).timeline == "table.json"
+
+
+# --------------------------------------------------------------------------- review fixes: a bad network, a double click, a reused folder
+
+def test_a_hub_failure_answers_502_and_keeps_the_page_talking(tmp_path):
+    class UnreachableIO(FakeIO):
+        def snapshot(self):  # the probe never asks for a snapshot; Start does
+            raise RuntimeError("hub unreachable")
+
+    r = a_runner(UnreachableIO(snapshot=ready_snapshot()), Clock(),
+                 log=driver.RunLog(tmp_path, "test"))
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), driver.make_handler(r))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        req = urllib.request.Request(base + "/start", data=b"{}", method="POST",
+                                     headers={"content-type": "application/json"})
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(req, timeout=5)
+        assert err.value.code == 502
+        body = json.loads(err.value.read())["error"]
+        assert "hub unreachable" in body and "RuntimeError" in body
+        # The handler logged it through the run log, and the server is still serving.
+        assert any(row["kind"] == "page.error" and "hub unreachable" in row["detail"]
+                   for row in r.log.rows)
+        status = json.loads(urllib.request.urlopen(base + "/status", timeout=5).read())
+        assert status["started"] is False
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_two_starts_at_once_send_the_brief_once_and_refuse_the_second():
+    class GatedIO(FakeIO):
+        """Both presses reach Start's guard before either can go on: the race, made repeatable."""
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.barrier = threading.Barrier(2, timeout=0.5)
+            self.arrived = set()
+
+        def snapshot(self):
+            me = threading.get_ident()
+            if me not in self.arrived:
+                self.arrived.add(me)
+                try:
+                    self.barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+            return super().snapshot()
+
+    io = GatedIO(snapshot=ready_snapshot())
+    r = a_runner(io, Clock(), brief={**a_plan()["brief"], "from": "laptop"})
+    started, refused = [], []
+
+    def press():
+        try:
+            r.start()
+            started.append(True)
+        except driver.RunnerError as e:
+            refused.append(str(e))
+
+    threads = [threading.Thread(target=press) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert not any(t.is_alive() for t in threads)
+    assert len(started) == 1
+    assert refused == ["this run has already started"]
+    assert len([s for s in io.sent if s[0] == "brief"]) == 1
+
+
+def test_a_folder_that_belongs_to_a_helper_cannot_rejoin_as_the_presenter(tmp_path):
+    folder = tmp_path / ".cadswarm"
+    folder.mkdir()
+    (folder / "config.json").write_text(json.dumps({
+        "uri": "http://127.0.0.1:9", "db": "team-db", "name": "lid-creao",
+        "client": "claude", "role": "member"}), encoding="utf-8")
+    (folder / "identity.json").write_text(json.dumps({
+        "token": "t_helper", "participant_id": 3, "fence": 1}), encoding="utf-8")
+    with pytest.raises(driver.RunnerError, match="presenter"):
+        driver.connect(tmp_path)
+    # Another client's config is refused before any join, and left exactly as it was.
+    assert load_json(folder / "config.json")["client"] == "claude"
+    assert load_json(folder / "identity.json")["token"] == "t_helper"
+
+
+def test_the_heartbeat_retries_with_a_bounded_backoff_and_stops_quietly():
+    class DeadHub:
+        def __init__(self):
+            self.calls = 0
+
+        def heartbeat(self, body):
+            self.calls += 1
+            raise RuntimeError("venue wifi")
+
+    class Stop:
+        def __init__(self, after):
+            self.waits, self.after, self.flag = [], after, False
+
+        def is_set(self):
+            return self.flag
+
+        def wait(self, seconds):
+            self.waits.append(seconds)
+            self.flag = len(self.waits) >= self.after
+
+    hub, stop = DeadHub(), Stop(after=7)
+    driver._heartbeat(hub, every=10.0, stop=stop)
+    assert stop.waits == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+    assert hub.calls == 7
+
+
+def test_serve_prints_and_opens_the_port_it_actually_bound(monkeypatch, capsys):
+    class BoundHTTPD:
+        server_address = ("127.0.0.1", 54321)
+
+        def __init__(self):
+            self.closed = False
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            self.closed = True
+
+    httpd = BoundHTTPD()
+    monkeypatch.setattr(driver, "ThreadingHTTPServer", lambda addr, handler: httpd)
+    stop = threading.Event()
+    driver.serve(a_runner(FakeIO(snapshot=ready_snapshot()), Clock()), 0,
+                 open_browser=False, stop=stop)
+    assert "http://127.0.0.1:54321/" in capsys.readouterr().out
+    assert httpd.closed and stop.is_set()
