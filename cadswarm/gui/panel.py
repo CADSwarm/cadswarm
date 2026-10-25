@@ -5,7 +5,7 @@
 * A TEAM PANEL shows presence, locks, tasks and the session chat, and lets the
   human steer: message agents (human messages outrank peer requests in every
   agent's inbox), lock/release parts, force a takeover, create tasks, set
-  shared Params, run an interference check and export STEP.
+  shared Params, run an interference check and export STEP/STL.
 
 Networking runs on background threads (event long-poll, heartbeats, BREP
 fetches) that only ever push into a queue; a QTimer drains it on the GUI
@@ -767,7 +767,8 @@ class TeamPanel(QtGui.QDockWidget):
                 ("Change a shared size", "Change a size every part reads from, like the hole spacing",
                  self.set_param),
                 ("Check for clashes", "Find parts that overlap", run_interference),
-                ("Save as 3D file", "Save the shared model as a STEP file", run_export))):
+                ("Save as STL/STEP file", "Save the shared model as an STL (for 3D printing) or a STEP "
+                                          "(editable CAD) file", run_export))):
             quick.addWidget(action_button(label, tip, fn), i // 2, i % 2)
         tl.addLayout(quick)
         self.params = QtGui.QLabel("")
@@ -918,7 +919,8 @@ class TeamPanel(QtGui.QDockWidget):
                            ("Auto-constrain…", "Bind the sizes and fits the model already repeats to shared "
                                                "sizes", auto_constrain),
                            ("Check for clashes", "Find parts that overlap", run_interference),
-                           ("Save as 3D file (STEP)…", "Save the shared model as a STEP file", run_export),
+                           ("Save as STL/STEP file…", "Save the shared model as an STL (for 3D printing) or a "
+                                                      "STEP (editable CAD) file", run_export),
                            ("Lighten part…", "Fill the selected part with a lattice that keeps its stiffness",
                             lighten_ui.show_lighten))),
                 ("Print", (("Printer bed…", "Tell the team what printer you print on", printer_bed),
@@ -3352,15 +3354,38 @@ def check_printability():
                       done=show_printability, purpose="check it fits the printer")
 
 
+EXPORT_FILTERS = "STEP - editable CAD (*.step *.stp);;STL - for 3D printing (*.stl)"
+
+
+def export_target(path, selected_filter):
+    """(format, path) from the save dialog: a typed extension wins, otherwise the file type on show."""
+    fmt = "stl" if "STL" in (selected_filter or "") else "step"
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".step", ".stp"):
+        fmt = "step"
+    elif ext == ".stl":
+        fmt = "stl"
+    else:  # no extension (or an unknown one): use the file type the dialog was showing
+        path += ".stl" if fmt == "stl" else ".step"
+    return fmt, path
+
+
 def run_export():
-    r = SESSION.act("POST", "/export", {"format": "step"}, purpose="export the shared model")
+    """Save the shared model as a 3D file. The save dialog offers STEP (editable CAD) and STL (for
+    printing) side by side; the file type you pick decides which one is written."""
+    default = safe_name(prefs().GetString("ProjectName") or "model") + ".step"
+    path, selected = QtGui.QFileDialog.getSaveFileName(Gui.getMainWindow(), "Save the 3D model (STEP or STL)",
+                                                       default, EXPORT_FILTERS)
+    if not path:
+        return
+    fmt, path = export_target(path, selected)
+    r = SESSION.act("POST", "/export", {"format": fmt}, purpose=f"export the model as {fmt.upper()}")
     if r is None:
         return
-    path, _ = QtGui.QFileDialog.getSaveFileName(Gui.getMainWindow(), "Save STEP", r["file"], "STEP (*.step *.stp)")
-    if path:
-        with open(path, "wb") as f:
-            f.write(SESSION.client.request("GET", r["url"], raw=True))
-        say(f"Exported {r['objects']} to {path}")
+    with open(path, "wb") as f:
+        f.write(SESSION.client.request("GET", r["url"], raw=True))
+    count = len(r.get("objects") or [])
+    say(f"Saved {count} part{'s' if count != 1 else ''} as {fmt.upper()} to {path}")
 
 
 # --------------------------------------------------------------- commands
@@ -3894,7 +3919,8 @@ def register_commands():
     Gui.addCommand("CadSwarm_Lock", Cmd("Lock selected", "Lock the selected mirror parts to you", lock_selected))
     Gui.addCommand("CadSwarm_Release", Cmd("Release selected", "Release your locks on the selected parts", release_selected))
     Gui.addCommand("CadSwarm_Interference", Cmd("Check for clashes", "Find parts that overlap", run_interference))
-    Gui.addCommand("CadSwarm_Export", Cmd("Save as 3D file…", "Save the shared model as a STEP file", run_export))
+    Gui.addCommand("CadSwarm_Export", Cmd("Save as STL/STEP file…", "Save the shared model as an STL (for 3D printing) "
+                                                                    "or a STEP (editable CAD) file", run_export))
     Gui.addCommand("CadSwarm_FeaReports", Cmd("Simulation reports…", "Open the team's FEA (simulation) reports",
                                               show_fea_reports))
     Gui.addCommand("CadSwarm_RunFea", Cmd("Run a simulation…", "Check how a part holds up under a load, no helper "

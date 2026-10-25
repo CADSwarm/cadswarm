@@ -171,7 +171,7 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <button type="button" data-act="task">Add a task</button>
         <button type="button" data-act="size">Change a shared size</button>
         <button type="button" data-act="clash">Check for clashes</button>
-        <button type="button" data-act="save">Save as 3D file</button>
+        <button type="button" data-act="save">Save as STL file</button>
       </div></div>
       <div class="panel-sec"><div data-handoff></div>
         <span class="section-label">Precision settings</span><div data-settings></div></div>
