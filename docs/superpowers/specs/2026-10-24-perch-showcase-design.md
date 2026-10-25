@@ -360,8 +360,7 @@ Brief, typed in the panel:
 
 | # | Beat | Time | Action / line | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | The five cards are in place and reading live state (the helpers join at T-30; the reviewer reads `stale`
-between rounds) and the board is bare; Act 1 starts now |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | The five cards are in place and reading live state (helpers join at T-30; the reviewer reads `stale` between rounds) and the board is bare; Act 1 starts now |
 | 2 | Plan + board | 2′ | Submit the brief | Planner calls `lookup_board`; board Params fill; Elastic card shows `esp32-s3-devkitc-1`; tasks appear with names |
 | 3 | Build | 8–12′ | Let the builders work | Parts in owner colors; Creao's one-call-per-turn trace; Claude workers take clamp/cradle |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused "locked by arm-opencode"; it messages the owner |
@@ -639,8 +638,9 @@ answer to "is this real?"
   line with index counts and Droid versions is a **stamped snapshot**, labelled "checked …"; it is
   never presented as live. Index counts, Agent Builder and Workflow executions are shown in Kibana.
 
-The two new cards never disappear, so the window is stable at five: SpacetimeDB says `not joined` when
-nobody has joined, and Factory says `not set up` until `init-reviewer` has run.
+No card disappears, so the window is stable at five: Anthropic and Creao say `not joined` for an empty
+client list, SpacetimeDB keeps reading `0 active · 0 joined`, and Factory says `not set up` until
+`init-reviewer` has run.
 
 ### Data and layout
 
@@ -767,7 +767,9 @@ Deferred until the demo is rehearsed:
 | the 2:45 video | cut from the rehearsed runs and the three clips |
 
 If the web UI ships, rebuild `website/app` from `web/dist` once and record the new hashes. No
-release, no module publish, no host restart is required for the cards.
+release, no module publish, no host restart is required for the cards themselves. The reviewer-lifetime
+fix is module code: publish `module/` keeping data (`docs/publishing-spacetimedb.md`) and restart the
+host before the first run on a machine that still has the old module.
 
 ## Verification
 

@@ -56,6 +56,10 @@ Run from the repo root, with the venv already installed (`python -m venv .venv;
 .venv\Scripts\pip install -e ".[test]"`).
 
 ```powershell
+# 0. If module/ or rules/ changed since the last publish (the reviewer-lifetime fix is module code),
+#    publish the module keeping data before starting. scripts\demo-up.ps1 does not publish it
+#    (docs\publishing-spacetimedb.md).
+
 # 1. The stack: builds the host and web app the first time, runs it against Maincloud, prints a phone
 #    invite. After one successful build, add -SkipBuild to start it faster.
 powershell -File scripts\demo-up.ps1
@@ -100,7 +104,7 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 
 | # | Beat | Time | Action | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth: the five cards are already live (the manual helpers joined at T-30), and the board is bare; Act 1 starts now. At the table the helpers are also joined by T-30 |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth: the five cards are in place and reading live state (the manual helpers joined at T-30; the reviewer reads `stale` between rounds), and the board is bare; Act 1 starts now. At the table the helpers are also joined by T-30 |
 | 2 | Plan + board | 2′ | Submit the brief | `lookup_board`, board Params, tasks with names |
 | 3 | Build | 8–12′ | Let them work | Parts in owner colours; Creao one call per turn |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused; it messages the owner |
@@ -191,6 +195,7 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
 | Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member) |
 | The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. The sweep never orphans a reviewer, so it stays on the card between rounds. Probe passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
+| The Factory card shows a reviewer that is `left` or `taken_over` | a row retired before the reviewer fix is still in `v_member`, and both cards pick the first reviewer row. Check `SELECT name, kind, status FROM v_member`; if the reviewer is not `stale`, use a fresh workspace (the booth rule) rather than deleting the folder and re-running `init-reviewer` |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |

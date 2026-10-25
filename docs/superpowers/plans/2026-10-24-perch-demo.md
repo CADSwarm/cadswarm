@@ -14,10 +14,10 @@ Copied from the spec (`docs/superpowers/specs/2026-10-24-perch-showcase-design.m
 
 - No new CAD operations, no new module tables/reducers/bindings/schema, no host-orchestration change, no FreeCAD panel-layout change, no phone-app change.
 - One approved exception, found by the Task 6 rehearsal: a reviewer-lifetime fix. `rules::Presence` gains `kind`, `plan_sweep` excludes `reviewer` from `to_orphan`, and the module passes `kind` through. The reviewer is HTTP-only and connects only during a review round, so the old sweep retired it ten minutes after `init-reviewer` and the Factory card and Probe lost it. The fix comes with a native rules test.
-- Product code changes are limited to the sponsor-card UI (`web/src/ui/sponsors.ts`, `cadswarm/gui/sponsors.py`, and the one docstring in `cadswarm/gui/panel.py:1291`) plus tests. `web/src/style.css` already lays five cards out as 3 + 2, so it does not change. Everything else is `demo/perch/`.
+- Product code changes are limited to the sponsor-card UI (`web/src/ui/sponsors.ts`, `cadswarm/gui/sponsors.py`, and the one docstring in `cadswarm/gui/panel.py:1291`) plus tests, and the approved reviewer-lifetime fix in `rules/src/lib.rs` and `module/src/sweep.rs`. `web/src/style.css` already lays five cards out as 3 + 2, so it does not change. The rest is `demo/perch/` and this plan/spec.
 - The browser makes no new network calls and holds no API keys. Every live card field comes from state the panel already subscribes to.
 - No fabricated numbers. A number we checked once is stamped and labelled `checked …`; a live field is labelled live. The Elastic index counts in the footer are never presented as live.
-- Card order is fixed: **SpacetimeDB → Anthropic → Creao → Factory.ai → Elastic**. The two new cards show `not joined` rather than disappearing.
+- Card order is fixed: **SpacetimeDB → Anthropic → Creao → Factory.ai → Elastic**. No card disappears: Anthropic and Creao show `not joined` for an empty client list, and Factory shows `not set up` until `init-reviewer` has run.
 - The driver is a human presenter: it never writes geometry, never claims a task, never posts as a helper. It may submit briefs, steers and messages, and read.
 - A step is done when the module says so: task, op, lock, review, bbox, artifact, event. Never an agent's prose.
 - The table run claims only: the recall returned Act 1, the tasks appeared with named owners, a locked body refused a helper, a part started. Never a finished head. One absolute gate: the first op by 1:45 on the pitch clock (75 s after the 0:30 press).
@@ -50,6 +50,8 @@ Copied from the spec (`docs/superpowers/specs/2026-10-24-perch-showcase-design.m
 | `demo/perch/prompts.md` | create | Every copy-paste brief, steer, note, phone line and style rule |
 | `demo/perch/checklist.md` | create | Pre-flight, live cue sheet, reset order, the `table-safe` decision |
 | `demo/perch/rehearsal.md` | create | The measurement sheet and the three rehearsals that gate the table |
+| `rules/src/lib.rs` | modify | `Presence.kind`; `plan_sweep` never orphans a `reviewer`; the native test |
+| `module/src/sweep.rs` | modify | Passes `kind` into `rules::Presence` |
 | `.gitignore` | modify | `demo/perch/runs/` (generated run logs) |
 
 ---
@@ -2484,6 +2486,10 @@ Run from the repo root, with the venv already installed (`python -m venv .venv;
 .venv\Scripts\pip install -e ".[test]"`).
 
 ```powershell
+# 0. If module/ or rules/ changed since the last publish (the reviewer-lifetime fix is module code),
+#    publish the module keeping data before starting. scripts\demo-up.ps1 does not publish it
+#    (docs\publishing-spacetimedb.md).
+
 # 1. The stack: builds the host and web app the first time, runs it against Maincloud, prints a phone
 #    invite. After one successful build, add -SkipBuild to start it faster.
 powershell -File scripts\demo-up.ps1
@@ -2528,7 +2534,7 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 
 | # | Beat | Time | Action | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth: the five cards are already live (the manual helpers joined at T-30), and the board is bare; Act 1 starts now. At the table the helpers are also joined by T-30 |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth: the five cards are in place and reading live state (the manual helpers joined at T-30; the reviewer reads `stale` between rounds), and the board is bare; Act 1 starts now. At the table the helpers are also joined by T-30 |
 | 2 | Plan + board | 2′ | Submit the brief | `lookup_board`, board Params, tasks with names |
 | 3 | Build | 8–12′ | Let them work | Parts in owner colours; Creao one call per turn |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused; it messages the owner |
@@ -2619,6 +2625,7 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
 | Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env`; then run `cadswarm-host … init-reviewer` if the Probe still says `no reviewer has joined` (signing in does not create the member) |
 | The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. The sweep never orphans a reviewer, so it stays on the card between rounds. Probe passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
+| The Factory card shows a reviewer that is `left` or `taken_over` | a row retired before the reviewer fix is still in `v_member`, and both cards pick the first reviewer row. Check `SELECT name, kind, status FROM v_member`; if the reviewer is not `stale`, use a fresh workspace (the booth rule) rather than deleting the folder and re-running `init-reviewer` |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
@@ -3138,7 +3145,7 @@ The plan is finished when all of these are true, checked in this order:
    **Rehearsed (a separate gate, on the demo machine):** R1, R2 and R3 are filled from run summaries and
    the table decision is written before the first judge. This plan is code-complete now; it is not
    rehearsed, and no timing number may be quoted until it is.
-7. `git status` is clean on `feat/perch-showcase`, and no file outside `web/`, `cadswarm/gui/`, `tests/`, `demo/perch/`, `rules/src/lib.rs`, `module/src/sweep.rs` and `.gitignore` changed.
+7. `git status` is clean on `feat/perch-showcase`, and no file outside `web/`, `cadswarm/gui/`, `tests/`, `demo/perch/`, `docs/superpowers/`, `.gitignore`, and the approved `rules/src/lib.rs`/`module/src/sweep.rs` changed.
 
 Nothing in this plan prints a part, claims a finished head at the table, or changes the schema, the host
 orchestration, the phone app or the FreeCAD panel's layout. The one code change outside the cards is the
