@@ -48,6 +48,9 @@ fn new_member(ws: u64, identity: Identity, name: &str, kind: &str, client: &str,
 #[reducer(client_connected)]
 pub fn on_connect(ctx: &ReducerContext) {
     if let Some(m) = latest_member(ctx, ctx.sender()) {
+        if m.status == "removed" {
+            return; // a person took this helper off the team; it stays off until invited again
+        }
         // Reconnecting is a sign of life: a quiet (stale) member is active again. Members who left
         // or were taken over stay retired; they must rejoin.
         let revived = m.status == "stale";
@@ -167,6 +170,11 @@ fn join_as(ctx: &ReducerContext, ws: u64, name: &str, kind: &str, client: &str, 
 #[reducer]
 pub fn rejoin(ctx: &ReducerContext, client: String) -> Result<(), String> {
     let m = latest_member(ctx, ctx.sender()).ok_or_else(|| "not_member: join with an invite first".to_string())?;
+    if m.status == "removed" {
+        // A person took this helper off the team: it must not come back on its own. A fresh invite
+        // creates a new identity, so re-inviting someone always works.
+        return Err("removed: a person removed this helper from the team".into());
+    }
     if m.status == "left" || m.status == "taken_over" {
         let (ws, name, kind, role, endpoint) = (m.ws, m.name.clone(), m.kind.clone(), m.role.clone(), m.endpoint_id.clone());
         join_as(ctx, ws, &name, &kind, &client, &role, &endpoint)?;
@@ -233,7 +241,9 @@ pub fn set_context_seq(ctx: &ReducerContext, fence: u32, seq: u64) -> Result<(),
     Ok(())
 }
 
-pub fn leave_inner(ctx: &ReducerContext, m: &Member) {
+/// Retires a member: releases its locks, returns its claimed work to the team and parks its pointer.
+/// `status` is what it becomes — "left" when it walks away, "removed" when a person takes it off the team.
+pub fn leave_inner(ctx: &ReducerContext, m: &Member, status: &str) {
     let now = now_ms(ctx);
     let released = locks_of(ctx, m.id);
     for obj in &released {
@@ -250,15 +260,17 @@ pub fn leave_inner(ctx: &ReducerContext, m: &Member) {
         let rev = t.rev + 1;
         ctx.db.task().id().update(Task { status: "open".into(), owner: 0, rev, updated_ms: now, ..t });
     }
-    ctx.db.member().id().update(Member { status: "left".into(), ..m.clone() });
+    ctx.db.member().id().update(Member { status: status.into(), ..m.clone() });
     set_pointer(ctx, m.ws, m.id, "", vec![], "idle", "", "");
-    emit(ctx, m.ws, "left", m.id, json!({"name": m.name, "released": released}));
+    // "removed" reads differently from "left" in the panel: a person took it off the team.
+    let kind = if status == "removed" { "removed" } else { "left" };
+    emit(ctx, m.ws, kind, m.id, json!({"name": m.name, "released": released}));
 }
 
 #[reducer]
 pub fn leave(ctx: &ReducerContext, fence: u32) -> Result<(), String> {
     let m = me(ctx, fence)?;
-    leave_inner(ctx, &m);
+    leave_inner(ctx, &m, "left");
     Ok(())
 }
 
@@ -275,8 +287,16 @@ pub fn revoke_member(ctx: &ReducerContext, fence: u32, member_id: u64) -> Result
         .find(&member_id)
         .filter(|t| t.ws == m.ws)
         .ok_or_else(|| format!("unknown_participant: No member {member_id}"))?;
-    emit(ctx, m.ws, "revoked", m.id, json!({"name": target.name, "by": m.name}));
-    leave_inner(ctx, &target);
+    if target.id == m.id {
+        return Err("not_allowed: use leave to step away yourself".into());
+    }
+    if target.kind == "host" {
+        return Err("not_allowed: the computer hosting the team can't be removed".into());
+    }
+    if target.status == "removed" {
+        return Ok(()); // already off the team; removing twice is not an error
+    }
+    leave_inner(ctx, &target, "removed");
     Ok(())
 }
 
@@ -332,7 +352,7 @@ pub fn take_over(ctx: &ReducerContext, fence: u32, target: String, force: bool) 
         .member()
         .ws()
         .filter(&m.ws)
-        .filter(|x| x.name.eq_ignore_ascii_case(&target) && x.status != "left")
+        .filter(|x| x.name.eq_ignore_ascii_case(&target) && x.status != "left" && x.status != "removed")
         .max_by_key(|x| x.id)
         .ok_or_else(|| format!("unknown_participant: No participant {target:?}"))?;
     rules::check_take_over(m.id, t.id, &t.name, &t.status, &m.kind, force)?;

@@ -22,6 +22,7 @@ from .space import SpaceClient, SpaceError
 from .space_library import LibraryRoutes
 
 STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over": 403, "left": 403,
+          "removed": 403,
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
           "not_found": 404, "bad_args": 400, "unknown_op": 400, "unreachable": 0}
 OP_WAIT_SECONDS = 150
@@ -104,6 +105,7 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/dependents", self.dependents), ("POST", r"/export", self.export),
             ("POST", r"/constrain", self.constrain),
             ("GET", r"/participants", self.participants_route), ("POST", r"/takeover", self.takeover),
+            ("POST", r"/participants/(?P<pid>[0-9]+)/remove", self.remove_member),
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
@@ -343,7 +345,7 @@ class SpaceHub(LibraryRoutes):
                  "locks": sorted(locks.get(m["id"], [])), "task": working.get(m["id"]),
                  "idle_s": round(max(0.0, now_ms - acted[m["id"]]) / 1000, 1) if m["id"] in acted else None}
                 for m in sorted(self._rows("v_member"), key=lambda m: m["id"])
-                if m["status"] not in ("left", "taken_over")]
+                if m["status"] not in ("left", "taken_over", "removed")]
 
     def participants_route(self):
         return {"participants": self.participants()}
@@ -609,6 +611,17 @@ class SpaceHub(LibraryRoutes):
         data = _json(ev[-1]["data_json"], {}) if ev else {}
         return {"from": data.get("target", target), "locks": data.get("locks", []), "tasks": data.get("tasks", [])}
 
+    def remove_member(self, body, pid):
+        """Take a member off the team: their locks are released and any task they hold goes back to the team.
+        A person or the host may do this (the module refuses anyone else). Removing an AI helper is how you
+        stop one that runs on someone else's computer, not just your own."""
+        pid = int(pid)
+        target = next((m for m in self._rows("v_member") if m["id"] == pid), None)
+        if target is None:
+            raise HubRequestError(404, {"error": f"No member {pid}", "code": "unknown_participant"})
+        self._f("revoke_member", pid)
+        return {"removed": target["name"], "id": pid}
+
     # -------------------------------------------------------------------- tasks
 
     def _task_shape(self, t, names):
@@ -743,7 +756,7 @@ class SpaceHub(LibraryRoutes):
         """The instructions this person sent to AI helpers and how far each got: sent (not read yet), seen (the
         helper read it) or done (the helper said it handled it)."""
         names = self._names()
-        members = [m for m in self._rows("v_member") if m["status"] not in ("left", "taken_over")]
+        members = [m for m in self._rows("v_member") if m["status"] not in ("left", "taken_over", "removed")]
         agents = [m["id"] for m in members if m["kind"] not in ("human", "host")]  # the team server never reads them
         receipts = {(r["message_id"], r["member"]): r["state"] for r in self._rows("v_receipt")}
         mine = sorted((m for m in self._rows("v_message") if m["from"] == self.me_id and m["kind"] == "steer"),

@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -20,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from urllib.parse import urlsplit
 
 from .paths import DEPENDENCIES, LAUNCHER, ROOT, app_dir, deps_dir, project_layout
 
@@ -133,6 +135,85 @@ def lan_ip():
             return s.getsockname()[0]
         except OSError:
             return "127.0.0.1"
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "")
+
+
+def invite_uri(uri):
+    """The address an invite should carry. A team hosted on this computer listens on `127.0.0.1`, which
+    only this computer can reach: hand out this computer's network address instead, so teammates on the
+    same network can join. Maincloud's public address (and a teammate's already-network address) pass
+    through unchanged."""
+    try:
+        host = urlsplit(uri or "").hostname or ""
+    except ValueError:
+        return uri
+    if host in LOOPBACK_HOSTS:
+        return f"http://{lan_ip()}:{LOCAL_PORT}"
+    return uri
+
+
+def server_label(uri):
+    """A short phrase for where a team's database lives, read from its address alone (cheap, no process).
+    Kept in step with the web panel's `serverLabel`."""
+    host = urlsplit(uri or "").hostname or ""
+    if host.endswith("spacetimedb.com"):
+        return "SpacetimeDB Maincloud"
+    if host in LOOPBACK_HOSTS:
+        return "this computer"
+    return f"this computer · {host}"
+
+
+# This computer's Maincloud account: `spacetime login show` is a process, so remember what it said.
+_LOGIN = {"account": "", "at": 0.0}
+
+
+def cached_maincloud_login():
+    """The last account we read for this computer, without running the CLI (the panel asks often)."""
+    return _LOGIN["account"]
+
+
+def maincloud_login(force=False, ttl=300):
+    """A short id for the Maincloud account this computer is signed in as, or "" when it isn't.
+    Reads `spacetime login show`, cached for `ttl`; `force` re-reads now (the sign-in button polls)."""
+    now = time.time()
+    if not force and _LOGIN["at"] and now - _LOGIN["at"] < ttl:
+        return _LOGIN["account"]
+    _LOGIN["at"] = now
+    _LOGIN["account"] = _read_maincloud_login()
+    return _LOGIN["account"]
+
+
+def _read_maincloud_login():
+    st = spacetime_bin()
+    if not st:
+        return ""
+    try:
+        r = subprocess.run([st, "login", "show"], capture_output=True, encoding="utf-8", errors="replace",
+                           timeout=10, creationflags=NO_WINDOW, env=host_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    m = re.search(r"logged in as\s+([0-9a-fA-F]{8,})", (r.stdout or "") + (r.stderr or ""))
+    return m.group(1)[:12] if m else ""
+
+
+def spacetime_login():
+    """Open the browser and sign this computer in to SpacetimeDB Maincloud (`spacetime login`). The CLI
+    opens the browser and waits for the person to finish there, so run it in the background; poll
+    `maincloud_login(force=True)` for the result."""
+    st = spacetime_bin()
+    if not st:
+        raise RuntimeError("CADSwarm needs the SpacetimeDB program to sign in to Maincloud, and this "
+                           "computer doesn't have it yet. Start a team on this computer first.")
+    os.makedirs(tools_dir(), exist_ok=True)
+    log = open(os.path.join(tools_dir(), "spacetime-login.log"), "a", encoding="utf-8")
+    kwargs = {"stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "env": host_env()}
+    if os.name == "nt":
+        kwargs["creationflags"] = NO_WINDOW
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen([st, "login"], **kwargs)
 
 
 def free_port(start=8765, tries=50):
@@ -600,7 +681,9 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
                                    "doesn't have it yet. Install it from https://spacetimedb.com/install, then "
                                    "click “Try again”.")
             log(f"Starting the local database on port {LOCAL_PORT}")
-            info["spacetime_pid"] = _spawn([st, "start", "--listen-addr", f"127.0.0.1:{LOCAL_PORT}"],
+            # Bind every interface, not just loopback: a teammate on the same network reaches the team at
+            # this computer's network address. The invite carries that address (see `invite_uri`).
+            info["spacetime_pid"] = _spawn([st, "start", "--listen-addr", f"0.0.0.0:{LOCAL_PORT}"],
                                            lay, "spacetime.log", env)
             _wait_port(LOCAL_PORT, 30, info["spacetime_pid"], data_dir)
         log(f"Creating your team's database “{db}” ({mode})")

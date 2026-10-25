@@ -46,6 +46,10 @@ That's it. Next time, open the **CADSwarm** shortcut (or pick *CADSwarm* in Free
 list) and you're back with your team. If you hosted the team, its server starts again when you open CADSwarm (it doesn't start on its
 own after a reboot until you do).
 
+Worked on more than one team? CADSwarm remembers the ones this computer has joined. Pick another from
+**CADSwarm ▸ Get started ▸ Open a previous project…**, or from the list at the top of the guide's first
+page. Your sign-in for each team is kept, so you don't need a new invite code.
+
 **Good to know**
 - You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup),
   [Codex](https://learn.chatgpt.com/docs/codex/cli),
@@ -66,9 +70,10 @@ own after a reboot until you do).
   the workbench ships with is used as it is, so updating the workbench never leaves an old module
   behind. Teammates who join don't need them. (A team server or SpacetimeDB already on your PATH is
   used as it is.)
-- The team's database runs on SpacetimeDB's cloud (Maincloud) by default, so teammates can join from
-  anywhere. The advanced "keep it on this computer" option is for offline or LAN-only demos; then
-  everyone must share a network and Windows may ask to allow access through its firewall.
+- The team's database runs on **SpacetimeDB**. By default it runs **on this computer**: nothing to sign
+  up for, and teammates on the same network join by reaching this computer's network address (Windows
+  may ask to allow access through its firewall). Choose **Maincloud** instead to let teammates join from
+  anywhere; the guide's **Sign in to SpacetimeDB…** button opens your browser so you sign in once.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
   FreeCAD.
 - The first setup downloads about 70 MB of helper software into CADSwarm's app folder, plus the team
@@ -91,7 +96,9 @@ more or less room) and scrolls when the window is short. It has three parts:
   starts another one on this computer: pick the AI (Claude Code, Codex, Droid, OpenCode or Creao AI) and,
   if you like, a name
   (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
-  one of yours to **Rename** it, **Restart** it, see its log or remove it. People are listed underneath.
+  one of yours to **Rename** it, **Restart** it or see its log; right-click any helper (even one running on a
+  teammate's computer) to **Remove from the team**. Removing releases its locks, returns the work it held and
+  stops it from rejoining on its own: only a fresh invite brings it back. People are listed underneath.
 - **Chat**: one box for everything.
   - `@name what to do` gives that helper a task (with the parts you have selected) and wakes it; it answers in
     the chat with what it'll do, then what it did. Typing `@` lists the helpers to pick from. Your message
@@ -495,16 +502,20 @@ files.
 
 ## Where the team's data lives
 
-- **The database is on SpacetimeDB.** Maincloud is the default: nothing to run, teammates join from
-  anywhere, and SpacetimeDB handles TLS and sign-in. The advanced local option runs `spacetime start`
-  on the host's computer for offline demos; then everyone must be on the same network.
+- **The database is on SpacetimeDB.** By default it runs on the host's own computer (`spacetime start`,
+  bound to the network so teammates on the same network can reach it): no account needed, works offline,
+  but everyone must share a network and the host must stay on. The other choice is **Maincloud**: nothing
+  to run, teammates join from anywhere, and SpacetimeDB handles TLS and sign-in (the guide signs you in
+  once through your browser).
 - **The live model stays on the host's computer.** `cadswarm-host` executes ops against it and serves
   files, exports, snapshots and storage, so the host must stay on while the team works.
 - **Invite codes are `cadswarm-2:` codes.** Each one works once and expires after a day. Make a new one
   for each teammate from the guide's invite page or the team panel's **Invite** button. They carry the
   database address and can be pasted as text, as a bare ticket, or as a phone link (`#t=`). The team
   panel's **Remote** tab shows that phone link as a QR; phone links point at
-  `https://cadswarm.design/app` unless the host was started with its own `--web-url`.
+  `https://cadswarm.design/app` unless the host was started with its own `--web-url`. A team hosted on
+  this computer hands out this computer's network address, so teammates must be on the same network
+  (and a phone, reached through the public site, cannot — use FreeCAD on a networked computer).
 
 ## What `cadswarm setup` writes
 
@@ -595,8 +606,8 @@ rules 17 passed locally.
 - `scripts\demo-up.ps1` uses a Cloudflare quick tunnel, whose URL changes on every run; mint new phone
   links after a restart, or pass `-WebUrl` for a fixed address.
 - Maincloud handles TLS and sign-in, and every person has their own identity; invites are single-use
-  and expire after a day. The advanced local mode has no TLS, so use it only with people you trust on
-  your own network.
+  and expire after a day. A team hosted on this computer has no TLS, so use it only with people you
+  trust on your own network.
 - The host's computer serves the model, files, exports and snapshots. If it goes offline, teammates can
   still read the team's state from SpacetimeDB, but the model stops changing until the host is back.
 

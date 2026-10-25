@@ -4,7 +4,7 @@ import { memberColor } from '../color';
 import { mountChat } from './chat-pane';
 import { mountHandoff } from './handoff';
 import { mountParams } from './params';
-import { freeHelper, helperNow, helpers, startInstruction } from './helpers';
+import { freeHelper, helperNow, helpers, startInstruction, takesInstructions } from './helpers';
 import { chatThread } from './chat';
 import { mountLibrary } from './library';
 import { mountSettings } from './settings';
@@ -245,6 +245,15 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         .finally(() => { del.disabled = false; });
       return;
     }
+    const removeMember = t.closest<HTMLButtonElement>('[data-remove-member]');
+    if (removeMember && api) {
+      const m = store.member(Number(removeMember.dataset.removeMember));
+      if (!m || !confirm(`Remove ${m.name} from the team? Its locks are released and its work goes back.`)) return;
+      removeMember.disabled = true;
+      void api.removeMember(m.id).catch(err => notice((err as Error).message ?? String(err)))
+        .finally(() => { removeMember.disabled = false; });
+      return;
+    }
     const stopBrief = t.closest<HTMLButtonElement>('[data-cancel-brief]');
     if (stopBrief && api) {
       const brief = store.state.briefs.find(x => x.id === stopBrief.dataset.cancelBrief);
@@ -364,10 +373,11 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
     $('[data-team]').innerHTML = here.map(m => {
       const holds = heldBy(s, m.id) || (m.kind === 'agent' ? helperNow(s, m) : '');
       const pill = memberPill(s, m);
+      const canRemove = m.id !== s.meId && takesInstructions(m);
       return `<li>
         <span class="dot" style="--c:${memberColor(m.id, dark())}"></span>
         <span class="who-main"><span class="name">${esc(m.name)}${m.id === s.meId ? ' <span class="holds">(you)</span>' : ''}</span>${holds ? `<span class="holds"> · ${esc(holds)}</span>` : ''}</span>
-        <span class="pill${pill.tone ? ` ${pill.tone}` : ''}">${esc(pill.word)}</span>
+        <span class="who-end"><span class="pill${pill.tone ? ` ${pill.tone}` : ''}">${esc(pill.word)}</span>${canRemove ? `<button class="remove-member" data-remove-member="${m.id}" title="Remove ${esc(m.name)} from the team">Remove</button>` : ''}</span>
       </li>`;
     }).join('') || '<li class="log-empty">Nobody has joined this build yet.</li>';
 

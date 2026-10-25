@@ -135,6 +135,11 @@ a { color: var(--accent); }
   color: var(--muted); white-space: nowrap; }
 .pill.live { color: var(--ok); border-color: rgba(79, 179, 90, .35); }
 .pill.warn { color: var(--warn); border-color: rgba(227, 179, 65, .4); background: rgba(227, 179, 65, .08); }
+.who-end { display: inline-flex; align-items: center; gap: 6px; justify-self: end; }
+.remove-member { margin: 0; padding: 5px 9px; min-height: 26px; border: 1px solid var(--line-strong); border-radius: 999px;
+  background: none; color: var(--muted); font: 500 11px/1 var(--font-mono); cursor: pointer; white-space: nowrap; }
+.remove-member:hover { color: var(--err); border-color: rgba(229, 83, 75, .5); }
+.remove-member:disabled { opacity: .45; cursor: default; }
 
 .log { display: grid; gap: 8px; font-size: 13px; line-height: 1.45; }
 .log-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; }

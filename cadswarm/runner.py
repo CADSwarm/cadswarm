@@ -44,7 +44,7 @@ MIN_GAP_SECONDS = 5
 LOG_LIMIT = 2_000_000
 IDLE_DOING = "listening for instructions"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-GONE = ("not_member", "left", "taken_over", "bad_token")
+GONE = ("not_member", "left", "taken_over", "removed", "bad_token")
 
 
 
@@ -171,9 +171,9 @@ def finished_keys(hub):
 
 def wake_prompt(name, project, lines, first):
     news = "\n".join(lines) if lines else "- Nothing specific yet."
-    start = ("Say hello to the team with send_message to \"all\" in one short, friendly sentence (who you "
-             "are and that you're ready). Then look at list_tasks: if a task is open, unassigned and fits you, "
-             "claim it and build it.\n" if first else "")
+    # The greeting is posted by the runner itself (Runner.greet), so the model spends no turn on it.
+    start = ("Look at list_tasks first: if a task is open, unassigned and fits you, claim it and build it.\n"
+             if first else "")
     return f"""You are {name}, an AI helper on the team building "{project}" in one shared FreeCAD model.
 You run in the background: nobody is watching a terminal, so never ask questions here and never wait for
 input. Talk to people only with send_message; they read it as a chat in FreeCAD.
@@ -291,6 +291,15 @@ class Runner:
             self.hub._f("heartbeat", IDLE_DOING)
             self.last_beat = now
 
+    def greet(self):
+        """Say hello for the helper the moment it first starts, so people see who joined without the model
+        spending a turn on it. Sent as chat to "all": peers ignore chat in pending_work, so it wakes nobody."""
+        name = self.cfg.get("name") or "an AI helper"
+        try:
+            self.hub.send({"to": "all", "body": f"Hi, I'm {name}, ready to help.", "kind": "chat"})
+        except HubRequestError:
+            pass  # a greeting is a courtesy; never let a hiccup stop the run
+
     # ------------------------------------------------------------------------ runs
 
     def allowed(self):
@@ -333,6 +342,8 @@ class Runner:
         argv, stdin_text = agent_command(client, exe, self.folder, prompt, resume=bool(self.state.get("started")),
                                          model=self.cfg.get("model"))
         self.log(f"waking the helper for {len(work)} new thing(s): {', '.join(k for k, _ in work) or 'first start'}")
+        if first:
+            self.greet()  # the runner introduces the helper, not the model
         self.child = self.spawn(argv, stdin_text)
         self.child_started = self.clock()
         self.present = False  # the agent's MCP server takes the seat (a newer fence)
@@ -340,7 +351,7 @@ class Runner:
         self.seen |= {k for k, _ in work}
         self.state["started"] = True
         self.save_state()
-        self.write_status("working", work[0][1][2:120] if work else "saying hello")
+        self.write_status("working", work[0][1][2:120] if work else "introducing itself")
         return True
 
     def child_running(self):

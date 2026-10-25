@@ -106,9 +106,8 @@ RESUME_PROMPT = ("We're continuing our team's CAD project \"{project}\". Check m
                  "tasks, then carry on with your part. Keep your replies short.")
 
 # AI helpers are always plain members: the people lead the team, and only a person hosts it.
-FIRST_PROMPT = ("I just joined our team's CAD project \"{project}\". Say hello in the team chat (send_message to "
-                "\"all\"), claim a task nobody has started, and build it. Keep your replies short: a line when you "
-                "start, up to three when you finish.")
+FIRST_PROMPT = ("I just joined our team's CAD project \"{project}\". Claim a task nobody has started and build it. "
+                "Keep your replies short: a line when you start, up to three when you finish.")
 
 
 def upsert_block(path, block, begin=BEGIN, end=END):

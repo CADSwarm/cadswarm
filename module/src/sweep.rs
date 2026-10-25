@@ -57,7 +57,7 @@ pub fn sweep(ctx: &ReducerContext, _row: SweepSchedule) -> Result<(), String> {
     }
     for id in plan.to_orphan {
         if let Some(m) = ctx.db.member().id().find(&id) {
-            leave_inner(ctx, &m);
+            leave_inner(ctx, &m, "left");
         }
     }
 

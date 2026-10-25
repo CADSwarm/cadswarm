@@ -84,3 +84,16 @@ def test_says_so_when_nothing_is_set_up_yet():
 def test_the_stamped_evidence_stays_labelled_checked():
     line = evidence_line()
     assert line.startswith("checked ") and "Elastic 6 board docs" in line and "Droid 0.249.0" in line
+
+
+def test_the_spacetime_card_says_where_the_database_lives_and_the_sign_in():
+    space = card(cards(session(), "cadswarm-demo", "SpacetimeDB Maincloud", "signed in as c200641aabd1"), "SpacetimeDB")
+    assert ("server", "SpacetimeDB Maincloud") in space["facts"]
+    assert ("sign-in", "signed in as c200641aabd1") in space["facts"]
+
+
+def test_the_spacetime_card_stays_quiet_when_the_panel_does_not_know_the_server():
+    # A snapshot with no server/sign-in still renders the counts it always did.
+    space = card(cards(session(), "cadswarm-demo"), "SpacetimeDB")
+    assert [k for k, _ in space["facts"]][:1] == ["database"]
+

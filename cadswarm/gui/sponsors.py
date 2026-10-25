@@ -30,8 +30,10 @@ def _findings(review):
     return [str(f) for f in (review.get("findings") or []) if f] if review else []
 
 
-def cards(session, database=""):
-    """The three cards, built from the snapshot the panel already has, plus the stamped snapshot."""
+def cards(session, database="", server="", sign_in=""):
+    """The three cards, built from the snapshot the panel already has, plus the stamped snapshot.
+    `server` and `sign_in` say where the team's SpacetimeDB lives and whether this computer is signed in
+    (the panel reads both cheaply: the address names the server, and the sign-in is only for Maincloud)."""
     model = session.model or {}
     members = model.get("participants") or []
     objects = model.get("objects") or []
@@ -51,18 +53,25 @@ def cards(session, database=""):
     board = (brief or {}).get("board") or ""
     seq = model.get("seq") or 0
 
+    space_facts = []
+    if server:
+        space_facts.append(("server", server))
+    if sign_in:
+        space_facts.append(("sign-in", sign_in))
+    space_facts += [
+        ("database", database or "this workspace"),
+        ("members", f"{active} active · {len(members)} joined"),
+        ("model", f"{len(parts)} parts · {len(params)} params · {held} held"),
+        ("work", f"{sum(1 for t in tasks if t.get('status') == 'open')} open tasks · {done}/{len(tasks)} done"),
+        ("events", f"seq {seq} · the Activity tab is the live feed"),
+    ]
+
     return [
         {
             "id": "spacetime",
             "name": "SpacetimeDB",
             "role": "the team's shared state",
-            "facts": [
-                ("database", database or "this workspace"),
-                ("members", f"{active} active · {len(members)} joined"),
-                ("model", f"{len(parts)} parts · {len(params)} params · {held} held"),
-                ("work", f"{sum(1 for t in tasks if t.get('status') == 'open')} open tasks · {done}/{len(tasks)} done"),
-                ("events", f"seq {seq} · the Activity tab is the live feed"),
-            ],
+            "facts": space_facts,
             "calls": ["submit_op(kind, args) -> host runs it alone -> complete_op(result)",
                       "views: v_member · v_object · v_task · v_op · v_review"],
         },

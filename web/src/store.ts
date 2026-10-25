@@ -33,7 +33,7 @@ export interface Suggestion {
 }
 
 export interface State {
-  connected: boolean; meId: number | null; workspace: Workspace | null;
+  connected: boolean; meId: number | null; workspace: Workspace | null; server: string;
   members: Member[]; locks: Lock[]; objects: Obj[]; params: Param[]; tasks: Task[]; ops: Op[];
   activity: Activity[]; pointers: Pointer[]; briefs: Brief[]; reviews: Review[];
   previews: Map<string, Preview>; artifacts: Artifact[]; handoffs: Handoff[];
@@ -42,7 +42,7 @@ export interface State {
 }
 
 export function emptyState(): State {
-  return { connected: false, meId: null, workspace: null, members: [], locks: [], objects: [], params: [], tasks: [], ops: [],
+  return { connected: false, meId: null, workspace: null, server: '', members: [], locks: [], objects: [], params: [], tasks: [], ops: [],
     activity: [], pointers: [], briefs: [], reviews: [], previews: new Map(), artifacts: [], handoffs: [],
     messages: [], receipts: [], components: [], settings: [], suggestions: [], notice: null };
 }
