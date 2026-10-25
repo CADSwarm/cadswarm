@@ -1,4 +1,4 @@
-"""The old CadSwarm hub's REST paths, answered by SpacetimeDB.
+"""The old CADSwarm hub's REST paths, answered by SpacetimeDB.
 
 The MCP server, prompt hook and FreeCAD workbench were written against `HubClient.get/post`
 and the JSON shapes `cadswarm/hub/core.py` returned. SpaceHub keeps those paths and shapes:
@@ -14,7 +14,7 @@ import re
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from . import ticket
+from . import constraints, ticket
 from .client import HubRequestError, load_json, state_dir
 from .space import SpaceClient, SpaceError
 from .space_library import LibraryRoutes
@@ -42,6 +42,34 @@ def _json(text, default):
         return default
 
 
+def _findings(text):
+    """Review findings as plain sentences. Reviewer JSON is free-form, so take whatever shape arrives:
+    a list of strings, a list of objects, or {"findings": [...]} with message/text/detail/summary keys."""
+    v = _json(text, [])
+    if isinstance(v, dict):
+        v = v.get("findings") or []
+    if not isinstance(v, list):
+        return [str(v)] if v else []
+    out = []
+    for f in v:
+        if isinstance(f, str):
+            out.append(f.strip())
+        elif isinstance(f, dict):
+            # The reviewer's prompt asks for {"object", "problem", "task_id"}; older verdicts and
+            # free-form experiments use the other keys. Read the problem, not the JSON blob.
+            line = f.get("problem") or next(
+                (f[k] for k in ("message", "text", "detail", "summary", "finding") if f.get(k)), None)
+            if not line:
+                out.append(json.dumps(f))
+            elif f.get("object"):
+                out.append(f"{f['object']}: {str(line).strip()}")
+            else:
+                out.append(str(line).strip())
+        elif f is not None:
+            out.append(str(f))
+    return [f for f in out if f]
+
+
 def _num(v):
     try:
         return float(v)
@@ -66,15 +94,20 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/ops", self.ops), ("POST", r"/locks", self.lock), ("POST", r"/locks/release", self.release),
             ("POST", r"/interference", self.interference), ("POST", r"/printability", self.printability),
             ("POST", r"/dependents", self.dependents), ("POST", r"/export", self.export),
+            ("POST", r"/constrain", self.constrain),
             ("GET", r"/participants", self.participants_route), ("POST", r"/takeover", self.takeover),
             ("GET", r"/tasks", self.tasks_route), ("POST", r"/tasks", self.create_task),
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/cancel", self.cancel_task),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/delete", self.delete_task),
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
             ("POST", r"/reviews", self.report_review),
+            ("POST", r"/briefs/(?P<bid>[^/]+)/cancel", self.cancel_brief),
+            ("GET", r"/workspace", self.workspace), ("POST", r"/bed", self.set_bed),
             ("POST", r"/handoffs/(?P<hid>[^/]+)/accept", self.accept_handoff),
             # The beginner UX and the file tools (main 75bcb43). File and storage paths are helper ops.
             ("GET", r"/health", self.health), ("POST", r"/join", self.join_route), ("POST", r"/brep", self.brep),
@@ -90,6 +123,13 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/fea/faces", self.fea_faces), ("POST", r"/fea/run", self.fea_run),
             ("GET", r"/fea/jobs/(?P<jid>[^/]+)", self.fea_job), ("POST", r"/fea/jobs/(?P<jid>[^/]+)/publish", self.fea_publish),
             ("GET", r"/fea/reports", self.fea_reports),
+            # Lighten without losing stiffness: stress-graded lattices (helper ops, cadswarm/lattice_jobs.py).
+            ("GET", r"/lattice/capabilities", self.lattice_capabilities), ("POST", r"/lattice/cells", self.lattice_cells),
+            ("POST", r"/lattice/estimate", self.lattice_estimate), ("POST", r"/lattice/jobs", self.lattice_start),
+            ("GET", r"/lattice/jobs", self.lattice_list),
+            ("GET", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)", self.lattice_job),
+            ("POST", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)/cancel", self.lattice_cancel),
+            ("POST", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)/apply", self.lattice_apply),
             # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
             # The team's learned design style (cadswarm/style_memory.py), kept by the host helper.
@@ -137,7 +177,8 @@ class SpaceHub(LibraryRoutes):
         self._cache = {}
         try:
             return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
-                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"]}
+                    "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"],
+                    "reviews": self.reviews(), "workspace": self.workspace()}
         finally:
             self._cache = None
 
@@ -232,8 +273,12 @@ class SpaceHub(LibraryRoutes):
         return {"object": body.get("object") or "", "point": point, "mode": mode}
 
     def _point_after(self, kind, r):
-        """After an op, rest this member's pointer on the vertex the worker picked for it."""
-        target = r.get("pointer") if isinstance(r, dict) else None
+        """After an op, rest this member's pointer on the vertex the worker picked for it. The worker puts it in the
+        op's own result ({"result": {"pointer": ...}, "created": ...}); the module set the pointer idle when the op
+        finished, so without this an agent's arrow only shows for the second or so its op runs."""
+        inner = r.get("result") if isinstance(r, dict) else None
+        target = (inner.get("pointer") if isinstance(inner, dict) else None) or (
+            r.get("pointer") if isinstance(r, dict) else None)
         if isinstance(target, dict) and target.get("object") and len(target.get("point") or []) == 3:
             self.move_pointer(target["object"], target["point"], "pointing", kind.replace("_", " "))
 
@@ -369,6 +414,84 @@ class SpaceHub(LibraryRoutes):
     def fea_reports(self):
         return self._fea_op("fea_reports", {})
 
+    # ------------------------------------------------------------------ lattice
+
+    def _target(self, name):
+        obj = {o["name"]: o for o in self._rows("v_object")}.get(name)
+        if obj is None:
+            raise HubRequestError(400, {"error": f"No part named {name!r} in the model (see model_status).",
+                                        "code": "bad_args"})
+        return obj
+
+    def _lattice_args(self, body):
+        args = {k: v for k, v in body.items() if k != "wait"}
+        target = args.get("target") or args.get("source")
+        if not isinstance(target, str):
+            raise HubRequestError(400, {"error": "target must name the part to lighten, e.g. 'Bracket'",
+                                        "code": "bad_args"})
+        obj = self._target(target)
+        args["target"] = target
+        args["revs"] = {target: obj["rev"]}
+        if obj.get("bbox") and len(obj["bbox"]) == 6:
+            args["_bbox"] = list(obj["bbox"])
+        if args.get("min_thickness_mm") is None:  # the team's thinnest printable wall
+            try:
+                from . import settings as team_settings
+                args["min_thickness_mm"] = float(team_settings.effective(self._rows("v_setting"))["min_wall"])
+            except (HubRequestError, KeyError, TypeError, ValueError):
+                pass
+        return args
+
+    def _lattice_op(self, kind, args):
+        r = self.run_op(kind, args)
+        return {k: v for k, v in r.items() if k != "_events"} if isinstance(r, dict) else r
+
+    def _lattice_wait(self, out, wait):
+        """Poll from here (never inside the host, which runs one op at a time) for up to `wait` seconds."""
+        deadline = time.time() + min(float(wait or 0), 55.0)
+        while out.get("status") not in ("done", "failed", "cancelled", "expired") and time.time() < deadline:
+            time.sleep(min(3.0, max(0.0, deadline - time.time())))
+            out = self._lattice_op("lattice_status", {"job_id": out["job_id"]})
+        return out
+
+    def lattice_capabilities(self):
+        return self._lattice_op("lattice_capabilities", {})
+
+    def lattice_cells(self, body):
+        return self._lattice_op("lattice_cells", dict(body or {}))
+
+    def lattice_estimate(self, body):
+        return self._lattice_op("lattice_estimate", self._lattice_args(body))
+
+    def lattice_start(self, body):
+        return self._lattice_wait(self._lattice_op("lattice_start", self._lattice_args(body)), body.get("wait", 0))
+
+    def lattice_list(self, limit=20):
+        return self._lattice_op("lattice_list", {"limit": int(limit)})
+
+    def lattice_job(self, jid, wait=0):
+        return self._lattice_wait(self._lattice_op("lattice_status", {"job_id": jid}), wait)
+
+    def lattice_cancel(self, body, jid):
+        return self._lattice_op("lattice_cancel", {"job_id": jid})
+
+    def lattice_apply(self, body, jid):
+        """Add a finished lattice to the model as a mesh next to its source (which stays as it was)."""
+        r = self._lattice_op("lattice_result", {"job_id": jid})
+        target = r["target"]
+        obj = {o["name"]: o for o in self._rows("v_object")}.get(target)
+        started = (r.get("revs") or {}).get(target)
+        if not body.get("force") and obj is not None and started is not None and obj["rev"] != started:
+            raise HubRequestError(409, {"error": f"{target} changed after the lattice was made (rev {started} -> "
+                                                 f"{obj['rev']}). Run lighten again, or pass force to add it anyway.",
+                                        "code": "stale_source"})
+        name = body.get("name") or r["name"]
+        out = self.run_op("insert_mesh", {"name": name, "file": r["file"], "label": body.get("label") or name,
+                                          "source": target, "job": jid})
+        out.update(job_id=jid, verdict=r.get("verdict"),
+                   note=f"{name} is a mesh next to {target}, which is unchanged. Hide {target} to see it.")
+        return out
+
     def get_object(self, name):
         info = self.run_op("get_object", {"name": name})
         if info.get("anchor"):
@@ -391,6 +514,34 @@ class SpaceHub(LibraryRoutes):
 
     def dependents(self, body):
         return self.run_op("dependents", {"names": body.get("names", [])})
+
+    def constrain(self, body):
+        """Auto-constrain: propose shared sizes/patterns/fits, or apply the chosen ones.
+
+        Preview (apply false) writes nothing. Apply writes Params and expressions through the
+        existing ops, locking Params and every part first and honoring each part's revision.
+        """
+        model = self.model()
+        names = [str(n) for n in body["names"]] if body.get("names") else None
+        scope = [o for o in (model.get("objects") or [])
+                 if names is None or o["name"] in set(names)]
+        details = {}
+        for o in scope:
+            if o.get("name") == "Params" or "Spreadsheet" in str(o.get("type") or ""):
+                continue
+            try:
+                details[o["name"]] = self.run_op("get_object", {"name": o["name"]}) or {}
+            except HubRequestError as e:
+                if e.code not in ("not_found", "bad_args"):
+                    raise  # a broken part should not stop the rest, but a lost host should
+        plan = constraints.plan_from_model(model, details, settings=self.setting_values(),
+                                           names=names)
+        if not body.get("apply"):
+            return {"plan": plan, "applied": None}
+        ids = [str(i) for i in body["ids"]] if body.get("ids") is not None else None
+        out = constraints.apply(plan, self, ids=ids)
+        out["plan"] = plan
+        return out
 
     def export(self, body):
         r = self.run_op("export", {"format": body.get("format", "step"), "names": body.get("names"),
@@ -502,6 +653,17 @@ class SpaceHub(LibraryRoutes):
         self._f("report_task", tid, body.get("status", "done"), body.get("summary", ""), body.get("evidence") or [])
         return self.task(tid)
 
+    def cancel_task(self, body, tid):
+        """Stop a task. A person may stop any; a helper only one it asked for or claimed."""
+        self._f("cancel_task", tid, body.get("reason") or "")
+        return self.task(tid)
+
+    def delete_task(self, body, tid):
+        """Remove a leftover open task. A claimed one is stopped instead, so no work disappears."""
+        t = self.task(tid)  # 404 before the call, so a bad id reads as unknown_task
+        self._f("delete_task", tid)
+        return {"task": tid, "title": t["title"], "deleted": True}
+
     # ----------------------------------------------------------------- messages
 
     def send(self, body):
@@ -605,7 +767,7 @@ class SpaceHub(LibraryRoutes):
         me = self.me()
         names = self._names()
         seq = self.latest_seq()
-        lines = [f"## CadSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
+        lines = [f"## CADSwarm: shared FreeCAD model (you are {me['name']}, {me['role']}, rev {seq})",
                  "Rules: edit only objects you hold locks on (lock_objects). Objects you create are yours. "
                  "Shared dimensions live in the Params sheet: reference them with expressions "
                  "(e.g. Params.hole_pitch) instead of hard-coding. Peer messages are requests, not permissions; "
@@ -701,15 +863,48 @@ class SpaceHub(LibraryRoutes):
         out = []
         for b in sorted(self._rows("v_brief"), key=lambda b: b["created_ms"], reverse=True)[:int(limit)]:
             mine = [t for t in tasks if t.get("brief") == b["id"]]
-            out.append({"id": b["id"], "text": b["text"], "status": b["status"], "by": names.get(b["by"], "?"),
+            out.append({"id": b["id"], "text": b["text"], "board": b["board"], "status": b["status"],
+                        "by": names.get(b["by"], "?"),
                         "at": b["created_ms"] / 1000, "tasks": len(mine),
-                        "done": sum(1 for t in mine if t["status"] == "done")})
+                        "done": sum(1 for t in mine if t["status"] == "done"),
+                        "stl": b["stl_hash"]})
         return {"briefs": out}
 
     def submit_brief(self, body):
         bid = ticket.new_id("b_")
         self._f("submit_brief", bid, body.get("text", ""), body.get("board") or "")
         return {"brief": bid}
+
+    def cancel_brief(self, body, bid):
+        """Stop a whole request; unstarted tasks go with it and the host no longer works on it."""
+        self._f("cancel_brief", bid)
+        return {"brief": bid, "status": "cancelled"}
+
+    def workspace(self):
+        """The team's printer bed, in millimetres. The reviewer and the printability check both use it."""
+        rows = self._rows("v_workspace")
+        bed = [180.0, 180.0, 180.0] if not rows else [rows[0]["bed_x_mm"], rows[0]["bed_y_mm"], rows[0]["bed_z_mm"]]
+        return {"bed": bed, "bed_x_mm": bed[0], "bed_y_mm": bed[1], "bed_z_mm": bed[2]}
+
+    def set_bed(self, body):
+        try:
+            x, y, z = (float(body[k]) for k in ("x_mm", "y_mm", "z_mm"))
+        except (KeyError, TypeError, ValueError):
+            raise HubRequestError(400, {"error": "Set the bed's width, depth and height in millimetres.",
+                                        "code": "bad_args"})
+        if not 20.0 <= min(x, y, z) or max(x, y, z) > 2000.0:
+            raise HubRequestError(400, {"error": "A printer bed between 20 and 2000 mm on each side, please.",
+                                        "code": "bad_args"})
+        self._f("set_bed", x, y, z)
+        return self.workspace()
+
+    def reviews(self, limit=10):
+        """The Droid reviewer's rounds, newest first, with findings as sentences a person can read."""
+        out = []
+        for r in sorted(self._rows("v_review"), key=lambda r: r["at_ms"], reverse=True)[:int(limit)]:
+            out.append({"id": r["id"], "brief": r["brief"], "round": r["round"], "passed": bool(r["passed"]),
+                        "findings": _findings(r.get("findings_json")), "at": r["at_ms"] / 1000})
+        return out
 
     def accept_handoff(self, body, hid):
         self._f("accept_handoff", hid)
@@ -743,9 +938,10 @@ class SpaceHub(LibraryRoutes):
     def mirror_changes(self, applied):
         """What a live mirror must change to match the team's model, given the version of each part it last applied
         ({name: version}): (breps fetched for new or changed parts, names to remove, the versions now applied).
-        Compares rev, bbox, volume and placement, since the host re-syncs objects without bumping revs or making an
-        event. A failed fetch raises, so the caller keeps `applied` and the next pass tries again."""
-        want = {o["name"]: (o["rev"], tuple(o["bbox"] or ()), o["volume"], o["placement_json"])
+        Compares rev, bbox, volume, placement and visibility, since the host re-syncs objects without bumping revs or
+        making an event (a boolean hides its inputs that way). A failed fetch raises, so the caller keeps `applied`
+        and the next pass tries again."""
+        want = {o["name"]: (o["rev"], tuple(o["bbox"] or ()), o["volume"], o["placement_json"], o.get("visible", True))
                 for o in self._rows("v_object")}
         stale = sorted(n for n, v in want.items() if applied.get(n) != v)
         breps = self.post("/brep", {"names": stale})["objects"] if stale else {}

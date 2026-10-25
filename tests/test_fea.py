@@ -95,6 +95,9 @@ def test_rules_safety_factor_bands():
     assert any("thin" in p["text"] for p in sf_points(1.2))
     assert any("heavier" in p["text"] for p in sf_points(20))
     assert not any("safety factor" in p["text"].lower() for p in sf_points(3))
+    # Strength to spare: the report points at lightening the part with this same load case.
+    assert any("lighten_part" in p["text"] and "spare" in p["text"] for p in sf_points(5))
+    assert any("lighten_part" in p["text"] for p in sf_points(20))
     # A peak above yield only at a support is a warning about the singularity, not a verdict of failure.
     local = sf_points(0.8, 1.6, "fixed_face")
     assert not any(p["severity"] == "critical" for p in local) and "small spot" in texts(local)
@@ -423,3 +426,11 @@ def test_run_job_installs_a_missing_mesher_and_retries(monkeypatch):
     monkeypatch.setattr(mesher, "install", broken)
     r, _ = fea.run_job("py", {}, "")
     assert r["code"] == "missing_mesher" and r["error"] == "no internet"
+
+
+def test_lighten_hint_detects_requests_to_save_weight():
+    from cadswarm.prompt_hook import lattice_hint
+    for text in ("make this bracket lighter", "can we save some weight", "add gyroid infill", "it's over-built"):
+        assert "lighten_part" in lattice_hint(text), text
+    for text in ("what colour is it", "move the light switch", "add a fillet"):
+        assert lattice_hint(text) == "", text

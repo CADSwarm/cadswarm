@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { splitError, toActivity, toBrief, toMember, toPointer } from '../src/api';
+import { splitError, toActivity, toBrief, toMember, toPointer, type Api } from '../src/api';
 import { PointerGate } from '../src/pointer-gate';
 import { loadSession, saveSession, lastDb } from '../src/session';
+import { Store } from '../src/store';
+import { startMockSwarm } from '../src/mock';
 
 describe('reducer errors', () => {
   it('splits "<code>: <message>" on the first ": "', () => {
@@ -44,8 +46,30 @@ describe('PointerGate', () => {
   });
 });
 
-describe('session', () => {
-  afterEach(() => vi.unstubAllGlobals());
+describe('chat and tasks', () => {
+  it('exposes the reducers the composer needs', () => {
+    const names: (keyof Api)[] = ['submitBrief', 'sendCommand', 'createTask', 'sendMessage', 'sendChat'];
+    expect(names).toEqual(['submitBrief', 'sendCommand', 'createTask', 'sendMessage', 'sendChat']);
+  });
+
+  it('strips @mentions from a brief, creates a helper task and chats to everyone', async () => {
+    const store = new Store();
+    const { api, stop } = startMockSwarm(store);
+    try {
+      api.submitBrief('@team make a lid', '');
+      expect(store.state.briefs[0].text).toBe('make a lid');
+
+      const taskId = await api.createTask({ title: 'make a lid', detail: 'make a lid 20 mm', objects: ['Lid'], assignee: 'worker1' });
+      expect(taskId).toMatch(/^t_/);
+      expect(store.state.tasks.at(-1)).toMatchObject({ id: taskId, title: 'make a lid', assignee: 'worker1', objects: ['Lid'] });
+
+      const messageId = api.sendChat('hello team');
+      expect(store.state.messages.at(-1)).toMatchObject({ id: messageId, kind: 'chat', to: 'all', body: 'hello team' });
+    } finally { stop(); }
+  });
+});
+
+describe('session', () => {  afterEach(() => vi.unstubAllGlobals());
   it('survives storage that throws', () => {
     vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } });
     expect(loadSession('u', 'd')).toBeNull();

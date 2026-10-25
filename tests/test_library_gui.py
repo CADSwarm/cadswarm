@@ -35,6 +35,6 @@ def test_library_tab_and_settings_dialog_in_freecad(tmp_path):
     profile.mkdir()
     env["FREECAD_USER_HOME"] = env["FREECAD_USER_DATA"] = str(profile)
     proc = subprocess.run([python, str(ROOT / "tests" / "library_gui_check.py"), str(tmp_path)], env=env,
-                          capture_output=True, text=True, timeout=240)
+                          capture_output=True, encoding="utf-8", errors="replace", timeout=240)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads((tmp_path / "library-gui-verified.json").read_text())["ok"]

@@ -162,6 +162,13 @@ def test_each_cli_gets_a_headless_command_with_the_prompt_on_stdin_where_it_can(
     assert argv[-1] == "-" and stdin == "do it"
     argv, stdin = runner.agent_command("droid", "droid", "/h", "do it\nnow", resume=False)
     assert argv[-1] == "do it now" and stdin is None
+    argv, stdin = runner.agent_command("opencode", "opencode", "/h", "do it\nnow", resume=True)
+    assert argv[:4] == ["opencode", "run", "--standalone", "--auto"] and "--continue" in argv
+    assert stdin == "do it\nnow" and not any("do it" in a for a in argv)
+    # Creao has no CLI: the launcher runs its bridge, which takes the prompt on stdin.
+    argv, stdin = runner.agent_command("creao", "", "/h", "do it", resume=False)
+    assert argv[-3:] == ["creao", "--dir", "/h"] and argv[1].endswith("cadswarm_launch.py")
+    assert stdin == "do it"
 
 
 def test_runner_alive_follows_its_heartbeat_file(tmp_path):
@@ -180,7 +187,7 @@ def test_panel_snapshot_reads_each_view_once():
     h = SpaceHub({"uri": "http://x", "db": "d", "name": "ann-claude"},
                  {"participant_id": 1, "fence": 2, "name": "ann-claude"}, space=space)
     snap = h.panel_snapshot()
-    assert set(snap) == {"model", "tasks", "commands", "briefs", "messages"}
+    assert set(snap) == {"model", "tasks", "commands", "briefs", "messages", "reviews", "workspace"}
     assert len(seen) == len(set(seen))  # no view read twice in one refresh
     assert [m["id"] for m in snap["messages"]] == ["m_steer", "m_ask", "m_chat", "m_bob"]
     h.tasks()

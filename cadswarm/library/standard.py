@@ -166,7 +166,7 @@ def virtual_components():
             "id": STD_PREFIX + name.lower(), "name": fam["name"], "category": fam["category"],
             "tags": fam.get("tags", []), "description": f"{fam['standard']}. Sizes: {', '.join(fam['sizes'])}"
             + (f"; lengths {', '.join(map(str, fam['lengths']))} mm" if fam.get("lengths") else ""),
-            "source": "builtin", "source_url": "", "license": "CadSwarm built-in", "author": "CadSwarm",
+            "source": "builtin", "source_url": "", "license": "CADSwarm built-in", "author": "CADSwarm",
             "format": "standard", "std": {"family": name, "sizes": list(fam["sizes"]),
                                           "lengths": fam.get("lengths", []), "params": fam["params"]},
         })

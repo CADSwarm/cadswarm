@@ -1,4 +1,4 @@
-"""CadSwarm MCP server: one per agent session (Claude Code or Codex).
+"""CADSwarm MCP server: one per agent session (Claude Code or Codex).
 
 Started by the agent CLI from a project folder prepared by `cadswarm setup --invite`.
 On start it rejoins the team on SpacetimeDB (resuming the folder's stored identity
@@ -21,7 +21,7 @@ from .files import unique_path
 from .space_hub import SpaceHub
 
 INSTRUCTIONS = """You are one of several agents (each driven by a different person) building ONE shared
-FreeCAD model through the CadSwarm hub. Talk briefly. People watch the model change live in FreeCAD and the
+FreeCAD model through the CADSwarm hub. Talk briefly. People watch the model change live in FreeCAD and the
 web app, so don't narrate: no running commentary, no restating tool calls or their results, no lists of what
 you're about to do. Reply in one or two short sentences; when you finish something, say what changed in at
 most three lines (part names and key sizes). Ask questions only when you truly need an answer, all in one
@@ -32,6 +32,8 @@ Work like a careful teammate:
    Never try to edit someone else's part. Message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
    (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
+   When parts already repeat a size, auto_constrain previews the shared sizes, equal-spacing patterns and
+   shaft/hole fits it can infer; apply the ones you mean.
    For a dev board's real dimensions (hole spacing, port positions, PCB size) call lookup_board, never guess.
 4. Build parametric primitives/booleans, or use run_part_script to compute complex shapes (set `shape`; the
    script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
@@ -56,7 +58,7 @@ Work like a careful teammate:
    Storage is limited: text files up to 5 MB, binary CAD/media up to 100 MB, and only the last 20
    versions of each file (plus everything from the last day) are kept. If a save fails with
    `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
-   them to free it (FreeCAD: the CadSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
+   them to free it (FreeCAD: the CADSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
    or exports yourself to make room, and don't save big files you can regenerate.
 9. FEA (strength, stiffness, vibration or heat questions: "will it hold / break / bend", stress, load, safety
    factor, natural frequency, temperature). Before running anything, ask your person in ONE message:
@@ -83,11 +85,23 @@ Work like a careful teammate:
    Fits are also Params (Params.tol_clearance etc.): bind gaps to them instead of hard-coding numbers.
    Only people change settings. When a part you add implies a different value (a press-fit bearing, small
    holes that need a finer mesh), call suggest_setting with a one-line reason; a person accepts it.
-13. Team design style. CadSwarm learns how this team designs (the values people use, the corrections they keep
+13. Team design style. CADSwarm learns how this team designs (the values people use, the corrections they keep
    making to agent work, preferred parts, problems reviews keep finding) and shows it as "Team design style" in
    your context. Follow it. Before modelling a new kind of part, call team_style(topic=...) for the rules that
    apply. A [confirmed] rule is the team's decision: never go against it without asking your person. When your
    person states a lasting preference ("we always use 2.4 mm walls"), propose it with teach_style.
+14. Lighten without losing stiffness (lighten_part). SUGGEST IT when your person wants a part lighter, cheaper,
+   faster to print or with less material ("make it lighter", "save weight", "infill", "lattice"), when an FEA
+   report shows a high safety factor (the part is over-built), and for drones, robots, brackets, mounts,
+   prosthetics and anything 3D printed in metal or plastic. It fills the inside with a lattice that is thicker
+   where the stress is high, keeps a solid skin and solid zones at supports and loads, and checks that the part
+   keeps the stiffness you ask for (default 90 %) by simulating the real lattice. Before running, ask in ONE
+   message: how the part is held and loaded (or reuse a finished static FEA with fea_job_id), the material,
+   and how it will be made (powder/resin printing needs open_faces so powder can drain). Not sure which cell?
+   lattice_cells ranks them. It runs in the background: poll lattice_status. Then tell your person the weight
+   saving and the VERIFIED stiffness, read out any warnings, and only with their OK call lattice_apply (it adds
+   a mesh next to the original, which stays unchanged). If no design meets the target, say so and pass on the
+   suggestions in the notes. Never present it as certification; printed parts still need testing.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 
@@ -311,6 +325,25 @@ def set_param(alias: str, value: str, note: str | None = None) -> dict:
 
 
 @mcp.tool()
+def auto_constrain(names: list[str] | None = None, apply: bool = False,
+                   ids: list[str] | None = None) -> dict:
+    """Turn sizes the model already repeats into shared Params, so one edit moves every part.
+
+    It finds equal dimensions across parts, holes on one pitch, and a shaft in a hole that should
+    use the team's slip/press fit. Preview first (the default): the plan lists each constraint with
+    its Params and expressions. Call again with apply=True to write them; pass ids to write only
+    the ones you mean. Applying locks Params and the parts, uses their current revisions, and
+    needs no publish. `names` limits it to a selection."""
+    body = {"apply": bool(apply)}
+    if names:
+        body["names"] = list(names)
+    if ids is not None:
+        body["ids"] = list(ids)
+    return call("POST", "/constrain", body,
+                doing="applying shared sizes" if apply else "looking for shared sizes")
+
+
+@mcp.tool()
 def run_part_script(code: str, name: str | None = None, label: str | None = None) -> dict:
     """Run FreeCAD Python in a sandbox to compute a shape. Available: Part, App, Vector, Placement, Rotation,
     math, params (dict of Params values) and doc, a READ-ONLY snapshot of the shared model: read other parts'
@@ -478,7 +511,7 @@ def save_snapshot(label: str = "") -> dict:
 @mcp.tool()
 def storage_status() -> dict:
     """How much room the project uses (live files, older versions, snapshots, exports), its limit, the host's
-    free disk space and the history-retention settings. Read-only: only a person can free up space (the CadSwarm panel's Tools tab >
+    free disk space and the history-retention settings. Read-only: only a person can free up space (the CADSwarm panel's Tools tab >
     Storage and free up space in FreeCAD), so ask one if you are running out."""
     return call("GET", "/project/storage")
 
@@ -493,14 +526,14 @@ def lookup_board(question: str, board: str | None = None) -> dict:
 
 @mcp.tool()
 def recall_designs(query: str, board: str | None = None) -> dict:
-    """Similar past CadSwarm designs and the lessons learned from their reviews, so you avoid repeating
+    """Similar past CADSwarm designs and the lessons learned from their reviews, so you avoid repeating
     a problem (e.g. a lid that clipped the USB plug)."""
     return call("POST", "/knowledge/designs", {"query": query, "board": board}, doing="recalling past designs")
 
 
 @mcp.tool()
 def team_style(topic: str | None = None, board: str | None = None) -> dict:
-    """The design-style rules this team follows, learned from how its people and agents work in CadSwarm
+    """The design-style rules this team follows, learned from how its people and agents work in CADSwarm
     (e.g. wall thickness, fits, preferred inserts, what people keep correcting). `topic` ranks rules for the part
     you are about to make; `board` adds that board's rules. [confirmed] rules are the team's decisions."""
     return call("GET", "/style", doing=f"checking team style{' for ' + topic if topic else ''}",
@@ -510,15 +543,86 @@ def team_style(topic: str | None = None, board: str | None = None) -> dict:
 @mcp.tool()
 def teach_style(statement: str) -> dict:
     """Propose a lasting design rule your person stated, e.g. "Lids use 4 M3 heat-set inserts". It waits as a
-    candidate until a person confirms it in the CadSwarm panel (Learned style); then every agent follows it."""
+    candidate until a person confirms it in the CADSwarm panel (Learned style); then every agent follows it."""
     return call("POST", "/style/teach", {"statement": statement}, doing="saving a team style rule")
 
 
 @mcp.tool()
 def style_rules() -> dict:
     """Every learned style rule with its evidence and status (confirmed, active, or a candidate awaiting a person).
-    A person can confirm or dismiss candidates in the CadSwarm panel (Learned style)."""
+    A person can confirm or dismiss candidates in the CADSwarm panel (Learned style)."""
     return call("POST", "/style/rules", {})
+
+
+# ------------------------------------------------- lighten without losing stiffness
+
+LATTICE_WAIT = 45  # seconds a call waits for the job; keeps tool calls under the CLIs' timeouts
+
+
+@mcp.tool()
+def lighten_part(target: str, stiffness_target_pct: float = 90, cell: str = "gyroid",
+                 fea_job_id: str | None = None, fixed: list[str] | None = None, loads: list[dict] | None = None,
+                 material: str | dict | None = None, cell_size_mm: float | None = None,
+                 min_thickness_mm: float | None = None, max_thickness_mm: float | None = None,
+                 skin_mm: float | None = None, open_faces: list[str] | None = None, voxel_mm: float | None = None,
+                 name: str | None = None, grading: str = "stress", thickness_mm: float | None = None) -> dict:
+    """Lighten a part without losing stiffness: fill its inside with a lattice that is thicker where the stress
+    is high, then verify on the real lattice that it keeps `stiffness_target_pct` % of the solid part's
+    stiffness. Works on a copy; the model only changes when you call lattice_apply.
+    Load case, like run_fea: reuse a finished static FEA (`fea_job_id`) or give `fixed` (face selectors) and
+    `loads` ([{"type": "force", "faces": ["xmax"], "newtons": 200, "direction": [0, 0, -1]}], pressure, gravity)
+    and `material` (preset or dict). With no load case use grading="uniform" and thickness_mm: an unverified
+    uniform lattice.
+    cell: gyroid (default, prints without supports), diamond or iwp (stiffest TPMS), schwarzP, octet (stiffest
+    beams), bcc, fcc, cubic. cell_size_mm (default 8), walls between min_thickness_mm (default: the team's
+    min_wall) and max_thickness_mm, skin_mm (default 1.5; thickened automatically if the core alone can't reach
+    the target), open_faces like ["+z", "-z"] for powder/resin drainage, voxel_mm (build resolution).
+    Returns job status; if not done, call lattice_status(job_id, wait=45)."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/lattice/jobs", {**body, "wait": LATTICE_WAIT}, doing=f"lightening {target}",
+                targets=[target])
+
+
+@mcp.tool()
+def lattice_status(job_id: str, wait: int = LATTICE_WAIT) -> dict:
+    """A lighten job's progress, or its result: weight saving, verified stiffness, wall range, warnings,
+    files (STL, 3MF, report) and the next step. wait: seconds to wait for it to finish (max 55)."""
+    return call("GET", f"/lattice/jobs/{job_id}", wait=min(int(wait or 0), 55))
+
+
+@mcp.tool()
+def lattice_apply(job_id: str, name: str | None = None, force: bool = False) -> dict:
+    """Add a finished lattice to the shared model as a mesh object next to its source part (unchanged).
+    Refused with stale_source if the part changed since the job started (force adds it anyway). Ask your
+    person first."""
+    return call("POST", f"/lattice/jobs/{job_id}/apply", {"name": name, "force": force},
+                doing="adding the lattice to the model")
+
+
+@mcp.tool()
+def lattice_cancel(job_id: str) -> dict:
+    """Stop a lighten job (yours; a person can stop anyone's)."""
+    return call("POST", f"/lattice/jobs/{job_id}/cancel", {})
+
+
+@mcp.tool()
+def lattice_cells(target: str = "stiffness", value: float | None = None, cell_size_mm: float = 8,
+                  min_wall_mm: float | None = None, youngs_mpa: float | None = None) -> dict:
+    """Which lattice cell to use: every cell's wall thickness and density for a target, lightest first.
+    target "stiffness": value is the lattice's stiffness relative to solid (0.1 = 10 %; or MPa with youngs_mpa).
+    target "density": value is the solid fraction (0.3 = 30 %). From CadSwarm's simulated cell map."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/lattice/cells", body)
+
+
+@mcp.tool()
+def lattice_estimate(target: str, cell: str = "gyroid", cell_size_mm: float | None = None,
+                     min_thickness_mm: float | None = None, skin_mm: float | None = None,
+                     open_faces: list[str] | None = None, voxel_mm: float | None = None) -> dict:
+    """Check a lighten request before running it: the normalized recipe, warnings (thin walls, trapped powder,
+    closing channels, too few voxels) and a rough time. Changes nothing."""
+    body = {k: v for k, v in locals().items() if v is not None}
+    return call("POST", "/lattice/estimate", body)
 
 
 # --------------------------------------------------- components library & settings
@@ -584,7 +688,7 @@ def hole_size(family: str, size: str, purpose: str | None = None) -> dict:
 @mcp.tool()
 def import_component_from_url(url: str, name: str | None = None, category: str = "other",
                               tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
-    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CadSwarm .zip pack) to the
+    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CADSwarm .zip pack) to the
     team's library, e.g. a vendor's CAD download or a model in a GitHub repo. The host downloads it (public
     internet only, up to 50 MB), FreeCAD measures it, and the team sees it. Always pass the license you saw
     on the source page. Then place it with insert_component."""

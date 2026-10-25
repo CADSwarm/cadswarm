@@ -1,6 +1,6 @@
 # Elastic: board knowledge, design memory and lessons
 
-Elastic is a core part of CadSwarm: with an Elastic project configured on the host, agents look up
+Elastic is a core part of CADSwarm: with an Elastic project configured on the host, agents look up
 board dimensions from datasheets, remember finished designs, and learn from reviewer findings.
 Without one the app degrades gracefully: it builds from the local board library and skips memory.
 
@@ -49,10 +49,11 @@ Run one host per database. Two `cadswarm-host` processes share the host identity
 each other's fence, so either one can win the export completion; if the loser predates
 `index_design`, the brief still reaches `ready` but is never indexed.
 
-## Agent Builder (optional, not in the demo)
+## Agent Builder
 
-The demo and the judging story use search, design memory and the Workflow only. This section is the
-extra that ships alongside them; it degrades to the local board library whenever it is unavailable.
+Two Agent Builder agents run on the Serverless project: the Board expert below and the
+`cadswarm-style-analyst` (see "Rewording"). A live `converse` call to the Board expert answered in
+13.6 s on 2026-10-24. Whenever its model is unavailable, the host degrades to the local board library.
 
 `elastic/agent.json` and `elastic/tools/*.json` define the Board expert:
 
@@ -132,8 +133,8 @@ Serverless Elasticsearch/Kibana 9.6.0, project region us-east-1:
   above rather than a fault in the Workflow.
 
 Known limit: the agent's model is whichever model Agent Builder is configured with, and on the trial
-tier that is a managed model with a per-model request quota. When the quota is exhausted, `converse`
-returns a bare `429 Too Many Requests` with no refill time, and the model selection made in the
+tier that is a managed model with a per-model request quota. When the quota is exhausted (it was for
+part of 2026-10-24), `converse` returns a bare `429 Too Many Requests` with no refill time, and the model selection made in the
 Kibana UI is not stored on the agent document, so it cannot be changed from this API. Nothing else
 in the pipeline (search, ingest, design memory, the Workflow) uses that model, and the host's
 `board_spec` call is best effort: on any error it falls back to the local board library.

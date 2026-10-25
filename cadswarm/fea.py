@@ -201,7 +201,7 @@ def runner_script():
 
 def run_job(python, job, model_path, timeout=FEA_TIMEOUT, progress=None):
     """Solve `job["target"]` from a saved model with FreeCAD's python; installs Gmsh first if neither FreeCAD
-    nor CadSwarm has one. Returns (result dict, plot PNG bytes or None). `progress(text)` hears about a
+    nor CADSwarm has one. Returns (result dict, plot PNG bytes or None). `progress(text)` hears about a
     mesher install.
     """
     from . import mesher
@@ -289,9 +289,15 @@ def rules(job, result):
             elif sf < 1.5:
                 out.append(_pt("warning", f"Safety factor {sf:.2f} is thin. Most designs aim for at least 1.5–2 "
                                "(more for impacts, fatigue or people's safety)."))
-            elif sf > 10:
-                out.append(_pt("info", f"Safety factor {sf:.1f} is very high: the part is probably heavier than it "
-                               "needs to be. Thinner walls or pockets could save material."))
+            elif sf > 3:
+                lighten = ("Lighten part (lighten_part, or the panel's Tools tab > Lighten part...) can fill its "
+                           "inside with a lattice that is thicker where this analysis shows stress, then check it "
+                           "keeps its stiffness, reusing this load case.")
+                if sf > 10:
+                    out.append(_pt("info", f"Safety factor {sf:.1f} is very high: the part is probably heavier than "
+                                   f"it needs to be. Thinner walls or pockets could save material. {lighten}"))
+                else:
+                    out.append(_pt("info", f"Safety factor {sf:.1f}: the part has strength to spare. {lighten}"))
         if r.get("peak_near") == "fixed_face":
             out.append(_pt("warning", "The highest stress sits right at a fixed face. Fully fixed faces are "
                            "infinitely stiff, which creates artificial stress peaks that grow as the mesh gets finer. "

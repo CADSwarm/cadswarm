@@ -1,171 +1,78 @@
-# CadSwarm lattice documentation
+# Lighten without losing stiffness
 
-This folder documents a proposed CadSwarm capability: local, agent-accessible lattice generation for a closed
-part in the shared FreeCAD model, with a thin `Lattice` tab and MCP tools for the team's AI helpers.
+CADSwarm can take a solid part, fill its inside with a lattice that is **thicker where the part works hard**,
+and check, by simulating the real lattice, that the part keeps the stiffness you asked for. People use
+**Lighten part…** in FreeCAD; AI helpers use `lighten_part` and suggest it when a part could be lighter.
 
-**Status: proposed, 2026-10-24. No implementation code has been written.** The documents exist so the feature
-can be reviewed, scoped and implemented without rediscovering the design. Commands, tools and tabs described
-here do not exist yet.
+**Status: implemented** (engine, jobs, hub, MCP tools, FreeCAD dialog, tests). It runs on the computer that
+hosts the team, inside FreeCAD's own Python (NumPy and SciPy, which FreeCAD ships); nothing is uploaded and
+nothing new has to be installed.
 
-**Provenance:** the capability is a clean-room reimplementation of the core workflow observed in
-[IMPLICIT](https://implicit.build/), using PicoGK 2.3.0 and the LEAP 71 libraries (Apache-2.0). No IMPLICIT
-code, assets or strings are used. See the evidence dossier for the boundary and the artifact record.
+**Provenance.** The workflow was studied from the public IMPLICIT web app (https://implicit.build), whose home
+page headline is "Lighten without losing stiffness". The study was reference only, under a clean-room boundary:
+see the [evidence dossier](../superpowers/research/2026-10-24-implicit-build-evidence.md). No IMPLICIT code,
+assets or wording is used; TPMS and strut cells, Gibson–Ashby scaling, voxel finite elements and marching
+tetrahedra are public mathematics, implemented here from scratch.
 
----
+## What happens when you lighten a part
 
-## 1. Document map
+```
+ 1 prepare   voxelize the part; map its supports and loads onto the voxels
+ 2 simulate  solve the solid part (voxel finite elements) for its stress and stiffness
+ 3 grade     density follows the stress: thick walls where it is high, thin where it is low
+ 4 search    find the lightest density level whose stiffness meets the target
+             (the lattice as an equivalent material from the calibrated cell map)
+             if even the densest core misses, thicken the skin and try again
+ 5 verify    rebuild the real walls on a finer grid and solve again next to the solid part:
+             stiffness kept, displacement x, stress x, safety factor; thicken and re-check if short
+ 6 build     final lattice = skin + solid zones at supports/loads + graded lattice, open faces cut
+ 7 mesh      watertight, oriented triangle mesh; STL, 3MF, a preview and a report
+ 8 apply     (on request) add it to the model as a mesh object next to the original
+```
 
-| Document | Audience | What it answers |
+The **verified** stiffness (step 5, real walls) is what the report and the agents quote. The search uses the
+calibrated cell map only to choose the design quickly.
+
+## Cells
+
+| Cell | Family | Good for |
 |---|---|---|
-| [Evidence dossier](../superpowers/research/2026-10-24-implicit-build-evidence.md) | reviewers, architects | What was observed in IMPLICIT, how, what is inferred, what remains unknown, and what must not be copied |
-| [Contract v1](../superpowers/specs/2026-10-24-lattice-contract.md) | implementers, agent developers | Exact job/apply contract: parameters, states, routes, MCP tools, errors, storage, security, test vectors |
-| [Implementation plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) | implementers, project lead | Phased tasks 0–9, repository layout, acceptance criteria, benchmarks, risks, backlog |
-| [Agent guide](agent-guide.md) | AI helpers (Claude Code, Codex) | How to use the tools, choose parameters, read warnings, recover from errors, and stay safe |
-| [Operator guide](operator-guide.md) | host, support, rollout | Install, configure, run the tab, job states, storage, troubleshooting, limits, security |
+| gyroid | TPMS sheet | the default: prints without supports, about isotropic |
+| diamond | TPMS sheet | the stiffest smooth cell for its weight |
+| iwp | TPMS sheet | very stiff, smaller pores |
+| schwarzP | TPMS sheet | big pores; channels close above about 55 % density |
+| octet | struts | the stiffest strut cell |
+| bcc, fcc | struts | light, flexible, bending-dominated |
+| cubic | struts | stiff only along its axes |
 
-The contract is the source of truth for names, fields, limits and error codes. If a guide disagrees with it, the
-contract wins and the guide is wrong.
+Each cell's density, stiffness and strength against wall thickness are in
+`cadswarm/lattice/calibration.json`, measured by compressing blocks of cells with the same voxel solver
+(`python -m cadswarm.lattice.calibration` regenerates it). These are simulations, not material tests.
 
----
+## Where things are
 
-## 2. Reading order
-
-- **Reviewing the idea:** evidence dossier → contract §1–§5 → plan §1–§3 → this page.
-- **Implementing the engine:** plan Task 0 → contract §4, §9, §10 → evidence dossier §8.
-- **Implementing the hub/worker:** contract §7–§12 → plan Task 4–5 → `cadswarm/hub/core.py`,
-  `cadswarm/worker/freecad_worker.py`.
-- **Implementing MCP tools:** contract §5–§7, §10 → agent guide → plan Task 6.
-- **Implementing the tab:** plan Task 7 → operator guide §5 → `cadswarm/gui/panel.py`, `InitGui.py`.
-- **Hosting or supporting:** operator guide → plan §15 → this page.
-
----
-
-## 3. What the MVP is
-
-The core loop, not the whole product:
-
-1. Pick one closed solid in the shared model.
-2. Choose a standard cell: Gyroid, Diamond, Schwarz P, Schoen I–WP, BCC, FCC, Octet or Simple cubic.
-3. Set cell size, uniform wall/strut thickness, skin, open faces and voxel size.
-4. Generate as a background job; inspect warnings and statistics.
-5. Apply the result as a new object under the existing lock and revision rules, or export STL/3MF.
-
-| In scope (v1) | Deferred |
+| Piece | File |
 |---|---|
-| 4 TPMS sheet cells, 4 beam cells | Exotic TPMS, TPMS network forms |
-| Regular box layout | Noisy, conformal layouts |
-| Box frame fitted to the bounding box | Cylinder, sphere frames |
-| Uniform thickness | Gradient, distance, attractor, zone, FEA-driven grading |
-| Closed skin, no skin, axis-aligned open faces | Arbitrary face selection |
-| Job queue, progress, cancel, retention | Multi-job parallelism |
-| One closed solid per job | Multi-body lattices |
-| STL and single-object millimetre 3MF | Colors, materials, density-map 3MF |
-| MCP tools and a thin FreeCAD tab | FEA, thermal, buckling, compression, flow, SIMP, Verify |
-| Windows x64 (macOS arm64 if supported) | Linux |
+| Engine (NumPy/SciPy) | `cadswarm/lattice/`: `cells`, `voxelize`, `vfem` (matrix-free hex8 + multigrid), `calibration`, `grade`, `build`, `loadcase`, `optimize`, `mc`, `pipeline` |
+| FreeCAD runner (one-shot process) | `cadswarm/lattice/runner.py` |
+| Jobs on the team server | `cadswarm/lattice_jobs.py` (helper ops `lattice_*`) |
+| Hub routes | `cadswarm/space_hub.py` (`/lattice/...`) |
+| Agent tools | `cadswarm/mcp_server.py`: `lighten_part`, `lattice_status`, `lattice_apply`, `lattice_cancel`, `lattice_cells`, `lattice_estimate` |
+| People | `cadswarm/gui/lighten_ui.py`: **Lighten part…** (the panel's Tools tab, the CADSwarm menu, the CADSwarm Optimization workbench) |
+| Placing the result | worker op `insert_mesh` (a `Mesh::Feature`) |
+| Tests | `tests/test_lattice.py`, `tests/test_lattice_freecad.py`, `tests/test_lighten_gui.py`, plus helper/hub tests |
 
-The plan's backlog orders the deferred work; each item needs its own contract revision.
+Guides: [agent guide](agent-guide.md) (how helpers use and suggest it) and
+[operator guide](operator-guide.md) (people, hosting, limits, troubleshooting).
+The [contract](../superpowers/specs/2026-10-24-lattice-contract.md) and the
+[original PicoGK plan](../superpowers/plans/2026-10-24-cadswarm-06-lattice.md) describe the earlier proposal; the
+[implementation plan](../superpowers/plans/2026-10-24-cadswarm-07-lighten.md) records what was built and why.
+The [PicoGK spike](spike-2026-10-24.md) records a throwaway headless test of that earlier kernel choice.
 
----
+## Honest limits
 
-## 4. Invariants
-
-These hold across the contract, plan and guides:
-
-1. **Generation is a job; apply is a transaction.** A long build never runs inside the single FreeCAD worker and
-   never holds the model lock.
-2. **The source is snapshotted atomically.** Mesh and revision are captured together.
-3. **Apply is revision-safe.** A changed source yields `stale_source`; a stale result is never inserted.
-4. **Apply is lock-safe and rollback-safe.** It uses the normal creation rules; failure leaves no object and no
-   lock change.
-5. **Agents never pass paths.** They name a job and an output object; the hub resolves the rest.
-6. **Everything is millimetres.** 3MF declares millimetres; STL is interpreted as millimetres.
-7. **The engine is optional.** Missing or disabled means `lattice_unavailable`, and the rest of CadSwarm is
-   unaffected.
-8. **Local only.** No uploads, no telemetry, no hosted fallback.
-9. **Additive.** Existing ops, tools, locks and storage behavior do not change.
-10. **No parity claim.** The MVP reproduces the workflow, not IMPLICIT's simulation, grading or UI.
-
----
-
-## 5. Architecture at a glance
-
-```text
- agent / Lattice tab
-     │  existing HTTP auth, fence and lock rules
-     ▼
- FastAPI hub ──────────────► LatticeJobs (Python)
-     │                         │  one queue, one engine process
-     │                         ▼
-     │                    LatticeEngine.exe  (PicoGK 2.3.0, local, no network)
-     │                         │
-     │  short query            │  result.stl + result.3mf + result.json
-     ▼                         ▼
- FreeCAD worker  ◄──── source.stl / import result.stl
-     │
-     └── the live .FCStd, transactions, lock rollback
-```
-
-- Snapshot: short worker query under the hub lock.
-- Generate: external one-shot process; the hub lock is free.
-- Apply: short worker mutation inside a normal transaction.
-- Export: copy to `exports/`; no model change.
-
----
-
-## 6. Where the code will live
-
-From the plan (§4), for orientation only — none of these files exist yet:
-
-```text
-services/lattice/                 .NET 9 engine: CLI, params, cells, build, output, validation, tests
-cadswarm/lattice/                 Python contract, job store, engine supervisor, manager
-cadswarm/gui/lattice_panel.py     FreeCAD dock tab
-cadswarm/hub/core.py, app.py      internal apply hook, HTTP routes
-cadswarm/worker/freecad_worker.py lattice_source query, lattice_import mutation
-cadswarm/mcp_server.py            eight agent tools
-InitGui.py                        command, toolbar, menu
-tests/test_lattice_*.py           contract, store, manager, worker, integration, MCP, panel
-```
-
-The engine is a separate solution so it can be built, tested and shipped without a .NET SDK on teammate
-machines.
-
----
-
-## 7. Open decisions before implementation
-
-These are recorded in the plan and evidence dossier, and should be settled first:
-
-1. Task 0 spike: can PicoGK 2.3.0 run headless on the host, and how reliably does its STL round-trip into a
-   closed FreeCAD solid? If not, the plan pivots to export-only.
-2. Platform coverage: is macOS arm64 supported by the pinned build, or is v1 Windows-only?
-3. Host-only rollout: is "engine on the hub machine only" acceptable for the hackathon, or does each teammate
-   need a local engine?
-4. Parity scope: is the eight-cell MVP enough for the demo, or is one grading option (for example uniform axial
-   gradient) worth pulling forward?
-5. Contract timing: implement against the current FastAPI/SQLite hub, or wait for the SpacetimeDB host? The
-   contract preserves the tool shape either way.
-
----
-
-## 8. Clean-room and licences
-
-- IMPLICIT is proprietary. The public page and bundles were used as **reference** for observable behavior only.
-  No code, assets, locale strings, shaders, WASM or recipe schema are copied. Do not add any.
-- Public mathematical definitions of TPMS surfaces and beam cells are not proprietary; the implementation must
-  still be CadSwarm's own.
-- PicoGK, LEAP 71 ShapeKernel and the LEAP 71 Lattice Library are Apache-2.0. Pin exact versions, keep the
-  licence texts, and ship `THIRD_PARTY_NOTICES.md` with any distribution. Re-verify before release.
-- The evidence dossier is engineering input, not legal advice.
-
----
-
-## 9. Change control
-
-- The contract is versioned (`lattice/1`). A new optional field or cell is a minor revision; a changed meaning
-  or removed field is a major revision.
-- If the IMPLICIT bundle changes, record the new artifact hashes and re-check every "observed" claim before
-  updating the plan. Do not carry conclusions across builds silently.
-- Update this index whenever a document is added, renamed or retired, and fix cross-links in the same change.
-- No document may claim the feature works before the plan's definition of done is met and the benchmarks are
-  recorded.
+- Voxel models: curved edges become staircases, so peak stresses at holes and notches read low unless the
+  voxel is small; the verify step reports how many voxels the thinnest wall gets.
+- Linear elasticity, one static load case. No buckling, fatigue, plasticity or print anisotropy.
+- One closed solid per job. Lattices are meshes, not B-rep solids.
+- A design aid, never a certification. Print and test parts that matter.

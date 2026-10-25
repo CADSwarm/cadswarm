@@ -14,6 +14,8 @@ pub const MUTATING: &[&str] = &[
     "set_expression", "set_placement", "delete", "set_param", "run_part_script",
     // Components library: place a library part or a generated standard part into the model.
     "insert_component", "insert_standard_part",
+    // A mesh from project files (a lattice from lighten_part) as a Mesh::Feature.
+    "insert_mesh",
 ];
 /// Read-only ops the host answers: FreeCAD queries, Elastic lookups, project file reads.
 pub const QUERIES: &[&str] = &[
@@ -22,6 +24,9 @@ pub const QUERIES: &[&str] = &[
     "list_files", "read_file", "file_history",
     "brep", "storage_status",
     "faces", "fea_status", "fea_reports",
+    // Lighten jobs: reading their state and the cell library (the host's helper, lattice_jobs.py).
+    "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_status", "lattice_list",
+    "lattice_result",
     // Components library reads (the host's helper; analyze_component is a FreeCAD query).
     "library_search", "library_recommend", "library_get", "library_export_pack", "standard_parts",
     "analyze_component", "suggest_settings",
@@ -33,6 +38,8 @@ pub const FILE_WRITES: &[&str] = &[
     "save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage",
     // FEA: a job copies the model and later writes its report into files/fea/.
     "fea_run", "fea_publish",
+    // Lighten: a job copies the model and later writes its lattice into files/lattice/.
+    "lattice_start", "lattice_cancel",
     // Components library: files under library/ on the host, mirrored into the `component` table.
     "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
     // Style rules live in the host's project database: teaching, confirming and re-learning change them.
@@ -40,7 +47,8 @@ pub const FILE_WRITES: &[&str] = &[
 ];
 /// Team events a completed (non-mutating) op may carry in its result as `_events` for complete_op to emit:
 /// the host's helper can't call reducers, and an FEA report must pop up for every member.
-pub const RESULT_EVENTS: &[&str] = &["fea_started", "fea_progress", "fea_report", "fea_failed"];
+pub const RESULT_EVENTS: &[&str] = &["fea_started", "fea_progress", "fea_report", "fea_failed",
+    "lattice_started", "lattice_progress", "lattice_report", "lattice_failed"];
 pub const MAX_RESULT_EVENTS: usize = 10;
 
 pub fn is_result_event(kind: &str) -> bool { RESULT_EVENTS.contains(&kind) }
@@ -97,7 +105,7 @@ fn targets(kind: &str) -> &'static [&'static str] {
 pub fn created_name(kind: &str, args: &Value) -> Option<String> {
     match kind {
         "create_primitive" | "create_extrusion" | "boolean" | "run_part_script" | "insert_component"
-        | "insert_standard_part" => str_arg(args, "name"),
+        | "insert_standard_part" | "insert_mesh" => str_arg(args, "name"),
         _ => None,
     }
 }
@@ -319,12 +327,61 @@ pub fn check_pickup(task_id: &str, p: &Pickup) -> Result<(), String> {
     Ok(())
 }
 
-pub fn check_report(task_id: &str, owner: u64, owner_name: &str, caller: u64, status: &str) -> Result<(), String> {
+pub fn check_report(task_id: &str, current: &str, owner: u64, owner_name: &str, caller: u64, status: &str) -> Result<(), String> {
     if status != "done" && status != "blocked" {
         return Err("bad_args: status must be done or blocked".into());
     }
+    if current == "cancelled" {
+        return Err(format!("cancelled: Task {task_id} was cancelled; drop it"));
+    }
     if owner != caller {
         return Err(format!("not_owner: Task {task_id} is owned by {owner_name}, not you"));
+    }
+    Ok(())
+}
+
+/// What `check_cancel_task` needs to know about a task a member wants to stop or remove.
+#[derive(Clone, Copy)]
+pub struct Closing<'a> {
+    pub status: &'a str,
+    pub owner: u64,
+    pub created_by: u64,
+    pub caller: u64,
+    pub caller_kind: &'a str,
+}
+
+/// A person may stop any task; a helper only one it created or claimed. A finished task keeps its result.
+pub fn check_cancel_task(task_id: &str, t: &Closing) -> Result<(), String> {
+    if t.status == "done" {
+        return Err(format!("already_done: Task {task_id} is done; its result is kept"));
+    }
+    if t.status == "cancelled" {
+        return Err(format!("already_cancelled: Task {task_id} was already cancelled"));
+    }
+    if t.caller_kind != "human" && t.caller != t.created_by && t.caller != t.owner {
+        return Err(format!("not_yours: Task {task_id} is not yours to stop"));
+    }
+    Ok(())
+}
+
+/// Deleting is for leftovers only: an open task nobody has started, so no work disappears.
+pub fn check_delete_task(task_id: &str, t: &Closing) -> Result<(), String> {
+    if t.status != "open" {
+        return Err(format!("not_deletable: Task {task_id} is {}; stop it instead", t.status));
+    }
+    check_cancel_task(task_id, t)
+}
+
+/// Statuses a brief never leaves: its result (or its failure) is kept.
+pub const CLOSED_BRIEFS: &[&str] = &["ready", "failed", "cancelled"];
+
+/// A person may stop any brief; a helper only one it asked for. A closed brief stays closed.
+pub fn check_cancel_brief(brief_id: &str, status: &str, author: u64, caller: u64, caller_kind: &str) -> Result<(), String> {
+    if CLOSED_BRIEFS.contains(&status) {
+        return Err(format!("already_closed: Brief {brief_id} is {status}"));
+    }
+    if caller_kind != "human" && caller != author {
+        return Err(format!("not_yours: Brief {brief_id} was asked for by someone else"));
     }
     Ok(())
 }
@@ -568,6 +625,19 @@ mod tests {
     }
 
     #[test]
+    fn lighten_jobs_are_helper_reads_and_writes_and_a_mesh_insert_is_a_locked_change() {
+        for k in ["lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_status", "lattice_list",
+                  "lattice_result"] {
+            assert!(is_query(k) && !is_write(k), "{k}");
+        }
+        assert!(is_file_write("lattice_start") && is_file_write("lattice_cancel") && !is_mutating("lattice_start"));
+        assert!(is_mutating("insert_mesh"));
+        assert_eq!(created_name("insert_mesh", &json!({"name": "Bracket_lattice"})), Some("Bracket_lattice".into()));
+        let r = json!({"_events": [{"kind": "lattice_report", "data": {"job_id": "lj_1"}}]});
+        assert_eq!(result_events(&r), vec![("lattice_report".to_string(), json!({"job_id": "lj_1"}))]);
+    }
+
+    #[test]
     fn reading_the_team_style_is_a_query_and_changing_it_is_a_write() {
         for k in ["style_context", "list_style", "teach_style", "resolve_style", "learn_style"] {
             assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
@@ -635,9 +705,36 @@ mod tests {
         assert!(check_claim("t_1", "open", 1, "", 1).is_ok());
         assert!(check_claim("t_1", "open", 1, "", 0).is_ok());
         assert!(check_claim("t_1", "claimed", 2, "bob", 0).unwrap_err().starts_with("not_claimable:"));
-        assert!(check_report("t_1", 2, "bob", 1, "done").unwrap_err().starts_with("not_owner:"));
-        assert!(check_report("t_1", 2, "bob", 2, "finished").unwrap_err().starts_with("bad_args:"));
-        assert!(check_report("t_1", 2, "bob", 2, "done").is_ok());
+        assert!(check_report("t_1", "claimed", 2, "bob", 1, "done").unwrap_err().starts_with("not_owner:"));
+        assert!(check_report("t_1", "claimed", 2, "bob", 2, "finished").unwrap_err().starts_with("bad_args:"));
+        assert!(check_report("t_1", "claimed", 2, "bob", 2, "done").is_ok());
+        assert!(check_report("t_1", "cancelled", 2, "bob", 2, "done").unwrap_err().starts_with("cancelled:"));
+    }
+
+    #[test]
+    fn a_person_stops_any_task_and_a_helper_only_its_own_and_only_open_ones_are_deleted() {
+        let open = Closing { status: "open", owner: 0, created_by: 7, caller: 3, caller_kind: "human" };
+        assert!(check_cancel_task("t_1", &open).is_ok());
+        // A helper that neither asked for it nor claimed it may not stop it.
+        let stranger = Closing { caller: 9, caller_kind: "agent", ..open };
+        assert!(check_cancel_task("t_1", &stranger).unwrap_err().starts_with("not_yours:"));
+        assert!(check_cancel_task("t_1", &Closing { caller: 7, caller_kind: "agent", ..open }).is_ok());
+        assert!(check_cancel_task("t_1", &Closing { caller: 9, caller_kind: "agent", owner: 9, ..open }).is_ok());
+        // A finished task is history, not something to stop again.
+        assert!(check_cancel_task("t_1", &Closing { status: "done", ..open }).unwrap_err().starts_with("already_done:"));
+        assert!(check_cancel_task("t_1", &Closing { status: "cancelled", ..open })
+            .unwrap_err().starts_with("already_cancelled:"));
+        // Deleting only takes back work nobody started.
+        assert!(check_delete_task("t_1", &open).is_ok());
+        assert!(check_delete_task("t_1", &Closing { status: "claimed", owner: 3, ..open })
+            .unwrap_err().starts_with("not_deletable:"));
+        assert!(check_delete_task("t_1", &stranger).unwrap_err().starts_with("not_yours:"));
+        // A brief can be stopped until it is closed; anyone on the team may stop a person's build.
+        assert!(check_cancel_brief("b_1", "building", 2, 3, "human").is_ok());
+        assert!(check_cancel_brief("b_1", "building", 2, 2, "agent").is_ok());
+        assert!(check_cancel_brief("b_1", "building", 2, 3, "agent").unwrap_err().starts_with("not_yours:"));
+        assert!(check_cancel_brief("b_1", "ready", 2, 3, "human").unwrap_err().starts_with("already_closed:"));
+        assert!(check_cancel_brief("b_1", "cancelled", 2, 3, "human").unwrap_err().starts_with("already_closed:"));
     }
 
     #[test]
@@ -772,7 +869,8 @@ mod tests {
         assert!(result_events(&json!({"ok": true})).is_empty());
         let many = json!({"_events": (0..20).map(|i| json!({"kind": "fea_progress", "data": {"i": i}})).collect::<Vec<_>>()});
         assert_eq!(result_events(&many).len(), MAX_RESULT_EVENTS);
-    }
+    }
+
 
     #[test]
     fn a_rename_needs_a_valid_name_nobody_else_holds() {

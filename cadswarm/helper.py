@@ -2,7 +2,8 @@
 board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design), the team's
 learned design style (observe_op, observe_brief, learn_style, style_context, teach_style, resolve_style;
 see style_memory.py), and FEA jobs
-(fea_run, fea_status, fea_publish, fea_reports; see fea_jobs.py), and the components library
+(fea_run, fea_status, fea_publish, fea_reports; see fea_jobs.py), lighten-without-losing-stiffness lattice jobs
+(lattice_*; see lattice_jobs.py), and the components library
 (library_*, standard_parts, suggest_settings; see library/ops.py). The
 Rust host drives it like the FreeCAD worker:
 
@@ -33,6 +34,7 @@ from cadswarm.files import ProjectFiles, safe_label, unique_path  # noqa: E402
 from cadswarm.knowledge import Elastic, ElasticError, design_doc  # noqa: E402
 from cadswarm.paths import project_layout  # noqa: E402
 from cadswarm.fea_jobs import FeaJobError  # noqa: E402
+from cadswarm.lattice_jobs import LatticeJobError  # noqa: E402
 from cadswarm.storage import FileError  # noqa: E402
 from cadswarm.library.ops import HANDLERS as LIBRARY_HANDLERS, LibraryError  # noqa: E402
 from cadswarm.style_memory import ANALYST_ID, StyleError, StyleMemory  # noqa: E402
@@ -56,11 +58,12 @@ class Project:
         self.clock = clock
         self._elastic = None
         self._fea = None
+        self._lattice = None
         self._style = None
 
     @property
     def style(self):
-        """What the team's way of working has taught CadSwarm (style_memory.py)."""
+        """What the team's way of working has taught CADSwarm (style_memory.py)."""
         if self._style is None:
             self._style = StyleMemory(self.db, self.clock)
         return self._style
@@ -72,6 +75,18 @@ class Project:
             from cadswarm.fea_jobs import FeaJobs
             self._fea = FeaJobs(self, self.clock)
         return self._fea
+
+    @property
+    def lattice(self):
+        """Lighten jobs (stress-graded lattices), created on first use (tests set a fake runner)."""
+        if self._lattice is None:
+            from cadswarm.lattice_jobs import LatticeJobs
+            self._lattice = LatticeJobs(self, self.clock)
+        return self._lattice
+
+    @lattice.setter
+    def lattice(self, value):
+        self._lattice = value
 
     @property
     def elastic(self):
@@ -96,7 +111,7 @@ def _author(a):
     return _actor(a).get("name") or "someone"
 
 
-def _people_only(a, what, where="the CadSwarm panel's Tools tab > Storage and free up space"):
+def _people_only(a, what, where="the CADSwarm panel's Tools tab > Storage and free up space"):
     if _actor(a).get("kind") != "human":
         raise HelperError("humans_only", f"Only a person can {what}. Ask someone on the team to do it "
                                          f"(in FreeCAD: {where}).")
@@ -227,7 +242,7 @@ def teach_style(p, a):
 
 
 def resolve_style(p, a):
-    _people_only(a, "confirm or dismiss a design-style rule", "the CadSwarm panel > Learned style")
+    _people_only(a, "confirm or dismiss a design-style rule", "the CADSwarm panel > Learned style")
     rule = p.style.resolve(_need(a, "rule_id"), _need(a, "decision"), _author(a))
     return {"rule": rule, "profile": p.style.context("", "", 6)["text"]}
 
@@ -263,6 +278,15 @@ HANDLERS = {
     "teach_style": teach_style,
     "resolve_style": resolve_style,
     # FEA: solves run in the background on a copy of the model; results carry `_events` for the team.
+    # Lighten without losing stiffness: stress-graded lattices, verified (lattice_jobs.py).
+    "lattice_capabilities": lambda p, a: p.lattice.capabilities(),
+    "lattice_cells": lambda p, a: p.lattice.cells(a),
+    "lattice_estimate": lambda p, a: p.lattice.estimate(a),
+    "lattice_start": lambda p, a: p.lattice.with_events(p.lattice.start(a, _actor(a))),
+    "lattice_status": lambda p, a: p.lattice.with_events(p.lattice.status(_need(a, "job_id"))),
+    "lattice_list": lambda p, a: p.lattice.with_events(p.lattice.list(int(a.get("limit") or 20))),
+    "lattice_cancel": lambda p, a: p.lattice.with_events(p.lattice.cancel(_need(a, "job_id"), _actor(a))),
+    "lattice_result": lambda p, a: p.lattice.result_file(_need(a, "job_id")),
     "fea_run": lambda p, a: p.fea.with_events(p.fea.start(a, _actor(a))),
     "fea_status": lambda p, a: p.fea.with_events(p.fea.status(a.get("job_id"))),
     "fea_publish": lambda p, a: p.fea.with_events(p.fea.publish(a.get("job_id"), a.get("summary") or "",
@@ -285,6 +309,8 @@ def handle(project, req):
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
     except (HelperError, LibraryError, StyleError) as e:
         return {"id": rid, "ok": False, "code": e.code, "error": str(e)}
+    except LatticeJobError as e:
+        return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
     except FeaJobError as e:
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
     except ElasticError as e:

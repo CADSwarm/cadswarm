@@ -98,7 +98,7 @@ def freecad_candidates():
                 for _ in range(up):  # the FreeCAD* folder holding the version text
                     folder = os.path.dirname(folder)
                 found.setdefault(os.path.normpath(py), _version_key(os.path.basename(folder)))
-    # The official Linux AppImage, unpacked by CadSwarm's installer into <app dir>/FreeCAD-<version>/.
+    # The official Linux AppImage, unpacked by CADSwarm's installer into <app dir>/FreeCAD-<version>/.
     for bin_dir in glob.glob(os.path.join(app_dir(), "FreeCAD-*", "squashfs-root", "usr", "bin")):
         py = _python_in(bin_dir)
         if py:

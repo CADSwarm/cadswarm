@@ -198,7 +198,7 @@ class OptimizeDialog(QtGui.QDialog):
                 raise ValueError("Invalid reconstructed output")
             self.result = (report, shape.exportBrepToString())
             self.preview_shapes = (self.source_brep, self.result[1])
-            self.preview_doc = App.newDocument("CADSwarmOptimizationPreview").Name
+            self.preview_doc = App.newDocument("CadSwarmOptimizationPreview").Name
             doc = App.getDocument(self.preview_doc)
             original = doc.addObject("Part::Feature", "Original")
             source = Part.Shape()

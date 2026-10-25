@@ -30,6 +30,7 @@ import type {
 import { newId } from './ids';
 import { saveSession } from './session';
 import { saveBytes } from './download';
+import { stripMentions } from './ui/mentions';
 
 const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param', 'v_op', 'v_task', 'v_activity',
   'v_pointer', 'v_brief', 'v_review', 'v_preview', 'v_artifact', 'v_handoff', 'v_message', 'v_receipt', 'v_component',
@@ -39,6 +40,41 @@ const VIEWS = ['v_me', 'v_workspace', 'v_member', 'v_lock', 'v_object', 'v_param
 export interface PlaceRequest { component?: string; family?: string; size?: string; length?: number; name: string; label?: string }
 export interface PartMeta { name: string; category: string; tags: string[]; description: string; license: string }
 
+/** A file in the team's project folder (the host's files/ directory); `updated_at` is epoch seconds. */
+export interface ProjectFile {
+  path: string; version: number; size: number; author: string; updated_at: number;
+}
+export interface ProjectListing { files: ProjectFile[]; folders: string[] }
+/** One replaced copy kept in history. */
+export interface FileVersion { version: number; size: number; author: string; saved_at: number; reason: string }
+export interface FileHistory { path: string; current: ProjectFile | null; older_versions: FileVersion[] }
+
+/** One part as the worker measured it. */
+export interface PrintPart {
+  name: string; size: number[]; fitsBed: boolean; closedSolid: boolean;
+  /** Distances (mm) of walls that look too thin to print. */
+  thinWalls: number[];
+}
+export interface Printability { ok: boolean; objects: PrintPart[] }
+
+/** The worker answers in snake_case; take whatever fields arrive and name them for the UI. */
+export function toPrintability(v: Record<string, unknown> | null): Printability {
+  const list = Array.isArray(v?.objects) ? v.objects : [];
+  const objects = list.filter(o => o && typeof o === 'object').map(o => {
+    const r = o as Record<string, unknown>;
+    const thin = Array.isArray(r.thin_wall_suspects) ? r.thin_wall_suspects : [];
+    return {
+      name: String(r.name ?? 'part'),
+      size: Array.isArray(r.size) ? r.size.map(Number).filter(Number.isFinite) : [],
+      fitsBed: r.fits_bed !== false,
+      closedSolid: r.closed_solid !== false,
+      thinWalls: thin.map(w => Number(w && typeof w === 'object' ? (w as Record<string, unknown>).distance : w))
+        .filter(Number.isFinite),
+    };
+  });
+  return { ok: v?.ok === true, objects };
+}
+
 export interface Api {
   fence(): number;
   redeem(token: string, name: string): Promise<void>;
@@ -46,12 +82,29 @@ export interface Api {
   lock(names: string[]): Promise<void>;
   release(names: string[]): Promise<void>;
   setParam(alias: string, value: string): Promise<void>;
+  /** The printer bed the team builds for, in millimetres. */
+  setBed(xMm: number, yMm: number, zMm: number): Promise<void>;
+  /** Stop a task (a person may stop any; a helper only one it asked for or claimed). */
+  cancelTask(id: string, reason: string): Promise<void>;
+  /** Remove a leftover open task; a claimed one must be cancelled instead. */
+  deleteTask(id: string): Promise<void>;
+  /** Stop a whole request; its unstarted tasks are cancelled with it. */
+  cancelBrief(id: string): Promise<void>;
+  /** Ask the host whether the parts fit the bed, are closed solids and have printable walls.
+   * Pass the bed the person typed so a check does not silently use the saved one. */
+  checkPrintability(bedMm?: [number, number, number]): Promise<Printability | null>;
   movePointer(object: string, point: number[], mode: string, label: string): void;
   logActivity(kind: string, summary: string, target: string[]): void;
   requestHandoff(note: string, trigger: 'now' | 'on_leave'): string;
   cancelHandoff(id: string): void;
   /** An instruction for an AI helper (by name, or "all"): it does it first and its receipt says how far it got. */
   sendCommand(to: string, body: string, taskId?: string): string;
+  /** A task for one AI helper, so the instruction that follows can point at it. Rejects if the host refuses. */
+  createTask(input: { title: string; detail: string; objects: string[]; assignee: string }): Promise<string>;
+  /** Any team message: chat between people, or a command. Returns its id. */
+  sendMessage(to: string, body: string, kind: string, taskId?: string): string;
+  /** People talking to everyone: helpers read it as background, never as an order. */
+  sendChat(body: string): string;
   downloadArtifact(hash: string, filename: string): Promise<void>;
   /** Place a library part in the model; resolves true once the host has built it. */
   placeComponent(req: PlaceRequest): Promise<boolean>;
@@ -63,6 +116,10 @@ export interface Api {
   resolveSuggestion(id: string, accept: boolean): Promise<void>;
   /** A library part's preview STL (null until FreeCAD has measured it). */
   componentPreview(id: string): Promise<Uint8Array | null>;
+  /** The team's project folder: files and folders under files/ on the host. */
+  listFiles(folder?: string): Promise<ProjectListing | null>;
+  /** Every kept version of one project file (null when the host can't answer). */
+  fileHistory(path: string): Promise<FileHistory | null>;
 }
 
 // ---- Row mapping (pure; u64 → number is safe for ids, seqs and epoch millis) ----
@@ -79,6 +136,7 @@ export const toObj = (r: Infer<typeof VObjectRow>): Obj => ({
 });
 export const toTask = (r: Infer<typeof VTaskRow>): Task => ({
   id: r.id, title: r.title, status: r.status, owner: num(r.owner), assignee: r.assignee, brief: r.brief, objects: [...r.objects],
+  createdBy: num(r.createdBy),
 });
 export const toActivity = (r: Infer<typeof VActivityRow>): Activity => ({
   id: num(r.id), member: num(r.member), kind: r.kind, summary: r.summary, atMs: num(r.atMs),
@@ -90,7 +148,7 @@ export const toBrief = (r: Infer<typeof VBriefRow>): Brief => ({
   id: r.id, by: num(r.by), text: r.text, board: r.board, status: r.status, planJson: r.planJson, stlHash: r.stlHash, updatedMs: num(r.updatedMs),
 });
 export const toReview = (r: Infer<typeof VReviewRow>): Review => ({
-  id: r.id, brief: r.brief, round: r.round, passed: r.passed, findingsJson: r.findingsJson,
+  id: r.id, brief: r.brief, round: r.round, passed: r.passed, findingsJson: r.findingsJson, atMs: num(r.atMs),
 });
 export const toArtifact = (r: Infer<typeof VArtifactRow>): Artifact => ({ hash: r.hash, name: r.name, mime: r.mime, size: num(r.size) });
 export const toHandoff = (r: Infer<typeof VHandoffRow>): Handoff => ({
@@ -100,7 +158,8 @@ export const toMessage = (r: Infer<typeof VMessageRow>): Message => ({
   id: r.id, from: num(r.from), to: r.to, kind: r.kind, body: r.body, taskId: r.taskId, createdMs: num(r.createdMs),
 });
 export const toOp = (r: Infer<typeof VOpRow>): Op => ({
-  id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error, argsJson: r.argsJson,
+  id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error,
+  argsJson: r.argsJson, resultJson: r.resultJson,
 });
 
 export const toComponent = (r: Infer<typeof VComponentRow>): Component => ({
@@ -240,17 +299,70 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       });
     }
 
-    /** Queue a host op and wait for it; reports a failure as a notice and resolves false. */
-    async function runOp(kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> {
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves how it ended. */
+    async function runOpOutcome(kind: string, args: Record<string, unknown>, ms = 60000): Promise<{ ok: boolean; resultJson: string }> {
       const opId = newId('o_');
       try {
         await r.submitOp({ fence: fence(), opId, kind, argsJson: JSON.stringify(args), expectedRevsJson: '' });
-      } catch (e) { report(e); return false; }
+      } catch (e) { report(e); return { ok: false, resultJson: '' }; }
       await waitFor(() => ['done', 'failed', 'rejected'].includes(store.state.ops.find(o => o.id === opId)?.status ?? ''), ms);
       const op = store.state.ops.find(o => o.id === opId);
-      if (!op || op.status === 'queued' || op.status === 'running') { report(new Error('The host is still working on it; check back in a moment.')); return false; }
-      if (op.status !== 'done') { report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return false; }
-      return true;
+      if (!op || op.status === 'queued' || op.status === 'running') {
+        report(new Error('The host is still working on it; check back in a moment.')); return { ok: false, resultJson: '' };
+      }
+      if (op.status !== 'done') {
+        report(new Error(op.error || `${kind.replace(/_/g, ' ')} failed (${op.status})`)); return { ok: false, resultJson: '' };
+      }
+      return { ok: true, resultJson: op.resultJson };
+    }
+
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves its parsed result (null on failure). */
+    async function runOpResult(kind: string, args: Record<string, unknown>, ms = 60000): Promise<Record<string, unknown> | null> {
+      const { ok, resultJson } = await runOpOutcome(kind, args, ms);
+      if (!ok) return null;
+      try {
+        const v = JSON.parse(resultJson || '{}');
+        return v && typeof v === 'object' ? v as Record<string, unknown> : {};
+      } catch { return {}; }
+    }
+
+    /** Queue a host op and wait for it; reports a failure as a notice and resolves whether it worked. */
+    const runOp = async (kind: string, args: Record<string, unknown>, ms = 60000): Promise<boolean> =>
+      (await runOpOutcome(kind, args, ms)).ok;
+
+    /** A read-only host query whose result carries the answer (list_files, file_history, …). */
+    async function queryOp<T>(kind: string, args: Record<string, unknown>): Promise<T | null> {
+      const { ok, resultJson } = await runOpOutcome(kind, args);
+      if (!ok) return null;
+      try { return JSON.parse(resultJson) as T; } catch { return null; }
+    }
+
+    /** Read one artifact blob (a spilled op result) and unsubscribe; null when it cannot be read. */
+    function readBlob(hash: string): Promise<Uint8Array | null> {
+      return new Promise(done => {
+        if (!/^[0-9a-f]{64}$/i.test(hash)) { done(null); return; }
+        let finished = false;
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = (bytes: Uint8Array | null) => {
+          if (finished) return;
+          finished = true; clearTimeout(timer); done(bytes);
+        };
+        timer = setTimeout(() => finish(null), 15000);
+        const take = () => [...conn.db.vArtifactBlob.iter()].find(b => b.hash === hash)?.bytes ?? null;
+        const attempt = (sql: string, onRefused: () => void) => {
+          const handle = conn.subscriptionBuilder()
+            .onApplied(() => {
+              const bytes = take();
+              try { handle.unsubscribe(); } catch { /* already ended */ }
+              finish(bytes ? new Uint8Array(bytes) : null);
+            })
+            .onError(() => onRefused())
+            .subscribe(sql);
+        };
+        const whole = () => attempt('SELECT * FROM v_artifact_blob', () => finish(null));
+        if (!filteredViewOk) { whole(); return; }
+        attempt(`SELECT * FROM v_artifact_blob WHERE hash = '${hash}'`, () => { filteredViewOk = false; whole(); });
+      });
     }
 
     const api: Api = {
@@ -264,11 +376,28 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       },
       submitBrief: (text, board) => {
         const id = newId('b_');
-        void quiet(r.submitBrief({ fence: fence(), briefId: id, text, board }));
+        void quiet(r.submitBrief({ fence: fence(), briefId: id, text: stripMentions(text), board }));
         return id;
       },
       lock: names => quiet(r.lockObjects({ fence: fence(), names })),
       release: names => quiet(r.releaseObjects({ fence: fence(), names, force: false })),
+      setBed: (xMm, yMm, zMm) => quiet(r.setBed({ fence: fence(), xMm, yMm, zMm })),
+      cancelTask: (id, reason) => quiet(r.cancelTask({ fence: fence(), taskId: id, reason })),
+      deleteTask: id => quiet(r.deleteTask({ fence: fence(), taskId: id })),
+      cancelBrief: id => quiet(r.cancelBrief({ fence: fence(), briefId: id })),
+      checkPrintability: async bedMm => {
+        const v = await runOpResult('printability', bedMm ? { bed: bedMm } : {}, 120000);
+        if (v === null) return null;
+        // A result over 32 KB is spilled to an artifact as {"blob": sha256}: read it back, or a big
+        // model would look like it had no parts at all.
+        if (typeof v.blob === 'string' && Object.keys(v).every(k => k === 'blob' || k.startsWith('_'))) {
+          const bytes = await readBlob(v.blob);
+          if (!bytes) { report(new Error('That check expired; run it again.')); return null; }
+          try { return toPrintability(JSON.parse(new TextDecoder().decode(bytes))); }
+          catch { report(new Error('The printability answer could not be read; run it again.')); return null; }
+        }
+        return toPrintability(v);
+      },
       setParam: async (alias, value) => {
         // set_param needs the `Params` lock (rules::needed_locks). Hold it only until the host finishes the op.
         let locked = false;
@@ -292,11 +421,24 @@ export function connect(store: Store, uri: string, db: string, token: string | n
         return id;
       },
       cancelHandoff: id => void quiet(r.cancelHandoff({ fence: fence(), handoffId: id })),
-      sendCommand: (to, body, taskId = '') => {
+      sendCommand: (to, body, taskId = '') => api.sendMessage(to, body, 'command', taskId),
+      createTask: async input => {
+        const taskId = newId('t_');
+        try {
+          await r.createTask({ fence: fence(), taskId, title: input.title, detail: input.detail,
+            objects: input.objects, assignee: input.assignee, brief: '' });
+        } catch (e) {
+          report(e);
+          throw new Error(splitError(e).message);
+        }
+        return taskId;
+      },
+      sendMessage: (to, body, kind, taskId = '') => {
         const id = newId('m_');
-        void quiet(r.sendMessage({ fence: fence(), messageId: id, to, body, kind: 'command', taskId }));
+        void quiet(r.sendMessage({ fence: fence(), messageId: id, to, body, kind, taskId }));
         return id;
       },
+      sendChat: body => api.sendMessage('all', body, 'chat'),
       placeComponent: req => req.family
         ? runOp('insert_standard_part', { family: req.family, size: req.size, name: req.name, label: req.label,
           ...(req.length ? { length: req.length } : {}) })
@@ -310,6 +452,8 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       setSetting: (setting, n, text) => quiet(r.setSetting({ fence: fence(), setting, num: n, text })),
       resetSetting: setting => quiet(r.resetSetting({ fence: fence(), setting })),
       resolveSuggestion: (id, accept) => quiet(r.resolveSuggestion({ fence: fence(), suggestionId: id, accept })),
+      listFiles: folder => queryOp<ProjectListing>('list_files', folder ? { folder } : {}),
+      fileHistory: path => queryOp<FileHistory>('file_history', { path }),
       // Preview meshes are never kept subscribed: subscribe to the one row, read it, unsubscribe.
       componentPreview: id => new Promise<Uint8Array | null>(done => {
         if (!/^c_[a-z0-9_]+$/.test(id)) { done(null); return; }

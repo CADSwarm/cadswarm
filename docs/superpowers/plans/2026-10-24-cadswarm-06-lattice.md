@@ -1,5 +1,9 @@
 # CadSwarm Lattice (IMPLICIT-parity core) implementation plan
 
+> **Superseded (2026-10-24)** by [07 Lighten without losing stiffness](2026-10-24-cadswarm-07-lighten.md): the
+> lattice was built as a NumPy/SciPy engine in FreeCAD's Python instead of a .NET/PicoGK process, and includes
+> the FEA grading and verify that this plan deferred.
+
 > **Status: proposed 2026-10-24. No implementation code has been written.** This plan exists so the work can
 > be reviewed, split and executed later. Do not treat unchecked tasks as started.
 

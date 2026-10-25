@@ -19,6 +19,9 @@ pub const HELPER_KINDS: &[&str] = &[
     // The team's learned design style (cadswarm/style_memory.py).
     "style_context", "list_style", "teach_style", "resolve_style", "learn_style",
     "fea_run", "fea_status", "fea_publish", "fea_reports",
+    // Lighten without losing stiffness (cadswarm/lattice_jobs.py).
+    "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status", "lattice_list",
+    "lattice_cancel", "lattice_result",
     "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
     "library_search", "library_recommend", "library_get", "library_export_pack", "standard_parts",
     "suggest_settings",
@@ -327,6 +330,15 @@ mod tests {
         assert!(is_helper_kind("board_spec") && is_helper_kind("index_design") && is_helper_kind("recall_designs"));
         assert!(is_helper_kind("fea_run") && is_helper_kind("fea_publish") && !is_helper_kind("faces"));
         assert!(!is_helper_kind("create_primitive") && !is_helper_kind("brep") && !is_helper_kind("export"));
+    }
+
+    #[test]
+    fn lattice_jobs_go_to_the_helper_but_placing_the_mesh_goes_to_freecad() {
+        for k in ["lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status",
+                  "lattice_list", "lattice_cancel", "lattice_result"] {
+            assert!(is_helper_kind(k), "{k}");
+        }
+        assert!(!is_helper_kind("insert_mesh"));
     }
 
     #[test]

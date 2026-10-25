@@ -50,6 +50,23 @@ def library_hint(prompt):
     return LIBRARY_HINT if isinstance(prompt, str) and PART_WORDS.search(prompt) else ""
 
 
+# Words that usually mean "make it lighter". A false positive only adds a short reminder.
+LATTICE_WORDS = re.compile(r"\b(light(er|en\w*|weight\w*)|less (weight|material|mass|plastic|metal)|"
+                           r"(save|saving|reduce|cut|shave)( the| some)? (weight|mass|material|grams?)|"
+                           r"weighs? less|too heavy|mass reduction|weight reduction|infill|lattice\w*|gyroid|"
+                           r"honeycomb|hollow( out)?|over-?built|over-?engineered|topolog\w* optimi[sz]\w*)\b", re.I)
+LATTICE_HINT = ("\n## This looks like a lighten request\n"
+                "lighten_part fills the inside with a stress-graded lattice and verifies the stiffness it keeps "
+                "(default 90 %). Ask in ONE message how the part is held and loaded (or reuse a static FEA with "
+                "fea_job_id), the material and how it will be printed (powder/resin needs open_faces). "
+                "lattice_cells helps pick a cell. Report the weight saving and the verified stiffness, and "
+                "lattice_apply only with your person's OK.")
+
+
+def lattice_hint(prompt):
+    return LATTICE_HINT if isinstance(prompt, str) and LATTICE_WORDS.search(prompt) else ""
+
+
 def main():
     raw = ""
     try:
@@ -77,7 +94,7 @@ def main():
         hub.space.timeout = 1.8
         text = hub.get("/context")["context"]
         prompt = payload.get("prompt") if isinstance(payload, dict) else None
-        hint = fea_hint(prompt) + library_hint(prompt)
+        hint = fea_hint(prompt) + library_hint(prompt) + lattice_hint(prompt)
         text = text[:6000 - len(hint)] + hint
         # Windows pipes default to the ANSI codepage; the CLIs read hook output as UTF-8.
         sys.stdout.reconfigure(encoding="utf-8")

@@ -1,4 +1,4 @@
-# CadSwarm — Devpost submission packet
+# CADSwarm — Devpost submission packet
 
 Draft for Cal Hacks 13.0. Replace every `[TBD]` before submitting. Keep the description within
 Devpost's field limits (the sections below are sized for the "built with a story" form).
@@ -20,23 +20,24 @@ Devpost's field limits (the sections below are sized for the "built with a story
   Record its brief-to-ready time here: [TBD — from T5].
 - [ ] Printed part (plan 06 T7d): photograph it for the Best Hardware write-up.
 - [ ] Fill in the team roles and the video link.
-- [x] Release: `v0.1.3` (2026-10-24 18:42 UTC, release run 40121511862, `main` `4188a16`) has all five host binaries, `cadswarm_module.wasm` and
+- [x] Release: `v0.1.4` (2026-10-24 21:07 UTC, release run 40132423474, `main` `59c30d9`) has all five host binaries, `cadswarm_module.wasm` and
   `SHA256SUMS.txt`; on 2026-10-24 every downloaded asset matched its checksum (`sha256sum -c`). The
   earlier `v0.1.0` check also ran the released Windows host through the FreeCAD 1.1.4 worker: a human
   join, lock, box (1440 mm3), printability, STL export and `model.FCStd` save.
-- [x] Tests: CI run 40118091369 on `main` `95664cc`: Python 437 / 436 / 435 passed on Linux / Windows
-  / macOS (20–22 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed on all
-  three, web 36 passed; rules 22 passed locally.
+- [x] Tests: CI run 40132359584 on `main` `59c30d9` (v0.1.4): Python 451 / 450 / 449 passed on Linux /
+  Windows / macOS (21–23 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed
+  on all three, web 65 passed; rules 23 passed locally.
 - [x] Live database: Maincloud `cadswarm-calhacks-0180` (new account with the Cal Hacks credits; the old
   `cadswarm-calhacks-ca8c` ran out of credits) runs the module from `feat/panel-tabs-workload-shifting`
   `ff382fe`, published 2026-10-24, and the team server shows `active` in `v_member`.
 - [x] Elastic, counted live on 2026-10-24: `cadswarm-boards` 6 datasheet documents for 5 boards
   (raspberry-pi-4, arduino-uno-r3, esp32-s3-devkitc-1, raspberry-pi-pico, seeed-xiao-esp32c3),
-  `cadswarm-designs` 1, `cadswarm-lessons` 0 (no reviewer findings yet).
+  `cadswarm-designs` 1, `cadswarm-lessons` 4 (the four design problems the Droid reviewer found in
+  `b_demo_2`, distilled by the `distil-lessons-4` workflow).
 
 ## Project name
 
-CadSwarm
+CADSwarm
 
 ## Tagline
 
@@ -51,13 +52,13 @@ wanted them to build the physical part too, together, while a person watches and
 
 The hard part is not generating a shape. It is keeping several agents' hands off each other's work.
 Two agents editing one FreeCAD document overwrite each other, a dead agent leaves half-built parts
-locked, and a plausible-looking enclosure can still not fit the board or the printer. CadSwarm is
+locked, and a plausible-looking enclosure can still not fit the board or the printer. CADSwarm is
 built around that coordination problem: the team's shared state is a database, and the rules that
 protect it are enforced there rather than requested in a prompt.
 
 ## What it does
 
-CadSwarm turns FreeCAD into a shared workspace for a small team of people and their AI helpers.
+CADSwarm turns FreeCAD into a shared workspace for a small team of people and their AI helpers.
 
 - **A beginner-friendly FreeCAD workbench.** A guide starts or joins a team with a single-use invite,
   detects the AI helper you already use (Claude Code, Codex, Factory Droid, or a CLI of your own),
@@ -147,7 +148,7 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 - **A reviewer that cannot make things worse.** We gave Droid an allowlist, but also made the module
   refuse write ops from its member kind, so a slipped tool still cannot change geometry. A reviewer
   that dies before reporting now fails the brief with a message instead of hanging it.
-- **Bring your own AI.** CadSwarm ships no model. The host finds the CLI the owner already has,
+- **Bring your own AI.** CADSwarm ships no model. The host finds the CLI the owner already has,
   starts it headlessly with the right prompt and folder, and attributes its actions to its own team
   identity.
 - **Making an installer out of a dev tree.** Pinning SpacetimeDB, extracting its archive, checksum
@@ -166,9 +167,9 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
   has nothing to write until a reviewer supplies findings.
 - The Droid reviewer runs from the host, shows its work in the activity feed, and has a safe failure
   mode; it is optional, and off on the demo host because Droid is not installed there.
-- Tests are part of the story: on every push CI runs about 436 Python tests on Windows, macOS and Linux
+- Tests are part of the story: on every push CI runs about 450 Python tests on Windows, macOS and Linux
   (module adapter, guide, hosting, sandbox, library, style memory, Elastic, reviewer), 35 host tests,
-  36 web tests, and the coordination rules' own unit tests.
+  65 web tests, and the coordination rules' own unit tests.
 
 ## What we learned
 
@@ -192,33 +193,41 @@ five host platforms plus the wasm and publishes the release when a `v*` tag is p
 
 SpacetimeDB 2.13.0 (Rust module, Rust and TypeScript clients) · Rust · Python 3.11+ · FreeCAD 1.x ·
 TypeScript · Vite · three.js · Elasticsearch Serverless 9.6 · Kibana · ES|QL
-· Jina embeddings and reranker · Factory Droid (`droid-sdk`) · Claude Code · OpenAI Codex · GitHub
-Actions · Windows
+· Jina embeddings and reranker · Factory Droid (`droid-sdk`) · Claude Code · OpenAI Codex · OpenCode ·
+Creao AI (Developer API) · GitHub Actions · Windows
 
 ## Try it out
 
 - **Code:** https://github.com/SachchitBalamurugan/cadswarm
-- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.3
-- **Web app:** [TBD — blocked, see "Web link" above] — press **Open the live demo** and enter the
-  code `swarm-13`. That opens the panels app on a sample build, no host or account needed.
+- **Release / downloads:** https://github.com/SachchitBalamurugan/cadswarm/releases/tag/v0.1.4
+- **Web app:** [TBD — blocked, see "Web link" above] — `/app/` opens on a join screen: scan the QR in
+  the FreeCAD panel's **Remote** tab, or paste an invite code. There is no sample build any more, so
+  a judge needs a running team (ours at the booth, or one started from FreeCAD).
 - **Video:** [TBD — YouTube/Vimeo URL]
 - **Run it:** install FreeCAD, then run one line. Windows (PowerShell):
   `irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex`;
   macOS or Linux:
   `curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash`.
   Then follow the guide in FreeCAD. The host needs an AI CLI (Claude Code, Codex, or Droid) that the
-  user already has; CadSwarm ships no model and no keys.
+  user already has; CADSwarm ships no model and no keys.
 
 ## Prize tracks: what a judge can check
 
 | Track | Evidence in the repo | What to look at |
 |---|---|---|
-| Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-0180`. |
-| Anthropic | `cadswarm/mcp_server.py`; `host/src/agents.rs` (`planner_prompt`, `worker_prompt`, `handoff_prompt`); `host/src/briefs.rs` | Claude Code agents work only through the MCP server's tools and its 13 working rules. The host plans a brief with a planner agent and starts up to three workers, and adds the team's learned design style to each prompt. |
-| Factory | `cadswarm/reviewer.py`; README "Where Droid runs" | The Droid reviewer runs on `droid-sdk` with `restrict_tools` limited to inspection, joins as a `reviewer` member, and the module refuses any write op from that member kind. |
-| Elastic | `elastic/setup.json`, `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | JINA `semantic_text` hybrid search with the reranker over board datasheets; design memory written back by the host; Agent Builder agents; the `distil-lessons` Workflow. |
+| Spacetime: Best Use of Spacetime | `module/src/` (`tables.rs`, `ops.rs`, `library.rs`, `views.rs`), `rules/src/lib.rs` | The whole world state is SpacetimeDB tables: members and fences, locks, ops, briefs, tasks, messages, reviews, handoffs, artifacts, components, settings. All tables are private, clients read `v_*` views, and the rules crate is compiled into the reducers. Live on Maincloud as `cadswarm-calhacks-0180`. |
+| Anthropic: Claude for Public Benefit | `cadswarm/mcp_server.py`; `host/src/agents.rs` (`planner_prompt`, `worker_prompt`, `handoff_prompt`); `host/src/briefs.rs` | Who it helps: people who need a physical part (a case, a mount, a bracket) but have no CAD or coding skills, such as students, makers and small hardware teams. Claude Code is the default helper and works only through the MCP server's tools and its 13 working rules. The host plans a brief with a planner agent and starts up to three workers, and adds the team's learned design style to each prompt. Failure modes are handled in the database rather than in a prompt: locks refuse an agent's edit to someone else's part, a stale agent's work is taken over, and a reviewer checks the result. |
+| Factory: Best Use of the Factory Droid SDK | `cadswarm/reviewer.py`; README "Where Droid runs" | The Droid reviewer runs on `droid-sdk` with `restrict_tools` limited to inspection, joins as a `reviewer` member, and the module refuses any write op from that member kind. |
+| Creao AI: Best Team Empowerment | `cadswarm/creao.py`, `cadswarm/creao_agent.py`; README "Creao AI (optional helper)" | An optional agent whose model turns arrive over Creao's Developer API. A local bridge asks for one JSON tool call per turn and executes it with the same MCP tools every helper uses, so Creao needs neither a CLI nor a custom connector. |
+| Elastic: Best use of the Elastic Agent Builder on a Serverless Instance | `elastic/agent.json`, `elastic/style_agent.json`, `elastic/tools/`, `elastic/setup.json`, `elastic/workflows/distil-lessons.yaml`, `cadswarm/knowledge.py`, `ELASTIC.md` | Two Agent Builder agents on the Serverless project: `cadswarm-board-expert` answers board questions through its own search tools over the datasheet index (checked live on 2026-10-24: a `converse` call returned in 13.6 s), and `cadswarm-style-analyst` rewords the team's learned design rules. Under them: JINA `semantic_text` hybrid search with the reranker over board datasheets, design memory written back by the host, and the `distil-lessons` Workflow. |
 | Best Hardware | The printed enclosure | [TBD — photo of the printed part, from T7d] |
 | Most Technically Complex | `rules/src/lib.rs` (fences, locks, stale sweep, `check_take_over`); `host/src/executor.rs` (`spill`: results over 32 KB become artifacts); `cadswarm/worker/sandbox.py`, `sandbox_win.py`, `script_runner.py` | Fenced leases, object locks and takeover enforced in reducers; handoff of locks and tasks; large results spilled out of the op table; agent part scripts run in a sandbox. |
+
+In the web app, press `?debug` (or `Shift+D`, or the **Sponsors** chip in the chat sheet's header) to open the
+sponsors panel. It shows, per sponsor, what the app can prove from live state: the SpacetimeDB tables
+and member kinds the session is reading, the Factory Droid review round with its findings and tool
+calls, and the Elastic index counts (stamped in `web/src/ui/sponsor-evidence.ts` with the date they
+were taken, because the browser store does not hold those numbers).
 
 ## Team
 
@@ -233,9 +242,9 @@ Actions · Windows
 
 **0:00–0:15 — The problem.** A desk with an ESP32 and a tangle of wires. "Every hardware team needs
 a case. CAD is the bottleneck, and one AI agent alone gets the details wrong." Show a finished
-CadSwarm enclosure in FreeCAD.
+CADSwarm enclosure in FreeCAD.
 
-**0:15–0:35 — Start a team.** Open the CadSwarm workbench, run the guide, name the project, show the
+**0:15–0:35 — Start a team.** Open the CADSwarm workbench, run the guide, name the project, show the
 invite code and the detected AI helper. Say: "No CAD or coding experience: pick the helper you
 already use."
 
@@ -250,7 +259,8 @@ and messages the owner. Change a shared `Params` value and show the dependent pa
 **1:30–1:55 — The design finishes.** The last task completes and the brief turns `ready`: open the
 exported STL in the viewer and the Params sheet with the values the swarm settled on. Say: "The
 export is also a hand-off to memory — the finished design, its parameters and any review findings go
-back into Elastic." (The Droid reviewer is optional and off on this host; see the scope note.)
+back into Elastic." If the host has the Droid CLI, show the reviewer's round and its findings on the
+brief before it turns `ready`.
 
 **1:55–2:15 — Knowledge.** In Kibana: the board datasheet chunks, a hybrid search for USB cutout
 dimensions (show the reranker lifting the right passage), then the finished design in
@@ -262,7 +272,7 @@ next design starts smarter."
 first-use download with checksum verification, and the GitHub Actions release page. "One file into
 FreeCAD; the pinned database and team server arrive on first use."
 
-**2:35–2:45 — Close.** "CadSwarm: your team's AI helpers, one live model, a printable part." Show the
+**2:35–2:45 — Close.** "CADSwarm: your team's AI helpers, one live model, a printable part." Show the
 repo URL and the mock web link.
 
 ### Fill the Elastic indices before recording
@@ -290,20 +300,16 @@ from reviewer findings, so it stays empty on a host without Droid; do not promis
 
 ### Scope note for the Elastic segment
 
-The Elastic build also has an optional Agent Builder expert (`cadswarm-board-expert`) that returns a
-validated board spec for a board outside the local library. It is not part of the demo or the video:
-its model sits on a trial quota that answers `429`, and the shipped path answers board questions
-from the local library plus datasheet search, which needs no model. The code keeps the expert as a
-best-effort extra that degrades to the library, so nothing in the demo depends on it.
+The Agent Builder expert (`cadswarm-board-expert`) returns a validated board spec for a board outside
+the local library. Its model quota answered `429` earlier on 2026-10-24; a live `converse` call at
+about 16:30 PT the same day answered in 13.6 s, so show it in the video (ask it about a board, then
+open the agent and its tools in Kibana). The code still degrades to the local library plus datasheet
+search if the model is unavailable, so the build itself never depends on it.
 
 ### What the demo does not claim
 
-Two optional pieces are shipped but not shown, because this host cannot run them:
-
-- **The Droid reviewer.** `cadswarm.reviewer` runs on `droid-sdk`; without the Droid CLI the host
-  never enables it, so a brief goes `building → ready` with no review. It is why
-  `cadswarm-lessons` stays empty: with no findings there is nothing to distil.
-- **Agent Builder** (`cadswarm-board-expert`), on a trial model quota that answers `429` for now.
+- **Creao AI** needs a `CREAO_API_KEY` on the host. Without one, the Creao card in the helper picker
+  stays unavailable and nothing else changes.
 
 Everything the video does show — board search, design memory, the Workflow run, the export — ran
 against the live project on 2026-10-24.

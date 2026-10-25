@@ -3,6 +3,7 @@
 
 use crate::config::HostConfig;
 use anyhow::{anyhow, bail, Context, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -33,6 +34,13 @@ pub fn cli_candidates(exe: &str, env: Option<String>, path_var: &str, home: &Pat
     }
     if cfg!(windows) && !appdata.as_os_str().is_empty() {
         out.push(appdata.join("npm").join(format!("{exe}.cmd")));
+    }
+    if exe == "opencode" {
+        out.extend(names.iter().map(|n| home.join(".opencode").join("bin").join(n)));
+        // The desktop app bundles a CLI under a different name, outside PATH.
+        if let Some(local) = appdata.parent() {
+            out.push(local.join("Local").join("Programs").join("@opencodedesktop").join("resources").join("opencode-cli.exe"));
+        }
     }
     if exe == "claude" {
         let ext = home.join(".vscode").join("extensions");
@@ -96,8 +104,19 @@ pub fn agent_command(client: &str, override_cmd: &[String], dir: &Path, prompt: 
                      "mcp__cadswarm".into(), "--mcp-config".into(), dir.join(".mcp.json").display().to_string()]),
         "codex" => ("codex".into(), vec!["exec".into(), "--full-auto".into(), "--skip-git-repo-check".into(), p]),
         "droid" => ("droid".into(), vec!["exec".into(), "--auto".into(), "low".into(), p]),
-        other => bail!("unknown agent client {other:?}; use claude, codex or droid, or set agent_command"),
+        // --standalone: a private server per run, not whatever the person's desktop app is running.
+        // The prompt goes in on stdin (see spawn): an npm .cmd shim would split a multi-line argument.
+        "opencode" => ("opencode".into(), vec!["run".into(), "--standalone".into(), "--auto".into()]),
+        other => bail!("unknown agent client {other:?}; use claude, codex, droid or opencode \
+                        (creao runs its bridge), or set agent_command"),
     })
+}
+
+/// Creao AI has no CLI to find: the bridge (mcp_server's tools, driven over Creao's HTTP API) runs from
+/// the same Python package that just ran `cadswarm setup`.
+pub fn creao_command(python: &Path, dir: &Path) -> (String, Vec<String>) {
+    (python.display().to_string(), vec!["-m".into(), "cadswarm.creao_agent".into(),
+     "--dir".into(), dir.display().to_string()])
 }
 
 impl Agent {
@@ -134,16 +153,28 @@ impl Agent {
             );
         }
         let log = std::fs::File::create(dir.join("agent.log"))?;
-        let (program, args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
-        let exe = if cfg.agent_command.is_empty() { find_cli(&program)? } else { PathBuf::from(&program) };
-        let child = Command::new(exe)
-            .args(&args)
+        let creao = cfg.agent_command.is_empty() && cfg.agent_client == "creao";
+        let (program, args) = if creao {
+            creao_command(&cfg.cadswarm_python, &dir)
+        } else {
+            agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?
+        };
+        let exe = if cfg.agent_command.is_empty() && !creao { find_cli(&program)? } else { PathBuf::from(&program) };
+        let mut cmd = Command::new(exe);
+        cmd.args(&args)
             .current_dir(&dir)
-            .stdin(Stdio::null())
+            .stdin(if (cfg.agent_client == "opencode" || cfg.agent_client == "creao")
+                && cfg.agent_command.is_empty() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(log.try_clone()?)
-            .stderr(log)
-            .spawn()
-            .with_context(|| format!("starting {program} for {name}"))?;
+            .stderr(log);
+        let mut child = cmd.spawn().with_context(|| format!("starting {program} for {name}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(prompt.as_bytes()).context("sending the prompt to the agent")?;
+        }
         Ok(Agent { name: name.into(), child, started: Instant::now() })
     }
 
@@ -250,7 +281,17 @@ mod tests {
         assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("codex", "exec", "build it"));
         let (p, a) = agent_command("droid", &[], dir, "build it").unwrap();
         assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("droid", "exec", "build it"));
+        let (p, a) = agent_command("opencode", &[], dir, "build it").unwrap();
+        assert_eq!((p.as_str(), a[0].as_str(), a[1].as_str()), ("opencode", "run", "--standalone"));
+        assert!(!a.contains(&"build it".to_string()), "the prompt goes in on stdin: {a:?}");
         assert!(agent_command("gpt", &[], dir, "x").is_err());
+    }
+
+    #[test]
+    fn creao_runs_the_bridge_with_the_python_that_has_the_package() {
+        let (p, a) = creao_command(Path::new("C:/py/python.exe"), Path::new("D:/agents/w1"));
+        assert_eq!(p, "C:/py/python.exe");
+        assert_eq!(a, vec!["-m", "cadswarm.creao_agent", "--dir", "D:/agents/w1"]);
     }
 
     #[test]
@@ -266,6 +307,14 @@ mod tests {
         let c = cli_candidates("codex", None, "", Path::new("H:/home"), Path::new("A:/appdata"));
         assert!(c.iter().all(|p| !p.display().to_string().contains("native-binary")));
         assert!(c.iter().any(|p| p.display().to_string().contains("codex")));
+    }
+
+    #[test]
+    fn opencode_also_looks_in_its_own_bin_and_the_desktop_app() {
+        let c = cli_candidates("opencode", None, "", Path::new("H:/home"), Path::new("A:/AppData/Roaming"));
+        let paths: Vec<String> = c.iter().map(|p| p.display().to_string().replace('\\', "/")).collect();
+        assert!(paths.iter().any(|p| p.contains(".opencode") && p.contains("bin/opencode")));
+        assert!(paths.iter().any(|p| p.contains("@opencodedesktop") && p.ends_with("opencode-cli.exe")));
     }
 
     #[test]

@@ -3,16 +3,16 @@
 **Build 3D designs together with your team's AI helpers: no CAD or coding experience needed.**
 
 Describe a part, say "an enclosure for this Raspberry Pi", and a swarm of AI helpers (Claude Code,
-Codex, Droid, or the agent CLI you already use) builds it together in one shared FreeCAD model, live,
-while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts yourself when
-that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one SpacetimeDB
+Codex, Droid, OpenCode, or the agent CLI you already use) builds it together in one shared FreeCAD
+model, live, while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts
+yourself when that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one SpacetimeDB
 database, the hosting computer runs the only copy of the model, Elastic supplies board datasheets and
 design memory, and a Factory Droid reviewer checks fit and printability before the STL is exported.
 
 ## Get started (about 5 minutes)
 
-**Quick install:** paste one line into a terminal. It downloads CadSwarm, finds FreeCAD (and offers to
-install the official FreeCAD if you don't have it), puts CadSwarm into FreeCAD, offers a shortcut, and opens
+**Quick install:** paste one line into a terminal. It downloads CADSwarm, finds FreeCAD (and offers to
+install the official FreeCAD if you don't have it), puts CADSwarm into FreeCAD, offers a shortcut, and opens
 FreeCAD.
 
 | | Paste this |
@@ -28,7 +28,7 @@ Or install by hand:
    have no Python of their own, so with them you can join a teammate's project but not start a team or
    connect an AI helper (the installer offers to
    fetch the official FreeCAD for you).
-2. **Download CadSwarm**: on this page click the green **Code** button, then **Download ZIP**.
+2. **Download CADSwarm**: on this page click the green **Code** button, then **Download ZIP**.
    Unzip it anywhere, for example your Downloads folder.
 3. **Run the installer** in the unzipped folder:
    - Windows: double-click **`Install CadSwarm.cmd`**.
@@ -40,34 +40,38 @@ Or install by hand:
      **invite code** to your teammates.
    - *Everyone else:* choose **Join a teammate's project** and paste the invite code.
    - Then pick your AI helper. The guide connects it and starts it in the background, so there's no
-     window to keep open and nothing to paste. You talk to it in the CadSwarm panel's **Chat**.
+     window to keep open and nothing to paste. You talk to it in the CADSwarm panel's **Chat**.
 
-That's it. Next time, open the **CadSwarm** shortcut (or pick *CadSwarm* in FreeCAD's workbench
-list) and you're back with your team. If you hosted the team, its server starts again when you open CadSwarm (it doesn't start on its
+That's it. Next time, open the **CADSwarm** shortcut (or pick *CADSwarm* in FreeCAD's workbench
+list) and you're back with your team. If you hosted the team, its server starts again when you open CADSwarm (it doesn't start on its
 own after a reboot until you do).
 
 **Good to know**
 - You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup),
-  [Codex](https://learn.chatgpt.com/docs/codex/cli), or
-  [Factory Droid](https://docs.factory.ai/cli/getting-started/quickstart). The guide detects which ones
-  you have and links to install instructions.
-- Your AI helper must be signed in once on this computer (open `claude`, `codex` or `droid` in a terminal
-  and follow its sign-in). After that CadSwarm starts it by itself whenever FreeCAD is open, and wakes it
+  [Codex](https://learn.chatgpt.com/docs/codex/cli),
+  [Factory Droid](https://docs.factory.ai/cli/getting-started/quickstart), or
+  [OpenCode](https://opencode.ai/docs/). The guide detects which ones
+  you have and links to install instructions. ([Creao AI](#creao-ai-optional-helper) is optional and
+  needs an API key instead of an installed CLI.)
+- Your AI helper must be signed in once on this computer (open `claude`, `codex`, `droid` or `opencode`
+  in a terminal and follow its sign-in). After that CADSwarm starts it by itself whenever FreeCAD is open, and wakes it
   when someone messages it or hands it a task. Its log is under **the Tools tab ▸ Show my AI helper's log**.
 - AI helpers always join as ordinary members. The people on the team lead it, and only a person's computer
   hosts it.
-- **Whoever starts a team** makes one extra download, about 50 MB: CadSwarm's team server plus the
+- **Whoever starts a team** makes one extra download, about 50 MB: CADSwarm's team server plus the
   [SpacetimeDB](https://spacetimedb.com/) database program (pinned to 2.13.0). The guide fetches them
-  into CadSwarm's app folder (`%APPDATA%\CadSwarm` on Windows, `~/Library/Application Support/CadSwarm`
-  on macOS, `~/.local/share/CadSwarm` on Linux) the first time you start a team, checks the SHA-256 of each file, and
-  needs nothing installed by hand. Teammates who join don't need them. (If your computer already has
-  both, the guide uses those instead.)
+  into CADSwarm's app folder (`%APPDATA%\CadSwarm` on Windows, `~/Library/Application Support/CadSwarm`
+  on macOS, `~/.local/share/CadSwarm` on Linux) the first time you start a team, checks the SHA-256 of
+  each file, and replaces an older download when a later release publishes a different one. The module
+  the workbench ships with is used as it is, so updating the workbench never leaves an old module
+  behind. Teammates who join don't need them. (A team server or SpacetimeDB already on your PATH is
+  used as it is.)
 - The team's database runs on SpacetimeDB's cloud (Maincloud) by default, so teammates can join from
   anywhere. The advanced "keep it on this computer" option is for offline or LAN-only demos; then
   everyone must share a network and Windows may ask to allow access through its firewall.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
   FreeCAD.
-- The first setup downloads about 70 MB of helper software into CadSwarm's app folder, plus the team
+- The first setup downloads about 70 MB of helper software into CADSwarm's app folder, plus the team
   server download above if you host. Nothing is installed into FreeCAD itself. On Linux, an official FreeCAD
   the installer fetched for you is unpacked there too (`FreeCAD-<version>`, about 3 GB).
 - Installer options (macOS/Linux, after `| bash -s --` or on `install/install.sh`): `--yes` (no questions;
@@ -79,12 +83,13 @@ own after a reboot until you do).
 
 ## Working with your team in FreeCAD
 
-The **CadSwarm Team** panel on the right follows the size of the FreeCAD window (drag its edge to give it
+The **CADSwarm Team** panel on the right follows the size of the FreeCAD window (drag its edge to give it
 more or less room) and scrolls when the window is short. It has three parts:
 
 - **AI helpers**: every helper on the team in three columns: its name, the **Task** it's on (or `next: …`
   when one is waiting for it) and its status (**◐ Working**, **Ready**, or why it's away). **＋ New helper**
-  starts another one on this computer: pick the AI (Claude Code, Codex or Droid) and, if you like, a name
+  starts another one on this computer: pick the AI (Claude Code, Codex, Droid, OpenCode or Creao AI) and,
+  if you like, a name
   (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
   one of yours to **Rename** it, **Restart** it, see its log or remove it. People are listed underneath.
 - **Chat**: one box for everything.
@@ -105,13 +110,17 @@ more or less room) and scrolls when the window is short. It has three parts:
   most 30 times an hour, so two helpers can't keep waking each other.
 - **Team tools ▾** has editing a part yourself, shared sizes, clash checks, STEP export, project files,
   snapshots, reports and storage.
+- **Remote** is where a phone joins from: the host mints one single-use code and shows it as a QR, with
+  the same link as text. Scan it with the phone's camera (or send the link) and the phone opens the
+  live build: the model, the chat and the `@` commands, from the sofa. One code works once, and only
+  while the computer hosting the team is on; **New code** makes the next one.
 
 **Changing a part yourself.** Select the part in the 3D view and choose **the Tools tab ▸ ✎ Edit a part yourself…**. While the
 editor is open, the part is held by you, so no helper can change it at the same time. Type a new size
 or position, or move it with FreeCAD's own **Edit ▸ Placement** / **Transform** and the editor picks up the
 move. **Save to team** sends the change to everyone; **Done** hands the part back. A part held by a helper
 offers **Ask … to let go** (or, if it has gone quiet, **Free it anyway**). If you move a part in the 3D view
-without opening the editor, CadSwarm puts it back and explains, so your view never silently differs
+without opening the editor, CADSwarm puts it back and explains, so your view never silently differs
 from your team's.
 
 ## Your project folder
@@ -131,7 +140,7 @@ Phone stand/
   README.txt           explains the above to anyone browsing the folder
 ```
 
-In FreeCAD, **the CadSwarm panel's Tools tab > Project files...** lists what the team saved (version, who, when) and
+In FreeCAD, **the CADSwarm panel's Tools tab > Project files...** lists what the team saved (version, who, when) and
 lets anyone save a copy. The host also gets **Open project folder**.
 
 ### Saving is safe by design
@@ -150,7 +159,7 @@ The team server enforces these rules; it doesn't just ask the AI helpers to foll
   file always keeps its latest version. Older versions beyond that are removed for good. If your file is
   replaced by a teammate, you're told.
 - **Atomic writes.** A crash never leaves half a file.
-- **Model scripts run in a sandbox.** When a helper runs a `run_part_script`, CadSwarm starts a separate,
+- **Model scripts run in a sandbox.** When a helper runs a `run_part_script`, CADSwarm starts a separate,
   throw-away FreeCAD process for it, never the live model's own process. The script works on a read-only
   copy of the model and can hand back only a shape and some data. Anything else it does to the copy is
   discarded, so it can't change other people's parts. How tightly that process is locked down depends on
@@ -178,7 +187,7 @@ Big projects are welcome, but the host's computer is protected and a project can
   checks free space on the drive. It refuses if less than 2 GB would be left (or 10% of the drive, if
   that is smaller) and says so in plain words (`disk_full`).
 - **Project limit: 20 GB by default**, counting files, older versions, snapshots and exports together.
-  The host can change it in **the CadSwarm panel's Tools tab > Storage and free up space...** (0 means no project limit; the
+  The host can change it in **the CADSwarm panel's Tools tab > Storage and free up space...** (0 means no project limit; the
   disk guard still applies), or with the environment variable `CADSWARM_PROJECT_LIMIT_GB` when starting the
   team's server. History retention (20 versions, 24 hours) is changed in the same place.
 - **Free up space.** The same dialog shows what is using the room and lets a person trim older versions,
@@ -206,10 +215,22 @@ work are untouched, and one long solve never blocks the team. When it finishes, 
 summary and its own points of improvement to the automatic checks (safety factor, stress peaks at supports or
 sharp corners, coarse mesh, no convergence check, resonance, temperature limits, placeholders...) and
 publishes the report. It **pops up in every teammate's FreeCAD**, can be exported as a self-contained
-**HTML** page or as **JSON** data, and is kept in `files/fea/`. In the CadSwarm panel, **Tools ▸ Simulation reports…**
+**HTML** page or as **JSON** data, and is kept in `files/fea/`. In the CADSwarm panel, **Tools ▸ Simulation reports…**
 lists past reports. If a helper forgets to publish, the hub publishes the automatic checks after 5 minutes.
 
 FEA here is a design aid for linear-elastic behaviour with idealised supports, not a certification.
+
+### Lighten without losing stiffness
+
+**Lighten part…** (the CadSwarm panel's Tools tab, the CadSwarm menu, and the CADSwarm Optimization workbench without a
+team) fills a part with a lattice that is thicker where the stress is high, keeps a solid skin and solid zones
+where it is held and loaded, and checks, by simulating the real lattice, that it keeps the stiffness you ask
+for (90 % by default). Pick the faces it is held by and loaded on, the material and how it is made; you get
+the weight saving, the verified stiffness, a preview you can cut open, and STL, 3MF and a report in
+`files/lattice/`. **Add to model** puts the lattice next to the original as a mesh; the original is never
+changed. AI helpers use `lighten_part` and suggest it when a part could be lighter, including when an FEA
+report shows strength to spare. Everything runs on the hosting computer in FreeCAD's own Python. It is a
+design aid, not a certification. See [docs/lattice](docs/lattice/README.md).
 
 ### Components library and precision settings
 
@@ -244,7 +265,7 @@ of the panel's Team tab (and of Settings) for someone to **Accept** or **Dismiss
 
 ### Learned design style
 
-CadSwarm learns how your team designs and teaches it to every AI helper. The host notes each change to the
+CADSwarm learns how your team designs and teaches it to every AI helper. The host notes each change to the
 shared model: who made it, whether a person or a helper, and what changed. It also notes every finished
 brief. From that it works out rules:
 
@@ -275,7 +296,7 @@ are also mirrored and an LLM rewords them: see [ELASTIC.md](ELASTIC.md).
 ## How it works
 
 All the AI helpers edit the *same* FreeCAD document through the team's SpacetimeDB database, and humans
-watch and steer from the CadSwarm workbench. They don't overwrite each other because:
+watch and steer from the CADSwarm workbench. They don't overwrite each other because:
 
 - **Object locks.** You can only change objects you've locked, and anything you create is yours.
 - **Transactional rollback.** An op (including an arbitrary agent Python script) that touches
@@ -294,7 +315,7 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
  bob:   Codex  ──────┼──► cadswarm MCP ──────► members · fences · locks · revisions ·    │
  dana:  Droid  ──────┘   + prompt hook       │ tasks · messages · briefs · stale sweep   │
                                              └───▲──────────────────▲──────────────▲────┘
- carol: FreeCAD GUI ─── CadSwarm workbench ──────┘                  │              │
+ carol: FreeCAD GUI ─── CADSwarm workbench ──────┘                  │              │
         (mirror + team panel)                                       │   phone / browser: web app
                                                                     │   (pair by QR or #t= link;
                                          cadswarm-host (Rust) ──────┘    pointers, briefs, 3D view)
@@ -309,12 +330,13 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
 
 ## Where Droid runs
 
-CadSwarm uses the Factory Droid SDK (`cadswarm/reviewer.py`) as the swarm's design reviewer.
+CADSwarm uses the Factory Droid SDK (`cadswarm/reviewer.py`) as the swarm's design reviewer.
 
 - **What starts it:** `cadswarm-host`, when every task of a brief is done (SpacetimeDB subscription), and again after the owners fix what it found. Nobody prompts it.
 - **What it checks:** collisions between parts, that the board actually fits (measured board dimensions, mounting holes, port cutouts), and printability (print bed size, closed solids, walls under 1.2 mm).
-- **What it can touch:** only inspection and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
+- **What it can touch:** only inspection, its own pointer and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
 - **Where you see its work:** every tool call and finding is written to the `activity` table and shown live in the app, and its verdict is stored in `review` and shown as a review card on the brief.
+- **Its arrow:** it is a member like any other, so it gets its own pointer in its own colour. The round parks it on the brief's first part and `point_at` moves it to whichever part it is checking, in FreeCAD's 3D view and the web viewer alike.
 
 Setup, once per team (needs `pip install droid-sdk` or `pip install -e ".[reviewer]"`, the `droid` CLI, and `FACTORY_API_KEY`):
 
@@ -325,6 +347,33 @@ host\target\release\cadswarm-host --data .\team-model init-reviewer
 That mints a reviewer invite and writes the reviewer's folder under `team-model\agents\reviewer`. Until that folder exists briefs skip review and export directly, so a team without Droid still works. If the reviewer exits without a verdict (for example Droid is not logged in) the brief fails with that message instead of waiting forever, and its log is `team-model\agents\reviewer\review-<brief>-<round>.log`.
 
 People can also hand work to an agent mid-design: while holding a part, "Hand off now" with a note spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks and tasks), reads their note and recent ops, and continues instead of starting over.
+
+## Creao AI (optional helper)
+
+Creao AI gives your helper **various frontier models with one API key**: there is no command-line tool
+to install or sign in to, and it can't be given a custom MCP server, so CadSwarm talks to it through a
+small local bridge (`cadswarm/creao_agent.py`). The bridge joins the team exactly like any other
+helper, sends Creao the wake-up prompt, and executes each tool call Creao asks for in-process with the
+same MCP tools, so activity logging and fencing work the same way.
+
+1. In the setup guide click **Creao AI** (or **Add key…**) and paste the key in the box that opens;
+   **Get a key…** in that box opens Creao's [Developer Console](https://developer.creao.ai) to make
+   an account-scoped `cr_sk_` key. CadSwarm saves the key on this computer only, in the CadSwarm
+   env file this computer already uses (otherwise `%APPDATA%\CadSwarm\cadswarm.env` on Windows), and
+   never in the project folder or the team.
+   For a terminal instead: `cadswarm setup --client creao --invite "cadswarm-2:..." --name carol-creao`
+   with `CREAO_API_KEY=cr_sk_...` in `cadswarm.env` (see `.env.example`).
+2. The first Creao helper on a computer creates the account's Creao agent (its id is cached in the
+   CadSwarm app folder, `%APPDATA%\CadSwarm\creao.json` on Windows) and every later Creao helper
+   reuses it; the key is never written there. Setup also installs the account-level
+   `cadswarm-tools` skill and lets the agent's writes run without approval prompts.
+3. Open CadSwarm in FreeCAD. The background runner wakes it like any other helper.
+
+Each helper keeps its own Creao conversation across tasks (cached in `.cadswarm/creao.json` next to
+its other state) so it remembers the project. `cadswarm creao reset` (or `cadswarm setup --fresh`)
+starts its next task in a new conversation and keeps the shared agent. `CREAO_AGENT_ID` reuses an
+agent you made yourself, as long as it accepts one text input named `message` (the setup guide
+creates one that does), and `CREAO_MODEL` pins a model.
 
 ## Run the demo
 
@@ -340,8 +389,8 @@ powershell -File scripts\demo-down.ps1             # stop everything demo-up sta
 ```
 
 Options: `-Data <dir>` (data folder), `-Db <name>` (Maincloud database), `-Python <exe>` (Python with
-the cadswarm package), `-Agent claude|codex|droid`, `-AgentCommand <argv>` (see below), `-WebPort <n>`
-(default 4173), `-WebUrl <url>` (use a fixed public URL instead of a tunnel). Everything it starts is
+the cadswarm package), `-Agent claude|codex|droid|opencode|creao`, `-AgentCommand <argv>` (see below),
+`-WebPort <n>` (default 4173), `-WebUrl <url>` (use a fixed public URL instead of a tunnel). Everything it starts is
 recorded in `<Data>\.cadswarm-team\demo-pids.json`; `demo-down.ps1` stops only those processes, and
 only after checking each one's command line. See [demo/README.md](demo/README.md) for a three-agent
 demo script.
@@ -352,7 +401,7 @@ The agents that build briefs run on whichever agent CLI the host's owner already
 account and model provider. Pick one when you set up the host:
 
 ```powershell
-host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | droid
+host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | droid | opencode | creao
 ```
 
 Or run any other CLI by setting `agent_command` in `team-model\host.json`; `{prompt}` is replaced by the
@@ -362,18 +411,26 @@ task prompt:
 "agent_command": ["aider", "--message", "{prompt}", "--yes"]
 ```
 
-A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX` or `CADSWARM_DROID`.
+A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX`, `CADSWARM_DROID` or
+`CADSWARM_OPENCODE`. Creao AI (`--agent creao`) has no CLI: it needs `CREAO_API_KEY` (see
+[Creao AI](#creao-ai-optional-helper)).
 
 ## For developers: command line
+
+> **Updating the team database.** After any change to `module/` or `rules/` (new op kinds such as the
+> lighten and style tools), the SpacetimeDB module must be republished, keeping the data, and the host
+> restarted. Step-by-step guide, including owner sign-in, bindings, a local rehearsal and troubleshooting:
+> [docs/publishing-spacetimedb.md](docs/publishing-spacetimedb.md).
 
 The guide wraps these commands; they still work for scripting and CI.
 
 Prereqs: FreeCAD 1.x (found automatically, or set `CADSWARM_FREECAD_PYTHON` to its
 `bin/python.exe`) and Python 3.11+. When you host, the guide downloads the
-[SpacetimeDB CLI](https://spacetimedb.com/install) 2.13.0, `cadswarm-host` and the module into
-`%APPDATA%\CadSwarm` on first use; from a checkout you can also build them yourself with
-`cargo build --release` in `host/` and `cargo build --release --target wasm32-unknown-unknown` in
-`module/`.
+[SpacetimeDB CLI](https://spacetimedb.com/install) 2.13.0 and `cadswarm-host` into
+`%APPDATA%\CadSwarm` on first use, and refreshes them when a newer release changes them; the module
+comes from the workbench (or that download, on an older install). From a checkout you can also build
+them yourself with `cargo build --release` in `host/` and
+`cargo build --release --target wasm32-unknown-unknown` in `module/`.
 
 Optional services read keys from the environment, never from the repo. Copy `.env.example` to
 `cadswarm.env` next to the checkout (for example `Projects\cadswarm.env`, shared by every worktree) or
@@ -408,10 +465,10 @@ host\target\release\cadswarm-host --data .\team-model invite --kind human --role
 # 3. Each person: join with the invite and wire their own AI helper in their own folder.
 .venv\Scripts\cadswarm setup --client claude --invite "cadswarm-2:..." --name alice --dir ..\alice
 .venv\Scripts\cadswarm setup --client codex  --invite "cadswarm-2:..." --name bob   --dir ..\bob
-#    then run `claude` / `codex` / `droid` in that folder. (Codex: trust the project so
-#    .codex/config.toml loads, then type `/hooks` in Codex and trust the CadSwarm hook.)
+#    then run `claude` / `codex` / `droid` / `opencode` in that folder. (Codex: trust the project so
+#    .codex/config.toml loads, then type `/hooks` in Codex and trust the CADSwarm hook.)
 
-# 4. Install this checkout into FreeCAD as the CadSwarm add-on (same as the double-click installer).
+# 4. Install this checkout into FreeCAD as the CADSwarm add-on (same as the double-click installer).
 .venv\Scripts\cadswarm install-workbench
 ```
 
@@ -444,15 +501,19 @@ files.
   files, exports, snapshots and storage, so the host must stay on while the team works.
 - **Invite codes are `cadswarm-2:` codes.** Each one works once and expires after a day. Make a new one
   for each teammate from the guide's invite page or the team panel's **Invite** button. They carry the
-  database address and can be pasted as text, as a bare ticket, or as a phone link (`#t=`).
+  database address and can be pasted as text, as a bare ticket, or as a phone link (`#t=`). The team
+  panel's **Remote** tab shows that phone link as a QR; phone links point at
+  `https://cadswarm.design/app` unless the host was started with its own `--web-url`.
 
 ## What `cadswarm setup` writes
 
 | Client | Files |
 |---|---|
 | Claude Code | `.mcp.json` (cadswarm server), `.claude/settings.json` (UserPromptSubmit hook, `enabledMcpjsonServers`, `mcp__cadswarm` allowed), `CLAUDE.md` section |
-| Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CadSwarm hook (again after updating CadSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
+| Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CADSwarm hook (again after updating CADSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
 | Droid | `.factory/mcp.json` (cadswarm server), `AGENTS.md` section |
+| OpenCode | `opencode.json` (cadswarm MCP server), `AGENTS.md` section |
+| Creao AI | `.cadswarm/creao.json` (this helper's conversation and the shared Creao agent id, never the key), `AGENTS.md` section. No CLI: the bridge (`cadswarm.creao_agent`) runs through the background runner |
 | all | `.cadswarm/config.json` (uri, db, name, client, role), and after first run `.cadswarm/identity.json` (SpacetimeDB token, git-ignored) |
 
 The prompt hook (Claude Code and Codex) injects a team block before every prompt: who holds which
@@ -468,6 +529,7 @@ through the MCP tools instead.
   `delete_object`, `set_param`, `run_part_script`
 - **Checks and output:** `check_interference`, `export_model` (STEP/STL), `save_snapshot`, `storage_status`
 - **Simulation (FEA):** `list_faces`, `run_fea` (static / modal / thermal), `fea_status`, `publish_fea_report`
+- **Lighten:** `lighten_part`, `lattice_status`, `lattice_apply`, `lattice_cancel`, `lattice_cells`, `lattice_estimate`
 - **Components library:** `search_components`, `recommend_components`, `get_component`, `insert_component`,
   `add_standard_part`, `hole_size`, `import_component_from_url`, `add_component_from_file`
 - **Team settings:** `get_settings`, `suggest_setting` (people accept suggestions; helpers never change settings)
@@ -477,9 +539,9 @@ through the MCP tools instead.
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
   `get_inbox`, `ack_messages`, `take_over`
 
-Elastic is a core part of CadSwarm: with an Elastic project configured on the host, board datasheets,
+Elastic is a core part of CADSwarm: with an Elastic project configured on the host, board datasheets,
 design memory and reviewer lessons are available to the same agents, and an Agent Builder expert can
-supply a board spec the local library lacks. Without one, CadSwarm falls back to the local board
+supply a board spec the local library lacks. Without one, CADSwarm falls back to the local board
 library. See [ELASTIC.md](ELASTIC.md).
 
 ## Rules the team enforces

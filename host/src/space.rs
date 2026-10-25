@@ -231,8 +231,21 @@ impl Space {
             .v_review()
             .iter()
             .filter(|r| r.brief == brief)
-            .max_by_key(|r| r.round)
+            .max_by_key(|r| (r.round, r.at_ms))
             .map(|r| ReviewRow { round: r.round, passed: r.passed })
+    }
+
+    /// The names from `names` that exist in the model, in order and without duplicates. Task rows
+    /// outlive the parts they name (a stopped task keeps its objects; a reopened one may never have
+    /// been built), so an export must ask the model what is really there.
+    pub fn objects_present(&self, names: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for name in names {
+            if !out.contains(name) && self.conn.db.v_object().iter().any(|o| &o.name == name) {
+                out.push(name.clone());
+            }
+        }
+        out
     }
 
     /// Handoffs a person made and nobody picked up yet. An agent that dies before accepting

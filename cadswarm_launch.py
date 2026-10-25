@@ -1,12 +1,13 @@
-"""Single entry point for every CadSwarm helper process.
+"""Single entry point for every CADSwarm helper process.
 
     python cadswarm_launch.py mcp            # an AI helper's MCP server (Claude Code / Codex start this)
     python cadswarm_launch.py hook           # UserPromptSubmit hook (stdlib only, fast)
     python cadswarm_launch.py runner <dir>   # keeps the AI helper in <dir> on the team, no terminal needed
+    python cadswarm_launch.py creao <dir>    # one Creao AI helper task (prompt on stdin)
     python cadswarm_launch.py check          # is the MCP package importable?
     python cadswarm_launch.py <cli args>     # anything else goes to the `cadswarm` CLI
 
-Agent configs point at this file by absolute path, so they work whether CadSwarm
+Agent configs point at this file by absolute path, so they work whether CADSwarm
 lives in a dev checkout or inside FreeCAD's Mod folder, with any Python.
 """
 import os
@@ -32,6 +33,10 @@ def main():
     if cmd == "mcp":
         from cadswarm.mcp_server import main as mcp_main
         mcp_main()
+    elif cmd == "creao":
+        # The Creao AI bridge: same tools, but the model's turns arrive over Creao's HTTP API.
+        from cadswarm.creao_agent import main as creao_main
+        creao_main(sys.argv[2:])
     elif cmd == "check":
         try:
             from mcp.server.mcpserver import MCPServer  # noqa: F401

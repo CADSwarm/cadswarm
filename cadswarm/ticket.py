@@ -34,3 +34,11 @@ def decode(s):
     cleaned = "".join(s.split()).upper()
     cleaned += "=" * (-len(cleaned) % 8)
     return json.loads(base64.b32decode(cleaned))
+
+
+def phone_url(web_url, ticket):
+    """The link a phone opens. Same shape as the Rust host's, so either side can print it.
+
+    The ticket rides in the fragment (`#t=`), which browsers never send to a server.
+    """
+    return f"{web_url.rstrip('/')}/#t={ticket}"

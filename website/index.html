@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="description" content="CadSwarm is a free, open-source FreeCAD workspace where your team and its AI agents build one live 3D model together. Join the waitlist.">
-<meta property="og:title" content="CadSwarm">
+<meta name="description" content="CADSwarm is a free, open-source FreeCAD workspace where your team and its AI agents build one live 3D model together. Join the waitlist.">
+<meta property="og:title" content="CADSwarm">
 <meta property="og:description" content="Design hardware as a team. Your team’s Claude Code and Codex build one live FreeCAD model together.">
 <meta name="theme-color" content="#0a0a0a">
-<title>CadSwarm</title>
+<title>CADSwarm</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Geist+Mono:wght@400;500&display=swap">
@@ -26,7 +26,7 @@ body { margin: 0; } img { max-width: 100%; } [hidden] { display: none !important
   --muted: #8f8d88;
   --bone: #e8e2d4;
   --ink-on-light: #0a0a0a;
-  /* owner colours, the same order CadSwarm hands them out in FreeCAD */
+  /* owner colours, the same order CADSwarm hands them out in FreeCAD */
   --own-1: #4c9be0;
   --own-2: #f0913a;
   --own-3: #4fb35a;
@@ -200,6 +200,31 @@ figcaption strong { color: var(--text); font-weight: 500; }
 .trio p { color: var(--muted); font-size: 15px; }
 .trio code { font-family: var(--font-mono); font-size: 13px; color: var(--body); background: var(--surface-2); padding: 2px 6px; border-radius: 5px; overflow-wrap: anywhere; }
 
+/* ---------- install ---------- */
+.inst { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 48px; align-items: start; }
+@media (max-width: 900px) { .inst { grid-template-columns: minmax(0, 1fr); } }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); width: fit-content; max-width: 100%; }
+.tabs button { font: 500 14px/1 var(--font-body); color: var(--muted); background: transparent; border: 0; padding: 10px 16px; border-radius: 8px; cursor: pointer; }
+.tabs button:hover { color: var(--text); }
+.tabs button[aria-selected="true"] { background: var(--text); color: var(--ink-on-light); }
+.os { display: grid; gap: 26px; margin-top: 22px; }
+.cmd { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.cmd-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.cmd-bar .label { margin: 0; }
+.copy-btn { font: 500 12px/1 var(--font-mono); color: var(--body); background: transparent; border: 1px solid var(--line-strong); border-radius: 7px; padding: 7px 10px; cursor: pointer; }
+.copy-btn:hover { color: var(--text); background: var(--bg); }
+.cmd pre { margin: 0; padding: 16px; overflow-x: auto; font: 400 13.5px/1.6 var(--font-mono); color: var(--text); }
+.cmd pre .pr { color: var(--muted); user-select: none; }
+.os h3 { font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
+.os .steps p code, .inst-side code, .os .note code { font-family: var(--font-mono); font-size: 12.5px; color: var(--body); background: var(--surface-2); padding: 2px 6px; border-radius: 5px; overflow-wrap: anywhere; }
+.os .steps a, .inst-side a, .os .note a { color: var(--text); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.os .note { font-size: 14px; color: var(--muted); padding: 12px 14px; border-left: 2px solid var(--warn); background: rgba(227,179,65,.06); border-radius: 0 8px 8px 0; }
+.inst-side { display: grid; gap: 22px; }
+.inst-side > div { display: grid; gap: 10px; padding-top: 20px; border-top: 1px solid var(--line-strong); }
+.inst-side h3 { font-size: 18px; letter-spacing: -.015em; }
+.inst-side p, .inst-side li { color: var(--muted); font-size: 15px; }
+.inst-side ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+
 /* ---------- waitlist ---------- */
 .wl { margin-top: clamp(72px, 9vw, 120px); border: 1px solid var(--line); border-radius: 20px; background: var(--surface); display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); overflow: hidden; }
 @media (max-width: 900px) { .wl { grid-template-columns: minmax(0, 1fr); } }
@@ -257,24 +282,13 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
 .foot a:hover { color: var(--text); }
 .copy { margin-top: 40px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
 
-/* ---------- demo access gate ---------- */
-.gate { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 20px; background: rgba(6,6,6,.72); backdrop-filter: blur(6px); }
-.gate-card { width: min(430px, 100%); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 16px; padding: 26px; display: grid; gap: 14px; text-align: left; box-shadow: 0 30px 80px rgba(0,0,0,.55); }
-.gate-card h2 { margin: 0; font-size: 21px; letter-spacing: -.02em; color: var(--text); }
-.gate-card p { margin: 0; color: var(--muted); font-size: 14px; }
-.gate-card label { font: 500 11px/1 var(--font-mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.gate-card input { font: 15px var(--font-mono); color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); border-radius: 9px; padding: 12px 14px; width: 100%; }
-.gate-card input:focus { outline: none; border-color: var(--bone); }
-.gate-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.gate-msg { min-height: 1.2em; font-size: 13px; color: var(--muted); }
-.gate-msg.err { color: #e5534b; }
 </style>
 </head>
 <body>
 
 <header class="nav">
   <div class="wrap nav-inner">
-    <a class="brand" href="#top" aria-label="CadSwarm home">
+    <a class="brand" href="#top" aria-label="CADSwarm home">
       <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.6">
         <path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4Z" stroke="#f4f3f1"/>
         <path d="M12 12 20 7.4M12 12 4 7.4M12 12v9.2" stroke="#f4f3f1" opacity=".45"/>
@@ -282,12 +296,13 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
         <circle cx="17" cy="9.2" r="1.5" fill="#f0913a" stroke="none"/>
         <circle cx="7" cy="9.2" r="1.5" fill="#4fb35a" stroke="none"/>
       </svg>
-      CadSwarm
+      CADSwarm
     </a>
     <nav class="links" aria-label="Sections">
       <a href="#how">How it works</a>
       <a href="#panel">In FreeCAD</a>
       <a href="#safety">Safety</a>
+      <a href="#install">Install</a>
       <a href="#waitlist">Waitlist</a>
     </nav>
     <a class="btn nav-cta" href="#waitlist">Join the waitlist</a>
@@ -300,10 +315,10 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
       <div class="hero-copy">
         <span class="eyebrow fade-in"><i></i>Open source · Waitlist open</span>
         <h1 class="fade-in d2">Design hardware<br>as a team.</h1>
-        <p class="hero-sub fade-in d3">CadSwarm is a shared FreeCAD workspace for your team and the AI agents it runs. Everyone's Claude Code and Codex build one live 3D model together, without stepping on each other's parts.</p>
+        <p class="hero-sub fade-in d3">CADSwarm is a shared FreeCAD workspace for your team and the AI agents it runs. Everyone's Claude Code and Codex build one live 3D model together, without stepping on each other's parts.</p>
         <div class="hero-actions fade-in d4">
           <a class="btn btn-lg" href="#waitlist">Join the waitlist <span aria-hidden="true">→</span></a>
-          <button class="btn btn-lg btn-ghost" type="button" data-demo-open>Open the live demo <span aria-hidden="true">→</span></button>
+          <a class="btn btn-lg btn-ghost" href="./app/">Open CADSwarm on the web <span aria-hidden="true">→</span></a>
           <span class="fine">FreeCAD 1.0+ · Claude Code and Codex · Free and open source</span>
         </div>
       </div>
@@ -418,7 +433,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
       </div>
       <div class="demo">
         <div style="display:grid;gap:12px;min-width:0">
-          <div class="panel" role="img" aria-label="Mock-up of the CadSwarm team panel during a build">
+          <div class="panel" role="img" aria-label="Mock-up of the CADSwarm team panel during a build">
             <div class="panel-bar"><b>Team · Enclosure</b><span class="status">Connected</span></div>
             <div class="panel-sec">
               <span class="label">Who's here</span>
@@ -444,7 +459,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
           <span class="figtag">Fig. 01 · The team panel during a three-agent enclosure build (illustration)</span>
         </div>
         <ol class="steps">
-          <li><div><b>Start a team</b><p>Open the CadSwarm workbench in FreeCAD and follow the guide. Name the project and pick a folder. That's the whole setup.</p></div></li>
+          <li><div><b>Start a team</b><p>Open the CADSwarm workbench in FreeCAD and follow the guide. Name the project and pick a folder. That's the whole setup.</p></div></li>
           <li><div><b>Share the invite code</b><p>Teammates paste one code to join. Each of them connects their own Claude Code or Codex in a click.</p></div></li>
           <li><div><b>Split the work</b><p>A lead agent sets the shared sizes and hands out tasks. The other agents claim them and build their parts.</p></div></li>
           <li><div><b>Steer and export</b><p>Message any agent from the panel, run a clash check, and save the result as STEP or STL.</p></div></li>
@@ -459,9 +474,90 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
         <p class="sub2">on your own machines, in one shared model.</p>
       </div>
       <div class="trio">
-        <div><h3>Bring your own agent.</h3><p>Use the Claude Code or Codex subscription you already have. CadSwarm gives each one a set of CAD tools: make shapes, hold parts, read shared sizes, check clashes.</p></div>
+        <div><h3>Bring your own agent.</h3><p>Use the Claude Code or Codex subscription you already have. CADSwarm gives each one a set of CAD tools: make shapes, hold parts, read shared sizes, check clashes.</p></div>
         <div><h3>Hosted by one teammate.</h3><p>The team server runs on the host's computer next to the model file. Your designs stay on your machines unless you choose to share them.</p></div>
         <div><h3>Guard rails on every change.</h3><p>Each change runs as one undoable step. Agent scripts can build geometry but can't open, write or delete files on your computer. Files go through <code>save_file</code>, which never overwrites by accident.</p></div>
+      </div>
+    </section>
+
+    <!-- ===== install ===== -->
+    <section class="block" id="install">
+      <div class="head">
+        <h2>Install in about five minutes.</h2>
+        <p class="sub2">Paste one line. It fetches CADSwarm, finds FreeCAD and opens it with the setup guide.</p>
+      </div>
+      <div class="inst">
+        <div>
+          <div class="tabs" role="tablist" aria-label="Operating system">
+            <button type="button" role="tab" id="tab-win" aria-controls="os-win" aria-selected="true" data-os="win">Windows</button>
+            <button type="button" role="tab" id="tab-mac" aria-controls="os-mac" aria-selected="false" tabindex="-1" data-os="mac">macOS</button>
+            <button type="button" role="tab" id="tab-linux" aria-controls="os-linux" aria-selected="false" tabindex="-1" data-os="linux">Linux</button>
+          </div>
+
+          <div class="os" id="os-win" role="tabpanel" aria-labelledby="tab-win">
+            <div class="cmd">
+              <div class="cmd-bar"><span class="label">PowerShell</span><button class="copy-btn" type="button" data-copy="irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex">Copy</button></div>
+              <pre><span class="pr">&gt; </span>irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex</pre>
+            </div>
+            <h3>Or install by hand</h3>
+            <ol class="steps">
+              <li><div><b>Install FreeCAD 1.0+</b><p>Download it free from <a href="https://www.freecad.org/downloads.php" target="_blank" rel="noopener">freecad.org</a>. The default options are fine.</p></div></li>
+              <li><div><b>Download CADSwarm</b><p>On <a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a>, click <b style="display:inline">Code ▸ Download ZIP</b> and unzip it anywhere.</p></div></li>
+              <li><div><b>Run the installer</b><p>Double-click <code>Install CadSwarm.cmd</code> in the unzipped folder.</p></div></li>
+              <li><div><b>Follow the guide in FreeCAD</b><p>Start a new team project, or paste a teammate's invite code to join one.</p></div></li>
+            </ol>
+          </div>
+
+          <div class="os" id="os-mac" role="tabpanel" aria-labelledby="tab-mac" hidden>
+            <div class="cmd">
+              <div class="cmd-bar"><span class="label">Terminal</span><button class="copy-btn" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash">Copy</button></div>
+              <pre><span class="pr">$ </span>curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash</pre>
+            </div>
+            <h3>Or install by hand</h3>
+            <ol class="steps">
+              <li><div><b>Install FreeCAD 1.0+</b><p>Download it free from <a href="https://www.freecad.org/downloads.php" target="_blank" rel="noopener">freecad.org</a> and drag it into Applications.</p></div></li>
+              <li><div><b>Download CADSwarm</b><p>On <a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a>, click <b style="display:inline">Code ▸ Download ZIP</b> and unzip it anywhere.</p></div></li>
+              <li><div><b>Run the installer</b><p>Double-click <code>Install CadSwarm.command</code>. If macOS says it can't be opened, right-click it, choose <b style="display:inline">Open</b>, then <b style="display:inline">Open</b> again.</p></div></li>
+              <li><div><b>Follow the guide in FreeCAD</b><p>Start a new team project, or paste a teammate's invite code to join one.</p></div></li>
+            </ol>
+          </div>
+
+          <div class="os" id="os-linux" role="tabpanel" aria-labelledby="tab-linux" hidden>
+            <div class="cmd">
+              <div class="cmd-bar"><span class="label">Terminal</span><button class="copy-btn" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash">Copy</button></div>
+              <pre><span class="pr">$ </span>curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash</pre>
+            </div>
+            <p class="note">Use the official FreeCAD AppImage. The snap, Flatpak and distro packages have no Python of their own, so with them you can join a team but not start one or connect an AI helper. The installer offers to fetch the official FreeCAD for you (about 3 GB unpacked).</p>
+            <h3>Or install by hand</h3>
+            <ol class="steps">
+              <li><div><b>Install FreeCAD 1.0+</b><p>Get the AppImage from <a href="https://www.freecad.org/downloads.php" target="_blank" rel="noopener">freecad.org</a>, or let the installer download it.</p></div></li>
+              <li><div><b>Download CADSwarm</b><p>On <a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a>, click <b style="display:inline">Code ▸ Download ZIP</b> and unzip it anywhere.</p></div></li>
+              <li><div><b>Run the installer</b><p>Run <code>bash "Install CadSwarm.sh"</code>, or right-click it and choose <b style="display:inline">Run as a Program</b>.</p></div></li>
+              <li><div><b>Follow the guide in FreeCAD</b><p>Start a new team project, or paste a teammate's invite code to join one.</p></div></li>
+            </ol>
+            <p class="note" style="border-left-color:var(--line-strong);background:var(--surface)">Installer options go after <code>| bash -s --</code>: <code>--yes</code> (no questions), <code>--get-freecad</code>, <code>--no-shortcut</code>, <code>--no-launch</code>. Set <code>CADSWARM_FREECAD</code> to use a specific FreeCAD.</p>
+          </div>
+        </div>
+
+        <div class="inst-side">
+          <div>
+            <h3>You'll also need an AI helper</h3>
+            <p>Install one and sign in once in a terminal. CADSwarm starts it for you after that.</p>
+            <ul>
+              <li><a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">Claude Code</a> · run <code>claude</code></li>
+              <li><a href="https://learn.chatgpt.com/docs/codex/cli" target="_blank" rel="noopener">Codex</a> · run <code>codex</code></li>
+              <li><a href="https://docs.factory.ai/cli/getting-started/quickstart" target="_blank" rel="noopener">Factory Droid</a> · run <code>droid</code></li>
+            </ul>
+          </div>
+          <div>
+            <h3>What gets downloaded</h3>
+            <p>About 70 MB of helper software into CADSwarm's app folder. Whoever starts a team gets about 50 MB more: the team server and SpacetimeDB, each checked by SHA-256. Nothing is installed into FreeCAD itself.</p>
+          </div>
+          <div>
+            <h3>Next time</h3>
+            <p>Open the <b style="color:var(--text);font-weight:500">CadSwarm</b> shortcut, or pick CADSwarm in FreeCAD's workbench list. If you host the team, keep that computer on while everyone works.</p>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -469,9 +565,9 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
     <section class="wl" id="waitlist" aria-labelledby="wl-title">
       <div class="wl-copy">
         <h2 id="wl-title">Join the waitlist.</h2>
-        <p style="color:var(--muted);font-size:17px">We're opening CadSwarm to small teams first. Leave your details and we'll send you an invite when your spot is ready.</p>
+        <p style="color:var(--muted);font-size:17px">We're opening CADSwarm to small teams first. Leave your details and we'll send you an invite when your spot is ready.</p>
         <ul>
-          <li>Early builds for Windows, with macOS and Linux to follow</li>
+          <li>Release notes for Windows, macOS and Linux builds</li>
           <li>Help setting up your first team build</li>
           <li>A say in what we build next</li>
         </ul>
@@ -525,7 +621,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
     <section class="closing">
       <h2>Build your next part together.</h2>
       <p>Free and open source. Start a team, share a code, let the agents build.</p>
-      <div class="btns"><a class="btn btn-lg" href="#waitlist">Join the waitlist</a><a class="btn btn-lg btn-ghost" href="#how">See how it works</a></div>
+      <div class="btns"><a class="btn btn-lg" href="#install">Install CADSwarm</a><a class="btn btn-lg btn-ghost" href="#waitlist">Join the waitlist</a></div>
     </section>
   </div>
 
@@ -533,14 +629,14 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
     <div class="wrap">
       <div class="foot">
         <div>
-          <a class="brand" href="#top" style="margin-bottom:12px">CadSwarm</a>
+          <a class="brand" href="#top" style="margin-bottom:12px">CADSwarm</a>
           <p>The shared FreeCAD workspace where your team and its AI agents build one model together.</p>
         </div>
         <div><h4>Product</h4><ul><li><a href="#how">How it works</a></li><li><a href="#panel">In FreeCAD</a></li><li><a href="#safety">Safety</a></li></ul></div>
         <div><h4>Works with</h4><ul><li>FreeCAD 1.0+</li><li>Claude Code</li><li>Codex</li></ul></div>
-        <div><h4>Open source</h4><ul><li>Free to use</li><li><a href="#waitlist">Join the waitlist</a></li><li>Windows first</li></ul></div>
+        <div><h4>Open source</h4><ul><li>Free to use</li><li><a href="#install">Install</a></li><li><a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a></li></ul></div>
       </div>
-      <div class="copy"><span>© 2026 CadSwarm</span><span>Free and open source. Your models stay on your machines.</span></div>
+      <div class="copy"><span>© 2026 CADSwarm</span><span>Free and open source. Your models stay on your machines.</span></div>
     </div>
   </footer>
 </main>
@@ -649,6 +745,37 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
   requestAnimationFrame(frame);
 })();
 
+/* ---------- install: OS tabs + copy ---------- */
+(function () {
+  const tabs = [...document.querySelectorAll('[role=tab][data-os]')];
+  function select(tab, focus) {
+    tabs.forEach((t) => {
+      const on = t === tab;
+      t.setAttribute('aria-selected', on);
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    if (focus) tab.focus();
+  }
+  tabs.forEach((t, i) => {
+    t.addEventListener('click', () => select(t));
+    t.addEventListener('keydown', (e) => {
+      const d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (d) { e.preventDefault(); select(tabs[(i + d + tabs.length) % tabs.length], true); }
+    });
+  });
+  // open the tab for the visitor's OS
+  const ua = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
+  const os = /mac/i.test(ua) ? 'mac' : /linux|x11/i.test(ua) && !/android/i.test(ua) ? 'linux' : 'win';
+  select(tabs.find((t) => t.dataset.os === os) || tabs[0]);
+
+  document.querySelectorAll('[data-copy]').forEach((b) => b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; }
+    catch (e) { b.textContent = 'Select and copy'; }
+    setTimeout(() => { b.textContent = 'Copy'; }, 1800);
+  }));
+})();
+
 /* ---------- waitlist ---------- */
 (function () {
   const form = document.getElementById('wl-form');
@@ -709,70 +836,5 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
   });
 })();
 </script>
-
-<!-- ===== demo access ===== -->
-<div class="gate" id="gate" hidden role="dialog" aria-modal="true" aria-labelledby="gate-title" aria-describedby="gate-note">
-  <form class="gate-card" id="gate-form" novalidate>
-    <h2 id="gate-title">Enter the demo code</h2>
-    <p id="gate-note">The live demo opens the CadSwarm panels with a sample build. The code is printed on our Devpost page.</p>
-    <label for="gate-code">Demo code</label>
-    <input id="gate-code" name="code" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="swarm-…">
-    <div class="gate-actions">
-      <button class="btn" type="submit">Open the demo</button>
-      <button class="btn btn-ghost" type="button" data-gate-close>Cancel</button>
-    </div>
-    <p class="gate-msg" id="gate-msg" role="status" aria-live="polite"></p>
-  </form>
-</div>
-<script>
-(function () {
-  // A client-side gate only: it keeps the demo out of search results and casual clicks, not out of view.
-  const CODE = 'swarm-13';
-  const DEMO = './app/?mock';
-  const gate = document.getElementById('gate');
-  const form = document.getElementById('gate-form');
-  const input = document.getElementById('gate-code');
-  const msg = document.getElementById('gate-msg');
-  let opener = null;
-
-  const open = (event) => {
-    opener = event.currentTarget;
-    input.value = '';
-    msg.textContent = '';
-    msg.className = 'gate-msg';
-    gate.hidden = false;
-    input.focus();
-  };
-  const close = () => {
-    gate.hidden = true;
-    if (opener) opener.focus();
-  };
-
-  document.querySelectorAll('[data-demo-open]').forEach((b) => b.addEventListener('click', open));
-  document.querySelectorAll('[data-gate-close]').forEach((b) => b.addEventListener('click', close));
-  gate.addEventListener('click', (e) => { if (e.target === gate) close(); });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !gate.hidden) close();
-    if (e.key === 'Tab' && !gate.hidden) {
-      const focusable = form.querySelectorAll('input, button');
-      const first = focusable[0], last = focusable[focusable.length - 1];
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    }
-  });
-
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (input.value.trim().toLowerCase() === CODE) {
-      location.href = DEMO;
-      return;
-    }
-    msg.textContent = 'That code is not right. It is printed on our Devpost page.';
-    msg.className = 'gate-msg err';
-    input.select();
-  });
-})();
-</script>
-
 </body>
 </html>

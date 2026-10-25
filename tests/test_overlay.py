@@ -354,6 +354,20 @@ def test_targets_carry_the_anchor_and_who_is_pointing():
     assert t["mode"] == "editing"
 
 
+def test_the_reviewer_gets_its_own_arrow():
+    reviewer = {"id": 6, "name": "reviewer", "kind": "reviewer", "status": "active", "status_text": "reviewing"}
+    got = overlay.targets_from(pay([pointer(6, mode="inspecting", label="reviewing Base")], [reviewer], [BASE]))
+    assert got[6]["kind"] == "reviewer"
+    assert got[6]["object"] == "Base"
+    assert got[6]["anchor"] == (20.0, 10.0, 10.0)
+
+
+def test_the_preview_demo_shows_the_reviewers_arrow_too():
+    demo = overlay.DemoSource().fetch()
+    got = overlay.targets_from(demo)
+    assert any(t["kind"] == "reviewer" for t in got.values())
+
+
 def test_two_agents_on_one_part_are_stood_side_by_side():
     a = {"id": 2, "name": "a", "kind": "agent", "status": "active", "status_text": ""}
     b = {"id": 3, "name": "b", "kind": "agent", "status": "active", "status_text": ""}
