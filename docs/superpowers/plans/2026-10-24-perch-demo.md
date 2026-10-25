@@ -625,12 +625,7 @@ def test_the_first_part_is_an_op_that_names_a_part():
     assert ok and "Podium_Body" in detail
     params = [{**events[0], "created": ["Params"], "op": "set_param"}]
     assert driver.first_part(step, a_view(run_events=params))[0] is False
-```
 
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `python -m pytest tests/test_perch_demo.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'driver'`.
 
 def test_parts_landed_params_and_reviews_are_read_from_the_module():
     snap = ready_snapshot()
@@ -847,6 +842,11 @@ def test_the_run_log_records_each_step_and_the_numbers_the_pitch_quotes(tmp_path
     rows = [json.loads(line) for line in log.path.read_text(encoding="utf-8").splitlines()]
     assert any(row["kind"] == "step.done" and "recall" in row["detail"] for row in rows)
 ```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `python -m pytest tests/test_perch_demo.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'driver'`.
 
 - [ ] **Step 3: Write the driver's core**
 
