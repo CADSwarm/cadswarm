@@ -3,18 +3,24 @@
  * live trace of it working in this workspace. It opens from the sidebar's "Sponsors" button, Shift+D,
  * or `?debug`.
  */
-import type { Review, State, Store } from '../store';
+import type { Member, Review, State, Store } from '../store';
 import { esc } from './esc';
 import { SPONSOR_EVIDENCE } from './sponsor-evidence';
 
 export interface Card {
-  id: 'spacetime' | 'factory' | 'elastic';
+  id: 'spacetime' | 'anthropic' | 'creao' | 'factory' | 'elastic';
   name: string;
   role: string;
   facts: Array<[string, string]>;
   list?: { title: string; rows: string[] };
   trace?: string[];
+  traceTitle?: string;
   calls: string[];
+}
+
+/** The window's order is part of the claim: the team's state, then who builds, then who checks, then memory. */
+export function cardOrder(cards: Card[]): Card['id'][] {
+  return cards.map(c => c.id);
 }
 
 export interface Finding { object: string; problem: string }
@@ -47,7 +53,7 @@ export function toolLine(summary: string): string {
 
 const list = (rows: string[], max: number) => rows.slice(0, max).map(r => (r.length > 170 ? `${r.slice(0, 167)}…` : r));
 
-/** The three cards, built only from state the browser already has, plus the stamped snapshot. */
+/** The five cards, built only from state the browser already has, plus the stamped snapshot. */
 export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | 'locks' | 'tasks' | 'ops' | 'activity' | 'briefs' | 'reviews'>, project: string): Card[] {
   const online = s.members.filter(m => m.status === 'active').length;
   const done = s.ops.filter(o => o.status === 'done').length;
@@ -63,6 +69,21 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
   // Params is the shared spreadsheet, not a part, and its lock is not a held part (same as the FreeCAD panel).
   const held = s.locks.filter(l => l.object !== 'Params').length;
 
+  const byClient = (client: string) => s.members.filter(m => m.client === client);
+  const owned = (m: Member) => s.tasks.filter(t => t.owner === m.id);
+  const opsBy = (m: Member) => s.ops.filter(o => o.by === m.id);
+  const doneOf = (rows: Array<{ status: string }>) => rows.filter(r => r.status === 'done').length;
+  const traceOf = (members: Member[]) =>
+    s.activity.filter(a => members.some(m => m.id === a.member)).map(a => a.summary);
+  const people = (members: Member[]) =>
+    members.length ? members.map(m => `${m.name} · ${m.status}`).join(', ') : 'not joined';
+  const claude = byClient('claude');
+  const creao = byClient('creao');
+  const claudeTasks = claude.flatMap(owned);
+  const claudeOps = claude.flatMap(opsBy);
+  const creaoTasks = creao.flatMap(owned);
+  const creaoOps = creao.flatMap(opsBy);
+
   return [
     {
       id: 'spacetime',
@@ -76,6 +97,37 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
         ['events', `${s.activity.length} activity rows · seq ${lastSeq}`],
       ],
       calls: ['submit_op(kind, args) → host runs it alone → complete_op(result)', 'views: v_member · v_object · v_task · v_op · v_review'],
+    },
+    {
+      id: 'anthropic',
+      name: 'Anthropic',
+      role: 'the planners and builders (Claude Code)',
+      facts: [
+        ['agents', `${people(claude)} · ${claude.filter(m => m.status === 'active').length}/${claude.length} active`.replace(' · 0/0 active', '')],
+        ['tasks done', `${doneOf(claudeTasks)}/${claudeTasks.length}`],
+        ['mcp ops', `${claudeOps.length} submitted · ${doneOf(claudeOps)} done`],
+        ['surface', 'Claude Code → MCP over stdio → the host runs the op'],
+      ],
+      trace: traceOf(claude),
+      traceTitle: 'recent work',
+      calls: ['Session(mcp_servers=[cadswarm]) → model_status, ops, tasks, recall_designs',
+        'claude → MCP over stdio → submit_op → host → complete_op'],
+    },
+    {
+      id: 'creao',
+      name: 'Creao AI',
+      role: 'the helper that drives its own conversation',
+      facts: [
+        ['helper', people(creao)],
+        ['mode', 'local bridge · one JSON tool call per turn'],
+        ['tasks done', `${doneOf(creaoTasks)}/${creaoTasks.length}`],
+        ['mcp ops', `${creaoOps.length} submitted · ${doneOf(creaoOps)} done`],
+        ['thread', 'one Creao conversation per helper folder'],
+      ],
+      trace: traceOf(creao),
+      traceTitle: 'recent work',
+      calls: ['cadswarm.creao_agent → CREAO_API_KEY → one tool call per turn',
+        'a stale card is the takeover proof: the fence moved and the old thread stops'],
     },
     {
       id: 'factory',
@@ -132,7 +184,7 @@ function cardHTML(c: Card): string {
     <dl>${c.facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
     ${c.list ? `<div class="sponsor-list"><span class="section-label">${esc(c.list.title)}</span>
       <ul>${c.list.rows.map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>` : ''}
-    ${c.trace?.length ? `<div class="sponsor-trace"><span class="section-label">trace</span>
+    ${c.trace?.length ? `<div class="sponsor-trace"><span class="section-label">${esc(c.traceTitle ?? 'trace')}</span>
       <ol>${c.trace.map(r => `<li>${esc(r)}</li>`).join('')}</ol></div>` : ''}
     <pre class="sponsor-code">${c.calls.map(esc).join('\n')}</pre>
   </section>`;
