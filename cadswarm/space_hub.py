@@ -77,6 +77,22 @@ def _num(v):
         return v
 
 
+def _op_targets(args):
+    """The objects a refused op meant to write: the name(s) the rules named in their refusal."""
+    out = []
+    for key in ("name", "objects", "target", "targets", "names"):
+        v = (args or {}).get(key)
+        if isinstance(v, str) and v:
+            out.append(v)
+        elif isinstance(v, (list, tuple)):
+            out.extend(str(x) for x in v if x)
+    seen = []
+    for name in out:
+        if name not in seen:
+            seen.append(name)
+    return seen[:8]
+
+
 class SpaceHub(LibraryRoutes):
     def __init__(self, cfg, identity=None, timeout=60, space=None):
         self.cfg = cfg
@@ -338,8 +354,17 @@ class SpaceHub(LibraryRoutes):
 
     def run_op(self, kind, args, expected_revs=None):
         op_id = ticket.new_id("o_")
-        self._f("submit_op", op_id, kind, json.dumps(args or {}),
-                json.dumps(expected_revs) if expected_revs else "")
+        try:
+            self._f("submit_op", op_id, kind, json.dumps(args or {}),
+                    json.dumps(expected_revs) if expected_revs else "")
+        except HubRequestError as e:
+            if e.code in ("not_locked", "locked"):
+                # A refused submit never becomes an op row, so the module has no event to read:
+                # log it as activity here, then let the tool return the refusal as before.
+                targets = _op_targets(args)
+                summary = f"refused {kind}" + (f" on {', '.join(targets)}" if targets else "") + f": {e}"
+                self.log_activity("refused", summary, targets)
+            raise
         deadline, delay = time.time() + OP_WAIT_SECONDS, 0.5
         while time.time() < deadline:
             rows = self._rows("v_op", f"id = '{op_id}'")

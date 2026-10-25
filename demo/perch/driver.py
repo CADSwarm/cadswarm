@@ -95,6 +95,8 @@ class View:
     started: float
     after: float          # when this step's own action went out (the mention), else `started`
     now: float
+    activity: list = field(default_factory=list)  # v_activity rows: recalls and refused submits
+    run_started: float = 0.0                      # when Start was pressed: a recall from a prior run is not evidence
 
 
 def load_plan(path):
@@ -175,6 +177,16 @@ def _op_seconds(op):
     return float(op.get("finished_ms") or 0) / 1000.0
 
 
+def _activity_seconds(row):
+    return float(row.get("at_ms") or 0) / 1000.0
+
+
+def _numbered(text, word):
+    """`3 problems` / `1 problem` in an activity summary, or None when the row carries no count."""
+    m = re.search(r"(\d+)\s+" + word + r"s?\b", str(text or ""), re.I)
+    return int(m.group(1)) if m else None
+
+
 # --------------------------------------------------------------------------- predicates
 # Each returns (done, the sentence the page and the log show). No predicate reads an agent's prose.
 
@@ -196,26 +208,27 @@ def brief_sent(step, view):
 
 
 def recall(step, view):
+    """The host's own recall makes no op: it logs a `recall` activity row (helper.recall_designs).
+    Filter by the press, not this step's start: the host may recall while a step's deadline runs out.
+    `query` (when a timeline sets it) keeps Act 1's planning recall from standing in for Act 2's."""
     marker = str(step.args["marker"]).lower()
+    query = str(step.args.get("query") or "").lower()
     need = int(step.args.get("problems", 3))
-    for op in view.ops:
-        if op.get("kind") != "recall_designs" or op.get("status") != "done":
+    for row in view.activity:
+        if row.get("kind") != "recall" or _activity_seconds(row) < view.run_started:
             continue
-        if _op_seconds(op) < view.started:
+        summary = str(row.get("summary") or "")
+        if marker not in summary.lower() or (query and query not in summary.lower()):
             continue
-        result = op.get("result") or {}
-        for design in result.get("designs") or []:
-            text = f"{design.get('request') or ''} {design.get('text') or ''}".lower()
-            if marker not in text:
-                continue
-            problems = design.get("problems") or []
-            lessons = result.get("lessons") or []
-            if len(problems) < need:
-                return False, f"Act 1 returned with {len(problems)} problems, need {need}"
-            if not lessons:
-                return False, "Act 1 returned, but no lessons came with it"
-            return True, f"Act 1 first · {len(problems)} problems · {len(lessons)} lessons"
-    return False, "waiting for recall_designs"
+        problems, lessons = _numbered(summary, "problem"), _numbered(summary, "lesson")
+        if problems is None or lessons is None:
+            return False, f"the host's recall row has no counts: {summary}"
+        if problems < need:
+            return False, f"Act 1 returned with {problems} problems, need {need}"
+        if not lessons:
+            return False, "Act 1 returned, but no lessons came with it"
+        return True, f"Act 1 first · {problems} problems · {lessons} lessons"
+    return False, "waiting for the host's recall"
 
 
 def tasks_landed(step, view):
@@ -223,8 +236,11 @@ def tasks_landed(step, view):
     tasks = view.snapshot.get("tasks") or []
     found, why = {}, []
     for part, owner in wanted.items():
+        # A task from the previous judge is still `open` in the same workspace: only this run's tasks
+        # count, and `created_at` is in the same epoch seconds as the press.
         row = next((t for t in tasks if part.lower() in (t.get("title") or "").lower()
-                    and (t.get("status") or "") in ("open", "claimed")), None)
+                    and (t.get("status") or "") in ("open", "claimed")
+                    and float(t.get("created_at") or 0) >= view.run_started), None)
         if not row:
             why.append(f"no open task for {part}")
             continue
@@ -242,10 +258,23 @@ def tasks_landed(step, view):
 
 
 def refusal(step, view):
+    """A steer is refused inside `submit_op`: no op row, no event, so SpaceHub logs a `refused` row.
+    A queued op that later meets a lock still arrives as `op_failed`; read both."""
     target = str(step.args.get("target") or "").lower()
     who = str(step.args.get("by") or "").lower()
+    names = _names(view.snapshot)
+    for row in view.activity:
+        if row.get("kind") != "refused" or _activity_seconds(row) < view.after:
+            continue
+        name = str(names.get(row.get("member")) or "").lower()
+        summary = str(row.get("summary") or "")
+        if who and name != who:
+            continue
+        if target and target not in summary.lower():
+            continue
+        return True, f"{name or 'a helper'} refused: {summary}"
     for e in view.events:
-        if e.get("kind") != "op_failed" or e.get("code") != "lock_violation":
+        if e.get("kind") != "op_failed" or e.get("code") not in ("lock_violation", "not_locked"):
             continue
         name = (e.get("name") or "").lower()
         error = (e.get("error") or "").lower()
@@ -254,7 +283,7 @@ def refusal(step, view):
         if target and target not in error:
             continue
         return True, f"{e.get('name')} refused: {e.get('error')}"
-    return False, f"waiting for a lock refusal from {who or 'any helper'}"
+    return False, f"waiting for a refusal from {who or 'any helper'}"
 
 
 def _ops_on_parts(run_events, parts):
@@ -444,6 +473,12 @@ class Runner:
                         if (b.get("status") or "") in ("open", "planning", "working")]
             if open_ids:
                 problems.append("brief still open: " + ", ".join(open_ids))
+        # A task from the last judge is still open in the same workspace: Start would land it again.
+        open_tasks = [t.get("title") or t.get("id") or "?"
+                      for t in snap.get("tasks") or []
+                      if (t.get("status") or "") in ("open", "claimed", "blocked")]
+        if open_tasks:
+            problems.append("tasks still open: " + ", ".join(open_tasks[:6]))
         # The reviewer is HTTP-only: `init-reviewer` mints it, then it never heartbeats, so the sweep marks
         # it stale by T-5 with no work at risk. Probe still shows it (and Droid on PATH); only a stale
         # *helper* can strand a part, so only helpers block Start.
@@ -532,7 +567,8 @@ class Runner:
 
             view = View(snapshot=self.io.snapshot(), ops=self.io.ops(), events=st.events,
                         run_events=self.run_events, seq=self.seq, started=st.started or self.started_at,
-                        after=st.sent_at or st.started or self.started_at, now=now)
+                        after=st.sent_at or st.started or self.started_at, now=now,
+                        activity=self.io.activity(), run_started=self.started_at)
 
             guard = (st.step.guard or {}).get("held_by")
             if guard and not st.sent:
@@ -631,17 +667,17 @@ class RunLog:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def summary(self, state):
-        # The numbers the pitch quotes come only from steps the module actually closed as done; a
-        # skipped step still has a `t`, but it is the deadline, not a result.
-        done = {s["id"]: s["t"] for s in state["steps"] if s["state"] == "done" and s["t"] is not None}
-        ended = [s["t"] for s in state["steps"] if s["t"] is not None]
+        # The numbers the pitch quotes come only from steps the module actually closed as done (or a
+        # person confirmed); a skipped step still has a `t`, but it is the deadline, not a result.
+        done = {s["id"]: s["t"] for s in state["steps"]
+                if s["state"] in ("done", "confirmed") and s["t"] is not None}
         out = {
             "timeline": state["timeline"],
             "log": self.path.name,
             "t_recall": done.get("recall"),
             "t_tasks": done.get("tasks"),
             "t_first_op": done.get("first_part"),
-            "t_finish": max(ended) if ended else None,
+            "t_finish": max(done.values()) if done else None,
             "gate_failed": state["gate"]["failed"],
             "steps": [{"id": s["id"], "state": s["state"], "t": s["t"]} for s in state["steps"]],
         }
@@ -714,23 +750,21 @@ class TeamIO:
         return {"model": s["model"], "tasks": s["tasks"], "briefs": s["briefs"], "reviews": s["reviews"]}
 
     def ops(self):
-        """The op rows the panel's views hold. SpaceHub has no public ops() reader; the demo reads
-        `v_op` directly and resolves only the results it needs (a recall's designs and lessons)."""
+        """The op rows the panel's views hold, for `op_done` and the gate. SpaceHub has no public
+        ops() reader, so the demo reads `v_op` directly; recall and refusal evidence is in activity()."""
         rows = sorted(self.hub._rows("v_op"), key=lambda o: o.get("created_ms") or 0)[-60:]
-        out = []
-        for r in rows:
-            result = {}
-            if r.get("kind") == "recall_designs" and r.get("status") == "done":
-                try:
-                    result = self.hub._result(r.get("result_json") or "")
-                except Exception:
-                    result = {}
-            out.append({"id": r.get("id"), "kind": r.get("kind"), "status": r.get("status"),
-                        "by": r.get("by"), "finished_ms": r.get("finished_ms") or 0, "result": result})
-        return out
+        return [{"id": r.get("id"), "kind": r.get("kind"), "status": r.get("status"),
+                 "by": r.get("by"), "finished_ms": r.get("finished_ms") or 0} for r in rows]
 
     def events(self, since):
         return self.hub.events(since, wait=0)
+
+    def activity(self):
+        """The team's activity rows. The host's own recall and a refused submit make no op or event,
+        so this view is where the driver finds both; newest last, capped to what a run can use."""
+        rows = sorted(self.hub._rows("v_activity"), key=lambda a: a.get("id") or 0)[-80:]
+        return [{"id": r.get("id"), "member": r.get("member"), "kind": r.get("kind"),
+                 "summary": r.get("summary"), "at_ms": r.get("at_ms") or 0} for r in rows]
 
     def send_brief(self, text, board):
         return self.hub.post("/briefs", {"text": text, "board": board or ""})

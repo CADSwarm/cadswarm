@@ -128,6 +128,24 @@ def test_a_failed_op_surfaces_its_code(world):
     assert e.value.status == 409 and e.value.code == "lock_violation"
 
 
+def test_a_refused_submit_is_logged_as_activity_before_it_raises(world):
+    hub, fake = world
+    fake.fail["submit_op"] = 'not_locked: Lock ["Mount"] before set_props. Current holders: bob-codex'
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/ops", {"op": "set_props", "args": {"name": "Mount", "props": {"Length": 5}}})
+    assert e.value.code == "not_locked"
+    logged = [c for c in fake.calls if c[0] == "log_activity"]
+    assert logged and logged[-1][1][0] == 2
+    kind, summary, targets = logged[-1][1][1:]
+    assert kind == "refused" and "set_props" in summary and "Mount" in summary
+    assert targets == ["Mount"]
+    # Only a lock refusal is the evidence the demo quotes; a bad request is not logged as one.
+    fake.fail["submit_op"] = "bad_args: op_id must be new"
+    with pytest.raises(HubRequestError):
+        hub.post("/ops", {"op": "set_props", "args": {"name": "Mount"}})
+    assert len([c for c in fake.calls if c[0] == "log_activity"]) == 1
+
+
 def test_inbox_puts_human_steering_first_skips_my_own_and_others_mail(world):
     hub, fake = world
     msgs = hub.get("/inbox")["messages"]

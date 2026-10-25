@@ -32,7 +32,7 @@
     {
       "id": "recall", "label": "The planner recalls the Perch before it plans",
       "at": 10, "deadline": 25, "predicate": "recall",
-      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "args": {"marker": "clip-on articulated arm", "query": "Make the Podium lid", "problems": 3},
       "say": "Before it plans, it looks up what we already built."
     },
     {

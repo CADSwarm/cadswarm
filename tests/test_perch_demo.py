@@ -14,11 +14,12 @@ import driver  # noqa: E402
 class FakeIO:
     """The team, canned: the runner sees exactly the module-shaped data it will see live."""
 
-    def __init__(self, snapshot=None, ops=None, events=None, checks=None):
+    def __init__(self, snapshot=None, ops=None, events=None, checks=None, activity=None):
         self.snap = snapshot or {"model": {"objects": [], "participants": [], "params": {}},
                                  "tasks": [], "briefs": [], "reviews": []}
         self.op_rows = ops or []
         self.ev = events or []
+        self.act = activity or []
         self.checks = checks if checks is not None else [
             {"name": "Claude", "ok": True, "detail": "lead-claude · active"}]
         self.sent = []
@@ -29,6 +30,9 @@ class FakeIO:
 
     def ops(self):
         return self.op_rows
+
+    def activity(self):
+        return self.act
 
     def events(self, since):
         rows = [e for e in self.ev if int(e["seq"]) > since]
@@ -68,7 +72,8 @@ def a_step(sid="brief", predicate="brief_sent", args=None, **over):
 def a_view(**over):
     base = dict(snapshot={"model": {"objects": [], "participants": [], "params": {}},
                           "tasks": [], "briefs": [], "reviews": []},
-                ops=[], events=[], run_events=[], seq=0, started=1_000.0, after=1_000.0, now=1_010.0)
+                ops=[], events=[], run_events=[], seq=0, started=1_000.0, after=1_000.0, now=1_010.0,
+                activity=[], run_started=1_000.0)
     base.update(over)
     return driver.View(**base)
 
@@ -156,32 +161,59 @@ def test_brief_sent_names_the_phone_and_rejects_the_presenter():
 
 
 def test_recall_needs_act1_its_three_problems_and_lessons():
-    result = {"designs": [{"brief_id": "b_1", "request": "Build The Perch: a clip-on articulated arm",
-                           "problems": ["missing OTG cutout", "cradle 8.0 mm", "lid wall 1.0 mm"]}],
-              "lessons": ["Walls are 2.4 mm", "M3 inserts", "3 mm fillets"]}
-    ops = [{"kind": "recall_designs", "status": "done", "finished_ms": 1_005_000, "result": result}]
+    row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+           "summary": 'recall "the same Perch" · 1 design · 3 problems · 3 lessons · '
+                      '"Build The Perch: a clip-on articulated arm"'}
     step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3})
-    ok, detail = driver.recall(step, a_view(ops=ops))
+    ok, detail = driver.recall(step, a_view(activity=[row]))
     assert ok and "3 problems" in detail and "3 lessons" in detail
-    thin = {"designs": [{**result["designs"][0], "problems": ["one"]}], "lessons": ["one"]}
-    ok, detail = driver.recall(step, a_view(ops=[{**ops[0], "result": thin}]))
+    thin = {**row, "summary": 'recall "the same Perch" · 1 design · 1 problem · 1 lesson · '
+                                 '"Build The Perch: a clip-on articulated arm"'}
+    ok, detail = driver.recall(step, a_view(activity=[thin]))
     assert not ok and "need 3" in detail
+    no_lessons = {**row, "summary": 'recall "same Perch" · 1 design · 3 problems · 0 lessons · '
+                                       '"Build The Perch: a clip-on articulated arm"'}
+    assert driver.recall(step, a_view(activity=[no_lessons]))[0] is False
 
 
-def test_recall_ignores_an_op_that_finished_before_the_step():
-    result = {"designs": [{"request": "clip-on articulated arm", "problems": ["a", "b", "c"]}], "lessons": ["l"]}
-    ops = [{"kind": "recall_designs", "status": "done", "finished_ms": 900_000, "result": result}]
+def test_recall_ignores_a_row_from_before_the_press():
+    row = {"kind": "recall", "member": 2, "at_ms": 900_000,
+           "summary": 'recall "x" · 1 design · 3 problems · 1 lesson · "clip-on arm"'}
     ok, detail = driver.recall(a_step("recall", "recall", {"marker": "clip-on", "problems": 3}),
-                               a_view(ops=ops, started=1_000.0))
+                               a_view(activity=[row], run_started=1_000.0))
     assert not ok and "waiting" in detail
+
+
+def test_a_recall_that_lands_before_the_step_starts_still_counts():
+    # The driver ticks every 2 s and the host every 100 ms: the row can arrive while the previous
+    # step is still finishing. The press, not the step start, is the fence.
+    row = {"kind": "recall", "member": 2, "at_ms": 1_004_000,
+           "summary": 'recall "x" · 1 design · 3 problems · 1 lesson · "clip-on arm"'}
+    ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on", "problems": 3}),
+                          a_view(activity=[row], started=1_006.0, run_started=1_000.0))
+    assert ok is True
+
+
+def test_recall_is_act2s_recall_not_act1s_planning():
+    # Act 1's planner recall can also return the clip-on design. The Act 2 step names the query too.
+    act1 = {"kind": "recall", "member": 2, "at_ms": 1_002_000,
+            "summary": 'recall "Build The Perch: a clip-on articulated arm" · 1 design · 3 problems · 1 lesson'}
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium",
+                                       "problems": 3})
+    assert driver.recall(step, a_view(activity=[act1]))[0] is False
+    # Act 2's row names its own query and still carries Act 1's design request: the marker is there.
+    act2 = {**act1, "at_ms": 1_005_000,
+            "summary": 'recall "Make the Podium head for the same Perch" · 1 design · 3 problems · '
+                       '1 lesson · "Build The Perch: a clip-on articulated arm"'}
+    assert driver.recall(step, a_view(activity=[act2]))[0] is True
 
 
 def test_tasks_land_with_their_named_owners_and_not_a_poacher():
     owners = {"Podium_Body": "lead-claude", "Podium_Lid": "lid-creao"}
     tasks = [{"title": "Podium_Body: upright", "status": "open", "assignee": "lead-claude", "owner": 2,
-              "owner_name": "lead-claude"},
+              "owner_name": "lead-claude", "created_at": 1_001.0},
              {"title": "Podium_Lid: back cover", "status": "open", "assignee": "lid-creao", "owner": None,
-              "owner_name": None}]
+              "owner_name": None, "created_at": 1_001.0}]
     snap = {"model": {"objects": [], "participants": []}, "tasks": tasks, "briefs": [], "reviews": []}
     ok, detail = driver.tasks_landed(a_step("tasks", "tasks_landed", {"owners": owners}), a_view(snapshot=snap))
     assert ok and "Podium_Body → lead-claude" in detail
@@ -191,13 +223,33 @@ def test_tasks_land_with_their_named_owners_and_not_a_poacher():
     assert not ok and "claimed by host-worker" in detail
 
 
-def test_a_refusal_is_the_modules_lock_violation_not_a_sentence():
+def test_a_previous_judges_task_does_not_land_this_run():
+    tasks = [{"title": "Podium_Body: upright", "status": "open", "assignee": "lead-claude",
+              "owner_name": "lead-claude", "created_at": 900.0}]
+    snap = {"model": {"objects": [], "participants": []}, "tasks": tasks, "briefs": [], "reviews": []}
+    ok, detail = driver.tasks_landed(a_step("tasks", "tasks_landed", {"owners": {"Podium_Body": "lead-claude"}}),
+                                     a_view(snapshot=snap, run_started=1_000.0))
+    assert ok is False and "no open task" in detail
+
+
+def test_a_refusal_is_the_activity_row_a_refused_submit_logs():
+    people = [{"id": 2, "name": "lid-creao", "client": "creao", "status": "active"},
+              {"id": 3, "name": "arm-opencode", "client": "opencode", "status": "active"}]
+    snap = {"model": {"objects": [], "participants": people}, "tasks": [], "briefs": [], "reviews": []}
+    row = {"kind": "refused", "member": 2, "at_ms": 1_003_000,
+           "summary": 'refused set_props on Podium_Body: not_locked: Lock ["Podium_Body"] before '
+                      "set_props. Current holders: lead-claude"}
+    step = a_step("refusal", "refusal", {"target": "Podium_Body", "by": "lid-creao"})
+    assert driver.refusal(step, a_view(activity=[row], snapshot=snap))[0] is True
+    assert driver.refusal(step, a_view(activity=[{**row, "kind": "tool_call"}], snapshot=snap))[0] is False
+    assert driver.refusal(step, a_view(activity=[{**row, "member": 3}], snapshot=snap))[0] is False
+    assert driver.refusal(step, a_view(activity=[row], after=1_004.0, snapshot=snap))[0] is False
+    # A queued op that the worker later rejects still arrives as op_failed: read it too.
     events = [{"kind": "op_failed", "code": "lock_violation", "name": "lid-creao", "seq": 9,
                "error": "Podium_Body is held by lead-claude"}]
-    step = a_step("refusal", "refusal", {"target": "Podium_Body", "by": "lid-creao"})
-    assert driver.refusal(step, a_view(events=events))[0] is True
-    assert driver.refusal(step, a_view(events=[{**events[0], "code": "bad_args"}]))[0] is False
-    assert driver.refusal(step, a_view(events=[{**events[0], "name": "arm-opencode"}]))[0] is False
+    assert driver.refusal(step, a_view(events=events, snapshot=snap))[0] is True
+    assert driver.refusal(step, a_view(events=[{**events[0], "code": "bad_args"}], snapshot=snap))[0] is False
+    assert driver.refusal(step, a_view(events=[{**events[0], "name": "arm-opencode"}], snapshot=snap))[0] is False
 
 
 def test_the_first_part_is_an_op_that_names_a_part():
@@ -274,6 +326,14 @@ def test_a_leftover_act2_part_also_refuses_start():
     assert not r.reset_ok() and "Podium_Body" in r.reset_why
 
 
+def test_an_open_task_from_the_last_judge_also_refuses_start():
+    snap = ready_snapshot(tasks=[{"id": "t_9", "title": "Podium_Lid: back cover", "status": "open"},
+                                 {"id": "t_8", "title": "Podium_Body: upright", "status": "done"}])
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    assert not r.reset_ok() and "Podium_Lid: back cover" in r.reset_why
+    assert "Podium_Body: upright" not in r.reset_why
+
+
 def test_a_stale_helper_refuses_start_but_a_stale_reviewer_does_not():
     # `init-reviewer` mints an HTTP-only member that never heartbeats: it is stale by T-5 either way.
     snap = ready_snapshot()
@@ -311,6 +371,8 @@ def test_a_step_that_misses_its_deadline_is_skipped_out_loud(tmp_path):
 def test_the_mention_waits_for_the_body_and_goes_out_once():
     clock = Clock()
     snap = ready_snapshot()
+    snap["model"]["participants"].append(
+        {"id": 2, "name": "lid-creao", "client": "creao", "kind": "agent", "status": "active"})
     io = FakeIO(snapshot=snap)
     steps = [
         {"id": "refusal", "label": "r", "at": 0, "deadline": 40, "predicate": "refusal",
@@ -335,8 +397,9 @@ def test_the_mention_waits_for_the_body_and_goes_out_once():
     clock.advance(2)
     r.tick()
     assert io.sent == [("steer", "lid-creao", "thicken Podium_Body by 2 mm")]  # sent once, not every tick
-    io.ev.append({"kind": "op_failed", "code": "lock_violation", "name": "lid-creao", "seq": 4,
-                  "error": "Podium_Body is held by lead-claude"})
+    io.act.append({"kind": "refused", "member": 2, "at_ms": 1_006_000,
+                   "summary": 'refused set_props on Podium_Body: not_locked: Lock ["Podium_Body"] before '
+                              "set_props. Current holders: lead-claude"})
     clock.advance(2)
     r.tick()
     assert r.steps[0].state == "done"
@@ -409,20 +472,21 @@ def test_skip_confirms_a_manual_step_and_logs_the_decision(tmp_path):
 
 def test_the_run_log_records_each_step_and_the_numbers_the_pitch_quotes(tmp_path):
     clock = Clock()
-    result = {"designs": [{"request": "clip-on arm", "problems": ["a", "b", "c"]}], "lessons": ["l"]}
-    ops = [{"kind": "recall_designs", "status": "done", "finished_ms": 1_006_000, "result": result}]
+    activity = [{"kind": "recall", "member": 2, "at_ms": 1_006_000,
+                 "summary": 'recall "Make the Podium head for the same Perch" · 1 design · 3 problems · '
+                            '1 lesson · "Build The Perch: a clip-on articulated arm"'}]
     events = [
         {"kind": "brief", "actor": 1, "seq": 2, "text": "Make the Podium head"},
         {"kind": "op", "op": "create_extrusion", "seq": 5, "created": ["Podium_Body"],
          "modified": [], "deleted": [], "recomputed": [], "broken": []},
     ]
-    io = FakeIO(snapshot=ready_snapshot(), ops=ops, events=events)
+    io = FakeIO(snapshot=ready_snapshot(), activity=activity, events=events)
     log = driver.RunLog(tmp_path, "test")
     steps = [
         {"id": "brief", "label": "b", "at": 0, "deadline": 10, "predicate": "brief_sent",
          "args": {"marker": "Podium head"}},
         {"id": "recall", "label": "r", "at": 10, "deadline": 25, "predicate": "recall",
-         "args": {"marker": "clip-on", "problems": 3}},
+         "args": {"marker": "clip-on", "query": "Make the Podium head", "problems": 3}},
         {"id": "first_part", "label": "f", "at": 20, "deadline": 45, "predicate": "first_part",
          "args": {"parts": ["Podium_Body"]}},
     ]
@@ -502,6 +566,27 @@ def test_a_skipped_step_is_not_a_number_for_the_pitch(tmp_path):
     assert r.steps[0].state == "skipped"
     out = json.loads(log.summary_path.read_text(encoding="utf-8"))
     assert out["t_first_op"] is None
+
+
+def test_t_finish_is_the_last_step_the_module_closed_not_the_last_skip(tmp_path):
+    clock = Clock()
+    activity = [{"kind": "recall", "member": 2, "at_ms": 1_002_000,
+                 "summary": 'recall "the same Perch" · 1 design · 3 problems · 1 lesson · "clip-on arm"'}]
+    io = FakeIO(snapshot=ready_snapshot(), activity=activity)
+    steps = [{"id": "recall", "label": "r", "at": 0, "deadline": 10, "predicate": "recall",
+              "args": {"marker": "clip-on", "problems": 3}},
+             {"id": "first_part", "label": "f", "at": 2, "deadline": 5, "predicate": "first_part",
+              "args": {"parts": ["Podium_Body"]}}]
+    log = driver.RunLog(tmp_path, "test")
+    r = a_runner(io, clock, steps=steps, log=log)
+    r.start()
+    clock.advance(2)
+    r.tick()  # recall done at 2 s
+    clock.advance(6)
+    r.tick()  # first_part skipped at 8 s: still no process evidence
+    out = json.loads(log.summary_path.read_text(encoding="utf-8"))
+    assert [s["state"] for s in out["steps"]] == ["done", "skipped"]
+    assert out["t_finish"] == pytest.approx(2.0)
 
 
 # --------------------------------------------------------------------------- the presenter, the page, the cli

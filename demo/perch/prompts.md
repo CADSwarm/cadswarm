@@ -26,7 +26,7 @@ simulate and lighten.
 | 8 | `take_over("lid-creao")` | `@lead-claude` |
 | 9 | Take `Clamp_Base` in the phone's Model tab, send the handoff note below in Team chat, arm **Continue my work if I leave**, then close the tab | (Sam's phone) |
 | 11 | Tools ▸ Learned design style: add the three rules | (panel) |
-| 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | `@arm-opencode` |
+| 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin, held at the elbow, loaded at the head.` | `@arm-opencode` |
 | 14 | `distil-lessons` | (Elastic workflow) |
 
 Handoff note, sent in Team chat before arming. The handoff's `note` field is empty here; the agent gets this

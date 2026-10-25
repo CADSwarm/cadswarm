@@ -104,7 +104,7 @@
     {
       "id": "lighten", "label": "The lattice report is published",
       "at": 2160, "deadline": 900, "predicate": "report", "args": {"kind": "lattice_report"},
-      "say": "90% stiffness, gyroid, 5 mm cells, held at the elbow: the verifier console and mass saved."
+      "say": "90% stiffness, gyroid, 5 mm cells, 2.4 mm solid skin, held at the elbow: the verifier console and mass saved."
     },
     {
       "id": "export", "label": "STEP and STL are exported",
@@ -124,7 +124,7 @@
     {
       "id": "act2_recall", "label": "Act 2's planner recalls both designs",
       "at": 2820, "deadline": 900, "predicate": "recall",
-      "args": {"marker": "clip-on articulated arm", "problems": 3},
+      "args": {"marker": "clip-on articulated arm", "query": "Make the Podium head", "problems": 3},
       "say": "From Sam's phone: the second head starts by recalling the first one, its problems and its lessons."
     }
   ]

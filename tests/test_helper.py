@@ -80,6 +80,39 @@ def test_recall_without_a_board_skips_lessons(tmp_path):
     assert r["ok"] and r["result"]["lessons"] == []
 
 
+def test_a_recall_leaves_an_activity_row_led_by_counts(tmp_path):
+    class Logged:
+        def __init__(self):
+            self.rows = []
+
+        def log_activity(self, kind, summary, targets=None):
+            self.rows.append((kind, summary, targets))
+
+    class WithProblems(FakeElastic):
+        def search(self, index, query, k=5, filters=None):
+            rows = super().search(index, query, k, filters)
+            if index == "cadswarm-designs":
+                rows[0]["source"] = {**rows[0]["source"], "request": "Build The Perch: a clip-on articulated arm",
+                                     "problems": ["missing OTG cutout", "cradle 8.0 mm", "lid wall 1.0 mm"]}
+            return rows
+
+    p = project(tmp_path, WithProblems())
+    space = Logged()
+    p.host_space = space
+    r = helper.handle(p, {"id": 1, "op": "recall_designs",
+                          "args": {"query": "the same Perch", "board": "raspberry-pi-pico"}})
+    assert r["ok"]
+    kind, summary, targets = space.rows[-1]
+    assert kind == "recall" and targets == []
+    assert "1 design" in summary and "3 problems" in summary and "1 lesson" in summary
+    assert "clip-on articulated arm" in summary
+
+
+def test_a_recall_without_a_host_still_answers(tmp_path):
+    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "recall_designs", "args": {"query": "x"}})
+    assert r["ok"] and r["result"]["designs"]
+
+
 def test_missing_args_are_bad_args(tmp_path):
     p = project(tmp_path, FakeElastic())
     for op, args in (("lookup_board", {}), ("recall_designs", {}), ("board_spec", {}), ("index_design", {})):
