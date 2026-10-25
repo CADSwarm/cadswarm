@@ -144,10 +144,25 @@ marketing estimate.
 | Material saved | lattice mass before and after at verified stiffness | the lattice report and both STLs |
 | Reuse | the second head's wall clock and human minutes against the first | the two measured rows, side by side |
 | Access | the whole build is driven from a brief, a phone and corrections — no CAD commands typed by a person | the live demo and the panel's guide |
+| Outside hands | three people outside the team, logged with what each actually did and how long it took | the clips, the run logs behind them, and the person's own words |
 
-The last one is the impact claim that matters most for this community: a person who cannot model can
-still end up with a part an engineer would sign. The video adds outside voices — people outside the
-team, each naming one concrete thing they did or saw — because our own claims are not evidence.
+The last two are the impact claim that matters most for this community: a person who cannot model can
+still end up with a part an engineer would sign. The video adds outside voices because our own claims
+are not evidence.
+
+### Outside testers
+
+Three kinds of people outside the team have used this, and every clip says which one it was:
+
+| What the person did | What the clip may say | What it may not say |
+|---|---|---|
+| drove a run themselves on a laptop, presenter beside them | "I typed the brief and it built" | "I use this", "we use it at work" |
+| rebuilt a part they had modelled by hand, from a sentence | that they rebuilt their own part, and the elapsed time **only if the screen or the run log shows it** | "in seconds" unless that time is on screen or in the log, or that it beat their own CAD work |
+| watched a run and typed the prompt themselves | what they watched and what they typed | that they own, printed or shipped the result |
+
+No one outside the team has held a printed Perch — there is no printer — so no clip claims use of the
+object; the clips are about the software. Each names the person's role and the date, is cut from a
+full recording kept in `demo/perch/testimonials/`, and is never scripted by us.
 
 ## What makes it technically hard
 
@@ -479,10 +494,18 @@ panel clock keeps the claim honest: the pitch claims recall, tasks, a refusal an
 not a finished head. `rehearsal.md` records when each of those landed, and that is what the impact
 table quotes.
 
-The video is **2:45, including 30 seconds of testimonials from people outside the team**. The build
-is a timelapse; the takeover and the second brief get real time. Each testimonial names one specific
-thing that person actually did or saw; the clips do not call them customers, and we do not script
-their words.
+The video is **2:45**, and the outside block is 30 seconds of it:
+
+| Time | Content |
+|---|---|
+| 0:00–0:25 | the problem and the object: the bare board, the Perch, both ports |
+| 0:25–1:40 | the build as a timelapse: auto-constrain, FEA, the lattice, both review rounds, the takeover, the handoff |
+| 1:40–2:10 | **the outside block**: three clips of ~10 s, one per kind — drove a run, rebuilt their own part, watched and prompted |
+| 2:10–2:45 | Act 2 from the phone, the recall, and the two heads on one arm |
+
+Each clip is the person's own words over a caption naming their role and the date, cut from a full
+recording we keep. They are not called customers, their words are not scripted, and no clip implies a
+printed Perch.
 
 ### Demo driver: one button, a live Act 2 build
 
@@ -646,9 +669,10 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 - **The table run does not finish the head.** Two minutes buys the recall, the tasks, one refusal and
   a part starting. The finished podium is the booth run and the video, and the presenter says which
   is which.
-- **Testimonials are outside voices, not customers.** The clips are from people outside the team;
-  each says what that person actually did or saw, and no clip implies a paying customer or production
-  use.
+- **Testimonials are outside testers, not customers.** Every clip is one of the three logged kinds —
+  drove a run, rebuilt their own part, watched and prompted — and any elapsed time it quotes is one
+  the screen or the run log shows. No clip claims a paying customer, production use, or a printed
+  Perch.
 - **No staged failures.** Round 1 findings are the first draft's natural errors. If a round passes,
   the runbook uses a real tight-fit change, not a fake defect.
 - **No module, rules, schema, host-orchestration or phone-app changes.** The only product change is
@@ -664,6 +688,7 @@ equally: the impact, the engineering, the stack.
 | Claim | Artifact a judge can inspect |
 |---|---|
 | A person who cannot CAD still gets a part | the live build from a sentence, the panel's guide, and the exported STEP/STL |
+| It works for people who are not us | the three outside clips, the full recordings, and the run logs behind them |
 | A part lands in about an hour | `demo/perch/rehearsal.md`: wall clock per act, recorded from the run |
 | Defects are caught before printing | the three round-1 findings and the fixed geometry |
 | It is lighter without losing stiffness | the lattice report, mass before and after, verified stiffness |
@@ -706,6 +731,7 @@ equally: the impact, the engineering, the stack.
 | `demo/perch/checklist.md` | pre-flight, live cue sheet, reset order |
 | `demo/perch/pitch.md` | the two-minute judge script and the 60-second Q&A answers |
 | `demo/perch/rehearsal.md` | measured wall clock, human minutes and defects caught per act, plus Act 2's t(recall)/t(tasks)/t(first op)/t(finish) — the source of every number the pitch quotes |
+| `demo/perch/testimonials/` | the three full outside recordings, each with the person's role, date, what they did and their permission to use the clip |
 | `demo/perch/driver.py` | the local driver: presenter join, button page, timeline runner, probes, run log |
 | `demo/perch/timeline.json` | the booth sequence: steps, state predicates, deadlines, skip labels |
 | `demo/perch/table.json` | the two-minute Act 2 sequence: the phone brief, recall, tasks, refusal, first part |
@@ -757,8 +783,9 @@ release, no module publish, no host restart is required for the cards.
   - each step lands inside its deadline, Skip advances the run, and the log records the step, the
     wait and the outcome;
   - after 2:00 the build is still moving: a judge who stays sees at least one more state change;
-  - every testimonial clip is from someone outside the team and names one specific thing that
-    person did or saw;
+  - the outside block has one clip of each kind — drove a run, rebuilt their own part, watched and
+    prompted — from people outside the team; any elapsed time it quotes is visible in the clip or in
+    the run log, and each person's permission is recorded;
   - each of the five cards is visibly doing its own job during the beat that claims it.
 
 ## Risks
@@ -783,7 +810,7 @@ release, no module publish, no host restart is required for the cards.
 | A driver step stalls at the table | Every step has a deadline; Skip advances and says so; the labelled replay is the fallback |
 | No visible part by 1:30 | `table-safe.json` sends the lid as its own small job; the presenter says the body is the next run; the video carries the finish |
 | The build is mistaken for finished | The pitch claims recall, tasks, a refusal and a part starting; the task list stays on screen and the finish is the booth run's claim |
-| A testimonial reads as a customer claim | Each clip names the person's role and what they actually did; the copy says "outside tester", never customer |
+| A testimonial reads as a customer claim | Each clip is one of the three logged kinds, names the person's role and what they actually did, and never implies a printed Perch, production use or a paying customer |
 
 ## Scope
 
