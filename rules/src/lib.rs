@@ -250,6 +250,7 @@ pub fn check_take_over(
 
 pub struct Presence {
     pub id: u64,
+    pub kind: String,
     pub status: String,
     pub last_seen_ms: u64,
     pub stale_since_ms: u64,
@@ -264,6 +265,9 @@ pub struct SweepPlan {
 
 /// Connected WebSocket clients (phone, host) never go stale; HTTP-only agents rely on heartbeats.
 /// A connected member is never retired, however long ago it went quiet.
+/// The reviewer is HTTP-only by design: `init-reviewer` mints it, and it only connects during a
+/// review round. Retiring it would erase the Factory card between rounds (and `rejoin` after a
+/// retirement mints a second member row), so a quiet reviewer stays `stale` and is never orphaned.
 pub fn plan_sweep(now: u64, members: &[Presence]) -> SweepPlan {
     SweepPlan {
         to_stale: members
@@ -273,6 +277,7 @@ pub fn plan_sweep(now: u64, members: &[Presence]) -> SweepPlan {
             .collect(),
         to_orphan: members
             .iter()
+            .filter(|m| m.kind != "reviewer")
             .filter(|m| m.status == "stale" && !m.online && now.saturating_sub(m.stale_since_ms) > ORPHAN_AFTER_MS)
             .map(|m| m.id)
             .collect(),
@@ -685,7 +690,7 @@ mod tests {
     fn quiet_members_go_stale_unless_connected_and_long_stale_offline_ones_are_orphaned() {
         let now = 1_000_000;
         let m = |id, status: &str, last_seen_ms, stale_since_ms, online| Presence {
-            id, status: status.into(), last_seen_ms, stale_since_ms, online,
+            id, kind: "agent".into(), status: status.into(), last_seen_ms, stale_since_ms, online,
         };
         let plan = plan_sweep(now, &[
             m(1, "active", now - STALE_AFTER_MS - 1, 0, false),
@@ -697,6 +702,21 @@ mod tests {
         ]);
         assert_eq!(plan.to_stale, vec![1]);
         assert_eq!(plan.to_orphan, vec![4]);
+    }
+
+    #[test]
+    fn a_quiet_reviewer_goes_stale_but_is_never_orphaned() {
+        // `init-reviewer` mints an HTTP-only member that only connects during a round. Between rounds it
+        // is offline for far longer than ORPHAN_AFTER_MS, and the Factory card and Probe both need it.
+        let now = 1_000_000;
+        let reviewer = |id| Presence {
+            id, kind: "reviewer".into(), status: "stale".into(), last_seen_ms: 0,
+            stale_since_ms: now - ORPHAN_AFTER_MS - 1, online: false,
+        };
+        let plan = plan_sweep(now, &[reviewer(9)]);
+        assert!(plan.to_orphan.is_empty());
+        // A stale reviewer is still a fact the panel shows; it is never revived by the sweep either.
+        assert!(plan.to_stale.is_empty());
     }
 
     #[test]

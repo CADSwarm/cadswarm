@@ -15,6 +15,7 @@ pub fn sweep(ctx: &ReducerContext, _row: SweepSchedule) -> Result<(), String> {
         .iter()
         .map(|m| rules::Presence {
             id: m.id,
+            kind: m.kind.clone(),
             status: m.status.clone(),
             last_seen_ms: m.last_seen_ms,
             stale_since_ms: m.stale_since_ms,
