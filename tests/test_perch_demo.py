@@ -1,0 +1,429 @@
+"""The Perch demo driver: the rules a judge can check on screen, as tests. No network, no FreeCAD."""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "demo" / "perch"))
+
+import driver  # noqa: E402
+
+
+class FakeIO:
+    """The team, canned: the runner sees exactly the module-shaped data it will see live."""
+
+    def __init__(self, snapshot=None, ops=None, events=None, checks=None):
+        self.snap = snapshot or {"model": {"objects": [], "participants": [], "params": {}},
+                                 "tasks": [], "briefs": [], "reviews": []}
+        self.op_rows = ops or []
+        self.ev = events or []
+        self.checks = checks if checks is not None else [
+            {"name": "Claude", "ok": True, "detail": "lead-claude · active"}]
+        self.sent = []
+        self.seq = 0
+
+    def snapshot(self):
+        return self.snap
+
+    def ops(self):
+        return self.op_rows
+
+    def events(self, since):
+        rows = [e for e in self.ev if int(e["seq"]) > since]
+        if rows:
+            self.seq = int(rows[-1]["seq"])
+        return {"seq": self.seq, "events": rows}
+
+    def send_brief(self, text, board):
+        self.sent.append(("brief", text, board))
+        return {"brief": "b_demo"}
+
+    def send_steer(self, to, body):
+        self.sent.append(("steer", to, body))
+        return {"id": "m_demo"}
+
+    def probe(self):
+        return self.checks
+
+
+class Clock:
+    def __init__(self, t=1_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, s):
+        self.t += s
+
+
+def a_step(sid="brief", predicate="brief_sent", args=None, **over):
+    base = {"id": sid, "label": sid, "predicate": predicate, "at": 0, "deadline": 30, "args": args or {}}
+    base.update(over)
+    return driver.Step(**base)
+
+
+def a_view(**over):
+    base = dict(snapshot={"model": {"objects": [], "participants": [], "params": {}},
+                          "tasks": [], "briefs": [], "reviews": []},
+                ops=[], events=[], run_events=[], seq=0, started=1_000.0, after=1_000.0, now=1_010.0)
+    base.update(over)
+    return driver.View(**base)
+
+
+def a_plan(steps=None, **over):
+    base = {
+        "name": "test",
+        "brief": {"from": "phone", "board": "esp32-s3-devkitc-1", "marker": "Podium head",
+                  "text": "Make the Podium head."},
+        "gate": {"first_op_by": 105, "if_missed": "No part has started yet."},
+        "ready": {"parts_any": ["Clamp_Base"], "forbid_prefix": ["Podium_"], "no_open_brief": True},
+        "cast": {"lead-claude": "claude"},
+        "probe": ["lead-claude"],
+        "steps": steps or [{"id": "brief", "label": "the brief", "at": 0, "deadline": 10,
+                            "predicate": "brief_sent", "args": {"marker": "Podium head"}}],
+    }
+    base.update(over)
+    return base
+
+
+def ready_snapshot(**over):
+    snap = {"model": {"objects": [{"name": "Clamp_Base", "locked_by": None},
+                                  {"name": "Params", "locked_by": None}],
+                      "participants": [{"id": 1, "name": "presenter", "client": "presenter", "status": "active"}],
+                      "params": {}},
+            "tasks": [], "briefs": [], "reviews": []}
+    snap.update(over)
+    return snap
+
+
+# --------------------------------------------------------------------------- plans
+
+def test_a_plan_loads_from_json(tmp_path):
+    p = tmp_path / "table.json"
+    p.write_text(json.dumps(a_plan()), encoding="utf-8")
+    assert driver.load_plan(p)["name"] == "test"
+
+
+def test_a_step_with_an_unknown_predicate_is_refused():
+    with pytest.raises(driver.PlanError, match="unknown predicate"):
+        driver.validate(a_plan(steps=[{"id": "x", "label": "x", "predicate": "vibes", "at": 0, "deadline": 5}]))
+
+
+def test_a_step_without_a_deadline_is_refused():
+    with pytest.raises(driver.PlanError, match="deadline"):
+        driver.validate(a_plan(steps=[{"id": "x", "label": "x", "predicate": "confirm", "at": 0}]))
+
+
+def test_steps_out_of_order_are_refused():
+    steps = [{"id": "a", "label": "a", "predicate": "confirm", "at": 30, "deadline": 5},
+             {"id": "b", "label": "b", "predicate": "confirm", "at": 10, "deadline": 5}]
+    with pytest.raises(driver.PlanError, match="out of order"):
+        driver.validate(a_plan(steps=steps))
+
+
+def test_a_predicate_missing_its_arguments_is_refused():
+    with pytest.raises(driver.PlanError, match="args.marker"):
+        driver.validate(a_plan(steps=[{"id": "brief", "label": "b", "predicate": "brief_sent",
+                                       "at": 0, "deadline": 5}]))
+
+
+def test_a_duplicate_step_id_is_refused():
+    steps = [{"id": "a", "label": "a", "predicate": "confirm", "at": 10, "deadline": 5},
+             {"id": "a", "label": "a again", "predicate": "confirm", "at": 20, "deadline": 5}]
+    with pytest.raises(driver.PlanError, match="twice"):
+        driver.validate(a_plan(steps=steps))
+
+
+def test_a_plan_without_a_brief_is_refused():
+    with pytest.raises(driver.PlanError, match="brief"):
+        driver.validate(a_plan(brief={"from": "phone", "text": "  "}))
+
+
+# --------------------------------------------------------------------------- predicates
+
+def test_brief_sent_names_the_phone_and_rejects_the_presenter():
+    event = {"kind": "brief", "actor": 7, "seq": 3, "text": "Make the Podium head for the same Perch"}
+    people = [{"id": 7, "name": "sam-phone", "client": "phone", "status": "active"}]
+    v = a_view(run_events=[event], snapshot={"model": {"objects": [], "participants": people}, "tasks": [],
+                                             "briefs": [], "reviews": []})
+    ok, detail = driver.brief_sent(a_step(args={"marker": "Podium head", "by_not": "presenter"}), v)
+    assert ok and "sam-phone" in detail
+    ok, detail = driver.brief_sent(a_step(args={"marker": "Podium head", "by_not": "sam-phone"}), v)
+    assert not ok and "sam-phone" in detail
+
+
+def test_recall_needs_act1_its_three_problems_and_lessons():
+    result = {"designs": [{"brief_id": "b_1", "request": "Build The Perch: a clip-on articulated arm",
+                           "problems": ["missing OTG cutout", "cradle 8.0 mm", "lid wall 1.0 mm"]}],
+              "lessons": ["Walls are 2.4 mm", "M3 inserts", "3 mm fillets"]}
+    ops = [{"kind": "recall_designs", "status": "done", "finished_ms": 1_005_000, "result": result}]
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3})
+    ok, detail = driver.recall(step, a_view(ops=ops))
+    assert ok and "3 problems" in detail and "3 lessons" in detail
+    thin = {"designs": [{**result["designs"][0], "problems": ["one"]}], "lessons": ["one"]}
+    ok, detail = driver.recall(step, a_view(ops=[{**ops[0], "result": thin}]))
+    assert not ok and "need 3" in detail
+
+
+def test_recall_ignores_an_op_that_finished_before_the_step():
+    result = {"designs": [{"request": "clip-on articulated arm", "problems": ["a", "b", "c"]}], "lessons": ["l"]}
+    ops = [{"kind": "recall_designs", "status": "done", "finished_ms": 900_000, "result": result}]
+    ok, detail = driver.recall(a_step("recall", "recall", {"marker": "clip-on", "problems": 3}),
+                               a_view(ops=ops, started=1_000.0))
+    assert not ok and "waiting" in detail
+
+
+def test_tasks_land_with_their_named_owners_and_not_a_poacher():
+    owners = {"Podium_Body": "lead-claude", "Podium_Lid": "lid-creao"}
+    tasks = [{"title": "Podium_Body: upright", "status": "open", "assignee": "lead-claude", "owner": 2,
+              "owner_name": "lead-claude"},
+             {"title": "Podium_Lid: back cover", "status": "open", "assignee": "lid-creao", "owner": None,
+              "owner_name": None}]
+    snap = {"model": {"objects": [], "participants": []}, "tasks": tasks, "briefs": [], "reviews": []}
+    ok, detail = driver.tasks_landed(a_step("tasks", "tasks_landed", {"owners": owners}), a_view(snapshot=snap))
+    assert ok and "Podium_Body → lead-claude" in detail
+    tasks[1] = {**tasks[1], "owner": 9, "owner_name": "host-worker"}
+    snap = {**snap, "tasks": tasks}
+    ok, detail = driver.tasks_landed(a_step("tasks", "tasks_landed", {"owners": owners}), a_view(snapshot=snap))
+    assert not ok and "claimed by host-worker" in detail
+
+
+def test_a_refusal_is_the_modules_lock_violation_not_a_sentence():
+    events = [{"kind": "op_failed", "code": "lock_violation", "name": "lid-creao", "seq": 9,
+               "error": "Podium_Body is held by lead-claude"}]
+    step = a_step("refusal", "refusal", {"target": "Podium_Body", "by": "lid-creao"})
+    assert driver.refusal(step, a_view(events=events))[0] is True
+    assert driver.refusal(step, a_view(events=[{**events[0], "code": "bad_args"}]))[0] is False
+    assert driver.refusal(step, a_view(events=[{**events[0], "name": "arm-opencode"}]))[0] is False
+
+
+def test_the_first_part_is_an_op_that_names_a_part():
+    events = [{"kind": "op", "op": "create_extrusion", "seq": 11,
+               "created": ["Podium_Body"], "modified": [], "deleted": [], "recomputed": [], "broken": []}]
+    step = a_step("first_part", "first_part", {"parts": ["Podium_Body", "Podium_Lid"]})
+    ok, detail = driver.first_part(step, a_view(run_events=events))
+    assert ok and "Podium_Body" in detail
+    params = [{**events[0], "created": ["Params"], "op": "set_param"}]
+    assert driver.first_part(step, a_view(run_events=params))[0] is False
+
+
+def test_parts_landed_params_and_reviews_are_read_from_the_module():
+    snap = ready_snapshot()
+    snap["model"]["objects"] = [{"name": n, "locked_by": None} for n in
+                                ["Clamp_Base", "Shoulder_Hub", "Arm_Proximal", "Arm_Distal", "Cradle_Base"]]
+    ok, detail = driver.parts_landed(a_step("build", "parts_landed", {"parts": ["Clamp_Base", "Cradle_Lid"]}),
+                                     a_view(snapshot=snap))
+    assert not ok and "Cradle_Lid" in detail
+    snap["model"]["objects"].append({"name": "Cradle_Lid", "locked_by": None})
+    assert driver.parts_landed(a_step("build", "parts_landed", {"parts": ["Cradle_Lid"]}), a_view(snapshot=snap))[0]
+
+    snap["model"]["params"] = {"arm_reach": 160.0}
+    assert driver.param_changed(a_step("s", "param_changed", {"alias": "arm_reach", "value": 160}),
+                                a_view(snapshot=snap))[0]
+    assert not driver.param_changed(a_step("s", "param_changed", {"alias": "arm_reach", "value": 150}),
+                                    a_view(snapshot=snap))[0]
+
+    review = [{"kind": "review", "round": 1, "passed": False, "seq": 20, "brief": "b_2"}]
+    assert driver.review_round(a_step("r1", "review_round", {"round": 1, "passed": False}),
+                               a_view(run_events=review))[0]
+    assert not driver.review_round(a_step("r2", "review_round", {"round": 2, "passed": True}),
+                                   a_view(run_events=review))[0]
+
+    fea = [{"kind": "fea_report", "seq": 21, "folder": "fea/2026-10-24 arm-distal"}]
+    assert driver.report(a_step("fea", "report", {"kind": "fea_report"}), a_view(run_events=fea))[0]
+
+    assert driver.takeover(a_step("t", "takeover"),
+                           a_view(run_events=[{"kind": "taken_over", "target": "lid-creao",
+                                               "taker": "lead-claude", "locks": ["Cradle_Lid"], "seq": 22}]))[0]
+    assert driver.handoff(a_step("h", "handoff"),
+                          a_view(run_events=[{"kind": "handoff_accepted", "from": "sam", "taker": "base-claude",
+                                              "seq": 23}]))[0]
+    assert driver.confirm(a_step("c", "confirm"), a_view())[0] is False
+
+
+# --------------------------------------------------------------------------- runner
+
+def a_runner(io, clock, steps=None, log=None, **plan_over):
+    r = driver.Runner(a_plan(steps=steps, **plan_over), io, log=log, clock=clock)
+    r.probe()
+    return r
+
+
+def test_start_refuses_without_a_passing_probe():
+    io = FakeIO(snapshot=ready_snapshot(), checks=[{"name": "Elastic", "ok": False, "detail": "no index"}])
+    r = a_runner(io, Clock())
+    with pytest.raises(driver.RunnerError, match="Elastic"):
+        r.start()
+
+
+def test_start_refuses_until_the_team_is_back_at_act1_ready():
+    snap = ready_snapshot(model={"objects": [{"name": "Params", "locked_by": None}],
+                                 "participants": [], "params": {}})
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    with pytest.raises(driver.RunnerError, match="missing Clamp_Base"):
+        r.start()
+
+
+def test_a_leftover_act2_part_also_refuses_start():
+    snap = ready_snapshot()
+    snap["model"]["objects"].append({"name": "Podium_Body", "locked_by": None})
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    assert not r.reset_ok() and "Podium_Body" in r.reset_why
+
+
+def test_laptop_mode_sends_the_brief_and_says_the_tunnel_is_down():
+    io = FakeIO(snapshot=ready_snapshot())
+    r = a_runner(io, Clock(), brief={**a_plan()["brief"], "from": "laptop"})
+    r.start()
+    assert io.sent[0][0] == "brief" and "Podium head" in io.sent[0][1]
+    assert r.steps[0].state == "done" and "tunnel" in r.steps[0].detail
+    assert r.index == 1
+
+
+def test_a_step_that_misses_its_deadline_is_skipped_out_loud(tmp_path):
+    clock = Clock()
+    r = a_runner(FakeIO(snapshot=ready_snapshot()), clock, log=driver.RunLog(tmp_path, "test"))
+    r.start()
+    clock.advance(11)
+    r.tick()
+    assert r.steps[0].state == "skipped" and "no result in 10s" in r.steps[0].detail
+    assert "skipped" in r.status
+
+
+def test_the_mention_waits_for_the_body_and_goes_out_once():
+    clock = Clock()
+    snap = ready_snapshot()
+    io = FakeIO(snapshot=snap)
+    steps = [
+        {"id": "refusal", "label": "r", "at": 0, "deadline": 40, "predicate": "refusal",
+         "args": {"target": "Podium_Body", "by": "lid-creao"},
+         "guard": {"held_by": {"object": "Podium_Body", "name": "lead-claude"}},
+         "on_start": {"steer": {"to": "lid-creao", "body": "thicken Podium_Body by 2 mm"}}},
+        {"id": "first_part", "label": "f", "at": 10, "deadline": 45, "predicate": "first_part",
+         "args": {"parts": ["Podium_Body"]}},
+    ]
+    r = a_runner(io, clock, steps=steps)
+    r.start()
+    # The body is an Act 2 part, so it arrives after Start: a leftover would be refused
+    # (test_a_leftover_act2_part_also_refuses_start). This step only needs to watch its lock.
+    snap["model"]["objects"].append({"name": "Podium_Body", "locked_by": None})
+    clock.advance(2)
+    r.tick()
+    assert io.sent == [] and "nobody" in r.steps[0].detail
+    snap["model"]["objects"][-1]["locked_by"] = "lead-claude"
+    clock.advance(2)
+    r.tick()
+    assert io.sent == [("steer", "lid-creao", "thicken Podium_Body by 2 mm")]
+    clock.advance(2)
+    r.tick()
+    assert io.sent == [("steer", "lid-creao", "thicken Podium_Body by 2 mm")]  # sent once, not every tick
+    io.ev.append({"kind": "op_failed", "code": "lock_violation", "name": "lid-creao", "seq": 4,
+                  "error": "Podium_Body is held by lead-claude"})
+    clock.advance(2)
+    r.tick()
+    assert r.steps[0].state == "done"
+
+
+def test_a_body_that_is_never_held_skips_the_mention_at_its_deadline():
+    clock = Clock()
+    snap = ready_snapshot()
+    steps = [{"id": "refusal", "label": "r", "at": 0, "deadline": 40, "predicate": "refusal",
+              "args": {"target": "Podium_Body", "by": "lid-creao"},
+              "guard": {"held_by": {"object": "Podium_Body", "name": "lead-claude"}},
+              "on_start": {"steer": {"to": "lid-creao", "body": "thicken"}}}]
+    io = FakeIO(snapshot=snap)
+    r = a_runner(io, clock, steps=steps)
+    r.start()
+    # Act 2 creates the body; the guard waits for the wrong holder (see the leftover-part reset test).
+    snap["model"]["objects"].append({"name": "Podium_Body", "locked_by": "arm-opencode"})
+    clock.advance(41)
+    r.tick()
+    assert io.sent == [] and r.steps[0].state == "skipped" and "arm-opencode" in r.steps[0].detail
+
+
+def test_the_absolute_gate_fires_once_and_shows_the_fallback_line(tmp_path):
+    clock = Clock()
+    io = FakeIO(snapshot=ready_snapshot())
+    steps = [{"id": "first_part", "label": "f", "at": 0, "deadline": 300, "predicate": "first_part",
+              "args": {"parts": ["Podium_Body"]}}]
+    r = a_runner(io, clock, steps=steps, log=driver.RunLog(tmp_path, "test"))
+    r.start()
+    clock.advance(106)
+    r.tick()
+    assert r.gate_failed and "No part has started" in r.status
+    clock.advance(10)
+    r.tick()
+    assert [row["kind"] for row in r.log.rows].count("gate.failed") == 1
+
+
+def test_pause_holds_the_sequence_and_the_build_keeps_running():
+    clock = Clock()
+    io = FakeIO(snapshot=ready_snapshot())
+    r = a_runner(io, clock)
+    r.start()
+    assert r.toggle_pause() is True
+    clock.advance(30)
+    r.tick()
+    assert r.steps[0].state == "waiting" and r.state()["paused"] is True
+    assert r.toggle_pause() is False
+
+
+def test_the_say_box_routes_a_steer_or_a_real_brief():
+    io = FakeIO(snapshot=ready_snapshot())
+    r = a_runner(io, clock=Clock())
+    r.say("@lid-creao thicken Podium_Body by 2 mm")
+    r.say("Make the medallion 55 mm and keep the same bearing.")
+    assert io.sent[0] == ("steer", "lid-creao", "thicken Podium_Body by 2 mm")
+    assert io.sent[1] == ("brief", "Make the medallion 55 mm and keep the same bearing.", "esp32-s3-devkitc-1")
+
+
+def test_skip_confirms_a_manual_step_and_logs_the_decision(tmp_path):
+    io = FakeIO(snapshot=ready_snapshot())
+    log = driver.RunLog(tmp_path, "test")
+    steps = [{"id": "constrain", "label": "auto-constrain", "at": 0, "deadline": 600, "predicate": "confirm"},
+             {"id": "close", "label": "close", "at": 10, "deadline": 600, "predicate": "confirm"}]
+    r = a_runner(io, Clock(), steps=steps, log=log)
+    r.start()
+    r.skip()
+    assert r.steps[0].state == "confirmed"
+    assert any(row["kind"] == "step.confirmed" for row in log.rows)
+
+
+def test_the_run_log_records_each_step_and_the_numbers_the_pitch_quotes(tmp_path):
+    clock = Clock()
+    result = {"designs": [{"request": "clip-on arm", "problems": ["a", "b", "c"]}], "lessons": ["l"]}
+    ops = [{"kind": "recall_designs", "status": "done", "finished_ms": 1_006_000, "result": result}]
+    events = [
+        {"kind": "brief", "actor": 1, "seq": 2, "text": "Make the Podium head"},
+        {"kind": "op", "op": "create_extrusion", "seq": 5, "created": ["Podium_Body"],
+         "modified": [], "deleted": [], "recomputed": [], "broken": []},
+    ]
+    io = FakeIO(snapshot=ready_snapshot(), ops=ops, events=events)
+    log = driver.RunLog(tmp_path, "test")
+    steps = [
+        {"id": "brief", "label": "b", "at": 0, "deadline": 10, "predicate": "brief_sent",
+         "args": {"marker": "Podium head"}},
+        {"id": "recall", "label": "r", "at": 10, "deadline": 25, "predicate": "recall",
+         "args": {"marker": "clip-on", "problems": 3}},
+        {"id": "first_part", "label": "f", "at": 20, "deadline": 45, "predicate": "first_part",
+         "args": {"parts": ["Podium_Body"]}},
+    ]
+    r = a_runner(io, clock, steps=steps, log=log)
+    r.start()
+    clock.advance(4)
+    r.tick()
+    clock.advance(6)
+    r.tick()
+    clock.advance(9)
+    r.tick()
+    assert r.done
+    out = json.loads(log.summary_path.read_text(encoding="utf-8"))
+    assert out["t_recall"] == pytest.approx(10.0)
+    assert out["t_first_op"] == pytest.approx(19.0)
+    assert out["t_finish"] == pytest.approx(19.0)
+    assert [s["state"] for s in out["steps"]] == ["done", "done", "done"]
+    rows = [json.loads(line) for line in log.path.read_text(encoding="utf-8").splitlines()]
+    assert any(row["kind"] == "step.done" and "recall" in row["detail"] for row in rows)
