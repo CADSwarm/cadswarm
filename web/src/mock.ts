@@ -197,6 +197,12 @@ export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
       store.set({ workspace: { bedXMm: xMm, bedYMm: yMm, bedZMm: zMm },
         activity: say(1, `set the printer bed to ${xMm} x ${yMm} x ${zMm} mm`, 'status') });
     },
+    removeMember: async id => {
+      const m = store.member(id);
+      store.set({ members: members.map(x => x.id === id ? { ...x, status: 'removed' } : x),
+        locks: store.state.locks.filter(l => l.holder !== id),
+        activity: say(1, `removed ${m?.name ?? id} from the team`, 'status') });
+    },
     cancelTask: async (id, reason) => {
       const t = store.state.tasks.find(x => x.id === id);
       store.set({ tasks: store.state.tasks.map(x => x.id === id ? { ...x, status: 'cancelled' } : x),

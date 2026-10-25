@@ -7,11 +7,11 @@
         Connect your AI helper (Claude Code / Codex / Droid / OpenCode / Creao AI / just watch) ─► (wire it up) ─►
         Open it, paste the first message ─► "✓ your helper joined" ─► Finish
 
-The team's database lives on SpacetimeDB (Maincloud by default, or this computer in the
-Advanced local mode); `cadswarm-host` is the program that runs the shared model. Everything
-the guide does is in plain words: "team", "invite code", "AI helper". Never hub, token or MCP.
-Slow work runs off the GUI thread behind a checklist; every failure says what to do and offers
-Try again.
+The team's database lives on SpacetimeDB: on this computer by default (no account; teammates on your
+network join), or on Maincloud when you sign in; `cadswarm-host` is the program that runs the shared
+model. Everything the guide does is in plain words: "team", "invite code", "AI helper". Never hub,
+token or MCP. Slow work runs off the GUI thread behind a checklist; every failure says what to do and
+offers Try again.
 """
 import getpass
 import os
@@ -266,7 +266,7 @@ class SetupWizard(QtGui.QDialog):
         self.p = panel.prefs()
         self._python = None       # looked up only when hosting or connecting a helper needs it
         self.mode = None          # "host" | "join"
-        self.host_mode = "maincloud"
+        self.host_mode = "local"
         self.project = self.p.GetString("ProjectName")
         self.name = self.p.GetString("Name") or default_name()
         self.db = self.p.GetString("Db")
@@ -297,6 +297,9 @@ class SetupWizard(QtGui.QDialog):
         self.secondary.clicked.connect(lambda: self.secondary_action and self.secondary_action())
         self.poll = QtCore.QTimer(self)
         self.poll.timeout.connect(self.check_helper_joined)
+        self.login_poll = QtCore.QTimer(self)  # waits for the sign-in finished in the browser
+        self.login_poll.timeout.connect(self.check_maincloud_login)
+        self.login_tries = 0
 
         if start == "agent" and panel.SESSION.connected:
             self.mode = "host" if panel.host_dir_for(self.db) else "join"
@@ -365,11 +368,21 @@ class SetupWizard(QtGui.QDialog):
         if self.reason:
             lay.addWidget(label(f"<b>{self.reason}</b>"))
         lay.addSpacing(8)
-        if self.project and (self.p.GetString("HostDataDir") or self.p.GetString("Db")):
-            again = QtGui.QCommandLinkButton(f"Reconnect to “{self.project}”",
-                                             "Pick up where you left off with your team.")
-            again.clicked.connect(lambda: self.show_page("reconnect"))
-            lay.addWidget(again)
+        teams = panel.recent_teams()
+        cur_db = self.p.GetString("Db")
+        if self.project and cur_db and not any(t.get("db") == cur_db for t in teams):
+            teams.insert(0, {"project": self.project, "uri": self.uri, "db": cur_db,
+                             "host_data_dir": self.p.GetString("HostDataDir"),
+                             "host_mode": self.p.GetString("HostMode")})
+        if teams:
+            lay.addWidget(label("Open a project you've worked on before", "hint"))
+            for t in teams[:5]:
+                open_btn = QtGui.QCommandLinkButton(f"Open “{t['project']}”",
+                                                    "Reopen this team's project where you left off.")
+                open_btn.clicked.connect(lambda _c=False, t=t: self.open_team(t))
+                lay.addWidget(open_btn)
+            lay.addSpacing(10)
+            lay.addWidget(label("Or start something new", "hint"))
         host = QtGui.QCommandLinkButton("Start a new team project",
                                         "Choose this if you're the first one. You'll get an invite code to send "
                                         "your teammates.")
@@ -392,6 +405,12 @@ class SetupWizard(QtGui.QDialog):
     def choose(self, mode):
         self.mode = mode
         self.show_page("host_name" if mode == "host" else "join")
+
+    def open_team(self, team):
+        """Reopen a team this computer joined before: its sign-in is kept per team, so no invite is needed."""
+        panel.select_team(team)
+        self.project, self.db, self.uri = team["project"], team["db"], team.get("uri") or ""
+        self.show_page("reconnect")
 
     # ------------------------------------------------------------------ host
 
@@ -421,9 +440,29 @@ class SetupWizard(QtGui.QDialog):
         lay.addLayout(row)
         self.chosen_parent = None  # None = the default Documents\CadSwarm\<project>
         self.project_edit.textChanged.connect(lambda _t: self.update_where())
-        self.local_box = QtGui.QCheckBox("Advanced: run the team's database on this computer (an offline demo; "
-                                        "teammates must be able to reach this computer)")
+        lay.addSpacing(6)
+        lay.addWidget(label("<b>Where should your team's database live?</b> Both are SpacetimeDB; pick either.",
+                            "hint"))
+        self.local_box = QtGui.QRadioButton(
+            "On this computer — no account, works offline. Teammates join over your network.")
+        self.cloud_box = QtGui.QRadioButton(
+            "On SpacetimeDB Maincloud — teammates join from anywhere. Needs a free SpacetimeDB sign-in.")
+        self.local_box.setChecked(True)  # the default: nothing to sign up for, nothing to sign in to
+        self.local_box.setToolTip("The database runs in the background on this computer while your team works.")
+        self.cloud_box.setToolTip("SpacetimeDB's cloud hosts the database; sign in once with your browser.")
         lay.addWidget(self.local_box)
+        lay.addWidget(self.cloud_box)
+        login_row = QtGui.QHBoxLayout()
+        self.login_button = QtGui.QPushButton("Sign in to SpacetimeDB…")
+        self.login_button.setEnabled(False)  # only needed for Maincloud
+        self.login_button.clicked.connect(self.log_in_maincloud)
+        self.login_note = label("", "hint")
+        login_row.addWidget(self.login_button)
+        login_row.addWidget(self.login_note, 1)
+        lay.addLayout(login_row)
+        self.cloud_box.toggled.connect(self.login_button.setEnabled)
+        self.local_box.toggled.connect(self.update_login_note)
+        self.cloud_box.toggled.connect(self.update_login_note)
         self.host_error = label("", "error")
         lay.addWidget(self.host_error)
         lay.addStretch(1)
@@ -432,7 +471,41 @@ class SetupWizard(QtGui.QDialog):
     def enter_host_name(self):
         self.buttons("Create my team ›", self.create_team)
         self.update_where()
+        self.update_login_note()
         self.project_edit.setFocus()
+
+    def update_login_note(self):
+        """Say whether this computer is already signed in to Maincloud, so the choice is informed."""
+        if not self.cloud_box.isChecked():
+            self.login_note.setText("")
+            return
+        account = hosting.maincloud_login(force=True)
+        self.login_note.setText(f"Signed in as {account}." if account else
+                                "Not signed in yet. Sign in once; your browser opens and comes back.")
+
+    def log_in_maincloud(self):
+        try:
+            hosting.spacetime_login()
+        except Exception as e:  # the program is missing, or won't start: say so, don't get stuck
+            self.login_note.setText(str(e))
+            return
+        self.login_tries = 0
+        self.login_button.setEnabled(False)
+        self.login_note.setText("Finish signing in in your browser, then come back to this window…")
+        self.login_poll.start(1500)
+
+    def check_maincloud_login(self):
+        account = hosting.maincloud_login(force=True)
+        if account:
+            self.login_poll.stop()
+            self.login_button.setEnabled(True)
+            self.login_note.setText(f"Signed in as {account}. You can create your team now.")
+            return
+        self.login_tries += 1
+        if self.login_tries >= 40:  # a minute: give up politely rather than poll forever
+            self.login_poll.stop()
+            self.login_button.setEnabled(True)
+            self.login_note.setText("Still not signed in. Click “Sign in” again once your browser is done.")
 
     def planned_folder(self):
         project = self.project_edit.text().strip() or "My project"
@@ -462,7 +535,7 @@ class SetupWizard(QtGui.QDialog):
                 n for n, v in (("a project name", project), ("your name", name)) if not v) + ".")
             return
         self.project, self.name = project, name
-        self.host_mode = "local" if self.local_box.isChecked() else "maincloud"
+        self.host_mode = "maincloud" if self.cloud_box.isChecked() else "local"
         self.project_dir, self.project_how = self.planned_folder()
         self.show_page("host_work")
 
@@ -513,7 +586,7 @@ class SetupWizard(QtGui.QDialog):
         log("Joining as the team's first member")
         t = hosting.mint_invite(self.project_dir, "human", "lead")
         ident = redeem(t, name, "freecad")
-        panel.SESSION.connect({"uri": t["uri"], "db": t["db"]}, ident, name, timeout=10)
+        panel.SESSION.connect({"uri": t["uri"], "db": t["db"]}, ident, name, timeout=10, project=self.project)
         self.name, self.db, self.uri = panel.prefs().GetString("Name"), t["db"], t["uri"]
         self.p.SetString("ProjectName", self.project)
 
@@ -544,7 +617,8 @@ class SetupWizard(QtGui.QDialog):
 
         def refresh_code():
             try:
-                code = panel.SESSION.client.create_invite("human", "member", 86400, self.project)
+                code = panel.SESSION.client.create_invite("human", "member", 86400, self.project,
+                                                          uri=hosting.invite_uri(panel.SESSION.client.hub))
             except AttributeError:
                 error.setText("Join your team first, then try again.")
                 copy.setEnabled(False)
@@ -642,7 +716,8 @@ class SetupWizard(QtGui.QDialog):
         QtGui.QApplication.processEvents()
         try:
             ident = redeem(inv, name, "freecad")
-            panel.SESSION.connect({"uri": inv["uri"], "db": inv["db"]}, ident, name, timeout=10)
+            panel.SESSION.connect({"uri": inv["uri"], "db": inv["db"]}, ident, name, timeout=10,
+                                  project=inv["project"] or "Team project")
         except SpaceError as e:
             self.join_error.setText(space_error(e))
             return
@@ -818,7 +893,8 @@ class SetupWizard(QtGui.QDialog):
                 "token": "", "kind": "agent", "role": role, "host_addr": ""}
         if identity_matches(self.folder, team):  # one signed in to another team, or the old hub, starts over
             return team
-        return read_invite(panel.SESSION.client.create_invite("agent", role, 86400, self.project))
+        return read_invite(panel.SESSION.client.create_invite("agent", role, 86400, self.project,
+                                                              uri=hosting.invite_uri(panel.SESSION.client.hub)))
 
     def step_write_config(self, log):
         if not panel.SESSION.connected:
@@ -933,7 +1009,7 @@ class SetupWizard(QtGui.QDialog):
         if not data_dir:
             return
         stored = hosting.host_config(data_dir)
-        mode = self.p.GetString("HostMode") or stored.get("mode") or "maincloud"
+        mode = self.p.GetString("HostMode") or stored.get("mode") or "local"
         db = self.p.GetString("Db") or stored.get("db")
         if not db:
             raise RuntimeError("This computer's team settings are incomplete. Start again from CADSwarm ▸ "

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardOrder, latestReviewOf, parseFindings, sponsorCards, toolLine } from '../src/ui/sponsors';
+import { cardOrder, latestReviewOf, parseFindings, serverLabel, sponsorCards, toolLine } from '../src/ui/sponsors';
 
 const base = {
   members: [
@@ -90,6 +90,24 @@ describe('sponsors panel', () => {
     expect(space.facts).toContainEqual(['members', '1 active · 2 joined']);
     expect(space.facts).toContainEqual(['work', '1 open tasks · 1/2 ops done']);
     expect(space.facts).toContainEqual(['events', '4 activity rows · seq 4']);
+  });
+
+  it('names where the team’s database lives, kept in step with the FreeCAD panel', () => {
+    expect(serverLabel('https://maincloud.spacetimedb.com')).toBe('SpacetimeDB Maincloud');
+    expect(serverLabel('http://127.0.0.1:3000')).toBe('this computer');
+    expect(serverLabel('http://192.168.1.42:3000')).toBe('this computer · 192.168.1.42');
+    expect(serverLabel('')).toBe('this computer');
+  });
+
+  it('shows the server and how the browser joined on the SpacetimeDB card', () => {
+    const cloud = sponsorCards({ ...(base as object), server: 'https://maincloud.spacetimedb.com' } as never, '')
+      .find(c => c.id === 'spacetime')!;
+    expect(cloud.facts).toContainEqual(['server', 'SpacetimeDB Maincloud']);
+    expect(cloud.facts).toContainEqual(['sign-in', 'joined by invite']);
+    const local = sponsorCards({ ...(base as object), server: 'http://192.168.1.42:3000' } as never, '')
+      .find(c => c.id === 'spacetime')!;
+    expect(local.facts).toContainEqual(['server', 'this computer · 192.168.1.42']);
+    expect(local.facts).toContainEqual(['sign-in', 'no account needed']);
   });
 });
 

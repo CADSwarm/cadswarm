@@ -90,6 +90,8 @@ export interface Api {
   deleteTask(id: string): Promise<void>;
   /** Stop a whole request; its unstarted tasks are cancelled with it. */
   cancelBrief(id: string): Promise<void>;
+  /** Take an AI helper off the team, wherever it runs: its locks are released and its work goes back. */
+  removeMember(id: number): Promise<void>;
   /** Ask the host whether the parts fit the bed, are closed solids and have printable walls.
    * Pass the bed the person typed so a check does not silently use the saved one. */
   checkPrintability(bedMm?: [number, number, number]): Promise<Printability | null>;
@@ -196,7 +198,7 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       .withAutomaticReconnect()
       .onConnect((c, _identity, tok) => {
         saveSession({ uri, db, token: tok });
-        store.set({ connected: true });
+        store.set({ connected: true, server: uri });
         c.subscriptionBuilder()
           .onApplied(() => { pull(); void ready(); })
           .onError((_ctx, e?: unknown) => fail(e ?? new Error('Could not subscribe to the build.')))
@@ -385,6 +387,7 @@ export function connect(store: Store, uri: string, db: string, token: string | n
       cancelTask: (id, reason) => quiet(r.cancelTask({ fence: fence(), taskId: id, reason })),
       deleteTask: id => quiet(r.deleteTask({ fence: fence(), taskId: id })),
       cancelBrief: id => quiet(r.cancelBrief({ fence: fence(), briefId: id })),
+      removeMember: id => quiet(r.revokeMember({ fence: fence(), memberId: BigInt(id) })),
       checkPrintability: async bedMm => {
         const v = await runOpResult('printability', bedMm ? { bed: bedMm } : {}, 120000);
         if (v === null) return null;

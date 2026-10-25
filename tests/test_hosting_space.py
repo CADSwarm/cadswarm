@@ -393,7 +393,7 @@ def test_start_team_local_starts_spacetime_only_when_nothing_listens(tmp_path, m
                         lambda argv, lay, log_name, env=None: (spawns.append(argv) or (7 if argv[0] == "spacetime" else 8)))
 
     info = hosting.start_team("python.exe", str(data), "local", "cadswarm-x-0001")
-    assert spawns[0][:4] == ["spacetime", "start", "--listen-addr", "127.0.0.1:3000"]
+    assert spawns[0][:4] == ["spacetime", "start", "--listen-addr", "0.0.0.0:3000"]
     assert spawns[1][3] == "run"
     assert info["spacetime_pid"] == 7 and info["host_pid"] == 8 and info["uri"] == hosting.LOCAL_URI
 
@@ -486,3 +486,46 @@ def test_an_existing_team_is_republished_as_its_own_host_identity(tmp_path, monk
                                                                req.get_header("Authorization"))) or Reply())
     hosting.publish("cadswarm-x-1", "local", str(tmp_path))
     assert sent == [("PUT", "http://127.0.0.1:3000/v1/database/cadswarm-x-1", "Bearer owner-token")]
+
+
+def test_invite_uri_hands_out_the_network_address_for_a_local_team(monkeypatch):
+    # A local team listens on 127.0.0.1, which only this computer can reach: the invite must carry the
+    # network address instead, or teammates on the same network cannot join.
+    monkeypatch.setattr(hosting, "lan_ip", lambda: "192.168.1.42")
+    assert hosting.invite_uri("http://127.0.0.1:3000") == "http://192.168.1.42:3000"
+    assert hosting.invite_uri("http://localhost:3000") == "http://192.168.1.42:3000"
+
+
+def test_invite_uri_leaves_reachable_addresses_alone(monkeypatch):
+    monkeypatch.setattr(hosting, "lan_ip", lambda: "192.168.1.42")
+    assert hosting.invite_uri("https://maincloud.spacetimedb.com") == "https://maincloud.spacetimedb.com"
+    # A teammate who joined a local team already has the network address: hand that on as-is.
+    assert hosting.invite_uri("http://192.168.1.42:3000") == "http://192.168.1.42:3000"
+
+
+def test_invite_uri_falls_back_to_loopback_when_offline(monkeypatch):
+    monkeypatch.setattr(hosting, "lan_ip", lambda: "127.0.0.1")
+    assert hosting.invite_uri("http://127.0.0.1:3000") == "http://127.0.0.1:3000"
+
+
+def test_server_label_names_where_the_database_lives():
+    assert hosting.server_label("https://maincloud.spacetimedb.com") == "SpacetimeDB Maincloud"
+    assert hosting.server_label("http://127.0.0.1:3000") == "this computer"
+    assert hosting.server_label("http://192.168.1.42:3000") == "this computer · 192.168.1.42"
+
+
+def test_read_maincloud_login_reads_the_account_id(monkeypatch):
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "host_env", lambda: {})
+    monkeypatch.setattr(hosting.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout="You are logged in as "
+                                                        "c200641aabd1f7b96c5d79c30f05636a702117b", stderr=""))
+    assert hosting._read_maincloud_login() == "c200641aabd1"
+
+
+def test_read_maincloud_login_says_nothing_when_signed_out(monkeypatch):
+    monkeypatch.setattr(hosting, "spacetime_bin", lambda: "spacetime")
+    monkeypatch.setattr(hosting, "host_env", lambda: {})
+    monkeypatch.setattr(hosting.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="You are not logged in"))
+    assert hosting._read_maincloud_login() == ""

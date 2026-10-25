@@ -24,6 +24,7 @@ pub fn me(ctx: &ReducerContext, fence: u32) -> Result<Member, String> {
             ))
         }
         "left" => return Err("left: This participant left the session; call rejoin".into()),
+        "removed" => return Err("removed: a person removed this helper from the team".into()),
         _ => {}
     }
     if fence != m.fence {

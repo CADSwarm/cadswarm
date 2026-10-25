@@ -97,6 +97,23 @@ def test_reducers_carry_the_fence_and_errors_keep_their_code(world):
     assert e.value.status == 409 and e.value.code == "locked" and "bob-codex" in str(e.value)
 
 
+def test_removing_a_member_revokes_any_helper_and_reports_unknown_ids(world):
+    hub, fake = world
+    assert hub.post("/participants/2/remove") == {"removed": "bob-codex", "id": 2}
+    assert fake.calls[-1] == ("revoke_member", (2, 2))  # fence first, then the teammate's id
+    before = len(fake.calls)
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/participants/99/remove")
+    assert e.value.status == 404 and e.value.code == "unknown_participant"
+    assert len(fake.calls) == before  # refused before any reducer runs
+
+
+def test_removed_helpers_drop_out_of_the_team_list(world):
+    hub, fake = world
+    fake.tables["v_member"].append(member(4, "gone-claude", status="removed"))
+    assert {p["name"] for p in hub.participants()} == {"alice-claude", "bob-codex", "carol"}
+
+
 def test_an_op_is_queued_then_awaited_until_the_host_finishes_it(world):
     hub, fake = world
 

@@ -85,10 +85,10 @@ class FakeClient:
                     "older_versions": [{"version": 1, "size": 1500, "author": "bob-codex",
                                         "saved_at": now - 9000, "reason": "replaced"}]}
         raise panel.HubRequestError(404, {"code": "not_found", "error": path})
-    def create_invite(self, kind, role, ttl, project):
+    def create_invite(self, kind, role, ttl, project, uri=None):
         from cadswarm import invite, ticket
         return invite.make_invite(ticket.decode(ticket.encode({
-            "v": 1, "uri": "https://maincloud.spacetimedb.com", "db": "team-db", "token": "ab" * 32,
+            "v": 1, "uri": uri or "https://maincloud.spacetimedb.com", "db": "team-db", "token": "ab" * 32,
             "kind": kind, "role": role, "host_addr": ""})), project)
 
 

@@ -130,6 +130,18 @@ class Session:
         save_json(self.ident_path, {**load_json(self.ident_path, {}), **ident})
         return ident
 
+    def greet(self, ident):
+        """Say hello once, so people see who joined without the model spending a turn on it. Background helpers
+        are greeted by their runner the moment they wake (faster); a terminal helper is greeted here, once."""
+        if (load_json(self.ident_path, {}) or {}).get("greeted"):
+            return
+        try:
+            self.client.post("/messages", {"to": "all", "body": f"Hi, I'm {ident['name']}, ready to help.",
+                                           "kind": "chat"})
+        except HubRequestError:
+            return  # a greeting is a courtesy; try again on the next start
+        save_json(self.ident_path, {**load_json(self.ident_path, {}), "greeted": True})
+
     def heartbeat_loop(self):
         backoff = HEARTBEAT_SECONDS
         while not self.dead:
@@ -139,7 +151,7 @@ class Session:
                 backoff = HEARTBEAT_SECONDS
                 self.poll_fea()
             except HubRequestError as e:
-                if e.code in ("fence_stale", "taken_over", "left", "not_member"):
+                if e.code in ("fence_stale", "taken_over", "left", "removed", "not_member"):
                     self.dead = str(e)
                     return
                 backoff = min(backoff * 2, 60)  # hub unreachable: back off, never hammer
@@ -175,7 +187,7 @@ def call(method, path, body=None, doing=None, targets=None, **params):
             return S.client.get(path, **params)
         return S.client.post(path, body)
     except HubRequestError as e:
-        if e.code in ("fence_stale", "taken_over"):
+        if e.code in ("fence_stale", "taken_over", "removed", "left"):
             S.dead = str(e)
         return {"error": str(e), **{k: v for k, v in e.body.items() if k != "error"}}
 
@@ -896,6 +908,10 @@ def main():
         print(f"cadswarm: could not join the team at {S.cfg['uri']} / {S.cfg['db']}: {e}", file=sys.stderr)
         raise SystemExit(1)
     print(f"cadswarm: joined as {ident['name']} ({ident['participant_id']}, fence {ident['fence']})", file=sys.stderr)
+    # Background helpers are greeted by their runner (which posts it sooner); the host's one-job agents and
+    # the team server never greet, so the chat stays for the real, lasting helpers.
+    if not BACKGROUND and not S.cfg.get("ephemeral"):
+        S.greet(ident)
     threading.Thread(target=S.heartbeat_loop, daemon=True).start()
     if not S.cfg.get("ephemeral"):
         mcp.run("stdio")

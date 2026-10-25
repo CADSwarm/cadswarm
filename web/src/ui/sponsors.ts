@@ -53,8 +53,20 @@ export function toolLine(summary: string): string {
 
 const list = (rows: string[], max: number) => rows.slice(0, max).map(r => (r.length > 170 ? `${r.slice(0, 167)}…` : r));
 
+const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/i;
+
+/** A short phrase for where the team's database lives, from the address the browser connected to.
+ *  Kept in step with the FreeCAD panel's `server_label` (cadswarm/hosting.py). */
+export function serverLabel(uri: string): string {
+  let host = '';
+  try { host = new URL(uri).hostname; } catch { return 'this computer'; }
+  if (/spacetimedb\.com$/i.test(host)) return 'SpacetimeDB Maincloud';
+  if (!host || LOOPBACK.test(host)) return 'this computer';
+  return `this computer · ${host}`;
+}
+
 /** The five cards, built only from state the browser already has, plus the stamped snapshot. */
-export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | 'locks' | 'tasks' | 'ops' | 'activity' | 'briefs' | 'reviews'>, project: string): Card[] {
+export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | 'locks' | 'tasks' | 'ops' | 'activity' | 'briefs' | 'reviews' | 'server'>, project: string): Card[] {
   const online = s.members.filter(m => m.status === 'active').length;
   const done = s.ops.filter(o => o.status === 'done').length;
   const lastSeq = s.activity.length ? Math.max(...s.activity.map(a => a.id)) : 0;
@@ -68,6 +80,8 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
   const parts = s.objects.filter(o => o.name !== 'Params').length;
   // Params is the shared spreadsheet, not a part, and its lock is not a held part (same as the FreeCAD panel).
   const held = s.locks.filter(l => l.object !== 'Params').length;
+  const server = serverLabel(s.server ?? '');
+  const maincloud = server === 'SpacetimeDB Maincloud';
 
   const byClient = (client: string) => s.members.filter(m => m.client === client);
   const owned = (m: Member) => s.tasks.filter(t => t.owner === m.id);
@@ -91,6 +105,8 @@ export function sponsorCards(s: Pick<State, 'members' | 'objects' | 'params' | '
       name: 'SpacetimeDB',
       role: 'the team\'s shared state',
       facts: [
+        ['server', server],
+        ['sign-in', maincloud ? 'joined by invite' : 'no account needed'],
         ['database', project || 'this workspace'],
         ['members', `${online} active · ${s.members.length} joined`],
         ['model', `${parts} parts · ${s.params.length} params · ${held} held`],

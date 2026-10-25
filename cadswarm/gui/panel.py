@@ -31,6 +31,7 @@ from ..invite import InviteError, read_invite
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
+from ..teams import recent_teams, remember_team
 from . import fea_ui, library_ui, lighten_ui, overlay, panes, sponsors as sponsors_ui, style_ui, theme
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
@@ -39,7 +40,7 @@ HEARTBEAT_SECONDS = 10
 REFRESH_SECONDS = 3         # the panel re-reads the team this often (in the background) even with no events
 HELPER_CHECK_SECONDS = 20   # how often to make sure this computer's AI helpers are running
 TOAST_SECONDS = 6           # how long a confirmation ("✓ Created task …") stays in the panel
-FATAL = ("taken_over", "fence_stale", "left", "bad_token", "not_member")
+FATAL = ("taken_over", "fence_stale", "left", "removed", "bad_token", "not_member")
 
 
 def prefs():
@@ -130,6 +131,7 @@ def friendly_error(e, hub=""):
         "taken_over": "A teammate took over your session, so you were signed out. Join again to keep working.",
         "fence_stale": "You joined from another FreeCAD window, so this one was signed out.",
         "left": "You left the team session.",
+        "removed": "A person removed this helper from the team. It can only rejoin with a new invite.",
         "bad_token": "Your saved sign-in is no longer valid. Join again.",
         "name_in_use": "Someone with that name is already in the team. Join again with a different name "
                        "(letters, numbers, - and _ only).",
@@ -207,7 +209,7 @@ class Session:
         except HubRequestError as e:
             self.set_state("disconnected", friendly_error(e, uri))
 
-    def connect(self, cfg, identity=None, name=None, timeout=30):
+    def connect(self, cfg, identity=None, name=None, timeout=30, project=None):
         """Join (or rejoin) the team in `cfg` {"uri", "db"} with this person's SpacetimeDB `identity`.
 
         The identity is saved under the app folder per team, so opening FreeCAD again just rejoins."""
@@ -224,6 +226,10 @@ class Session:
         p.SetString("Db", cfg["db"])
         p.SetString("Name", self.ident.get("name") or name)
         save_identity(cfg["db"], self.ident)
+        # Note the team so it can be reopened later (this computer hosts it only if host_dir_for says so).
+        hosted = host_dir_for(cfg["db"])
+        remember_team(project or p.GetString("ProjectName"), cfg["uri"], cfg["db"],
+                      hosted, p.GetString("HostMode") if hosted else "")
         # Fresh stop flag and queue per connection: a worker still blocked in an old long-poll can
         # only ever signal its own (already stopped) session. Workers never touch Qt; they only queue.
         self.stop, self.events = threading.Event(), queue.Queue()
@@ -738,8 +744,8 @@ class TeamPanel(QtGui.QDockWidget):
         self.team.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.team.customContextMenuRequested.connect(self.helper_menu)
         self.team.itemDoubleClicked.connect(self.team_double_click)
-        self.team.setToolTip("Double-click a helper to give it a task. Right-click your own helpers to rename, "
-                             "restart or remove them.")
+        self.team.setToolTip("Double-click a helper to give it a task. Right-click a helper to remove it from the "
+                             "team; your own also rename, restart or show their log.")
         tl.addWidget(self.team)
         self.team_tip = QtGui.QLabel("")
         self.team_tip.setWordWrap(True)
@@ -957,7 +963,9 @@ class TeamPanel(QtGui.QDockWidget):
                 ("Print", (("Printer bed…", "Tell the team what printer you print on", printer_bed),
                            ("Check it fits the printer…", "Check the parts fit the bed, are closed solids and have "
                             "printable walls", check_printability))),
-                ("Project", (("Project files…", "Notes, plans and scripts your team saved", show_project_files),
+                ("Project", (("Open a previous project…", "Reopen another team you've joined on this computer",
+                              open_previous_team),
+                             ("Project files…", "Notes, plans and scripts your team saved", show_project_files),
                              ("Open project folder", "Open the folder the team saves into", open_project_folder),
                              ("Save a snapshot…", "Keep this version of the model", save_snapshot),
                              ("Run a simulation…", "Check how a part holds up under a load, without asking a helper",
@@ -1096,7 +1104,8 @@ class TeamPanel(QtGui.QDockWidget):
         if not self.session.ensure_connected("invite a teammate"):
             return
         try:
-            code = self.session.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"))
+            code = self.session.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"),
+                                                     uri=hosting.invite_uri(self.session.client.hub))
             t = read_invite(code)
             t.pop("project", None)  # the phone link carries the ticket; the project name rides in the code
             url = ticket.phone_url(web_url_for_phone(), ticket.encode(t))
@@ -1113,7 +1122,10 @@ class TeamPanel(QtGui.QDockWidget):
         self.remote_link.setCursorPosition(0)
         self.paint_remote()
         self.remote_note.setText("One code works once, and only while this computer is on with CadSwarm running. "
-                                 "Make a new code for the next phone.")
+                                 "Make a new code for the next phone."
+                                 + ("\nThis team's database runs on this computer, so a phone must be on the same "
+                                    "network, and the public site can't reach it: use FreeCAD on a networked "
+                                    "computer for now." if prefs().GetString("HostMode") == "local" else ""))
 
     def paint_remote(self):
         rows = qr.rows(self.remote_url) if self.remote_url else []
@@ -1320,9 +1332,22 @@ class TeamPanel(QtGui.QDockWidget):
 
     def render_sponsors(self, s):
         """The five outside services, from the snapshot this refresh already read, plus the stamped evidence."""
-        database = (getattr(s.client, "cfg", {}) or {}).get("db", "")
+        client = getattr(s, "client", None)
+        database = (getattr(client, "cfg", {}) or {}).get("db", "")
+        uri = (getattr(client, "cfg", {}) or {}).get("uri") or getattr(client, "hub", "") or ""
+        server = hosting.server_label(uri)
+        # The sign-in only matters for Maincloud, and only on the computer hosting it: a teammate joins with
+        # an invite, and a team on this computer needs no account at all.
+        if server == "SpacetimeDB Maincloud":
+            if prefs().GetString("HostMode") == "maincloud" and prefs().GetString("HostDataDir"):
+                account = hosting.maincloud_login()
+                sign_in = f"signed in as {account}" if account else "not signed in"
+            else:
+                sign_in = "joined by invite"
+        else:
+            sign_in = "no account needed"
         parts = []
-        for card in sponsors_ui.cards(s, database):
+        for card in sponsors_ui.cards(s, database, server, sign_in):
             facts = "<br>".join(
                 f"<span style='color:#8b949e'>{html.escape(key)}</span>&nbsp; {html.escape(str(value))}"
                 for key, value in card["facts"])
@@ -1762,6 +1787,7 @@ class TeamPanel(QtGui.QDockWidget):
             return
         menu = QtGui.QMenu(self)
         menu.addAction(f"Give @{name} a task").triggered.connect(lambda: self.mention(name))
+        participant = next((p for p in self.session.model["participants"] if p["name"] == name), None)
         mine = local_helpers(self.session).get(name)
         if mine:
             folder = mine[0]
@@ -1769,10 +1795,10 @@ class TeamPanel(QtGui.QDockWidget):
             menu.addAction("Rename…").triggered.connect(lambda: self.rename_helper(name, folder))
             menu.addAction("Restart").triggered.connect(lambda: self.restart_helper(folder))
             menu.addAction("Show its log").triggered.connect(lambda: open_log(folder))
+        if participant and takes_instructions(participant):
             menu.addSeparator()
-            menu.addAction("Remove from the team…").triggered.connect(lambda: self.remove_helper(name, folder))
-        else:
-            menu.addAction("(runs on a teammate's computer)").setEnabled(False)
+            menu.addAction("Remove from the team…").triggered.connect(
+                lambda: self.remove_helper(participant, mine[0] if mine else None))
         (getattr(menu, "exec", None) or menu.exec_)(self.team.viewport().mapToGlobal(pos))
 
     def new_helper(self):
@@ -1802,19 +1828,21 @@ class TeamPanel(QtGui.QDockWidget):
         else:
             start_runner(folder, freecad_python(), LAUNCHER, prefs().GetString("ProjectName"))
 
-    def remove_helper(self, name, folder):
-        if not confirm(f"Remove {name} from the team? It stops, and its locks are released. Its folder stays on "
-                       "this computer."):
+    def remove_helper(self, participant, folder=None):
+        """Take any AI helper off the team, not just this computer's: the module releases its locks and returns
+        the work it held, and it can't come back on its own. `folder` is set when it runs here, so we also stop
+        it and forget the folder."""
+        name, pid = participant["name"], participant["id"]
+        if not confirm(f"Remove {name} from the team? It stops and its locks are released."
+                       + (" Its folder stays on this computer." if folder else "")):
             return
-        from ..runner import set_background, stop_runner
-        set_background(folder, False)
-        stop_runner(folder)
-        hub = helper_hub(folder)
-
-        def work(_c):
-            hub.join(client=hub.cfg.get("client"))  # take the seat back from a running agent, then leave
-            return hub.post("/leave")
-        self.session.run_async(work, purpose="remove a helper", done=lambda _r: forget_helper_folder(folder))
+        if folder:
+            from ..runner import set_background, stop_runner
+            set_background(folder, False)
+            stop_runner(folder)
+        self.session.act_async("POST", f"/participants/{pid}/remove", None, purpose="remove a helper",
+                               done=(lambda _r: forget_helper_folder(folder)) if folder
+                               else f"Removed {name} from the team")
 
     def selected_or_hint(self, verb):
         if not self.session.ensure_connected(f"{verb} parts"):
@@ -3155,7 +3183,7 @@ def edit_part():
     dlg.show()
 
 
-STATUS_WORDS = {"active": "here", "stale": "away", "left": "left"}
+STATUS_WORDS = {"active": "here", "stale": "away", "left": "left", "removed": "removed"}
 TASK_WORDS = {"open": "not started", "claimed": "in progress", "awaiting_takeover": "needs someone",
               "done": "done ✓", "blocked": "stuck", "cancelled": "cancelled"}
 
@@ -3195,6 +3223,8 @@ def describe_event(ev):
         return f"{who} ({kind}) joined the team"
     if k == "left":
         return f"{who} left the team"
+    if k == "removed":
+        return f"{who} was removed from the team"
     if k == "stale":
         held = names(ev.get("locks") or [])
         return f"{who} went quiet" + (f" while working on {held}" if held else "") + \
@@ -3511,6 +3541,45 @@ def connect_dialog(reason=None):
     return run_wizard(reason=reason)
 
 
+def select_team(team):
+    """Point the app at a recent team without joining yet (the guide's reconnect step does the joining).
+    A team server this computer is still running is never forgotten, so "Stop hosting" keeps working."""
+    p = prefs()
+    p.SetString("ProjectName", team["project"])
+    p.SetString("Db", team["db"])
+    p.SetString("Uri", team.get("uri") or "")
+    folder = team.get("host_data_dir") or ""
+    if folder:
+        p.SetString("HostDataDir", folder)
+        p.SetString("HostMode", team.get("host_mode") or "")
+        return
+    current = p.GetString("HostDataDir")
+    if not (current and hosting.team_ready(current)):  # this computer hosts the picked team, or nobody
+        p.SetString("HostDataDir", "")
+        p.SetString("HostMode", "")
+
+
+def open_previous_team():
+    """Reopen a team this computer joined before, without a new invite code (a per-team sign-in is kept)."""
+    from .wizard import run_wizard
+    teams = recent_teams()
+    if not teams:
+        hint("You haven't joined a team on this computer yet. Start or join one from CADSwarm ▸ Get started.")
+        return
+    if len(teams) == 1:
+        chosen = teams[0]
+    else:
+        labels = [t["project"] if t["db"] == prefs().GetString("Db")
+                  else f"{t['project']}  ({t['db']})" for t in teams]
+        pick, ok = QtGui.QInputDialog.getItem(Gui.getMainWindow(), "Open a previous project",
+                                              "Choose a team to reopen:", labels, 0, False)
+        if not ok:
+            return
+        chosen = teams[labels.index(pick)]
+    select_team(chosen)
+    run_wizard(start="reconnect")
+
+
 def add_helper():
     from .wizard import run_wizard
     run_wizard(start="agent")
@@ -3521,7 +3590,8 @@ def invite_teammates():
     if not SESSION.ensure_connected("invite teammates"):
         return
     try:
-        code = SESSION.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"))
+        code = SESSION.client.create_invite("human", "member", 86400, prefs().GetString("ProjectName"),
+                                            uri=hosting.invite_uri(SESSION.client.hub))
     except HubRequestError as e:
         QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm", friendly_error(e, SESSION.client.hub))
         return

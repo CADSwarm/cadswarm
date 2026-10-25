@@ -125,3 +125,16 @@ def test_both_cards_stay_when_neither_helper_has_joined():
     assert names == ["SpacetimeDB", "Anthropic", "Creao AI", "Factory.ai", "Elastic"]
     assert card(cards(s), "Anthropic")["facts"][0] == ("agents", "not joined")
     assert card(cards(s), "Creao AI")["facts"][0] == ("helper", "not joined")
+
+
+def test_the_spacetime_card_says_where_the_database_lives_and_the_sign_in():
+    space = card(cards(session(), "cadswarm-demo", "SpacetimeDB Maincloud", "signed in as c200641aabd1"), "SpacetimeDB")
+    assert ("server", "SpacetimeDB Maincloud") in space["facts"]
+    assert ("sign-in", "signed in as c200641aabd1") in space["facts"]
+
+
+def test_the_spacetime_card_stays_quiet_when_the_panel_does_not_know_the_server():
+    # A snapshot with no server/sign-in still renders the counts it always did.
+    space = card(cards(session(), "cadswarm-demo"), "SpacetimeDB")
+    assert [k for k, _ in space["facts"]][:1] == ["database"]
+

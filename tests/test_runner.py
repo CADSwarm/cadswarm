@@ -157,8 +157,13 @@ def test_a_step_rejoins_heartbeats_and_wakes_the_agent_with_whats_new(tmp_path, 
     assert calls[:2] == ["rejoin", "heartbeat"]  # present as "ready" while no agent runs
     (argv, prompt), = spawned
     assert argv[:2] == ["/bin/claude", "-p"] and "--continue" not in argv  # the first run starts a conversation
-    assert "make the lid 20 mm" in prompt and "Phone stand" in prompt and "Say hello" in prompt
+    assert "make the lid 20 mm" in prompt and "Phone stand" in prompt
+    assert "Say hello" not in prompt  # the runner greets instead, so the model spends no turn on it
     assert "never ask questions here" in prompt
+    # The runner itself says hello, as a chat to "all" (peers ignore it, so it wakes nobody).
+    # send_message args are (fence, id, to, body, kind, task_id).
+    sends = [args for reducer, args in r.hub.space.calls if reducer == "send_message"]
+    assert sends and sends[-1][2] == "all" and sends[-1][4] == "chat" and "ann-claude" in sends[-1][3]
     status = json.load(open(os.path.join(r.folder, ".cadswarm", "runner.json")))
     assert status["state"] == "working"
     # The agent exits; nothing new arrived: the runner rejoins and listens, without waking it again.
@@ -171,6 +176,7 @@ def test_a_step_rejoins_heartbeats_and_wakes_the_agent_with_whats_new(tmp_path, 
     clock[0] += 60
     r.step()
     assert len(spawned) == 2 and "--continue" in spawned[1][0] and "now the base" in spawned[1][1]
+    assert len([1 for reducer, _ in r.hub.space.calls if reducer == "send_message"]) == 1  # greeted only once
 
 
 def test_runs_are_rate_limited_so_helpers_cant_wake_each_other_forever(tmp_path, monkeypatch):
