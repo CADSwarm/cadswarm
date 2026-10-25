@@ -76,9 +76,16 @@ if dlg.apply_btn.isEnabled():
     added = doc.getObject("Bracket_lattice")
     assert added is not None and added.TypeId == "Mesh::Feature" and added.Mesh.isSolid()
     assert doc.getObject("Bracket").Shape.Volume == 36 * 12 * 12  # the original is unchanged
+    assert not doc.getObject("Bracket").ViewObject.Visibility  # and hidden, so it doesn't z-fight the lattice
 dlg.reject()
 assert not App.listDocuments().get(lighten_ui.PREVIEW_DOC)
 (out / "lighten-gui-verified.json").write_text(json.dumps({"ok": True, "verdict": s["verdict"],
                                                            "saving": s["weight_saving_pct"]}))
-print("lighten gui ok", s["verdict"], s["weight_saving_pct"])
-Gui.getMainWindow().close()
+print("lighten gui ok", s["verdict"], s["weight_saving_pct"], flush=True)
+# Closing the main window would ask to save the changed document, a prompt nobody answers offscreen.
+# Close the documents (no prompt) and let Qt quit, like panel_gui_check.py.
+for name in list(App.listDocuments()):
+    App.closeDocument(name)
+from PySide import QtCore  # noqa: E402
+QtCore.QTimer.singleShot(0, QtGui.QApplication.quit)
+sys.exit(0)
