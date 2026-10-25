@@ -8,10 +8,12 @@ member-only views, and ops are queued with `submit_op` and awaited until the hos
 Stdlib only.
 """
 import base64
+import contextlib
 import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlsplit
 
 from . import constraints, ticket
@@ -23,6 +25,12 @@ STATUS = {"not_member": 401, "bad_invite": 401, "fence_stale": 409, "taken_over"
           "not_allowed": 403, "not_owner": 403, "unknown_participant": 404, "unknown_task": 404,
           "not_found": 404, "bad_args": 400, "unknown_op": 400, "unreachable": 0}
 OP_WAIT_SECONDS = 150
+READ_THREADS = 6  # views read at the same time by refresh(); one hosted round trip is ~0.1-0.25 s
+# What the panel draws: read at once instead of one view after another.
+PANEL_VIEWS = ("v_me", "v_member", "v_message", "v_receipt", "v_task", "v_brief", "v_review",
+               "v_lock", "v_object", "v_param", "v_workspace")
+# What a runner needs to decide whether a helper has new work.
+POLL_VIEWS = ("v_me", "v_member", "v_message", "v_receipt", "v_task", "v_lock")
 # Events that mean a member actually did something (the panel's "working" indicator).
 ACTIVE_KINDS = ("op", "task_claimed", "task_reported", "file_saved", "file_moved", "fea_started", "fea_report",
                 "snapshot", "exported", "message")
@@ -171,16 +179,35 @@ class SpaceHub(LibraryRoutes):
             self._cache[(view, where)] = rows
         return rows
 
-    def panel_snapshot(self, chat_limit=80):
-        """Everything the FreeCAD panel shows, reading each view once (one refresh used to be ~15 round trips
-        to the database, which froze FreeCAD on a slow network)."""
+    def _read_views(self, views):
+        """Read these views at the same time. They are independent, and one hosted round trip is ~0.1-0.25 s,
+        so a refresh that read ten of them one after another took over 2 s."""
+        if not views:
+            return
+        if len(views) == 1:
+            self._rows(views[0])
+            return
+        with ThreadPoolExecutor(max_workers=min(READ_THREADS, len(views))) as pool:
+            list(pool.map(self._rows, views))  # exceptions surface here, after every read has finished
+
+    @contextlib.contextmanager
+    def refresh(self, *views):
+        """One refresh: each view is read once, all of them at the same time, and every read inside the
+        block reuses those rows. `views` should name everything the block reads."""
         self._cache = {}
         try:
+            self._read_views(list(dict.fromkeys(views)))
+            yield self
+        finally:
+            self._cache = None
+
+    def panel_snapshot(self, chat_limit=80):
+        """Everything the FreeCAD panel shows, reading each view once (one refresh used to be ~15 round trips
+        to the database, which froze FreeCAD on a slow network) and reading them side by side."""
+        with self.refresh(*PANEL_VIEWS):
             return {"model": self.model(), "tasks": self.tasks(), "commands": self.commands()["commands"],
                     "briefs": self.briefs()["briefs"], "messages": self.chat(chat_limit)["messages"],
                     "reviews": self.reviews(), "workspace": self.workspace()}
-        finally:
-            self._cache = None
 
     def request(self, method, path, body=None, params=None, timeout=None, raw=False):
         if raw and path.startswith("/artifacts/"):

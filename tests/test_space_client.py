@@ -75,6 +75,68 @@ def test_decode_handles_plain_names_options_and_bytes():
     assert decode_sql(body) == [{"a": 5, "b": None, "c": "0a0b"}]
 
 
+class KeepAlive(Fake):
+    """Same answers, but HTTP/1.1 so the client may keep the socket for the next request."""
+    protocol_version = "HTTP/1.1"
+
+
+class Drops(BaseHTTPRequestHandler):
+    """Accepts the request and closes without answering (like a pooled socket the server gave up on)."""
+    protocol_version = "HTTP/1.1"
+    seen = 0
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        Drops.seen += 1
+        self.close_connection = True
+        self.connection.close()
+
+
+def serve(handler):
+    srv = HTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_reads_reuse_one_connection_instead_of_a_new_tls_handshake_each():
+    srv = serve(KeepAlive)
+    try:
+        client = SpaceClient(f"http://127.0.0.1:{srv.server_port}", "db", "tok")
+        opened = []
+        real = client._open
+
+        def counting():
+            opened.append(1)
+            return real()
+        client._open = counting
+        client.sql("SELECT * FROM v_member")
+        client.sql("SELECT * FROM v_task")
+        assert len(opened) == 1  # the second read went out on the same socket
+        assert len(client._idle) == 1
+        client.close()
+        assert client._idle == []
+    finally:
+        srv.shutdown()
+
+
+def test_a_dropped_read_is_retried_but_a_dropped_reducer_is_not():
+    """Repeating a reducer could post the same chat message twice; repeating a query cannot hurt."""
+    srv = serve(Drops)
+    try:
+        uri = f"http://127.0.0.1:{srv.server_port}"
+        with pytest.raises(SpaceError):
+            SpaceClient(uri, "db", "tok", timeout=5).sql("SELECT * FROM v_member")
+        assert Drops.seen == 2
+        Drops.seen = 0
+        with pytest.raises(SpaceError):
+            SpaceClient(uri, "db", "tok", timeout=5).call("send_message", 1, "m1", "all", "hi", "chat", "")
+        assert Drops.seen == 1
+    finally:
+        srv.shutdown()
+
+
 def test_an_unreachable_server_is_a_space_error():
     with pytest.raises(SpaceError) as e:
         SpaceClient("http://127.0.0.1:9", "db", "tok", timeout=2).call("heartbeat", 1, "")
