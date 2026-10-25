@@ -409,7 +409,7 @@ Brief, sent from the phone:
 | # | Beat | Time | What happens |
 |---|---|---|---|
 | 1 | Phone brief | 1′ | Brief appears in FreeCAD and web; the remote path is live |
-| 2 | Recall | 1′ | Planner calls `recall_designs`; Act 1 returns first; Elastic card's design memory shows it |
+| 2 | Recall | 1′ | Planner calls `recall_designs`; Act 1 returns (first, or second to a closer match); Elastic card's design memory shows it |
 | 3 | Build | 6–10′ | Three parts; the cradle is moved aside; the lattice mesh is hidden; the arm stays |
 | 4 | Review 1 | 2–3′ | Medallion clashes with the body by 0.4 mm; `Podium_Lid` is 2.0 mm against the 2.4 mm rule (a `style:` finding) |
 | 5 | Fix + Review 2 | 2–3′ | Both fixed; round 2 approved; Act 1's lessons prevented a repeat port/depth mistake |
@@ -430,10 +430,12 @@ press: the recall returns Act 1, the tasks appear with the same owners, a locked
 helper, and a real part starts to build. The finished podium on the arm is the rehearsal's artifact,
 labelled as such.
 
-The recall query is deliberately worded differently from the Act 1 request — at the table, "an
-upright display head for a dev board on the same clip-on arm"; in the booth run, "… with an OLED
-window and a spinning medallion". Act 1 must return first (or second only to a closer match), and its
-three problems must be visible in the result.
+The recall query is the brief's own text: the host passes `b.text` straight to `recall_designs`, so
+the table's begins "Make the Podium head for the same Perch…" and the booth's adds "… with an OLED
+window and a spinning medallion". That wording already differs from Act 1's request, so the memory is
+matching a second design, not replaying the first. Act 1 must return first (or second only to a closer
+match), and its own three problems must be visible: the helper logs one `recall` activity row per
+returned design, each with the design's rank, request and own problem count.
 
 **Impact read of Act 2.** Same clock, same measurement, second design. The pitch puts the two rows
 side by side: the delta is the reuse dividend, and it is the only number that has to be believable.
@@ -695,10 +697,11 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
   member that only connects during a review round). Without it the reviewer is retired after ten
   quiet minutes and the Factory card and the driver's Probe lose it. Observability: the host's own
   recall calls `recall_designs` directly and a refused submit returns before any op row exists, so
-  neither leaves an event; `cadswarm/helper.py` logs a `recall` activity row as the host and
-  `cadswarm/space_hub.py` logs a `refused` row before re-raising, both through the existing
-  `log_activity` reducer. The driver reads `v_activity`. No module, orchestration, schema or phone
-  change, and no module publish for the observability fix.
+  neither leaves an event; `cadswarm/helper.py` logs one `recall` activity row per returned design
+  (rank, request, its own problem count) as the host, and `cadswarm/space_hub.py` logs a `refused` row
+  before re-raising, both through the existing `log_activity` reducer. A recall made by a helper (it
+  carries `_actor`) is not the host's planning and leaves no row. The driver reads `v_activity`.
+  No module, orchestration, schema or phone change, and no module publish for the observability fix.
 
 ## Proof ledger
 
@@ -764,7 +767,7 @@ Now:
 | `tests/panel_gui_check.py` | Sponsors tab assertions |
 | `rules/src/lib.rs` | `Presence.kind`; `plan_sweep` never orphans a `reviewer` (an approved product exception, found by rehearsal) |
 | `module/src/sweep.rs` | passes each member's `kind` into `rules::Presence` |
-| `cadswarm/helper.py` | the host's own recall logs a `recall` activity row (the approved observability exception) |
+| `cadswarm/helper.py` | the host's own recall logs one `recall` activity row per returned design (the approved observability exception) |
 | `cadswarm/space_hub.py` | a refused submit logs a `refused` activity row before it re-raises |
 
 Deferred until the demo is rehearsed:

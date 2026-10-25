@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -80,7 +81,7 @@ def test_recall_without_a_board_skips_lessons(tmp_path):
     assert r["ok"] and r["result"]["lessons"] == []
 
 
-def test_a_recall_leaves_an_activity_row_led_by_counts(tmp_path):
+def test_a_recall_leaves_one_activity_row_per_design_with_its_own_problems(tmp_path):
     class Logged:
         def __init__(self):
             self.rows = []
@@ -88,24 +89,79 @@ def test_a_recall_leaves_an_activity_row_led_by_counts(tmp_path):
         def log_activity(self, kind, summary, targets=None):
             self.rows.append((kind, summary, targets))
 
-    class WithProblems(FakeElastic):
+    class TwoDesigns(FakeElastic):
         def search(self, index, query, k=5, filters=None):
-            rows = super().search(index, query, k, filters)
             if index == "cadswarm-designs":
-                rows[0]["source"] = {**rows[0]["source"], "request": "Build The Perch: a clip-on articulated arm",
-                                     "problems": ["missing OTG cutout", "cradle 8.0 mm", "lid wall 1.0 mm"]}
-            return rows
+                return [
+                    {"score": 0.9, "source": {"request": "A podium from last year", "problems": []}},
+                    {"score": 0.8, "source": {"request": "Build The Perch: a clip-on articulated arm",
+                                              "problems": ["missing OTG cutout", "cradle 8.0 mm",
+                                                           "lid wall 1.0 mm"]}},
+                ]
+            return super().search(index, query, k, filters)
 
-    p = project(tmp_path, WithProblems())
+    p = project(tmp_path, TwoDesigns())
     space = Logged()
     p.host_space = space
     r = helper.handle(p, {"id": 1, "op": "recall_designs",
                           "args": {"query": "the same Perch", "board": "raspberry-pi-pico"}})
     assert r["ok"]
-    kind, summary, targets = space.rows[-1]
-    assert kind == "recall" and targets == []
-    assert "1 design" in summary and "3 problems" in summary and "1 lesson" in summary
-    assert "clip-on articulated arm" in summary
+    first, second = [row[1] for row in space.rows]
+    assert all(row[0] == "recall" and row[2] == [] for row in space.rows)
+    assert "#1" in first and "A podium" in first and "0 problems" in first
+    assert "#2" in second and "clip-on articulated arm" in second
+    assert "3 problems" in second and "1 lesson" in second
+
+
+def test_a_helpers_recall_is_not_logged_as_the_hosts(tmp_path):
+    class Logged:
+        def __init__(self):
+            self.rows = []
+
+        def log_activity(self, *a, **k):
+            self.rows.append(a)
+
+    p = project(tmp_path, FakeElastic())
+    space = Logged()
+    p.host_space = space
+    r = helper.handle(p, {"id": 1, "op": "recall_designs",
+                          "args": {"query": "x", "_actor": {"id": 2, "name": "lid-creao", "kind": "agent"}}})
+    assert r["ok"] and space.rows == []
+
+
+def test_the_host_identity_is_read_from_host_json(tmp_path, monkeypatch):
+    (tmp_path / "host.json").write_text(json.dumps(
+        {"uri": "https://cloud", "db": "team-db", "token": "t_host"}), encoding="utf-8")
+    seen = {}
+
+    class FakeHub:
+        def __init__(self, cfg, identity=None):
+            seen["cfg"], self.identity = cfg, dict(identity or {})
+
+        def me(self):
+            return {"id": 7, "name": "host", "fence": 4}
+
+    monkeypatch.setattr("cadswarm.space_hub.SpaceHub", FakeHub)
+    p = helper.Project(tmp_path)
+    hub = p.host_space
+    assert isinstance(hub, FakeHub)
+    assert seen["cfg"] == {"uri": "https://cloud", "db": "team-db", "token": "t_host"}
+    assert hub.identity == {"token": "t_host", "participant_id": 7, "fence": 4, "name": "host"}
+
+
+def test_no_host_json_or_no_member_leaves_recall_without_a_row(tmp_path, monkeypatch):
+    assert helper.Project(tmp_path).host_space is None  # a checkout or a test, not a host data dir
+    (tmp_path / "host.json").write_text(json.dumps({"uri": "u", "db": "d", "token": "t"}), encoding="utf-8")
+
+    class NoMember:
+        def __init__(self, cfg, identity=None):
+            self.identity = dict(identity or {})
+
+        def me(self):
+            raise RuntimeError("no member")
+
+    monkeypatch.setattr("cadswarm.space_hub.SpaceHub", NoMember)
+    assert helper.Project(tmp_path).host_space is None
 
 
 def test_a_recall_without_a_host_still_answers(tmp_path):

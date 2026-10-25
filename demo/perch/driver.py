@@ -181,10 +181,17 @@ def _activity_seconds(row):
     return float(row.get("at_ms") or 0) / 1000.0
 
 
-def _numbered(text, word):
-    """`3 problems` / `1 problem` in an activity summary, or None when the row carries no count."""
-    m = re.search(r"(\d+)\s+" + word + r"s?\b", str(text or ""), re.I)
-    return int(m.group(1)) if m else None
+def _recall_row(summary, marker):
+    """Rank, own problem count and lesson count of the design whose logged request carries `marker`."""
+    head = re.search(r'#(\d+)\s+"([^"]*)"', str(summary or ""))
+    if not head or marker not in head.group(2).lower():
+        return None
+    tail = summary[head.end():]
+    problems = re.search(r"(\d+)\s+problems?\b", tail, re.I)
+    lessons = re.search(r"(\d+)\s+lessons?\b", tail, re.I)
+    if not problems or not lessons:
+        return None
+    return int(head.group(1)), int(problems.group(1)), int(lessons.group(1))
 
 
 # --------------------------------------------------------------------------- predicates
@@ -208,26 +215,33 @@ def brief_sent(step, view):
 
 
 def recall(step, view):
-    """The host's own recall makes no op: it logs a `recall` activity row (helper.recall_designs).
+    """The host's own recall makes no op: it logs one `recall` activity row per returned design.
     Filter by the press, not this step's start: the host may recall while a step's deadline runs out.
-    `query` (when a timeline sets it) keeps Act 1's planning recall from standing in for Act 2's."""
+    `query` (when a timeline sets it) keeps Act 1's planning recall from standing in for Act 2's.
+    The row names the design's rank, request and its own problem count: a sum across designs, or a
+    marker found anywhere in the summary, would let an unrelated hit certify Act 1's three problems."""
     marker = str(step.args["marker"]).lower()
     query = str(step.args.get("query") or "").lower()
     need = int(step.args.get("problems", 3))
+    within = int(step.args.get("within", 2))
     for row in view.activity:
         if row.get("kind") != "recall" or _activity_seconds(row) < view.run_started:
             continue
         summary = str(row.get("summary") or "")
-        if marker not in summary.lower() or (query and query not in summary.lower()):
+        if query and query not in summary.lower():
             continue
-        problems, lessons = _numbered(summary, "problem"), _numbered(summary, "lesson")
-        if problems is None or lessons is None:
-            return False, f"the host's recall row has no counts: {summary}"
+        found = _recall_row(summary, marker)
+        if found is None:
+            continue
+        rank, problems, lessons = found
+        if rank > within:
+            return False, f"Act 1 came back #{rank}, need top {within}"
         if problems < need:
             return False, f"Act 1 returned with {problems} problems, need {need}"
         if not lessons:
             return False, "Act 1 returned, but no lessons came with it"
-        return True, f"Act 1 first · {problems} problems · {lessons} lessons"
+        where = "first" if rank == 1 else f"#{rank}"
+        return True, f"Act 1 {where} · {problems} problems · {lessons} lessons"
     return False, "waiting for the host's recall"
 
 

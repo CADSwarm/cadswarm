@@ -160,25 +160,66 @@ def test_brief_sent_names_the_phone_and_rejects_the_presenter():
     assert not ok and "sam-phone" in detail
 
 
-def test_recall_needs_act1_its_three_problems_and_lessons():
+def test_recall_needs_act1s_own_problems_and_lessons():
     row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
-           "summary": 'recall "the same Perch" · 1 design · 3 problems · 3 lessons · '
-                      '"Build The Perch: a clip-on articulated arm"'}
+           "summary": 'recall "the same Perch" · #1 "Build The Perch: a clip-on articulated arm" · '
+                      '3 problems · 3 lessons'}
     step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3})
     ok, detail = driver.recall(step, a_view(activity=[row]))
-    assert ok and "3 problems" in detail and "3 lessons" in detail
-    thin = {**row, "summary": 'recall "the same Perch" · 1 design · 1 problem · 1 lesson · '
-                                 '"Build The Perch: a clip-on articulated arm"'}
+    assert ok and "first" in detail and "3 problems" in detail and "3 lessons" in detail
+    thin = {**row, "summary": 'recall "the same Perch" · #1 "Build The Perch: a clip-on articulated arm" · '
+                                     '1 problem · 1 lesson'}
     ok, detail = driver.recall(step, a_view(activity=[thin]))
     assert not ok and "need 3" in detail
-    no_lessons = {**row, "summary": 'recall "same Perch" · 1 design · 3 problems · 0 lessons · '
-                                       '"Build The Perch: a clip-on articulated arm"'}
+    no_lessons = {**row, "summary": 'recall "same Perch" · #1 "Build The Perch: a clip-on articulated arm" · '
+                                       '3 problems · 0 lessons'}
     assert driver.recall(step, a_view(activity=[no_lessons]))[0] is False
+
+
+def test_act1_may_come_back_second_behind_a_closer_match():
+    # The spec allows Act 1 first or second to a closer match. One row per design carries the rank.
+    query = "Make the Podium head for the same Perch"
+    rows = [
+        {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+         "summary": f'recall "{query}" · #1 "Make the Podium head, a previous run" · 0 problems · 3 lessons'},
+        {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+         "summary": f'recall "{query}" · #2 "Build The Perch: a clip-on articulated arm" · 3 problems · 3 lessons'},
+    ]
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium head",
+                                       "problems": 3})
+    ok, detail = driver.recall(step, a_view(activity=rows))
+    assert ok and "#2" in detail and "3 problems" in detail
+
+
+def test_act1_third_is_not_the_recall_the_spec_claims():
+    row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+           "summary": 'recall "Make the Podium head" · #3 "Build The Perch: a clip-on articulated arm" · '
+                      '3 problems · 3 lessons'}
+    ok, detail = driver.recall(a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3}),
+                               a_view(activity=[row]))
+    assert not ok and "need top 2" in detail
+
+
+def test_other_designs_problems_do_not_certify_act1s_three():
+    # The old summary summed every design's problems, so 1 + 1 + 1 from unrelated hits passed.
+    query = "Make the Podium head for the same Perch"
+    rows = [
+        {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+         "summary": f'recall "{query}" · #1 "A podium from last year" · 2 problems · 3 lessons'},
+        {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+         "summary": f'recall "{query}" · #2 "Build The Perch: a clip-on articulated arm" · 1 problem · 3 lessons'},
+        {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+         "summary": f'recall "{query}" · #3 "Another display head" · 2 problems · 3 lessons'},
+    ]
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium head",
+                                       "problems": 3})
+    ok, detail = driver.recall(step, a_view(activity=rows))
+    assert not ok and "need 3" in detail
 
 
 def test_recall_ignores_a_row_from_before_the_press():
     row = {"kind": "recall", "member": 2, "at_ms": 900_000,
-           "summary": 'recall "x" · 1 design · 3 problems · 1 lesson · "clip-on arm"'}
+           "summary": 'recall "x" · #1 "clip-on arm" · 3 problems · 1 lesson'}
     ok, detail = driver.recall(a_step("recall", "recall", {"marker": "clip-on", "problems": 3}),
                                a_view(activity=[row], run_started=1_000.0))
     assert not ok and "waiting" in detail
@@ -188,7 +229,7 @@ def test_a_recall_that_lands_before_the_step_starts_still_counts():
     # The driver ticks every 2 s and the host every 100 ms: the row can arrive while the previous
     # step is still finishing. The press, not the step start, is the fence.
     row = {"kind": "recall", "member": 2, "at_ms": 1_004_000,
-           "summary": 'recall "x" · 1 design · 3 problems · 1 lesson · "clip-on arm"'}
+           "summary": 'recall "x" · #1 "clip-on arm" · 3 problems · 1 lesson'}
     ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on", "problems": 3}),
                           a_view(activity=[row], started=1_006.0, run_started=1_000.0))
     assert ok is True
@@ -197,14 +238,15 @@ def test_a_recall_that_lands_before_the_step_starts_still_counts():
 def test_recall_is_act2s_recall_not_act1s_planning():
     # Act 1's planner recall can also return the clip-on design. The Act 2 step names the query too.
     act1 = {"kind": "recall", "member": 2, "at_ms": 1_002_000,
-            "summary": 'recall "Build The Perch: a clip-on articulated arm" · 1 design · 3 problems · 1 lesson'}
+            "summary": 'recall "Build The Perch: a clip-on articulated arm" · #1 '
+                       '"Build The Perch: a clip-on articulated arm" · 3 problems · 1 lesson'}
     step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium",
                                        "problems": 3})
     assert driver.recall(step, a_view(activity=[act1]))[0] is False
     # Act 2's row names its own query and still carries Act 1's design request: the marker is there.
     act2 = {**act1, "at_ms": 1_005_000,
-            "summary": 'recall "Make the Podium head for the same Perch" · 1 design · 3 problems · '
-                       '1 lesson · "Build The Perch: a clip-on articulated arm"'}
+            "summary": 'recall "Make the Podium head for the same Perch" · #1 '
+                       '"Build The Perch: a clip-on articulated arm" · 3 problems · 1 lesson'}
     assert driver.recall(step, a_view(activity=[act2]))[0] is True
 
 
@@ -473,8 +515,8 @@ def test_skip_confirms_a_manual_step_and_logs_the_decision(tmp_path):
 def test_the_run_log_records_each_step_and_the_numbers_the_pitch_quotes(tmp_path):
     clock = Clock()
     activity = [{"kind": "recall", "member": 2, "at_ms": 1_006_000,
-                 "summary": 'recall "Make the Podium head for the same Perch" · 1 design · 3 problems · '
-                            '1 lesson · "Build The Perch: a clip-on articulated arm"'}]
+                 "summary": 'recall "Make the Podium head for the same Perch" · #1 '
+                            '"Build The Perch: a clip-on articulated arm" · 3 problems · 1 lesson'}]
     events = [
         {"kind": "brief", "actor": 1, "seq": 2, "text": "Make the Podium head"},
         {"kind": "op", "op": "create_extrusion", "seq": 5, "created": ["Podium_Body"],
@@ -571,7 +613,7 @@ def test_a_skipped_step_is_not_a_number_for_the_pitch(tmp_path):
 def test_t_finish_is_the_last_step_the_module_closed_not_the_last_skip(tmp_path):
     clock = Clock()
     activity = [{"kind": "recall", "member": 2, "at_ms": 1_002_000,
-                 "summary": 'recall "the same Perch" · 1 design · 3 problems · 1 lesson · "clip-on arm"'}]
+                 "summary": 'recall "the same Perch" · #1 "clip-on arm" · 3 problems · 1 lesson'}]
     io = FakeIO(snapshot=ready_snapshot(), activity=activity)
     steps = [{"id": "recall", "label": "r", "at": 0, "deadline": 10, "predicate": "recall",
               "args": {"marker": "clip-on", "problems": 3}},

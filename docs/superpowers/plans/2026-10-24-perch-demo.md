@@ -14,7 +14,7 @@ Copied from the spec (`docs/superpowers/specs/2026-10-24-perch-showcase-design.m
 
 - No new CAD operations, no new module tables/reducers/bindings/schema, no host-orchestration change, no FreeCAD panel-layout change, no phone-app change.
 - One approved exception, found by the Task 6 rehearsal: a reviewer-lifetime fix. `rules::Presence` gains `kind`, `plan_sweep` excludes `reviewer` from `to_orphan`, and the module passes `kind` through. The reviewer is HTTP-only and connects only during a review round, so the old sweep retired it ten minutes after `init-reviewer` and the Factory card and Probe lost it. The fix comes with a native rules test.
-- A second approved exception, also found by rehearsal: the host's own recall creates no op and a refused submit returns before any op row exists, so neither leaves an event the page could read. `cadswarm/helper.py` logs a `recall` activity row as the host and `cadswarm/space_hub.py` logs a `refused` row before re-raising, both through the existing `log_activity` reducer; the driver reads `v_activity`. No module, rules, schema, host-orchestration or phone change, and no module publish for this one.
+- A second approved exception, also found by rehearsal: the host's own recall creates no op and a refused submit returns before any op row exists, so neither leaves an event the page could read. `cadswarm/helper.py` logs one `recall` activity row per returned design (its rank, request, own problem count and the lessons) as the host, and `cadswarm/space_hub.py` logs a `refused` row before re-raising, both through the existing `log_activity` reducer; the driver reads `v_activity`. A recall made by a helper (it carries `_actor`) is not the host's planning and leaves no row. No module, rules, schema, host-orchestration or phone change, and no module publish for this one.
 - Product code changes are limited to the sponsor-card UI (`web/src/ui/sponsors.ts`, `cadswarm/gui/sponsors.py`, and the one docstring in `cadswarm/gui/panel.py:1291`) plus tests, and the two approved exceptions: the reviewer-lifetime fix in `rules/src/lib.rs` and `module/src/sweep.rs`, and the activity rows in `cadswarm/helper.py` and `cadswarm/space_hub.py`. `web/src/style.css` already lays five cards out as 3 + 2, so it does not change. The rest is `demo/perch/`, `tests/` and this plan/spec.
 - The browser makes no new network calls and holds no API keys. Every live card field comes from state the panel already subscribes to.
 - No fabricated numbers. A number we checked once is stamped and labelled `checked …`; a live field is labelled live. The Elastic index counts in the footer are never presented as live.
@@ -2635,7 +2635,7 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 | Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
 | A step hangs | Next; a `confirm` step is logged `confirmed`, a module step `skipped`, and the sequence moves on |
-| The recall or refusal step never closes while the build moves | restart the host, every helper and the driver (no module publish): the helper logs the host's own recall as a `recall` activity row and the hub client logs a refused submit as `refused`, both read from `v_activity`. The panel's Activity tab shows the same rows; if the recall row is missing, Elastic is failing - check the Probe's Elastic line |
+| The recall or refusal step never closes while the build moves | restart the host, every helper and the driver (no module publish): the helper logs one `recall` row per returned design (rank, request, its own problems) and the hub client logs a refused submit as `refused`, both read from `v_activity`. The panel's Activity tab shows the same rows. If the recall rows are missing, check Elastic (the Probe's Elastic line) and that `<data-dir>/host.json` holds this run's `uri`/`db`/token — a host that never joined leaves no row |
 | The page is closed | reopen the URL; the run and the log are unaffected |
 | Creao stalls mid-Act 1 | kill it earlier: that is the takeover beat; restart it for Act 2 |
 | A host worker claims a manual part | cancel that task and re-assign by name; the module only rebalances busy or stale assignees |
@@ -3026,7 +3026,7 @@ The three defects are the ones review 1 actually filed. Write them as filed, not
 
 ## Act 2: the reuse delta
 
-| Run | Date | Timeline | Act 1 wall clock | Act 2 wall clock | Delta | Same owners? | Recall returned Act 1 first? |
+| Run | Date | Timeline | Act 1 wall clock | Act 2 wall clock | Delta | Same owners? | Act 1's rank |
 |---|---|---|---|---|---|---|---|
 | R4 (booth Act 2) | — | timeline.json / phone |  |  |  |  |  |
 

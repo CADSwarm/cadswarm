@@ -78,7 +78,7 @@ The three defects are the ones review 1 actually filed. Write them as filed, not
 
 ## Act 2: the reuse delta
 
-| Run | Date | Timeline | Act 1 wall clock | Act 2 wall clock | Delta | Same owners? | Recall returned Act 1 first? |
+| Run | Date | Timeline | Act 1 wall clock | Act 2 wall clock | Delta | Same owners? | Act 1's rank |
 |---|---|---|---|---|---|---|---|
 | R4 (booth Act 2) | — | timeline.json / phone |  |  |  |  |  |
 

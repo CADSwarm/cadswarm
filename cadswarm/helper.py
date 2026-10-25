@@ -214,20 +214,28 @@ def _plural(n, word):
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
-def _log_recall(p, query, out):
+def _log_recall(p, query, out, actor=None):
     """The host's own recall creates no op, so the activity feed is the only place the team sees it.
 
-    The row leads with counts, then up to two design requests: the words a presenter can point at."""
+    One `recall` row per returned design: its rank, its request, its own problem count and the
+    lessons that came with the same call. A sum across designs would let three unrelated hits look
+    like Act 1's three problems. A recall made by a helper (it carries `_actor`) is that helper's
+    business, not the host's planning, so it leaves no row."""
+    if actor:
+        return
     hub = p.host_space
     if hub is None:
         return
     designs = [d for d in out.get("designs") or [] if isinstance(d, dict)]
-    problems = sum(len(d.get("problems") or []) for d in designs)
-    summary = (f'recall "{str(query)[:60]}" · {_plural(len(designs), "design")} · '
-               f'{_plural(problems, "problem")} · {_plural(len(out.get("lessons") or []), "lesson")}')
-    for request in [str(d.get("request") or "").strip() for d in designs if d.get("request")][:2]:
-        summary += f' · "{request[:60]}"'
-    hub.log_activity("recall", summary, [])
+    lessons = len(out.get("lessons") or [])
+    for rank, design in enumerate(designs, 1):
+        request = str(design.get("request") or "").strip().replace('"', "'")
+        if not request:
+            continue
+        problems = len(design.get("problems") or [])
+        summary = (f'recall "{str(query)[:60]}" · #{rank} "{request[:80]}" · '
+                   f'{_plural(problems, "problem")} · {_plural(lessons, "lesson")}')
+        hub.log_activity("recall", summary, [])
 
 
 def recall_designs(p, a):
@@ -243,7 +251,7 @@ def recall_designs(p, a):
            "simulations": [{k: s.get(k) for k in ("title", "target", "verdict", "headline", "problems", "material")}
                            for s in sims]}
     try:
-        _log_recall(p, query, out)
+        _log_recall(p, query, out, a.get("_actor"))
     except Exception:  # activity is evidence; it is never a reason for memory to fail
         pass
     return out
