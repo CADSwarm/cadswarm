@@ -78,7 +78,7 @@ def test_a_helper_with_its_own_work_or_held_parts_isnt_offered_spare_work():
     assert "s:t_next" not in dict(runner.pending_work(hub(t), set()))
 
 
-def make_runner(tmp_path, client="claude"):
+def make_runner(tmp_path, client="claude", t=None):
     folder = tmp_path / "helper"
     (folder / ".cadswarm").mkdir(parents=True)
     (folder / ".cadswarm" / "config.json").write_text(json.dumps(
@@ -95,8 +95,58 @@ def make_runner(tmp_path, client="claude"):
 
     r = runner.Runner(str(folder), "Phone stand", clock=lambda: clock[0],
                       spawn=lambda argv, stdin: spawned.append((argv, stdin)) or Child())
-    r.hub = hub()
+    r.hub = hub(t)
     return r, clock, spawned
+
+
+def test_an_idle_poll_is_one_cheap_read_and_news_gets_a_full_look(tmp_path, monkeypatch):
+    """A poll used to be ~10 round trips, ~3 s, so a message could sit for 6 s before it was even seen."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    calm = tables()
+    calm["v_message"] = []
+    calm["v_task"] = []
+    calm["v_receipt"] = []
+    calm["v_event"] = [{"seq": 5, "kind": "op", "actor": 2, "at_ms": 1, "data_json": "{}"}]
+    r, clock, spawned = make_runner(tmp_path, t=calm)
+    r.state["started"] = True  # don't wake it just to say hello
+    r.save_state()
+    queries = []
+    r.hub.space.on_sql = queries.append
+
+    r.step()  # the first poll looks properly and sets the event cursor
+    assert spawned == [] and r.seq == 5
+    queries.clear()
+
+    clock[0] += 1
+    r.step()  # nothing happened: only the event cursor is read
+    assert len(queries) == 1 and "v_event" in queries[0], queries
+    assert spawned == []
+
+    # A message arrives (which the module records as an event): the full look wakes the helper.
+    r.hub.space.tables["v_event"].append({"seq": 6, "kind": "message", "actor": 3, "at_ms": 2, "data_json": "{}"})
+    r.hub.space.tables["v_message"].append(msg("m_new", 3, "member:1", "steer", "now the base"))
+    clock[0] += 1
+    r.step()
+    assert len(spawned) == 1 and "now the base" in spawned[0][1]
+    assert r.seq == 6
+
+
+def test_a_full_look_also_happens_now_and_then_in_case_work_raised_no_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    calm = tables()
+    calm["v_task"] = []
+    calm["v_message"] = []
+    calm["v_receipt"] = []
+    r, clock, spawned = make_runner(tmp_path, t=calm)
+    r.state["started"] = True
+    r.save_state()
+    queries = []
+    r.hub.space.on_sql = queries.append
+    r.step()
+    queries.clear()
+    clock[0] += runner.FULL_CHECK_SECONDS
+    r.step()
+    assert len(queries) > 1, "an idle poll every few seconds still reads the tables"
 
 
 def test_a_step_rejoins_heartbeats_and_wakes_the_agent_with_whats_new(tmp_path, monkeypatch):

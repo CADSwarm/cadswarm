@@ -13,6 +13,11 @@ exits; the runner goes back to waiting.
 One runner per folder: it writes .cadswarm/runner.json every few seconds, and a second runner exits while
 that is fresh. Runs are rate limited, so two helpers can't keep waking each other.
 
+Waiting is cheap on purpose: every second it reads one row (the newest team event) and only looks at what
+the news actually is when something happened, or every few seconds anyway. A person's message reaching the
+helper used to take up to ~6 s of polling; it is about a second now. What remains is the agent CLI starting
+(~7 s) and the model's own time, not the team.
+
 Stdlib only: it runs with FreeCAD's Python.
 """
 import json
@@ -27,9 +32,10 @@ if __package__ in (None, ""):  # run as a script: make `cadswarm` importable
 from cadswarm.agent_setup import agent_ready, find_agent_cli  # noqa: E402
 from cadswarm.client import HubRequestError, load_json, save_json, state_dir  # noqa: E402
 from cadswarm.paths import LAUNCHER  # noqa: E402
-from cadswarm.space_hub import SpaceHub  # noqa: E402
+from cadswarm.space_hub import POLL_VIEWS, SpaceHub  # noqa: E402
 
-POLL_SECONDS = 3
+POLL_SECONDS = 1            # one poll is now a single cheap read, so news is noticed within about a second
+FULL_CHECK_SECONDS = 5      # ...and every few seconds look properly for anything that raised no event
 HEARTBEAT_SECONDS = 10
 ALIVE_SECONDS = 30          # runner.json older than this means no runner is looking after the folder
 RUN_TIMEOUT = 20 * 60       # one wake-up may take this long before it is stopped
@@ -240,6 +246,8 @@ class Runner:
         self.runs = [t for t in self.state.get("runs") or [] if clock() - t < 3600]
         self.present = False
         self.last_beat = 0.0
+        self.seq = None  # event cursor: one cheap read tells us whether anything at all happened since
+        self.last_full = 0.0  # when pending_work last looked properly
         self.status = ("starting", "")
         self.last_error = ""  # why the last run failed, shown in FreeCAD until a run succeeds
 
@@ -368,12 +376,25 @@ class Runner:
             return True
         try:
             self.be_present()
-            self.hub.identity["name"] = self.hub.me()["name"]  # a person may have renamed it
             if "primed" not in self.state:
                 self.seen |= finished_keys(self.hub)
                 self.state["primed"] = True
                 self.save_state()
-            work = pending_work(self.hub, self.seen)
+            now = self.clock()
+            # One cheap read tells us whether anything happened at all; only then (and every few seconds
+            # regardless, for work that raises no event) do we work out what it is. Before, every poll was
+            # ~10 round trips: ~3 s of a 3 s poll, so a message could sit unread for 6 s.
+            news = self.hub.latest_seq()
+            if self.seq is not None and news <= self.seq and now - self.last_full < FULL_CHECK_SECONDS:
+                work = []
+            else:
+                with self.hub.refresh(*POLL_VIEWS):
+                    self.hub.identity["name"] = self.hub.me()["name"]  # a person may have renamed it
+                    work = pending_work(self.hub, self.seen)
+                # The cursor is where it was *before* the look, so anything that landed while we looked
+                # still counts as news next time round.
+                self.seq = news
+                self.last_full = now
         except HubRequestError as e:
             if e.code in GONE:
                 self.log(f"this helper is no longer on the team ({e.code}); stopping")
