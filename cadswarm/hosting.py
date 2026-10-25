@@ -237,6 +237,16 @@ def port_open(port, host="127.0.0.1", timeout=0.5):
         return s.connect_ex((host, int(port))) == 0
 
 
+def local_reachable(port=LOCAL_PORT, timeout=0.4):
+    """True when the local database also answers on this computer's network address, so a teammate on the
+    same network can reach the team. A server bound to 127.0.0.1 answers only on loopback, so an invite
+    carrying the network address would point at nothing a teammate can reach.
+
+    Probes the same address the invite carries (`lan_ip`), not every interface: that is the one that has
+    to answer."""
+    return port_open(port, host=lan_ip(), timeout=timeout)
+
+
 # ------------------------------------------------------------------- programs
 
 def platform_key():
@@ -650,6 +660,59 @@ def _wait_port(port, timeout=30, pid=None, data_dir=None):
     raise RuntimeError("The local database server is taking too long to start." + log_tail(data_dir))
 
 
+def _loopback_only_db_pid():
+    """PID of a SpacetimeDB on our port that was told to listen on loopback only (so only this computer
+    can reach it), else None.
+
+    Read from the process's command line, not a network probe: a probe also fails behind a firewall on a
+    correctly-bound server, and we must never restart a server that is already reachable by teammates."""
+    pid = pid_on_port(LOCAL_PORT)
+    if not pid:
+        return None
+    cmd = _command_line(pid).lower()
+    if "0.0.0.0" in cmd:  # told to bind every interface: leave it be
+        return None
+    if "127.0.0.1" in cmd or "localhost" in cmd or "::1" in cmd:
+        return pid
+    if not cmd and not local_reachable(LOCAL_PORT):  # no readable command line: trust a probe
+        return pid
+    return None
+
+
+def _restart_local_db(pid):
+    """Stop a loopback-only local database so the caller can start one bound to every interface. Its
+    databases live on disk, so they come back and everyone reconnects. Only ever a SpacetimeDB process."""
+    if not is_our_process(pid, ("spacetime",)):
+        return False
+    _kill(pid)
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if not port_open(LOCAL_PORT) and not pid_alive(pid):
+            return True
+        time.sleep(0.3)
+    if os.name != "nt" and pid_alive(pid):  # the polite stop was ignored: insist, so the new server can bind
+        try:
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
+        time.sleep(1)
+    return True
+
+
+def ensure_local_reachable(mode, log=None):
+    """A local team's database must be bound to every interface, or teammates on the network can't join.
+    If this computer already has one bound to loopback only (from before that fix, or a manual
+    `spacetime start`), restart it now. Returns True when it was restarted."""
+    if mode != "local" or not port_open(LOCAL_PORT):
+        return False
+    pid = _loopback_only_db_pid()
+    if not pid:
+        return False
+    if log:
+        log("Making the team's database reachable from your network")
+    return _restart_local_db(pid)
+
+
 def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="claude", on_log=None):
     """Publish the team's database and start its host in the background.
 
@@ -674,18 +737,20 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
     info = {"host_pid": None, "spacetime_pid": None, "db": db, "mode": mode,
             "uri": LOCAL_URI if mode == "local" else MAINCLOUD_URI}
     try:
-        if mode == "local" and not port_open(LOCAL_PORT):
-            st = spacetime_bin()
-            if not st:
-                raise RuntimeError("CADSwarm needs the SpacetimeDB program for a local team, and this computer "
-                                   "doesn't have it yet. Install it from https://spacetimedb.com/install, then "
-                                   "click “Try again”.")
-            log(f"Starting the local database on port {LOCAL_PORT}")
-            # Bind every interface, not just loopback: a teammate on the same network reaches the team at
-            # this computer's network address. The invite carries that address (see `invite_uri`).
-            info["spacetime_pid"] = _spawn([st, "start", "--listen-addr", f"0.0.0.0:{LOCAL_PORT}"],
-                                           lay, "spacetime.log", env)
-            _wait_port(LOCAL_PORT, 30, info["spacetime_pid"], data_dir)
+        if mode == "local":
+            ensure_local_reachable(mode, log)  # replace a loopback-only database before using the port
+            if not port_open(LOCAL_PORT):
+                st = spacetime_bin()
+                if not st:
+                    raise RuntimeError("CADSwarm needs the SpacetimeDB program for a local team, and this computer "
+                                       "doesn't have it yet. Install it from https://spacetimedb.com/install, then "
+                                       "click “Try again”.")
+                log(f"Starting the local database on port {LOCAL_PORT}")
+                # Bind every interface, not just loopback: a teammate on the same network reaches the team at
+                # this computer's network address. The invite carries that address (see `invite_uri`).
+                info["spacetime_pid"] = _spawn([st, "start", "--listen-addr", f"0.0.0.0:{LOCAL_PORT}"],
+                                               lay, "spacetime.log", env)
+                _wait_port(LOCAL_PORT, 30, info["spacetime_pid"], data_dir)
         log(f"Creating your team's database “{db}” ({mode})")
         publish(db, mode, data_dir)
         if not host_config(data_dir):
