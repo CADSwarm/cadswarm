@@ -55,6 +55,11 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "One code works once" in r["remote"]["note"], r["remote"]
     # The banner's Invite button copies the code a teammate pastes into FreeCAD (it does not open the QR).
     assert r["invite_button"] == {"copied_code": True, "code_in_dialog": True, "stayed_on_team_tab": True}, r["invite_button"]
+    sim = r["run_simulation"]  # Tools > Run a simulation: the form becomes a run_fea request
+    assert sim["parts"] >= 1 and sim["fixed"] == ["zmin", "cyl r=2"] and sim["newtons"] == 80.0, sim
+    assert sim["material"] == "pla" and sim["modal_hides_load"], sim
+    # A failed report: Ask a helper to fix this sends the helper a command that reads it with fea_report.
+    assert r["fix_request"] == {"to": "ann-claude", "kind": "command", "reads_report": True}, r["fix_request"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).

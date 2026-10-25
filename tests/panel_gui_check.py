@@ -298,10 +298,38 @@ QtGui.QMessageBox.information = info
 copied = QtGui.QApplication.clipboard().text()
 invite_button = {"copied_code": copied.startswith("cadswarm-2:"), "code_in_dialog": bool(copied) and copied in "".join(shown),
                  "stayed_on_team_tab": p.tabs.currentWidget() is p.team_page}
+# Run a simulation: a person fills the form and gets run_fea's request, no helper in the loop.
+sim = panel.fea_ui.RunSimulationDialog(s)
+sim.fixed.setText("zmin, cyl r=2")
+sim.newtons.setText("80")
+body = sim.request()
+sim.analysis.setCurrentIndex(sim.analysis.findData("modal"))
+run_simulation = {"parts": sim.part.count(), "target": body["target"], "fixed": body["fixed"],
+                  "newtons": body["loads"][0]["newtons"], "material": body["material"],
+                  "modal_hides_load": not sim.newtons.isEnabled()}
+sim.close()
+# A report that needs changes offers to send it to a helper, who reads it with fea_report and fixes the part.
+report = {"id": "fea_1a2b3c4d", "title": "Linear static of Base", "analysis_name": "Linear static", "by": "carol",
+          "verdict": "fail", "headline": "safety factor 0.8", "inputs": {"placeholders": []}, "files": {},
+          "model": {"target": ["Base"]}}
+real_post, sent_fix = s.client.post, []
+s.client.post = lambda path, body=None: {"text": json.dumps(report) if body["path"].endswith(".json") else "<p>x</p>"}
+dlg = panel.FeaReportDialog("fea/x")
+s.client.post = real_post
+pick, act = QtGui.QInputDialog.getItem, s.act_async
+QtGui.QInputDialog.getItem = staticmethod(lambda parent, title, label, items, *a, **k: (items[0], True))
+s.act_async = lambda method, path, body=None, **k: sent_fix.append((path, body))
+dlg.fix_button.click()
+QtGui.QInputDialog.getItem, s.act_async = pick, act
+dlg.close()
+fix_request = {"to": sent_fix[0][1]["to"], "kind": sent_fix[0][1]["kind"],
+               "reads_report": "fea_report('fea_1a2b3c4d')" in sent_fix[0][1]["body"]} if sent_fix else None
 result = {
     "layout": checks,
     "remote": remote,
     "invite_button": invite_button,
+    "run_simulation": run_simulation,
+    "fix_request": fix_request,
     "follows_window": {"at_1600": wide_w, "at_1000": narrow_w},
     "chat_has_reply": "lid still clears the posts" in chat and "✓ done" in chat,
     "offered_all": offered_all,
