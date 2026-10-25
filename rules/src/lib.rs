@@ -709,14 +709,17 @@ mod tests {
         // `init-reviewer` mints an HTTP-only member that only connects during a round. Between rounds it
         // is offline for far longer than ORPHAN_AFTER_MS, and the Factory card and Probe both need it.
         let now = 1_000_000;
-        let reviewer = |id| Presence {
-            id, kind: "reviewer".into(), status: "stale".into(), last_seen_ms: 0,
-            stale_since_ms: now - ORPHAN_AFTER_MS - 1, online: false,
+        let reviewer = |id, status: &str, last_seen_ms, stale_since_ms| Presence {
+            id, kind: "reviewer".into(), status: status.into(), last_seen_ms, stale_since_ms, online: false,
         };
-        let plan = plan_sweep(now, &[reviewer(9)]);
+        // Quiet past STALE_AFTER_MS: it does go stale, exactly like any HTTP-only helper.
+        let plan = plan_sweep(now, &[reviewer(9, "active", now - STALE_AFTER_MS - 1, 0)]);
+        assert_eq!(plan.to_stale, vec![9]);
         assert!(plan.to_orphan.is_empty());
-        // A stale reviewer is still a fact the panel shows; it is never revived by the sweep either.
+        // Quiet for longer than ORPHAN_AFTER_MS: still stale, never retired.
+        let plan = plan_sweep(now, &[reviewer(9, "stale", 0, now - ORPHAN_AFTER_MS - 1)]);
         assert!(plan.to_stale.is_empty());
+        assert!(plan.to_orphan.is_empty());
     }
 
     #[test]

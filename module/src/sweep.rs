@@ -5,7 +5,8 @@ use cadswarm_rules as rules;
 use serde_json::json;
 use spacetimedb::{reducer, ReducerContext, Table};
 
-/// Mark quiet members stale, free the work of long-gone ones, expire invites, prune activity
+/// Mark quiet members stale, free the work of long-gone ones (the reviewer is never freed: it is
+/// HTTP-only and the Factory card and Probe need it between rounds), expire invites, prune activity
 /// (core.py Hub.sweep). Runs every 5 s from `sweep_schedule`.
 #[reducer]
 pub fn sweep(ctx: &ReducerContext, _row: SweepSchedule) -> Result<(), String> {
