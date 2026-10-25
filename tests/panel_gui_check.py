@@ -287,9 +287,21 @@ remote = {
 }
 p.grab().save(str(out / "panel-340x640-remote.png"))
 p.show_tab(p.team_page)
+# The banner's Invite button hands a teammate the code they paste into FreeCAD, not the phone's QR.
+shown = []
+info = QtGui.QMessageBox.information
+QtGui.QMessageBox.information = staticmethod(lambda parent, title, text, *a, **k: shown.append(text))
+QtGui.QApplication.clipboard().clear()
+p.invite_button.click()
+QtGui.QApplication.processEvents()
+QtGui.QMessageBox.information = info
+copied = QtGui.QApplication.clipboard().text()
+invite_button = {"copied_code": copied.startswith("cadswarm-2:"), "code_in_dialog": bool(copied) and copied in "".join(shown),
+                 "stayed_on_team_tab": p.tabs.currentWidget() is p.team_page}
 result = {
     "layout": checks,
     "remote": remote,
+    "invite_button": invite_button,
     "follows_window": {"at_1600": wide_w, "at_1000": narrow_w},
     "chat_has_reply": "lid still clears the posts" in chat and "✓ done" in chat,
     "offered_all": offered_all,

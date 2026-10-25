@@ -53,6 +53,8 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert r["remote"]["no_horizontal_overflow"], r["remote"]
     assert r["remote"]["qr_pixmap"] == (r["remote"]["qr_modules"] > 0), r["remote"]
     assert "One code works once" in r["remote"]["note"], r["remote"]
+    # The banner's Invite button copies the code a teammate pastes into FreeCAD (it does not open the QR).
+    assert r["invite_button"] == {"copied_code": True, "code_in_dialog": True, "stayed_on_team_tab": True}, r["invite_button"]
     assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).

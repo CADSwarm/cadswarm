@@ -646,8 +646,9 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner_text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         bl.addWidget(self.banner_text)
         brow = QtGui.QHBoxLayout()
-        self.invite_button = action_button("Invite a teammate", "Show the code and QR a teammate's phone scans",
-                                           self.show_remote)
+        # A teammate joins from their own FreeCAD with the code; a phone's QR lives in the Remote tab.
+        self.invite_button = action_button("Invite a teammate", "Copy a single-use invite code for a teammate",
+                                           invite_teammates)
         self.banner_button = action_button("", "", self.banner_action)
         brow.addWidget(self.invite_button)
         brow.addWidget(self.banner_button)
