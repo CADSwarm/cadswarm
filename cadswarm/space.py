@@ -21,8 +21,9 @@ POOL_SIZE = 6  # one per reader in a parallel refresh (space_hub.READ_THREADS)
 
 
 class SpaceError(Exception):
-    def __init__(self, status, text):
+    def __init__(self, status, text, uri=""):
         self.status = status
+        self.uri = uri  # where we tried to reach (set for connection failures): the guide names it in words
         text = (text or "").strip()
         code, sep, message = text.partition(": ")
         if sep and code.replace("_", "").isalnum() and code.islower():
@@ -135,7 +136,7 @@ class SpaceClient:
             except (http.client.HTTPException, OSError) as e:
                 conn.close()
                 if attempt:
-                    raise SpaceError(0, f"Cannot reach SpacetimeDB at {self.uri}{path}: {e}")
+                    raise SpaceError(0, f"Cannot reach SpacetimeDB at {self.uri}{path}: {e}", self.uri)
                 continue
             try:
                 resp = conn.getresponse()
@@ -143,7 +144,7 @@ class SpaceClient:
             except (http.client.HTTPException, OSError) as e:
                 conn.close()
                 if attempt or not repeatable:
-                    raise SpaceError(0, f"Cannot reach SpacetimeDB at {self.uri}{path}: {e}")
+                    raise SpaceError(0, f"Cannot reach SpacetimeDB at {self.uri}{path}: {e}", self.uri)
                 continue
             if resp.will_close:
                 conn.close()
@@ -167,7 +168,7 @@ class SpaceClient:
             raise SpaceError(e.code, e.read().decode("utf-8", "replace"))
         except (urllib.error.URLError, OSError) as e:
             reason = getattr(e, "reason", e)
-            raise SpaceError(0, f"Cannot reach SpacetimeDB at {url}: {reason}")
+            raise SpaceError(0, f"Cannot reach SpacetimeDB at {url}: {reason}", url)
 
     @staticmethod
     def new_identity(uri, timeout=30):

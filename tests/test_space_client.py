@@ -186,3 +186,5 @@ def test_an_unreachable_server_is_a_space_error():
     with pytest.raises(SpaceError) as e:
         SpaceClient("http://127.0.0.1:9", "db", "tok", timeout=2).call("heartbeat", 1, "")
     assert e.value.status == 0 and e.value.code == "unreachable"
+    # The address we tried is kept, so the guide can say which database it couldn't reach.
+    assert e.value.uri == "http://127.0.0.1:9"

@@ -67,10 +67,10 @@ def default_name():
 
 def space_error(e):
     """A SpacetimeDB refusal or connection failure, in words a hobbyist can act on."""
+    where = f" at {e.uri}" if getattr(e, "uri", "") else ""  # which database we couldn't reach, so it is clear
     return {
-        "unreachable": "Couldn't reach your team's database. Check your internet connection and click "
-                       "“Try again”. If the database runs on this computer, restart it from Get started ▸ "
-                       "Reconnect.",
+        "unreachable": f"Couldn't reach your team's database{where}. Check your internet connection and try "
+                       "again. If the database runs on this computer, restart it from Get started ▸ Reconnect.",
         "bad_invite": "That invite code has already been used or has expired. Ask your teammate for a new one.",
         "name_in_use": "That name is already connected to this team. Pick a different one, or if it was your "
                        "own crashed session, wait a minute and try again.",
