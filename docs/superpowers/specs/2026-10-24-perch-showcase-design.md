@@ -1,23 +1,22 @@
-# The Perch: a commercial showcase build
+# The Perch: a showcase of impact and technical rigor
 
 Date: 2026-10-24
-Status: approved (design dialogue, sections 1–3); commercial case and sponsor weighting added at
-review, both at the user's request
+Status: approved (design dialogue, sections 1–3); commercial framing removed, impact case and
+judging map added at review
 Branch: `feat/perch-showcase` (worktree, based on `origin/main` `6f21059`)
 
 ## Goal
 
-Build one physical product family that does two jobs with equal weight:
+Build one physical project that makes two things undeniable in a live demo:
 
-1. **Commercial.** Prove CadSwarm can sell a real part: a small hardware team describes a bench
-   problem in a sentence and gets a correct, strong, light, print-ready accessory — then gets the
-   next SKU for the same product for a fraction of the first one's cost, because the fits, style and
-   review lessons were remembered. The build is evidence that the business below is deliverable,
-   not hypothetical.
-2. **Sponsor.** Make every partner in the stack load-bearing for that paid promise: SpacetimeDB is
-   the shared team state, Anthropic the designers, Creao the cheap always-on helper, Factory.ai the
-   QA gate that stops wasted prints, Elastic the memory that makes SKU #2 cheap. No card is
-   decoration; each underwrites a specific line in the pitch.
+1. **Impact.** A team that can wire a board but cannot use CAD gets a correct, strong, light,
+   print-ready part from a sentence — and gets the second part for the same product far faster,
+   because the board's measurements, the team's style and the reviewer's lessons were remembered.
+   The object is not a toy: it holds a real dev board at eye level with both ports usable.
+2. **Technical rigor.** Every claim is backed by a mechanism and a number: fits computed from shared
+   parameters, a cantilever simulated before it is lightened, a lattice verified against a stiffness
+   target, a reviewer that cannot write, a dead agent taken over mid-build, and two agents kept from
+   overwriting each other by rules in the database rather than in a prompt.
 
 The project is **The Perch**: a clip-on articulated arm that holds an ESP32-S3-DevKitC-1 at eye
 level with both hands free, plus a second **Podium** display head for the same board and the same
@@ -25,143 +24,130 @@ arm. It is performed as two briefs against one live model, with Claude Code, Ope
 helpers, a Droid reviewer, SpacetimeDB as the team's state, and Elastic as board knowledge, design
 memory and lessons.
 
-The deliverable is the printable object family plus a runbook that can be performed live, pitched
-in ten minutes, or recorded. The runbook carries both halves: the live proof and the business case
-built on it.
+The deliverable is the printable object family plus a runbook that can be performed live, pitched in
+two minutes at a judging table, or recorded. The sponsor stack is not a logo wall: each partner does
+a job the build would fail without, and the five-card window is the live receipt.
 
-## Two theses, equal weight
+## What the room should be able to say
 
-The demo succeeds only if the room can say both of these, and can point at the artifact behind each.
+Cal Hacks judges on impact, quality, technical complexity and creativity, and asks for a two-minute
+pitch plus a live demo. The demo is built backwards from those four words.
 
-### A. Commercial thesis
+1. **This solves a problem I have seen.** A board on a desk slides, faces the wrong way and eats a
+   hand while you probe it. The Perch clamps on, holds it at eye level, and leaves both USB-C ports
+   reachable.
+2. **The part is engineered, not drawn.** A simulated cantilever with a real deflection and safety
+   factor, a lattice that hits 90% stiffness with 30–45% less mass, a 608 press fit that tightens
+   when one shared tolerance changes, a lid that screws into heat-set inserts, and every part checked
+   against a 180 mm bed.
+3. **The team cannot wreck it.** Locks and fences stop two agents editing one part; a dead helper is
+   taken over instead of blocking the build; a person can hand a half-finished part to an agent; the
+   reviewer can only inspect and its findings become tasks.
+4. **It gets better at the next job.** The style the team teaches by correcting build one shows up in
+   build two's prompts; build one and its review lessons are recalled for a differently worded
+   request; the second head is a new design on the same mount, not a parameter tweak.
 
-1. **The pain is real and it is priced badly today.** A one-off bracket or enclosure for a dev board
-   costs a freelancer 3–10 days and $600–2,000, a marketplace gig two rounds of re-explaining with no
-   memory, or the team's own weekend in Fusion. Most teams choose a binder clip.
-2. **We sell the missing third option.** A brief in, a print-ready part out in about an hour, with
-   the fits, the wall rule and the board's own measurements already correct.
-3. **The second SKU is where the margin is.** The Podium head reuses the mount, the fits, the style
-   and the Act 1 lessons; its design cost is a fraction of the Cradle's. That is the product, not a
-   demo trick: every board in the catalog is a family, not a one-off.
-4. **The output is trustworthy enough to print.** Two review rounds with real findings, a simulated
-   cantilever, a verified lattice, a clash check and a bed check are what let us charge for
-   "print-ready" instead of "looks fine in the viewport".
+### Judging map
 
-### B. Sponsor thesis
+| Criterion the guide names | What this demo puts in front of the judge |
+|---|---|
+| **Impact** | a named community with a lived problem (hardware teams and student makerspaces that can wire but not CAD) and a part they can use on Monday |
+| **Quality** | two review rounds with real findings, clash and min-wall checks, a closed solid, a real bed, exportable STEP/STL |
+| **Technical complexity** | rules in the database (fences, locks, stale sweep, takeover), a transactional FreeCAD worker, expression-driven fits, FEA, lattice verification, memory recall |
+| **Creativity** | two agents and two people building one physical object live; a phone-submitted second brief that reuses the first; a referee agent that cannot touch the model |
+| **Live demo** (required) | every act runs live in a fresh document; no slide can show this |
+| **Anthropic track: named community, real problem, it works, thoughtful use and known failure modes** | the community in one sentence, the object in the room, one thing done well, and the failure-mode table below |
+| **Factory track: Droid SDK, a trigger you designed, safety, visible work** | the host triggers the reviewer when parts finish; an allowlist plus a server-side write refusal; the activity feed shows plans, steps and the verdict |
 
-| Sponsor | What it does in this build | The paid promise it underwrites |
+Best Hardware is out (no printer). The two general prizes this build is shaped for are **Most
+Technically Complex** and **Best People-First Hack**; the sponsor tracks it fits are Anthropic and
+Factory, and for Creao the claim is narrower than a track: a Creao helper does real work in the
+build, and the card shows it.
+
+### Sponsor stack, equally load-bearing
+
+| Sponsor | Its job in this build | What the live card proves |
 |---|---|---|
-| **SpacetimeDB** | every member, lock, op, task and revision is one live database the panel and web both read | a team and its agents edit one model at once without merge hell |
-| **Anthropic** | planner, lead and worker agents plan, build and hand off | a part in an hour instead of a week of CAD |
-| **Creao** | a cheap, always-on helper takes the small parts, one JSON tool call per turn | low-cost SKU variants; capacity that scales without headcount |
-| **Factory.ai** | Droid reviews each round and files findings as tasks | fewer wasted prints — the quality claim we charge for |
-| **Elastic** | board knowledge, design memory, FEA reports, distilled lessons | SKU #2 is cheap because the team remembers; that memory is the moat |
+| **SpacetimeDB** | every member, lock, op, task and revision in one database | the shared state is real, not a slide |
+| **Anthropic** | planner, lead and worker agents plan, build and hand off | the design work is done by Claude agents, visible in their traces |
+| **Creao** | a cheap always-on helper takes the small parts, one tool call per turn | a second vendor's agent speaks the same protocol |
+| **Factory.ai** | Droid reviews each round and files findings as tasks | a referee that cannot write, and knows when to ask |
+| **Elastic** | board knowledge, design memory, FEA reports, distilled lessons | the second job starts from what the first learned |
 
-The sponsor window is the live receipt for that table. It is not a logo wall: a card going stale when
-Creao dies, or a round-2 approval landing on the Factory card, is the same event the customer is
-paying for.
+## Who it is for, and why it matters
 
-## The commercial case
+This is a usefulness demo, not a business pitch: no pricing, no market sizing, no customer claim.
 
-### Customer
+### The community
 
-Small hardware teams (2–10 people) shipping an accessory around a dev board — a holder, a case, a
-bracket, a display stand; makerspaces and teaching labs that need the same part in quantity; and
-print shops that receive "can you make me one of these" CAD requests they cannot answer.
+**Hardware teams and student makerspaces that can wire a board but cannot use CAD.** They buy the
+dev board, write the firmware, and then hit the case, the mount, the bracket — the part that has no
+tutorial. A hackathon team is the sharpest version of this: 36 hours, no CAD seat, and a physical
+demo that needs a housing.
 
-The first customer is the team that already bought the board and already has a printer: they are one
-part away from a product, and the part is exactly the thing they cannot design.
+### The problem, lived
 
-### What we sell
+The part is small, boring and blocking. It is too small to hire for (a freelancer quotes $600–2,000
+and 3–10 days), too specific for a marketplace (two rounds of re-explaining, and no memory of the
+last part), and too slow to learn for the weekend (10–30 h in Fusion before the first correct fit).
+Most teams tape the board down and hope the demo survives.
 
-| Offer | Buyer | Price (modeled) | What they get |
-|---|---|---|---|
-| **Accessory sprint** | a team with one part to make | $1,500 fixed fee | brief → print-ready STEP/STL in about a day, with FEA, printability and review evidence |
-| **Team subscription** | a team making parts continuously | $299/team/month | the panel, the host, the helpers, and the memory across parts and boards |
-| **Catalog partner** | print farms and board vendors | rev-share per printed part | a family of ready parts per board, already reviewed and print-checked |
+### What changes for them
 
-The sprint is the wedge: it prices against a freelancer, not against software. The subscription is
-the business: it converts the sprint's memory into recurring work. The catalog is the long tail: the
-same design doc, licensed per print.
+| Before | After |
+|---|---|
+| the board slides, faces away, or is held in one hand | clamped at eye level, both ports reachable |
+| the case is a sketch at 3 a.m. | a print-ready STEP/STL with the ports, the lid and the fits resolved |
+| the first print discovers the errors | the reviewer finds the missing port cutout, the short inner height and the thin wall before the printer |
+| the next part is a new project | the next head reuses the mount, the fits and the style |
+| the part is a one-off | the design and its lessons persist for the next team member, or the next board |
 
-The two clocks are different on purpose: the sprint is a working day end to end, because a customer
-conversation, a print service and shipping sit around it; the hour is the part of that day which
-used to take three days. The demo's 40–50 minutes are the honest core of the hour.
+## Impact, measured
 
-### Who pays, and what for
+Every number below is recorded in `demo/perch/rehearsal.md` and quoted in the pitch; none is a
+marketing estimate.
 
-They pay for **time and for not wasting prints**. A wasted print is a day and a spool; a missed
-press fit is a reprint; a wrong port cutout is a refund. Our invoice is defensible only because the
-review, the simulation and the bed check happened before the printer did — which is exactly what the
-runbook shows on screen.
-
-### Why us, against the alternatives
-
-| Alternative | What it costs | Where it breaks | Our difference |
-|---|---|---|---|
-| CAD freelancer | $600–2,000, 3–10 days | no memory: every part is a new briefing, and the board's measurements are re-guessed | board params, fits and style persist across parts |
-| Marketplace gig | $50–300, 1–2 weeks of messages | no review, no printability evidence, usually a mesh you cannot edit | parametric model, review rounds, FEA and bed check |
-| Do it yourself | 10–30 h of learning | the team's own time, and the fit errors are discovered after printing | brief in, part out, with the checks already run |
-| Do nothing | free | tape, a binder clip, a board that slides | a real part for less than a day of engineering |
-
-The comparison is the pitch's second slide: it is not "AI vs CAD", it is "the only option sized for a
-two-person team with one part to make".
-
-### Unit economics (modeled, not booked)
-
-| Line | Act 1 (Cradle) | Act 2 (Podium) |
+| Impact | How it is measured | What a judge sees |
 |---|---|---|
-| Agent time (host + helpers, ~1 h wall clock) | $2–6 | $1–4 |
-| Reviewer pass (Droid + key) | ~$0.25 | ~$0.25 |
-| Human time (steer, correct, approve) | ~15 min, ~$25 loaded | ~8 min, ~$13 |
-| **Landed cost** | **$27–31** | **$14–17** |
-| Price (sprint, first part) | $1,500 | — |
-| Price (subscription, per part amortized) | $100 | $100 |
-| **Gross margin** | ~97% sprint / ~70% subscription | ~85% subscription |
+| Time to a correct part | wall clock from brief submission to exported STL, per act | the runbook's clock and `rehearsal.md` |
+| Defects caught before printing | review findings that are real, and the fixed part | the two review rounds and the diff |
+| Material saved | lattice mass before and after at verified stiffness | the lattice report and both STLs |
+| Reuse | the second head's wall clock and human minutes against the first | the two measured rows, side by side |
+| Access | the whole build is driven from a brief, a phone and corrections — no CAD commands typed by a person | the live demo and the panel's guide |
 
-Two numbers matter more than the table: the marginal cost of the **second head** is roughly half the
-first, and the human time per part falls because the style rules and lessons are already in the
-prompt. That curve — cost down, price flat — is the business.
+The last one is the impact claim that matters most for this community: a person who cannot model can
+still end up with a part an engineer would sign.
 
-Every number above is modeled from the rehearsal, labelled as modeled in the pitch, and never
-presented as revenue. The hackathon does not need a booked customer to show a real business; it
-needs a deliverable a customer could buy tomorrow and a cost structure that survives the sale.
+## What makes it technically hard
 
-### The wedge and the expansion path
+Impressiveness has to survive a judge asking "how?". One line per hard problem, with the mechanism
+and the artifact that proves it.
 
-1. **One board, one family.** ESP32-S3-DevKitC-1 gets a Cradle and a Podium from one arm. The next
-   board is a new parameter seed, not a new product.
-2. **Board vendors and print farms** already own the customer at the moment of purchase. A reviewed
-   part family per board is inventory they can sell without hiring a CAD team.
-3. **Education and makerspaces** buy the same sprint repeatedly, with a new brief each term.
-4. **The catalog compounds.** Every remembered design and every lesson makes the next brief cheaper
-   and more likely to pass review first time, which widens the margin without raising the price.
+| Hard problem | Mechanism | Proof |
+|---|---|---|
+| Two agents must not overwrite one part | object locks and fenced leases enforced in the SpacetimeDB reducers, not in prompts | the refused op in Activity, the lock row, revisions |
+| A plausible shape can still be wrong | the reviewer inspects measured board fit, ports, clashes and printability, then files tasks | review rounds 1 and 2 and the fixed geometry |
+| Fits must move together | `Params` aliases with FreeCAD expressions, applied by auto-constrain | the bearing seat shrinking when `tol_press_fit` changes |
+| A light part must still be strong | linear-static FEA at a stated load, then lattice verification against a stiffness target | the FEA report and the verified lattice |
+| A dead helper must not block a delivery | heartbeats, stale detection, takeover with a new fence | the stale member, the takeover row, the finished lid |
+| A person and an agent must share one part | handoff of locks, tasks and a note, with the agent continuing from recent ops | the handoff row and the agent's reply |
+| The second job must start smarter | board datasheets, finished designs and distilled lessons in Elastic, recalled by meaning | `recall_designs` returning Act 1, and five lesson documents |
+| The model must survive a crash | one worker owns the file; every op commits transactionally with a save | the repo's tests and the host's commit path |
 
-### Why The Perch proves repeatable value
+### Where it could go wrong, and what we do about it
 
-- The same two people run both briefs, and the second one is submitted from a phone.
-- The second head is a **new design**, not a parameter tweak, so reuse is proven on geometry the
-  memory did not literally contain.
-- Design memory and lessons are what make the second part cheap; the sponsor card and the recall
-  result are the receipt.
-- A dead helper is taken over instead of stalling the build, so output is not proportional to
-  headcount — the operating leverage a $299 subscription is sold on.
-- The reviewer is the quality gate behind "print-ready"; its findings become tasks, which is why the
-  second part ships without repeating the first part's mistakes.
+The Anthropic track asks a team to know where their use of the model could fail. Our answers are
+mechanisms, not promises.
 
-### What would falsify the commercial case
-
-- If Act 2 costs as much as Act 1 in agent and human time, the memory claim is decoration.
-- If round 1 findings are trivial, "print-ready" is not worth a premium.
-- If neither head survives a real print, the product is a render.
-- If a stranger cannot read the proof ledger and reach the same conclusion, the pitch is a story.
-
-The rehearsal measures the first three (wall clock, findings, printability) and the ledger answers the
-fourth. We report the measured numbers, not the modeled ones, if they disagree.
-
-The honest hardware boundary stands: this is **print-ready, not printed**. No printer is available
-for the run, so the project does not claim Best Hardware and does not show a photographed part.
-Printability is still checked against a real 180 mm bed and the STLs are exported.
+| Failure mode | What catches it |
+|---|---|
+| an agent invents a board dimension | the measured board library seeds `Params`; the reviewer checks the fit against it |
+| an agent overwrites someone else's part | locks and fences in the database; the op is refused |
+| an agent "fixes" the model while reviewing | the reviewer is inspect-only and the module refuses its writes |
+| a helper dies mid-task | stale detection and takeover; the build continues |
+| a mesh looks fine but cannot be printed | bed, min-wall, closed-solid and clash checks before export |
+| the model is too weak in the hand | FEA with a stated load and a safety factor, before anyone prints |
+| memory returns the wrong design | recall is board-filtered and ranked; the demo shows the result and its problems |
 
 ## The object
 
@@ -172,11 +158,11 @@ Printability is still checked against a real 180 mm bed and the STLs are exporte
 - **Cradle head (Act 1)** — a tray for the ESP32-S3-DevKitC-1 with side rails (the board has no
   mounting holes), two USB-C cutouts, and a vented screw-on lid.
 - **Podium head (Act 2)** — the same board upright behind an OLED window, plus a 60 mm medallion
-  that spins on a 608 bearing. This is the sellable second SKU: the board and the team's award are
-  visible at eye level, on the same arm, for roughly half the design cost of the Cradle.
+  that spins on a 608 bearing. This is the second real design: the board and the team's award are
+  visible at eye level, on the same arm, for a fraction of the first head's design time.
 
-The sellable unit is the **family**, not a part: one arm, a mount, and a head per use. That is why
-the demo builds two heads — it shows the catalog, the margin curve and the memory in one object.
+The unit is the **family**, not a part: one arm, a mount, and a head per use. That is why the demo
+builds two heads — it shows reuse and memory in one object, instead of one lucky part.
 
 ### Parts and owners
 
@@ -227,11 +213,12 @@ Each feature is forced by the object rather than bolted on:
 - The **second head** makes design memory, lessons and style a new design, not a repeat.
 - The **board has no mounting holes**, so the cradle must use rails — a real design decision the
   reviewer can reason about.
-- The **board-specific fit** is what a customer pays for; a generic box is already free on Printables.
-- The **second head** is a second SKU on one mount, so the demo measures the cost of SKU #2 — the
-  number the business is built on.
-- The **180 mm bed and stock hardware** are what a print farm or a two-person shop already owns, so
-  the part is sellable without asking the buyer to buy a machine.
+- The **board-specific fit** is the engineering a generic Printables box cannot do: the ports, the
+  measured length and the no-holes rail solution.
+- The **second head** is a second design on one mount, so the demo measures reuse instead of
+  claiming it.
+- The **180 mm bed and stock hardware** are what a student makerspace already owns, so the part is
+  reproducible without a special machine.
 
 ## Engineering spine: auto-constrain → FEA → Lighten
 
@@ -349,9 +336,10 @@ Style rules:
 2. Lids fasten with M3 heat-set inserts, not snap tabs.
 3. Printed levers and arms get 3 mm outer fillets.
 
-**Commercial read of Act 1.** The part that lands at beat 14 is the sprint deliverable. The clock
-starts at beat 2 and stops at beat 14; that wall clock and the human minutes spent at beats 5, 6, 9,
-11 and 13 are recorded in the rehearsal sheet and become the modeled cost line in the pitch.
+**Impact read of Act 1.** The part that lands at beat 14 is the deliverable. The clock starts at
+beat 2 and stops at beat 14; that wall clock, the human minutes at beats 5, 6, 9, 11 and 13, and the
+three defects caught at beat 10 are recorded in `rehearsal.md` and become the impact numbers in the
+pitch.
 
 ### Act 2 — "The Podium" (from Sam's phone)
 
@@ -371,14 +359,14 @@ Brief, sent from the phone:
 | 4 | Review 1 | 2–3′ | Medallion clashes with the body by 0.4 mm; `Podium_Lid` is 2.0 mm against the 2.4 mm rule (a `style:` finding) |
 | 5 | Fix + Review 2 | 2–3′ | Both fixed; round 2 approved; Act 1's lessons prevented a repeat port/depth mistake |
 | 6 | Second design memory | 1′ | Export; second design doc; `recall_designs` returns both; lessons grow to 5 |
-| 7 | Close | 1′ | Sponsor window + reports + STL preview; the offer price and the next-board path on screen; "print-ready, designed on a 180 mm bed" |
+| 7 | Close | 1′ | Sponsor window + reports + STL preview; both heads on one arm and the next-board path on screen; "print-ready, designed on a 180 mm bed" |
 
 The recall query is deliberately worded differently from the Act 1 request: "a display head for a
 dev board with an OLED window and a spinning medallion on the same clip-on arm." Act 1 must return
 first (or second only to a closer match), and its three problems must be visible in the result.
 
-**Commercial read of Act 2.** Same clock, same measurement, second SKU. The pitch puts the two rows
-side by side: the delta is the memory dividend, and it is the only number that has to be believable.
+**Impact read of Act 2.** Same clock, same measurement, second design. The pitch puts the two rows
+side by side: the delta is the reuse dividend, and it is the only number that has to be believable.
 If the delta is small, we say so and the claim changes.
 
 ### Sponsor mapping, beat by beat
@@ -398,21 +386,24 @@ If the delta is small, we say so and the claim changes.
 | Workflow | — | — | — | — | 3 lessons |
 | Act 2 | new brief/members | build trace | live again | 2 new findings | recall + 5 lessons |
 
-Read a column for one partner's arc, a row for what the room sees at that moment. The commercial
-pitch uses the same table: each row is a promise a customer would pay for, and the card on screen is
-the evidence it happened.
+Read a column for one partner's arc, a row for what the room sees at that moment. Every row is a
+claim the demo makes, and the card on screen is the evidence that it happened.
 
 ### Three formats
 
+The guide's judging loop sets the shapes: judges walk the tables between 10:30 and 12:30, each team
+gets about two minutes plus a live demo, and projects are judged on impact, quality, technical
+complexity and creativity.
+
 | Format | Length | Act 1 | Act 2 | FEA/Lighten | Elastic |
 |---|---|---|---|---|---|
+| **Judging table** | 2′ + Q&A | restore `act-1-ready`, open the reports | live from the phone if time allows, else the snapshot | pre-run, show reports | recall live, lessons pre-run |
 | **Full live** (booth) | 40–50′ | live | live | live | Workflow run live |
-| **Pitch** (judges) | ~10′ | restore `act-1-ready` + show reports | live from phone | pre-run, show reports | recall live, lessons pre-run |
-| **Video** | 2:45 | timelapse | live or recorded | cutaways | Kibana cutaways |
+| **Video** | 2:00 | timelapse | live or recorded | cutaways | Kibana cutaways |
 
-The pitch is not a feature tour. It runs **problem → offer → live proof → economics → expansion**:
-Act 1 is the proof, Act 2 is the economics, and the sponsor window stays on screen through both.
-The full walkthrough of every tool is the booth format, not the pitch.
+The two-minute pitch runs **problem → who it is for → live proof → what was measured → what's next**,
+with one artifact per claim: the part, an FEA report, a lattice, a review finding, a recall result.
+It is not a feature tour; the full walkthrough of every tool is the booth format.
 
 ### Fallbacks
 
@@ -431,8 +422,8 @@ The full walkthrough of every tool is the booth format, not the pitch.
 Order: **SpacetimeDB → Anthropic → Creao → Factory.ai → Elastic**.
 
 Five cards, two jobs: each shows its partner working live, and each is the receipt for one line in
-the commercial pitch. The window stays on the second screen for the whole run, because it is the
-fastest answer to "is this real?"
+the judging map. The window stays on the second screen for the whole run, because it is the fastest
+answer to "is this real?"
 
 ### Live vs stamped
 
@@ -474,11 +465,9 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 
 - **Not printed.** No printer is available; this is print-ready. Best Hardware is not entered.
 - **No model is shipped.** The helpers are the user's Claude Code, OpenCode and Creao accounts.
-- **No customer and no revenue.** The prices, margins and price points in the commercial case are
-  modeled from the rehearsal and labelled as modeled everywhere they appear. No LOI, invoice or
-  booked sale is claimed.
-- **No speed benchmark against a human CAD team.** We report our own wall clock and human minutes;
-  the freelancer comparison is a market price, not a measured contest.
+- **No business claims.** This is a usefulness demo, not a startup pitch: no pricing, no market
+  sizing, no customer, no revenue. The freelancer and marketplace figures in "the problem, lived"
+  are market prices we did not measure, and they are described as such.
 - **No IP claim.** The object is the team's design; the board belongs to Espressif; the build uses
   stock 608, M8, M4 and M3 hardware.
 - **The reviewer is optional in the product, live in this run.** If Droid is not signed in, the
@@ -493,18 +482,17 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 ## Proof ledger
 
 Every claim in the pitch has an artifact a stranger can open. Three columns of proof, weighted
-equally: the business, the engineering, the stack.
+equally: the impact, the engineering, the stack.
 
-### Commercial proof
+### Impact proof
 
-| Claim | Artifact a judge or buyer can inspect |
+| Claim | Artifact a judge can inspect |
 |---|---|
-| A customer could buy this | `demo/perch/pitch.md` offer table plus the exported STEP/STL a buyer would receive |
+| A person who cannot CAD still gets a part | the live build from a sentence, the panel's guide, and the exported STEP/STL |
 | A part lands in about an hour | `demo/perch/rehearsal.md`: wall clock per act, recorded from the run |
-| Human time per part falls | `demo/perch/rehearsal.md`: measured human minutes at the listed beats, Act 1 vs Act 2 |
-| SKU #2 is cheaper than SKU #1 | the two cost rows, built from measured time and token usage |
-| The margin survives the sale | the modeled cost table, with every input traced to the rehearsal sheet |
-| Print-ready is worth a premium | review rounds, clash check, bed check, FEA and lattice reports |
+| Defects are caught before printing | the three round-1 findings and the fixed geometry |
+| It is lighter without losing stiffness | the lattice report, mass before and after, verified stiffness |
+| The second job is faster | `demo/perch/rehearsal.md`: wall clock and human minutes, Act 1 against Act 2 |
 | It is repeatable, not a one-off | second brief in different words, recalled memory, second design doc |
 
 ### Engineering proof
@@ -528,7 +516,7 @@ equally: the business, the engineering, the stack.
 |---|---|
 | SpacetimeDB is the shared state | the window's members, locks, ops, revisions and activity seq |
 | Anthropic did the design work | Anthropic card trace and the task rows owned by `client=claude` members |
-| Creao is a real, cheap helper | Creao card trace, one-call-per-turn cadence, its stale state and the takeover at beat 8 |
+| Creao is a real helper | Creao card trace, one-call-per-turn cadence, its stale state and the takeover at beat 8 |
 | Factory.ai is the quality gate | Factory card: round 1 findings → tasks → round 2 approved; Droid version in the footer |
 | Elastic is the memory | `cadswarm-designs` docs, `recall_designs` result, `cadswarm-lessons` docs, Kibana counts |
 | No number is invented | stamped footer labelled "checked …"; every live field labelled live |
@@ -541,8 +529,8 @@ equally: the business, the engineering, the stack.
 | `demo/perch/README.md` | runbook: cast, setup, Act 1/2, formats, fallbacks |
 | `demo/perch/prompts.md` | copy-paste briefs, steers, handoff note, phone lines, style rules |
 | `demo/perch/checklist.md` | pre-flight, live cue sheet, reset order |
-| `demo/perch/pitch.md` | 10-minute commercial script: problem → offer → live proof → economics → expansion; the offer table and the one-page buyer handout |
-| `demo/perch/rehearsal.md` | measured wall clock, human minutes and token spend per act — the source every modeled cost is traced to |
+| `demo/perch/pitch.md` | the two-minute judge pitch (problem → who it is for → live proof → what was measured → what's next), the 60-second Q&A answers, and the table card |
+| `demo/perch/rehearsal.md` | measured wall clock, human minutes and defects caught per act — the source of every number the pitch quotes |
 | `web/src/ui/sponsors.ts` | Anthropic + Creao cards, trace titles |
 | `web/src/style.css` | five-card auto-fit grid |
 | `web/test/sponsors.test.ts` | card tests |
@@ -566,9 +554,15 @@ release, no module publish, no host restart is required for the cards.
   - FEA and Lighten reports exist with recorded numbers;
   - the sponsor window updates live on web and within one refresh in FreeCAD;
   - five lesson documents exist before Act 2's recall;
-  - wall clock and human minutes are recorded for both acts, and Act 2's human minutes are lower;
-  - every number in `pitch.md` traces to `rehearsal.md` and is labelled modeled or measured;
-  - a stranger reads the one-pager and can restate who pays, for what, and at what price;
+  - wall clock, human minutes and defects caught are recorded for both acts, and Act 2 is faster;
+  - every impact number in `pitch.md` traces to `rehearsal.md` and is presented as measured;
+  - a stranger reads the table card and can name the community, the problem and the one thing it
+    does well;
+  - the two-minute pitch is delivered inside two minutes with one live artifact per claim;
+  - each Anthropic-track question has an answer in `pitch.md` (community, real problem, it works,
+    where it could fail);
+  - each Factory-track "what scores well" item is visible: a trigger we designed, an allowlist plus
+    the server-side write refusal, and plans, steps and the verdict in the feed;
   - each of the five cards is visibly doing its own job during the beat that claims it.
 
 ## Risks
@@ -583,30 +577,33 @@ release, no module publish, no host restart is required for the cards.
 | The cradle and podium both occupy the model | Move the cradle aside after Act 1; hide the lattice mesh before Act 2 |
 | No printer | Print-ready only; no Best Hardware claim; optional print-service appendix |
 | Sponsor cards change a shipping UI | Read-only from existing state, unit tests, visual check, no schema/binding change |
-| Judges read it as a cool demo, not a business | Open with the offer and the price; the commercial column of the proof ledger; the one-pager answers "who pays" |
-| Modeled numbers look invented | Label them modeled, show `rehearsal.md`, quote only measured numbers for time, never say "revenue" |
-| Sponsor cards look like a logo wall | Each card is on screen at the beat whose promise it underwrites, and each maps to an offer line |
-| "Who is the customer?" at Q&A | The customer paragraph and the sprint offer, answered in one sentence, then the price |
+| Judges cannot tell what is real | Every live number is labelled live, the Elastic/Droid footer stays stamped, and `rehearsal.md` is on the table |
+| Two minutes is not enough | One artifact per claim; the table card carries the rest; the 40–50′ booth run is the long version |
+| A judge arrives mid-build | The table card opens with the four claims and where each artifact is |
+| "How is this different from one agent?" | The refusal, the takeover, the handoff and the second-brief recall are the difference, and each is a beat |
+| The demo machine dies mid-run | `act-1-ready`, the STL and the reports live on disk, so the second machine can show the same artifacts |
+| The impact claim sounds generic | A named community, the before/after table, and only measured numbers |
 
 ## Scope
 
-In: the object family, the two-act runbook, the commercial case and pitch, the five-card sponsor
-window, tests, the three-column proof ledger.
+In: the object family, the two-act runbook, the impact case and judging map, the rigor and
+failure-mode tables, the five-card sponsor window, tests, the three-column proof ledger.
 
 Out: new CAD operations, new module tables/reducers, new host orchestration, new Elastic indices or
-Workflow changes, voice/Cartesia, a printed part, a public mock/demo mode, a real customer contract,
-a paid pilot, a pricing experiment or go-to-market spend.
+Workflow changes, voice/Cartesia, a printed part, a public mock/demo mode, pricing or market
+analysis, and any claim of a customer or revenue.
 
 ## Success criteria
 
-1. The audience can restate the offer without prompting: who pays, for what, and at what price.
-2. The audience can name each sponsor's job in the build and point at the card or artifact that
-   proves it.
+1. A judge can name the community and the problem in one sentence, and say what the part does for
+   them.
+2. A judge can point at the mechanism behind each hard claim: locks, reviewer, auto-constrain, FEA,
+   lattice verification, takeover, handoff, recall.
 3. A full run produces: auto-constrain applied, an FEA report, a verified lattice, two review rounds
    with real findings, a takeover, a handoff, a live phone brief, and a recalled design.
-4. Rehearsal records wall clock and human minutes for both acts; Act 2 is cheaper, and the pitch
-   quotes the measured numbers rather than the modeled ones when they disagree.
+4. Rehearsal records wall clock, human minutes and defects caught for both acts; Act 2 is faster, and
+   the pitch quotes the measured numbers.
 5. Five sponsor cards are live; no card claims a number it cannot source; the Elastic/Droid footer
    stays visibly stamped.
-6. All tests are green, the runbook has been rehearsed end to end, and a stranger can read
-   `pitch.md` plus the one-pager and repeat the business case back.
+6. All tests are green, the two-minute pitch fits its time with a live artifact per claim, and a
+   stranger can read the table card and repeat the impact case back.
