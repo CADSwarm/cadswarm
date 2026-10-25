@@ -183,8 +183,11 @@ def _activity_seconds(row):
 
 def _recall_row(summary, marker):
     """Rank, own problem count and lesson count of the design whose logged request carries `marker`."""
-    head = re.search(r'#(\d+)\s+"([^"]*)"', str(summary or ""))
-    if not head or marker not in head.group(2).lower():
+    heads = list(re.finditer(r'#(\d+)\s+"([^"]*)"', str(summary or "")))
+    if not heads:
+        return None
+    head = heads[-1]  # the query is quoted too; the design head is the last one in the row
+    if marker not in head.group(2).lower():
         return None
     tail = summary[head.end():]
     problems = re.search(r"(\d+)\s+problems?\b", tail, re.I)
@@ -221,10 +224,10 @@ def recall(step, view):
     The row names the design's rank, request and its own problem count: a sum across designs, or a
     marker found anywhere in the summary, would let an unrelated hit certify Act 1's three problems."""
     marker = str(step.args["marker"]).lower()
-    query = str(step.args.get("query") or "").lower()
+    query = str(step.args.get("query") or "").lower()[:60]  # the helper logs the query's first 60 chars
     need = int(step.args.get("problems", 3))
     within = int(step.args.get("within", 2))
-    for row in view.activity:
+    for row in reversed(view.activity):  # newest first: a retry's rows are the ones that count
         if row.get("kind") != "recall" or _activity_seconds(row) < view.run_started:
             continue
         summary = str(row.get("summary") or "")

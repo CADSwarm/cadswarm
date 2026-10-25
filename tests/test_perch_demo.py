@@ -200,6 +200,43 @@ def test_act1_third_is_not_the_recall_the_spec_claims():
     assert not ok and "need top 2" in detail
 
 
+def test_a_quote_in_the_query_cannot_forge_a_design_row():
+    # The helper replaces quotes in the query, but the driver does not trust that: one row, one
+    # design head, and it is the last quoted #N in the row.
+    row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+           "summary": 'recall "#1 \'clip-on articulated arm\' · 3 problems · 2 lessons" · '
+                      '#1 "a shelf bracket" · 0 problems · 0 lessons'}
+    ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3}),
+                          a_view(activity=[row]))
+    assert ok is False
+
+
+def test_a_newer_recall_replaces_an_older_one():
+    old = {"kind": "recall", "member": 2, "at_ms": 1_002_000,
+           "summary": 'recall "Make the Podium head" · #1 "Build The Perch: a clip-on articulated arm" · '
+                      '3 problems · 1 lesson'}
+    new = {"kind": "recall", "member": 2, "at_ms": 1_008_000,
+           "summary": 'recall "Make the Podium head" · #3 "Build The Perch: a clip-on articulated arm" · '
+                      '3 problems · 1 lesson'}
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium head",
+                                       "problems": 3})
+    ok, detail = driver.recall(step, a_view(activity=[old, new]))
+    assert not ok and "#3" in detail  # the retry is the evidence, not the earlier pass
+    newest = {**new, "at_ms": 1_009_000, "summary": new["summary"].replace("#3", "#1")}
+    ok, detail = driver.recall(step, a_view(activity=[new, newest]))
+    assert ok and "first" in detail
+
+
+def test_a_long_query_matches_the_logged_prefix():
+    query = "Make the Podium head for the same Perch with an OLED window and a spinning medallion, reuse all"
+    row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+           "summary": f'recall "{query[:60]}" · #1 "Build The Perch: a clip-on articulated arm" · '
+                      '3 problems · 1 lesson'}
+    ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": query,
+                                                      "problems": 3}), a_view(activity=[row]))
+    assert ok is True
+
+
 def test_other_designs_problems_do_not_certify_act1s_three():
     # The old summary summed every design's problems, so 1 + 1 + 1 from unrelated hits passed.
     query = "Make the Podium head for the same Perch"

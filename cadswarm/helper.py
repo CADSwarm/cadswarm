@@ -201,7 +201,7 @@ def _host_hub(root):
         return None
     try:
         from cadswarm.space_hub import SpaceHub
-        hub = SpaceHub(cfg, identity={"token": cfg["token"]})
+        hub = SpaceHub(cfg, identity={"token": cfg["token"]}, timeout=5)  # the recall must not wait on a dead hub
         me = hub.me()
         hub.identity.update({"participant_id": me.get("id"), "fence": me.get("fence") or 0,
                              "name": me.get("name") or "host"})
@@ -228,12 +228,13 @@ def _log_recall(p, query, out, actor=None):
         return
     designs = [d for d in out.get("designs") or [] if isinstance(d, dict)]
     lessons = len(out.get("lessons") or [])
+    query_text = str(query)[:60].replace('"', "'")
     for rank, design in enumerate(designs, 1):
         request = str(design.get("request") or "").strip().replace('"', "'")
         if not request:
             continue
         problems = len(design.get("problems") or [])
-        summary = (f'recall "{str(query)[:60]}" · #{rank} "{request[:80]}" · '
+        summary = (f'recall "{query_text}" · #{rank} "{request[:80]}" · '
                    f'{_plural(problems, "problem")} · {_plural(lessons, "lesson")}')
         hub.log_activity("recall", summary, [])
 

@@ -113,6 +113,31 @@ def test_a_recall_leaves_one_activity_row_per_design_with_its_own_problems(tmp_p
     assert "3 problems" in second and "1 lesson" in second
 
 
+def test_a_quote_in_the_query_is_not_a_design_head(tmp_path):
+    class Logged:
+        def __init__(self):
+            self.rows = []
+
+        def log_activity(self, kind, summary, targets=None):
+            self.rows.append(summary)
+
+    class OneDesign(FakeElastic):
+        def search(self, index, query, k=5, filters=None):
+            if index == "cadswarm-designs":
+                return [{"score": 0.9, "source": {"request": "A shelf bracket", "problems": []}}]
+            return super().search(index, query, k, filters)
+
+    p = project(tmp_path, OneDesign())
+    space = Logged()
+    p.host_space = space
+    query = '#1 "clip-on articulated arm" · 3 problems · 2 lessons'
+    r = helper.handle(p, {"id": 1, "op": "recall_designs", "args": {"query": query}})
+    assert r["ok"]
+    assert '#1 "clip-on articulated arm"' not in space.rows[0]
+    assert "#1 'clip-on articulated arm'" in space.rows[0]
+    assert '#1 "A shelf bracket"' in space.rows[0]
+
+
 def test_a_helpers_recall_is_not_logged_as_the_hosts(tmp_path):
     class Logged:
         def __init__(self):
@@ -135,8 +160,8 @@ def test_the_host_identity_is_read_from_host_json(tmp_path, monkeypatch):
     seen = {}
 
     class FakeHub:
-        def __init__(self, cfg, identity=None):
-            seen["cfg"], self.identity = cfg, dict(identity or {})
+        def __init__(self, cfg, identity=None, timeout=None):
+            seen["cfg"], seen["timeout"], self.identity = cfg, timeout, dict(identity or {})
 
         def me(self):
             return {"id": 7, "name": "host", "fence": 4}
@@ -146,6 +171,7 @@ def test_the_host_identity_is_read_from_host_json(tmp_path, monkeypatch):
     hub = p.host_space
     assert isinstance(hub, FakeHub)
     assert seen["cfg"] == {"uri": "https://cloud", "db": "team-db", "token": "t_host"}
+    assert seen["timeout"] == 5  # a dead hub must not spend the table's 25 s recall deadline
     assert hub.identity == {"token": "t_host", "participant_id": 7, "fence": 4, "name": "host"}
 
 
@@ -154,7 +180,7 @@ def test_no_host_json_or_no_member_leaves_recall_without_a_row(tmp_path, monkeyp
     (tmp_path / "host.json").write_text(json.dumps({"uri": "u", "db": "d", "token": "t"}), encoding="utf-8")
 
     class NoMember:
-        def __init__(self, cfg, identity=None):
+        def __init__(self, cfg, identity=None, timeout=None):
             self.identity = dict(identity or {})
 
         def me(self):
