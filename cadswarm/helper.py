@@ -60,6 +60,24 @@ class Project:
         self._fea = None
         self._lattice = None
         self._style = None
+        self._host_space = None
+        self._host_space_checked = False
+
+    @property
+    def host_space(self):
+        """The host's own team identity, from `<data_dir>/host.json`, or None.
+
+        A helper started by the host runs inside the host's data folder; a checkout or a test does
+        not. When there is no host.json, recall still answers and simply leaves no activity row."""
+        if not self._host_space_checked:
+            self._host_space_checked = True
+            self._host_space = _host_hub(self.layout["root"])
+        return self._host_space
+
+    @host_space.setter
+    def host_space(self, value):
+        self._host_space = value
+        self._host_space_checked = True
 
     @property
     def style(self):
@@ -172,6 +190,55 @@ def board_spec(p, a):
         raise HelperError("spec_unverified", f"No sourced spec for {board}: {e}")
 
 
+def _host_hub(root):
+    """Connect as the host itself with the token it wrote to `host.json`. Best effort: None on any miss."""
+    try:
+        with open(os.path.join(root, "host.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(cfg, dict) or not (cfg.get("uri") and cfg.get("db") and cfg.get("token")):
+        return None
+    try:
+        from cadswarm.space_hub import SpaceHub
+        hub = SpaceHub(cfg, identity={"token": cfg["token"]}, timeout=5)  # the recall must not wait on a dead hub
+        me = hub.me()
+        hub.identity.update({"participant_id": me.get("id"), "fence": me.get("fence") or 0,
+                             "name": me.get("name") or "host"})
+        return hub
+    except Exception:  # no hub, no member, a stale token: memory still answers the op
+        return None
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def _log_recall(p, query, out, actor=None):
+    """The host's own recall creates no op, so the activity feed is the only place the team sees it.
+
+    One `recall` row per returned design: its rank, its request, its own problem count and the
+    lessons that came with the same call. A sum across designs would let three unrelated hits look
+    like Act 1's three problems. A recall made by a helper (it carries `_actor`) is that helper's
+    business, not the host's planning, so it leaves no row."""
+    if actor:
+        return
+    hub = p.host_space
+    if hub is None:
+        return
+    designs = [d for d in out.get("designs") or [] if isinstance(d, dict)]
+    lessons = len(out.get("lessons") or [])
+    query_text = str(query)[:60].replace('"', "'")
+    for rank, design in enumerate(designs, 1):
+        request = str(design.get("request") or "").strip().replace('"', "'")
+        if not request:
+            continue
+        problems = len(design.get("problems") or [])
+        summary = (f'recall "{query_text}" · #{rank} "{request[:80]}" · '
+                   f'{_plural(problems, "problem")} · {_plural(lessons, "lesson")}')
+        hub.log_activity("recall", summary, [])
+
+
 def recall_designs(p, a):
     query = a.get("query") or _need(a, "board")
     board = a.get("board")
@@ -181,9 +248,14 @@ def recall_designs(p, a):
         sims = [d["source"] for d in p.elastic.search("cadswarm-fea", query, 3)]
     except Exception:  # an older Elastic setup without the index still answers designs and lessons
         sims = []
-    return {"designs": [d["source"] for d in designs], "lessons": [l.get("lesson") for l in lessons],
-            "simulations": [{k: s.get(k) for k in ("title", "target", "verdict", "headline", "problems", "material")}
-                            for s in sims]}
+    out = {"designs": [d["source"] for d in designs], "lessons": [l.get("lesson") for l in lessons],
+           "simulations": [{k: s.get(k) for k in ("title", "target", "verdict", "headline", "problems", "material")}
+                           for s in sims]}
+    try:
+        _log_recall(p, query, out, a.get("_actor"))
+    except Exception:  # activity is evidence; it is never a reason for memory to fail
+        pass
+    return out
 
 
 def index_design(p, a):

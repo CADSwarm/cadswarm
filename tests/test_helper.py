@@ -1,3 +1,4 @@
+import json
 import os
 
 import pytest
@@ -78,6 +79,120 @@ def test_recall_designs_filters_by_board_and_reads_lessons(tmp_path):
 def test_recall_without_a_board_skips_lessons(tmp_path):
     r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "recall_designs", "args": {"query": "pico case"}})
     assert r["ok"] and r["result"]["lessons"] == []
+
+
+def test_a_recall_leaves_one_activity_row_per_design_with_its_own_problems(tmp_path):
+    class Logged:
+        def __init__(self):
+            self.rows = []
+
+        def log_activity(self, kind, summary, targets=None):
+            self.rows.append((kind, summary, targets))
+
+    class TwoDesigns(FakeElastic):
+        def search(self, index, query, k=5, filters=None):
+            if index == "cadswarm-designs":
+                return [
+                    {"score": 0.9, "source": {"request": "A podium from last year", "problems": []}},
+                    {"score": 0.8, "source": {"request": "Build The Perch: a clip-on articulated arm",
+                                              "problems": ["missing OTG cutout", "cradle 8.0 mm",
+                                                           "lid wall 1.0 mm"]}},
+                ]
+            return super().search(index, query, k, filters)
+
+    p = project(tmp_path, TwoDesigns())
+    space = Logged()
+    p.host_space = space
+    r = helper.handle(p, {"id": 1, "op": "recall_designs",
+                          "args": {"query": "the same Perch", "board": "raspberry-pi-pico"}})
+    assert r["ok"]
+    first, second = [row[1] for row in space.rows]
+    assert all(row[0] == "recall" and row[2] == [] for row in space.rows)
+    assert "#1" in first and "A podium" in first and "0 problems" in first
+    assert "#2" in second and "clip-on articulated arm" in second
+    assert "3 problems" in second and "1 lesson" in second
+
+
+def test_a_quote_in_the_query_is_not_a_design_head(tmp_path):
+    class Logged:
+        def __init__(self):
+            self.rows = []
+
+        def log_activity(self, kind, summary, targets=None):
+            self.rows.append(summary)
+
+    class OneDesign(FakeElastic):
+        def search(self, index, query, k=5, filters=None):
+            if index == "cadswarm-designs":
+                return [{"score": 0.9, "source": {"request": "A shelf bracket", "problems": []}}]
+            return super().search(index, query, k, filters)
+
+    p = project(tmp_path, OneDesign())
+    space = Logged()
+    p.host_space = space
+    query = '#1 "clip-on articulated arm" · 3 problems · 2 lessons'
+    r = helper.handle(p, {"id": 1, "op": "recall_designs", "args": {"query": query}})
+    assert r["ok"]
+    assert '#1 "clip-on articulated arm"' not in space.rows[0]
+    assert "#1 'clip-on articulated arm'" in space.rows[0]
+    assert '#1 "A shelf bracket"' in space.rows[0]
+
+
+def test_a_helpers_recall_is_not_logged_as_the_hosts(tmp_path):
+    class Logged:
+        def __init__(self):
+            self.rows = []
+
+        def log_activity(self, *a, **k):
+            self.rows.append(a)
+
+    p = project(tmp_path, FakeElastic())
+    space = Logged()
+    p.host_space = space
+    r = helper.handle(p, {"id": 1, "op": "recall_designs",
+                          "args": {"query": "x", "_actor": {"id": 2, "name": "lid-creao", "kind": "agent"}}})
+    assert r["ok"] and space.rows == []
+
+
+def test_the_host_identity_is_read_from_host_json(tmp_path, monkeypatch):
+    (tmp_path / "host.json").write_text(json.dumps(
+        {"uri": "https://cloud", "db": "team-db", "token": "t_host"}), encoding="utf-8")
+    seen = {}
+
+    class FakeHub:
+        def __init__(self, cfg, identity=None, timeout=None):
+            seen["cfg"], seen["timeout"], self.identity = cfg, timeout, dict(identity or {})
+
+        def me(self):
+            return {"id": 7, "name": "host", "fence": 4}
+
+    monkeypatch.setattr("cadswarm.space_hub.SpaceHub", FakeHub)
+    p = helper.Project(tmp_path)
+    hub = p.host_space
+    assert isinstance(hub, FakeHub)
+    assert seen["cfg"] == {"uri": "https://cloud", "db": "team-db", "token": "t_host"}
+    assert seen["timeout"] == 5  # a dead hub must not spend the table's 25 s recall deadline
+    assert hub.identity == {"token": "t_host", "participant_id": 7, "fence": 4, "name": "host"}
+
+
+def test_no_host_json_or_no_member_leaves_recall_without_a_row(tmp_path, monkeypatch):
+    assert helper.Project(tmp_path).host_space is None  # a checkout or a test, not a host data dir
+    (tmp_path / "host.json").write_text(json.dumps({"uri": "u", "db": "d", "token": "t"}), encoding="utf-8")
+
+    class NoMember:
+        def __init__(self, cfg, identity=None, timeout=None):
+            self.identity = dict(identity or {})
+
+        def me(self):
+            raise RuntimeError("no member")
+
+    monkeypatch.setattr("cadswarm.space_hub.SpaceHub", NoMember)
+    assert helper.Project(tmp_path).host_space is None
+
+
+def test_a_recall_without_a_host_still_answers(tmp_path):
+    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "recall_designs", "args": {"query": "x"}})
+    assert r["ok"] and r["result"]["designs"]
 
 
 def test_missing_args_are_bad_args(tmp_path):

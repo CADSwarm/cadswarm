@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { latestReviewOf, parseFindings, sponsorCards, toolLine } from '../src/ui/sponsors';
+import { cardOrder, latestReviewOf, parseFindings, sponsorCards, toolLine } from '../src/ui/sponsors';
 
 const base = {
   members: [
@@ -90,5 +90,107 @@ describe('sponsors panel', () => {
     expect(space.facts).toContainEqual(['members', '1 active · 2 joined']);
     expect(space.facts).toContainEqual(['work', '1 open tasks · 1/2 ops done']);
     expect(space.facts).toContainEqual(['events', '4 activity rows · seq 4']);
+  });
+});
+
+const team = {
+  ...(base as object),
+  members: [
+    { id: 1, name: 'you', kind: 'human', client: 'phone', role: 'member', status: 'active', statusText: '', fence: 1, online: true },
+    { id: 2, name: 'lead-claude', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: true },
+    { id: 3, name: 'lid-creao', kind: 'agent', client: 'creao', role: 'member', status: 'stale', statusText: '', fence: 2, online: false },
+    { id: 5, name: 'reviewer', kind: 'reviewer', client: 'droid', role: 'member', status: 'left', statusText: '', fence: 1, online: false },
+  ],
+  tasks: [
+    { id: 't_1', status: 'done', owner: 2, createdBy: 1 },
+    { id: 't_2', status: 'open', owner: 2, createdBy: 1 },
+    { id: 't_3', status: 'done', owner: 3, createdBy: 1 },
+    { id: 't_4', status: 'done', owner: 5, createdBy: 5 },
+  ],
+  ops: [
+    { id: 'o_1', by: 2, kind: 'create_primitive', status: 'done' },
+    { id: 'o_2', by: 2, kind: 'set_param', status: 'done' },
+    { id: 'o_3', by: 3, kind: 'boolean', status: 'running' },
+    { id: 'o_4', by: 5, kind: 'interference', status: 'done' },
+  ],
+  activity: [
+    { id: 1, member: 1, kind: 'say', summary: 'submitted a brief', atMs: 1 },
+    { id: 2, member: 2, kind: 'tool_call', summary: 'modelling the podium body', atMs: 2 },
+    { id: 3, member: 3, kind: 'tool_call', summary: 'thickening the lid', atMs: 3 },
+    { id: 4, member: 5, kind: 'tool_call', summary: 'cadswarm___check_interference {}', atMs: 4 },
+  ],
+} as never;
+
+describe('five sponsor cards', () => {
+  it('keeps the fixed order', () => {
+    expect(cardOrder(sponsorCards(team, 'perch'))).toEqual(['spacetime', 'anthropic', 'creao', 'factory', 'elastic']);
+  });
+
+  it('shows the Claude helpers with their work and only their trace', () => {
+    const c = sponsorCards(team, 'perch').find(x => x.id === 'anthropic')!;
+    expect(c.facts).toContainEqual(['agents', 'lead-claude · active · 1/1 active']);
+    expect(c.facts).toContainEqual(['tasks done', '1/2']);
+    expect(c.facts).toContainEqual(['mcp ops', '2 submitted · 2 done']);
+    expect(c.facts).toContainEqual(['surface', 'Claude Code → MCP over stdio → the host runs the op']);
+    expect(c.traceTitle).toBe('recent work');
+    expect(c.trace).toEqual(['modelling the podium body']);
+  });
+
+  it('shows Creao stale with the turn-at-a-time mode', () => {
+    const c = sponsorCards(team, 'perch').find(x => x.id === 'creao')!;
+    expect(c.facts).toContainEqual(['helper', 'lid-creao · stale']);
+    expect(c.facts).toContainEqual(['mode', 'local bridge · one JSON tool call per turn']);
+    expect(c.facts).toContainEqual(['tasks done', '1/1']);
+    expect(c.facts).toContainEqual(['mcp ops', '1 submitted · 0 done']);
+    expect(c.facts).toContainEqual(['thread', 'one Creao conversation per helper folder']);
+    expect(c.trace).toEqual(['thickening the lid']);
+  });
+
+  it('keeps the two team cards when nobody has joined', () => {
+    const alone = { ...(team as object), members: [], tasks: [], ops: [], activity: [] } as never;
+    const cards = sponsorCards(alone, 'perch');
+    expect(cards.map(c => c.id)).toEqual(['spacetime', 'anthropic', 'creao', 'factory', 'elastic']);
+    expect(cards.find(c => c.id === 'anthropic')!.facts[0]).toEqual(['agents', 'not joined']);
+    expect(cards.find(c => c.id === 'creao')!.facts[0]).toEqual(['helper', 'not joined']);
+    expect(cards.find(c => c.id === 'creao')!.trace).toEqual([]);
+  });
+
+  it('tallies a team of Claude helpers in one agents fact', () => {
+    const pair = {
+      ...(team as object),
+      members: [
+        { id: 2, name: 'lead-claude', kind: 'agent', client: 'claude', role: 'member', status: 'active', statusText: '', fence: 1, online: true },
+        { id: 6, name: 'worker-1-claude', kind: 'agent', client: 'claude', role: 'member', status: 'stale', statusText: '', fence: 2, online: false },
+      ],
+    } as never;
+    const agents = sponsorCards(pair, 'perch').find(x => x.id === 'anthropic')!
+      .facts.find(([k]) => k === 'agents')![1];
+    expect(agents).toBe('lead-claude · active, worker-1-claude · stale · 1/2 active');
+    expect(agents).toContain('lead-claude');
+    expect(agents).toContain('worker-1-claude');
+    expect(agents).toContain('· active');
+    expect(agents).toContain('· stale');
+    expect(agents).toContain('1/2 active');
+  });
+
+  it('shows only the newest, truncated seven rows of recent work', () => {
+    const long = 'x'.repeat(200);
+    const busy = {
+      ...(team as object),
+      activity: [
+        ...Array.from({ length: 8 }, (_, i) => ({ id: i + 1, member: 2, kind: 'tool_call', summary: `work ${i + 1}`, atMs: i + 1 })),
+        { id: 9, member: 2, kind: 'tool_call', summary: long, atMs: 9 },
+      ],
+    } as never;
+    const trace = sponsorCards(busy, 'perch').find(x => x.id === 'anthropic')!.trace!;
+    expect(trace).toHaveLength(7);
+    expect(trace[0]).toBe('work 3');
+    expect(trace[6]).toBe(`${'x'.repeat(167)}…`);
+  });
+
+  it('leaves Factory with the plain trace label', () => {
+    const f = sponsorCards(team, 'perch').find(x => x.id === 'factory')!;
+    expect(f.traceTitle).toBeUndefined();
+    expect(f.trace).toContain('cadswarm.check_interference');
   });
 });
