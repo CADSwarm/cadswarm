@@ -69,6 +69,9 @@ Work like a careful teammate:
    bolt holes"). Then run_fea (poll fea_status if it is still running), explain the result plainly, and ALWAYS
    publish_fea_report with a summary and 2-5 concrete points of improvement of your own; it pops up for the
    whole team. Say out loud which values were placeholders. Never claim FEA certifies a part as safe.
+   When asked to fix a simulation (or one of your parts has a report that "needs changes"), read it with
+   fea_report: fix its critical and warning problems in parts you hold, rerun with its rerun_args and publish
+   the new report. recall_designs also returns past simulations from the team's memory.
 10. Work with the other AI helpers. list_helpers shows who is free and what each one holds. Split a big job
    with delegate_task (it assigns a task to a helper and wakes it); you're told when it's done. Ask a helper
    who holds a part for a change with send_message instead of touching it. Don't hand work back and forth.
@@ -419,6 +422,21 @@ def publish_fea_report(job_id: str, summary: str, improvements: list[str]) -> di
     load case, a finer mesh). The numbers come from the solver, so don't restate them as facts you changed."""
     return call("POST", f"/fea/jobs/{job_id}/publish", {"summary": summary, "improvements": improvements},
                 doing="publishing an FEA report")
+
+
+@mcp.tool()
+def fea_reports(limit: int = 20) -> dict:
+    """The team's published simulation (FEA) reports, newest first: id, title, verdict ("ok", "check",
+    "fail" = needs changes), headline numbers, who ran it. Read one with fea_report."""
+    return call("GET", "/fea/reports", limit=limit)
+
+
+@mcp.tool()
+def fea_report(report: str) -> dict:
+    """One published simulation report (its id, e.g. "fea_1a2b3c4d", or its folder), shaped for fixing the design:
+    the problems worst first, the results behind them, placeholder inputs, and rerun_args, the run_fea
+    arguments that repeat the same analysis once you've changed the part."""
+    return call("GET", "/fea/reports", report=report)
 
 
 @mcp.tool()

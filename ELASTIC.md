@@ -12,12 +12,13 @@ process's environment and is never written to the repo, the database, or an agen
 | Index | Written by | Read by |
 | --- | --- | --- |
 | `cadswarm-boards` | `python -m cadswarm.ingest boards/sources.json` | `cadswarm.board_docs` tool, `lookup_board` helper op |
+| `cadswarm-fea` | `FeaJobs.remember` (`cadswarm.fea_jobs`) for every published simulation report: what was simulated, the verdict, safety factor, stress, deflection and its critical/warning problems | the `simulations` field of the `recall_designs` helper op |
 | `cadswarm-designs` | `index_design` (`cadswarm.knowledge`) for a finished brief | `cadswarm.design_memory` tool, `recall_designs` helper op |
 | `cadswarm-lessons` | the `distil-lessons` Workflow (every 10 minutes), from reviewer findings | `cadswarm.board_lessons` tool, the `lessons` field of the `recall_designs` helper op |
 | `cadswarm-usage` | the helper's style memory, mirrored in bulk after each re-learn: every model change (person or agent), correction and finished brief | Kibana / Discover (how the team works) |
 | `cadswarm-style` | the same mirror: each learned or taught design-style rule with its status, confidence and evidence | `cadswarm.team_style` tool, the `cadswarm-style-analyst` agent |
 
-`cadswarm-boards` and `cadswarm-designs` use `semantic_text` with the JINA embedding endpoint,
+`cadswarm-boards`, `cadswarm-designs` and `cadswarm-fea` use `semantic_text` with the JINA embedding endpoint,
 so Elasticsearch chunks and embeds the text itself; queries are hybrid (BM25 + semantic) and
 reranked by `.jina-reranker-v3.5`.
 

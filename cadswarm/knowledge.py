@@ -94,6 +94,9 @@ class Elastic:
     def index_design(self, doc):
         self.es("PUT", f"/cadswarm-designs/_doc/{doc['brief_id']}", doc)
 
+    def index_fea(self, doc):
+        self.es("PUT", f"/cadswarm-fea/_doc/{doc['report_id']}", doc)
+
     def lessons(self, board_id, k=5):
         """Recurring problems for a board, most frequent first (the lessons index has no text to search)."""
         r = self.es("POST", "/cadswarm-lessons/_search",
@@ -189,6 +192,24 @@ def design_doc(brief, plan, reviews, params):
     return {"brief_id": brief["id"], "board_id": brief.get("board") or "", "request": brief["text"],
             "outcome": brief.get("status", ""), "findings": json.dumps(findings), "problems": problems,
             "params": params, "finished_at": int(time.time() * 1000), "text": text, "content": text}
+
+
+def fea_doc(report, project=""):
+    """A published simulation report as design memory: what was checked, how it did, and what to change."""
+    problems = [p["text"] for p in report.get("improvements") or [] if p.get("severity") in ("critical", "warning")]
+    res, material = report.get("results") or {}, (report.get("inputs") or {}).get("material") or {}
+    target = (report.get("model") or {}).get("target") or []
+    text = (f"Simulation: {report.get('title')} ({report.get('analysis_name') or report.get('analysis')})\n"
+            f"Parts: {', '.join(target)}\nMaterial: {material.get('name') or 'unspecified'}\n"
+            f"Verdict: {report.get('verdict')}. {report.get('headline') or ''}\n"
+            f"Summary: {report.get('summary') or ''}\nProblems: {'; '.join(problems) or 'none'}")
+    return {"report_id": report["id"], "project": project, "title": report.get("title") or "", "target": target,
+            "analysis": report.get("analysis"),
+            "verdict": report.get("verdict"), "headline": report.get("headline") or "",
+            "material": material.get("name") or "", "safety_factor": res.get("safety_factor"),
+            "max_stress_mpa": res.get("max_von_mises_mpa"), "max_displacement_mm": res.get("max_displacement_mm"),
+            "problems": problems, "by": report.get("by") or "",
+            "published_at": int((report.get("published_at") or time.time()) * 1000), "text": text, "content": text}
 
 
 def _first_json_object(text):

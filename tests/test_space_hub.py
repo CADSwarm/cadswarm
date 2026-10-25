@@ -613,3 +613,12 @@ def test_after_an_op_the_pointer_rests_on_the_vertex_the_worker_picked(world):
     fake.calls.clear()
     hub._point_after("set_param", {"modified": ["Params"], "result": {"alias": "wall"}})  # nothing to point at
     assert fake.calls == []
+
+
+def test_a_helper_can_ask_the_hub_for_one_fea_report(world):
+    hub, _ = world
+    seen = []
+    hub.run_op = lambda kind, args: seen.append((kind, args)) or {"id": args.get("report"), "_events": []}
+    assert hub.get("/fea/reports", report="fea_1a2b") == {"id": "fea_1a2b"}  # the module's events stay inside
+    hub.get("/fea/reports")
+    assert seen == [("fea_reports", {"report": "fea_1a2b", "limit": 100}), ("fea_reports", {"limit": 100})]

@@ -177,7 +177,13 @@ def recall_designs(p, a):
     board = a.get("board")
     designs = p.elastic.search("cadswarm-designs", query, 3, {"board_id": board} if board else None)
     lessons = p.elastic.lessons(board, 5) if board else []
-    return {"designs": [d["source"] for d in designs], "lessons": [l.get("lesson") for l in lessons]}
+    try:  # simulations the team published (cadswarm-fea): what broke, bent or was over-built before
+        sims = [d["source"] for d in p.elastic.search("cadswarm-fea", query, 3)]
+    except Exception:  # an older Elastic setup without the index still answers designs and lessons
+        sims = []
+    return {"designs": [d["source"] for d in designs], "lessons": [l.get("lesson") for l in lessons],
+            "simulations": [{k: s.get(k) for k in ("title", "target", "verdict", "headline", "problems", "material")}
+                            for s in sims]}
 
 
 def index_design(p, a):
@@ -291,7 +297,7 @@ HANDLERS = {
     "fea_status": lambda p, a: p.fea.with_events(p.fea.status(a.get("job_id"))),
     "fea_publish": lambda p, a: p.fea.with_events(p.fea.publish(a.get("job_id"), a.get("summary") or "",
                                                                 a.get("improvements"), _actor(a))),
-    "fea_reports": lambda p, a: p.fea.with_events(p.fea.reports()),
+    "fea_reports": lambda p, a: p.fea.with_events(p.fea.reports(int(a.get("limit") or 100), a.get("report"))),
     **LIBRARY_HANDLERS,
 }
 
