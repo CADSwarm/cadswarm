@@ -12,6 +12,7 @@ from PySide import QtCore, QtGui
 from ..config import freecad_import_dirs
 from ..paths import ROOT, app_dir, freecad_python
 from ..structural.collaboration import accepted_operation
+from . import theme
 from .panel import fit_to_screen
 
 
@@ -29,6 +30,7 @@ DEMO = {
 class OptimizeDialog(QtGui.QDialog):
     def __init__(self, obj):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: Optimize Part")
         fit_to_screen(self, 760, 780)
         self.source_doc, self.source_name = obj.Document.Name, obj.Name

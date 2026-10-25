@@ -8,6 +8,7 @@ import FreeCADGui as Gui
 from PySide import QtGui
 
 from .. import fea
+from . import theme
 
 def _p():
     from . import panel
@@ -19,6 +20,7 @@ class RunSimulationDialog(QtGui.QDialog):
         super().__init__(Gui.getMainWindow())
         self.session = session
         self.setWindowTitle("CADSwarm: run a simulation")
+        theme.apply(self)
         form = QtGui.QFormLayout(self)
         intro = QtGui.QLabel("Check how a part holds up under a load, without asking a helper. It runs on a copy of "
                              "the model; nothing in the shared model changes. The report pops up for everyone.")
@@ -55,7 +57,7 @@ class RunSimulationDialog(QtGui.QDialog):
         self.load_faces.setToolTip("The faces the force pushes on, same words as Held still at")
         form.addRow("On faces", self.load_faces)
         self.error = QtGui.QLabel("")
-        self.error.setStyleSheet("color: #cf222e")
+        self.error.setStyleSheet("color: #ff7b72")
         self.error.setWordWrap(True)
         form.addRow(self.error)
         buttons = QtGui.QDialogButtonBox()

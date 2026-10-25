@@ -8,6 +8,8 @@ import html
 
 from PySide import QtGui
 
+from . import theme
+
 
 def _p():
     from . import panel
@@ -46,6 +48,7 @@ def _binding_text(b):
 class AutoConstrainDialog(QtGui.QDialog):
     def __init__(self, session, result, scope_label):
         super().__init__(_p().Gui.getMainWindow())
+        theme.apply(self)
         self.session = session
         self.plan = (result or {}).get("plan") or {}
         self.names = (result or {}).get("names")

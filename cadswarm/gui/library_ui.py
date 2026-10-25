@@ -18,6 +18,7 @@ from PySide import QtCore, QtGui
 from ..client import HubRequestError
 from ..library.present import SOURCE_WORDS, decimals_for, describe, setting_value_text, size_label
 from ..library.store import CATEGORIES
+from . import theme
 
 PREVIEW_DOC = "CadSwarmLibraryPreview"
 PART_FILTER = "Part files (*.step *.stp *.STEP *.STP *.FCStd *.fcstd *.stl *.STL)"
@@ -369,6 +370,7 @@ class PartDetailsDialog(QtGui.QDialog):
 
     def __init__(self, name, with_url=False, category="other", tags="", description="", license_text=""):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("Add a link to the library" if with_url else "Part details")
         form = QtGui.QFormLayout(self)
         self.url = None
@@ -416,6 +418,7 @@ class RecommendDialog(QtGui.QDialog):
 
     def __init__(self, tab, need, result):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.tab, self.need = tab, need
         self.recs = result.get("recommendations") or []
         self.setWindowTitle("Parts for: " + need[:60])
@@ -483,6 +486,7 @@ class SettingsDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: precision settings")
         self.resize(640, 640)
         self.widgets = {}

@@ -13,6 +13,7 @@ import FreeCADGui as Gui
 from PySide import QtCore, QtGui
 
 from ..client import HubRequestError
+from . import theme
 
 TYPE_WORDS = {"param_convention": "shared size", "correction_pattern": "people's corrections",
               "preferred_component": "preferred part", "modelling_practice": "modelling habit",
@@ -45,6 +46,7 @@ class StyleDialog(QtGui.QDialog):
 
     def __init__(self):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CADSwarm: learned design style")
         self.resize(680, 620)
         lay = QtGui.QVBoxLayout(self)

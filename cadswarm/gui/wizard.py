@@ -32,19 +32,10 @@ from ..client import HubRequestError
 from ..invite import InviteError, read_invite
 from ..paths import freecad_python, projects_dir, resolve_project_folder
 from ..space import SpaceError
-from . import panel
+from . import panel, theme
 
-STYLE = """
-QDialog { font-size: 11pt; }
-QLabel#title { font-size: 17pt; font-weight: 600; }
-QLabel#lead { font-size: 11.5pt; }
-QLabel#hint { color: #8b949e; font-size: 10pt; }
-QLabel#error { color: #e5484d; font-weight: 600; }
-QLabel#ok { color: #30a46c; font-weight: 600; }
-QFrame#card { border: 1px solid palette(mid); border-radius: 8px; padding: 8px; }
-QPushButton#primary { font-weight: 600; padding: 7px 18px; }
-QPlainTextEdit#code { font-family: Consolas, monospace; font-size: 10.5pt; }
-"""
+# CadSwarm's own dark surface, so the guide reads the same on a light FreeCAD theme (see theme.py).
+STYLE = theme.DIALOG
 
 
 def slug(text):
@@ -914,7 +905,7 @@ class SetupWizard(QtGui.QDialog):
         if any(p["name"] == self.agent_name and p["status"] == "active" for p in people):
             self.poll.stop()
             self.helper_status.setObjectName("ok")
-            self.helper_status.setStyleSheet("color: #30a46c; font-weight: 600;")
+            self.helper_status.setStyleSheet("color: #4fb35a; font-weight: 600;")
             self.helper_status.setText(f"✓ Your AI helper “{self.agent_name}” is on the team. Tell it what to "
                                        "build in the panel's Chat and watch the parts appear in CADSwarm Live.")
             self.primary.setText("Done, show me the model")

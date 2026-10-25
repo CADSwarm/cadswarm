@@ -19,6 +19,7 @@ from PySide import QtCore, QtGui
 from .. import fea
 from ..client import HubRequestError
 from ..lattice_jobs import CELLS, LatticeJobError, LatticeJobs, cell_library, estimate, freecad_python
+from . import theme
 
 # How a part is made decides the thinnest wall and whether loose powder or resin must drain out.
 PROCESSES = [
@@ -116,6 +117,7 @@ class LocalJob:
 class LightenDialog(QtGui.QDialog):
     def __init__(self, obj):
         super().__init__(Gui.getMainWindow())
+        theme.apply(self)
         self.setWindowTitle("CadSwarm: Lighten part")
         from .panel import fit_to_screen, MIRROR_DOC, SESSION
         fit_to_screen(self, 720, 760)
@@ -333,14 +335,14 @@ class LightenDialog(QtGui.QDialog):
             out = (self.client.post("/lattice/estimate", req) if self.team
                    else estimate(dict(req, _bbox=self.bbox)))
         except (ValueError, LatticeJobError, HubRequestError) as e:
-            self.check_out.setText(f"<span style='color:#d1242f'>{html.escape(str(e))}</span>")
+            self.check_out.setText(f"<span style='color:#ff7b72'>{html.escape(str(e))}</span>")
             return
         lines = []
         if out.get("build_voxels"):
             lines.append(f"About {out['build_voxels'] / 1e6:.1f} M voxels at {out['build_voxel_mm']:g} mm, roughly "
                          f"{out.get('minutes_estimate', '?')} min.")
         for w in out.get("warnings") or []:
-            colour = "#9a6700" if w["severity"] == "warning" else "#57606a"
+            colour = "#e3b341" if w["severity"] == "warning" else "#b9b5af"
             lines.append(f"<span style='color:{colour}'>• {html.escape(w['text'])}</span>")
         self.check_out.setText("<br>".join(lines) or "Looks good.")
 
@@ -353,6 +355,7 @@ class LightenDialog(QtGui.QDialog):
             _p().hint(str(e))
             return
         dlg = QtGui.QDialog(self)
+        theme.apply(dlg)
         dlg.setWindowTitle("Which lattice cell?")
         lay = QtGui.QVBoxLayout(dlg)
         lay.addWidget(QtGui.QLabel("At 30 % material, how stiff each cell is (lattice stiffness / solid), and "
@@ -467,7 +470,7 @@ class LightenDialog(QtGui.QDialog):
         if s["status"] != "done":
             self.bar.setValue(0)
             self.phase.setText("Stopped." if s["status"] == "cancelled" else "It didn't work.")
-            self.summary.setText(f"<span style='color:#d1242f'>{html.escape(str(s.get('error') or ''))}</span>")
+            self.summary.setText(f"<span style='color:#ff7b72'>{html.escape(str(s.get('error') or ''))}</span>")
             return
         self.bar.setValue(100)
         self.phase.setText("Done.")
@@ -480,8 +483,8 @@ class LightenDialog(QtGui.QDialog):
     @staticmethod
     def describe(s):
         v, m, t = s.get("verify") or {}, s.get("mass") or {}, s.get("thickness_mm") or {}
-        verdict = {"passed": "<b style='color:#1a7f37'>It keeps the stiffness you asked for.</b>",
-                   "no_passing_design": "<b style='color:#9a6700'>No lattice kept enough stiffness.</b>",
+        verdict = {"passed": "<b style='color:#4fb35a'>It keeps the stiffness you asked for.</b>",
+                   "no_passing_design": "<b style='color:#e3b341'>No lattice kept enough stiffness.</b>",
                    "not_verified": "<b>An even lattice (no load case, so stiffness not checked).</b>"}
         rows = [verdict.get(s.get("verdict"), ""),
                 f"<b>{m.get('weight_saving_pct', 0):g} % lighter</b>: {m.get('lattice_g')} g instead of "
@@ -493,7 +496,7 @@ class LightenDialog(QtGui.QDialog):
                         + (f"; safety factor {v['safety_factor']:.1f}" if v.get("safety_factor") else "") + ".")
         rows.append(f"Walls {t.get('min')}–{t.get('max')} mm.")
         for text in (s.get("warnings") or []) + (s.get("notes") or []):
-            rows.append(f"<span style='color:#57606a'>• {html.escape(text)}</span>")
+            rows.append(f"<span style='color:#b9b5af'>• {html.escape(text)}</span>")
         rows.append("<small>A design aid on a voxel model, not a certification: test printed parts.</small>")
         return "<br>".join(rows)
 
