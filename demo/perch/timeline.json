@@ -9,7 +9,7 @@
   },
   "gate": {
     "first_op_by": 2400,
-    "if_missed": "Forty minutes in, no part has started. Stop the build, say so, and run the smaller job in table-safe.json."
+    "if_missed": "Forty minutes in, no part has started. Stop the build, say so, and show the Act 1 recording labelled as a replay."
   },
   "ready": {
     "parts_any": [],
@@ -82,7 +82,7 @@
     {
       "id": "handoff", "label": "The clamp handoff is accepted",
       "at": 1500, "deadline": 400, "predicate": "handoff",
-      "say": "Sam holds the clamp, edits the M8 pocket, and hands it to base-claude with the note."
+      "say": "Sam takes the clamp on the phone, sends the note, and leaves; the host's handoff agent accepts."
     },
     {
       "id": "review1", "label": "Round 1 comes back with findings",

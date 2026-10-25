@@ -119,7 +119,7 @@ def validate(plan):
     if not isinstance(plan.get("cast"), dict) or not plan["cast"]:
         raise PlanError("a timeline needs cast: owner name -> client")
     # Who must be live before Start. Not every cast member: the booth's `base-claude` joins at the
-    # handoff, twenty minutes in, and must not block the start.
+    # handoff, twenty-five minutes in, and must not block the start.
     probe = plan.get("probe")
     if not isinstance(probe, list) or not probe:
         raise PlanError("a timeline needs probe: the owners that must be live before Start")
@@ -847,7 +847,7 @@ input[type=text] { width:min(560px, 90%); font:16px/1.4 ui-monospace, monospace;
 </div>
 <p id="gate" hidden></p>
 <ol id="steps"></ol>
-<fieldset><legend>the brief on Sam's phone</legend>
+<fieldset><legend>__BRIEF_LEGEND__</legend>
   <pre id="brief">__BRIEF__</pre>
   <button id="copy" class="quiet">Copy the brief</button>
 </fieldset>
@@ -897,8 +897,11 @@ setInterval(poll, 1000); poll();
 
 
 def page(plan):
+    legend = ("the brief to send from the phone" if (plan["brief"].get("from") or "") == "phone"
+              else "the brief to type in the panel")
     return (PAGE.replace("__TITLE__", html.escape(f"The Perch · {plan['name']} run"))
                 .replace("__NOTE__", html.escape(plan.get("note") or ""))
+                .replace("__BRIEF_LEGEND__", html.escape(legend))
                 .replace("__BRIEF__", html.escape(plan["brief"]["text"])))
 
 

@@ -20,16 +20,16 @@ simulate and lighten.
 | Beat | Send | To |
 |---|---|---|
 | 4 | `thicken Arm_Distal by 2 mm; it flexes.` | `@lid-creao` |
-| 5 | Tools ▸ Set param: `arm_reach = 160` | (panel) |
-| 6 | Tools ▸ Auto-constrain → Apply, then Tools ▸ Set param: `tol_press_fit = -0.08` | (panel) |
+| 5 | Tools ▸ Change a shared size…: `arm_reach = 160` | (panel) |
+| 6 | Tools ▸ Auto-constrain… → Apply, then Tools ▸ Change a shared size…: `tol_press_fit = -0.08` | (panel) |
 | 7 | `linear static on Arm_Distal: fixed at the elbow, 4.9 N down at the head, PETG. Publish it and tell us if it's overbuilt.` | `@arm-opencode` |
 | 8 | `take_over("lid-creao")` | `@lead-claude` |
-| 9 | Hand off now, then the handoff note below | (panel) |
+| 9 | Take `Clamp_Base` in the phone's Model tab, send the handoff note below in Team chat, arm **Continue my work if I leave**, then close the tab | (Sam's phone) |
 | 11 | Tools ▸ Learned design style: add the three rules | (panel) |
 | 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | `@arm-opencode` |
 | 14 | `distil-lessons` | (Elastic workflow) |
 
-Handoff note, pasted into **Hand off now**:
+Handoff note, sent in Team chat before arming (the handoff snapshot carries the last five messages):
 
 ```
 Jaw opening is 34 mm; the M8 nut pocket is 0.2 mm tight. Finish the insert pocket, add 0.4 mm clearance,
@@ -92,7 +92,9 @@ Said while typing, not instead of typing:
 
 ## The lines that bound the claims
 
-- Before Start: "The team is back at the state we finished Act 1 in; the build you are about to see is new."
+- Before Start (table): "The team is back at the state we finished Act 1 in; the build you are about to
+  see is new."
+- Before Start (booth): "We start from a bare board; Act 1 is built live."
 - If the gate is missed (`table.json`): "No part has started yet. The recall and the tasks are real; the body
   is the next run." Then show the recall and the task rows, and switch to the labelled replay if the judge
   wants to see the finished head.

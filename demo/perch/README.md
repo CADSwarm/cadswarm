@@ -35,12 +35,13 @@ does not depend on any of them.
 | `worker-1/2/3-claude` | claude | unassigned tasks: `Clamp_Base`, `Cradle_Base` | host-spawned worker labels |
 | `arm-opencode` | opencode | arm segments, FEA, Lighten | manual OpenCode |
 | `lid-creao` | creao | the lid; killed for the takeover; back for Act 2 | Creao bridge |
-| `base-claude` | claude | finishes the clamp after the handoff | host-spawned at the handoff |
+| `base-claude` | claude | finishes the clamp after the handoff | host-spawned at the handoff as `handoff-<id>` |
 | `reviewer` | droid | review rounds 1 and 2 | host `init-reviewer` |
 
-The host-spawned names are labels in this runbook, not literal member names: the host names the planner
-`planner-<brief>` when the brief is submitted, the workers `worker-<n>-claude`, and `base-claude` joins at
-the handoff. The manual helpers keep the names above.
+The host-spawned names are call-sheet labels in this runbook, not literal member names. The host names the
+planner `planner-<brief>` when the brief is submitted, the workers `worker<n>-<brief>`, and the handoff
+agent `handoff-<id>`. Those are the names the panel's Team tab shows. `lead-claude`, `arm-opencode` and
+`lid-creao` are the manual helpers and keep the names above.
 
 The three card claims the window makes about people are these members: `client = "claude"` is the
 Anthropic card, `client = "creao"` is the Creao card, `kind = "reviewer"` is the Factory card. The
@@ -55,8 +56,9 @@ Run from the repo root, with the venv already installed (`python -m venv .venv;
 .venv\Scripts\pip install -e ".[test]"`).
 
 ```powershell
-# 1. The stack: builds the host and web app, runs it against Maincloud, prints a phone invite.
-powershell -File scripts\demo-up.ps1 -SkipBuild
+# 1. The stack: builds the host and web app the first time, runs it against Maincloud, prints a phone
+#    invite. After one successful build, add -SkipBuild to start it faster.
+powershell -File scripts\demo-up.ps1
 
 # 2. One human invite for the presenter (the host prints a cadswarm-2: string).
 host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects\cadswarm-demo invite --kind human --role lead
@@ -94,15 +96,15 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 
 | # | Beat | Time | Action | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth cold open: Anthropic/Creao go from `not joined` to live. At the table the manual helpers are already joined at T-30 |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth: the five cards are already live (the manual helpers joined at T-30), and the board is bare; Act 1 starts now. At the table the helpers are also joined by T-30 |
 | 2 | Plan + board | 2′ | Submit the brief | `lookup_board`, board Params, tasks with names |
 | 3 | Build | 8–12′ | Let them work | Parts in owner colours; Creao one call per turn |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused; it messages the owner |
-| 5 | Shared size | 1′ | Tools ▸ Set param `arm_reach = 160 mm` | Segments and head positions recompute |
-| 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain → apply; `tol_press_fit = -0.08 mm` | Aliases, M4 pattern, bearing fit; the bore shrinks |
+| 5 | Shared size | 1′ | Tools ▸ Change a shared size… `arm_reach = 160 mm` | Segments and head positions recompute |
+| 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain… → apply; `tol_press_fit = -0.08 mm` | Aliases, M4 pattern, bearing fit; the bore shrinks |
 | 7 | FEA | 3–6′ | `@arm-opencode linear static …` | Report pops up for the team; Elastic indexes it |
 | 8 | Kill + takeover | 2′ | Kill the Creao bridge; `@lead-claude take_over("lid-creao")` | Creao goes stale, its trace stops, the lock moves |
-| 9 | Handoff | 2–3′ | Hold `Clamp_Base`, edit the M8 pocket, **Hand off now** | `base-claude` joins, accepts, finishes, messages back |
+| 9 | Handoff | 2–3′ | You hold `Clamp_Base`, edit the M8 pocket, and let go; Sam takes the lock in the phone's Model tab, sends the handoff note in Team chat, arms **Continue my work if I leave**, and closes the tab | Sam goes quiet; the handoff opens; the host's handoff agent accepts, finishes, and messages back |
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer, trace, three findings |
 | 11 | Correct + style | 2–3′ | Set the lid wall to 2.4 mm; add the three rules in Learned design style | The correction is recorded; rules are active |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
@@ -150,13 +152,14 @@ same owners, same recall. The medallion and its 608 bearing are **booth only**.
 The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` stops the tab).
 
 - **Start** — refuses unless Probe passed and the team is at the timeline's ready state (`act-1-ready`
-  for the table, the empty model for the booth); opens the sequence and shows the brief to paste on the
-  phone. Sam sends it from the phone.
+  for the table, the empty model for the booth); opens the sequence and shows the brief. At the table
+  Sam sends it from the phone; at the booth you type it in the panel.
 - **Next** — advance now. A manual step is logged `confirmed`; a module step `skipped`. Both say why.
 - **Pause / Resume** — holds the sequence while a judge talks. The build keeps running.
 - **Probe** — Claude, Creao, Droid, Elastic, then every other owner in the timeline's `probe` list.
-  The booth's planner joins when the brief is submitted (`planner-<brief>`) and `base-claude` at the
-  handoff, twenty-five minutes in, so neither is probed at Start. Re-run Probe after touching any helper.
+  The booth's planner joins when the brief is submitted (`planner-<brief>`), and the handoff agent
+  (`handoff-<id>`, called `base-claude` here) joins at the handoff, twenty-five minutes in, so neither is
+  probed at Start. Re-run Probe after touching any helper.
 - **Say box** — `@lid-creao …` is a real steer; anything else is a real brief. This is how a judge's own
   idea runs live.
 
@@ -180,7 +183,7 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 
 | Symptom | Do this |
 |---|---|
-| Probe fails on Claude | check that helper's folder is running; re-run Probe; if it stays down, run `table-safe.json` with that Claude helper out of `cast` — never fake its card |
+| Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
 | Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
 | Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env` |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
@@ -192,9 +195,9 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 | A host worker claims a manual part | cancel that task and re-assign by name; the module only rebalances busy or stale assignees |
 | Review passes round 1 | steer a legitimate tight-fit change (thin the podium lid to 1.6 mm so the OLED bezel fits) and wait for the style finding — never invent one |
 
-## Reset between judges
+## Reset between table judges
 
-The operative order is in `checklist.md`; this is the same order.
+The operative order is in `checklist.md`; this is the same order. It is for the table only.
 
 1. Restore the `act-1-ready` snapshot; delete `Podium_*` and `Medallion*`; hide the lattice mesh; move the
    cradle back; delete or cancel Act 2's tasks and the open brief.
@@ -205,5 +208,9 @@ The operative order is in `checklist.md`; this is the same order.
 5. Re-run Probe. Confirm the page says `ready — press Start`, Probe is all ✓, and the first step is
    `pending`.
 
-If the reset cannot finish before the next judge, do not fake it: start from the running Act 2, say the
-recall already happened, and let the panel and `rehearsal.md` carry Act 1.
+At the booth there is no table reset: `timeline.json` starts from an empty model and refuses Start once
+Act 1 parts exist. A second booth run needs a fresh workspace (a new host data folder and fresh helper
+invites), not a restore of `act-1-ready`.
+
+If the table reset cannot finish before the next judge, do not fake it: start from the running Act 2, say
+the recall already happened, and let the panel and `rehearsal.md` carry Act 1.

@@ -4,10 +4,11 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 
 ## T-45 minutes: the stack
 
-- [ ] `powershell -File scripts\demo-up.ps1 -SkipBuild` finished; the host is running.
+- [ ] `powershell -File scripts\demo-up.ps1` finished; the host is running. Add `-SkipBuild` only after a
+      successful build on this machine.
 - [ ] The web panel is open on the second screen; its **Sponsors** dialog opens with `?debug` or Shift+D.
-      The FreeCAD panel on the laptop has the **Sponsors** tab. These are two surfaces of the same window,
-      not one "sponsor tab".
+      The FreeCAD panel on the laptop has its own **Sponsors** tab. They are two separate panels reading
+      the same live sponsor state, not one "sponsor tab".
 - [ ] `cadswarm-host … invite --kind human --role lead` printed a fresh presenter invite (or the presenter
       folder already has an identity).
 - [ ] Elastic tabs open: the reranked board query, `cadswarm-designs`, the `distil-lessons` execution,
@@ -18,7 +19,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] `lead-claude`, `arm-opencode`, `lid-creao` are joined and `active` in the panel.
 - [ ] The host's planner and up to three workers are enabled.
 - [ ] `droid` is signed in (`droid` once on the host) and `cadswarm-host … init-reviewer` has run.
-- [ ] Sam's phone is joined and can see the briefs tab; the tunnel or the phone invite is live.
+- [ ] Sam's phone is joined and can see the Model, Tasks and Team tabs (Model for the handoff, Tasks for
+      Act 2, Team for the handoff switch); the tunnel or the phone invite is live.
 - [ ] The numbers: the last rehearsal's `runs/*.json` summary is open in a second tab.
 
 ## T-15 minutes: the state
@@ -38,7 +40,8 @@ the manual helpers joined. Act 1 is built live.
 
 - [ ] `.venv\Scripts\python demo\perch\driver.py --project demo\perch\presenter` is running.
 - [ ] The page says `ready — press Start`, Probe is all ✓, and step 1 is `pending`.
-- [ ] The timeline is the one you decided on (see below), and its brief is the brief Sam has on the phone.
+- [ ] The timeline is the one you decided on (see below). At the table its brief is the one Sam has on the
+      phone; at the booth you type the same text in the panel.
 - [ ] The replay recording is open, muted, in a window **labelled "replay"**.
 
 ## The timeline decision (made now, never mid-pitch)
@@ -58,13 +61,14 @@ the manual helpers joined. Act 1 is built live.
 | 0:30 | **press Start**; Sam types the brief on the phone | `brief` (10 s) | say the phone line, keep going; Next by 0:40 (the brief auto-skips at 0:40) |
 | 0:45 (narration) | "it recalls the first head before it plans" | `recall` (25 s) | Next; the recall is still real, say it is running |
 | 1:00 (narration) | "the same owners as Act 1" | `tasks` (30 s) | Next; read the task rows that exist |
-| 1:15 (narration) | "the body is held; Creao is asked anyway" | `refusal` (40 s) | Next; if the page still shows `lead-claude` holding `Podium_Body`, say the lock is on the body; if it moved, say the lock moved and do not claim the refusal |
+| 1:15 (narration) | "the body is held; Creao is asked anyway" | `refusal` (40 s) | Next; if the page says `lid-creao refused: …`, claim the refusal. If it shows the body held by another helper or says the step was skipped, say the lock moved and do not claim it |
 | 1:30 (narration) | one artifact each: FEA, lattice, round 1 | `first_part` (45 s) | — |
 | 1:45 (75 s after the press) | "it is still building" | gate check | say the fallback line; the page shows it in `Runner.status`; stop claiming a part |
 | 2:00 | hand to Q&A; leave the page up | still running | — |
 
-The 0:45, 1:00, 1:15 and 1:30 times are narration cues. The JSON starts `recall`, `tasks`, `refusal` and
-`first_part` at 10, 20, 35 and 45 s after the press, so the page can be a beat ahead of the spoken line.
+The 0:45, 1:00, 1:15 and 1:30 times are narration cues. The JSON's cue values are 10, 20, 35 and 45 s
+after the press; the driver starts each step as soon as the previous one closes, not at its cue value, so
+the page can run a beat ahead of the spoken line.
 
 Cue sheet (`table-safe.json`): same first three beats, then `first_part` (55 s), narration at 1:15; the
 presenter says "the body is the next run" at 1:30.
@@ -76,9 +80,10 @@ presenter says "the body is the next run" at 1:30.
 - If a card looks empty, read it: `not joined` is a fact, not a failure to hide.
 - If asked for a finished part, show `runs/` and the booth capture **as a recording**.
 
-## Reset between judges (12 minutes)
+## Reset between table judges (12 minutes)
 
-This is the single operative reset order; `README.md` mirrors it.
+This is the single operative table reset order; `README.md` mirrors it. The booth does not use it: see the
+note after the steps.
 
 1. **Stop claiming.** Pause the driver. Leave the build running; it is evidence.
 2. **Snapshot.** Restore `act-1-ready`.
@@ -91,8 +96,12 @@ This is the single operative reset order; `README.md` mirrors it.
    `pending`.
 7. **Log it.** One line in `rehearsal.md`: time the reset took, and anything that had to be skipped.
 
-If the reset cannot finish before the next judge: start from the running Act 2, say the recall already
-happened, and let the panel carry Act 1. Never present a recorded run as live.
+At the booth there is no reset between judges. `timeline.json` starts from an empty model and refuses Start
+once Act 1 parts exist; a second booth run needs a fresh workspace (a new host data folder and fresh helper
+invites), not a restore of `act-1-ready`.
+
+If the table reset cannot finish before the next judge: start from the running Act 2, say the recall
+already happened, and let the panel carry Act 1. Never present a recorded run as live.
 
 ## End of day
 

@@ -544,7 +544,16 @@ def test_the_page_shows_the_brief_and_the_buttons():
     html = driver.page(a_plan())
     assert "Start" in html and "Next" in html and "Probe" in html
     assert "Make the Podium head." in html
+    assert "the brief to send from the phone" in html
     assert "fetch('/status')" in html
+
+
+def test_the_page_names_the_booth_brief_as_panel_text():
+    plan = a_plan()
+    plan["brief"]["from"] = "panel"
+    html = driver.page(plan)
+    assert "the brief to type in the panel" in html
+    assert "Sam's phone" not in html
 
 
 def test_the_status_endpoint_answers_and_start_is_a_post():
