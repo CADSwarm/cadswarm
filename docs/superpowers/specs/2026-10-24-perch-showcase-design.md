@@ -2,7 +2,7 @@
 
 Date: 2026-10-24
 Status: approved (design dialogue, sections 1–3); commercial framing removed, impact case and
-judging map added at review
+judging map added at review; the judging-table run is a live Act 2 build, not a static snapshot
 Branch: `feat/perch-showcase` (worktree, based on `origin/main` `6f21059`)
 
 ## Goal
@@ -396,13 +396,33 @@ Brief, sent from the phone:
 | 6 | Second design memory | 1′ | Export; second design doc; `recall_designs` returns both; lessons grow to 5 |
 | 7 | Close | 1′ | Sponsor window + reports + STL preview; both heads on one arm and the next-board path on screen; "print-ready, designed on a 180 mm bed" |
 
-The recall query is deliberately worded differently from the Act 1 request: "a display head for a
-dev board with an OLED window and a spinning medallion on the same clip-on arm." Act 1 must return
-first (or second only to a closer match), and its three problems must be visible in the result.
+**At the judging table the brief asks for two parts, not three.** Two minutes cannot build the
+medallion, so the table run uses a shorter brief with the same wording, the same owners and the same
+recall:
+
+> Make the **Podium** head for the same Perch: the same ESP32-S3 upright, a 2.4 mm lid, the same fits,
+> the same 180 mm bed. Reuse the arm and the mount. **Recall the Perch we just built before
+> planning**, and use what its review found. `Podium_Body` → lead-claude, `Podium_Lid` → lid-creao.
+
+The medallion and its 608 bearing are booth-and-video only, and the presenter says so rather than
+implying the head is finished. The table claims four things it can actually land in the ninety
+seconds after the press: the recall returns Act 1, the tasks appear with the same owners, a locked
+part refuses a helper, and a real part starts to build. The finished podium on the arm is the
+rehearsal's and the video's artifact, labelled as such.
+
+The recall query is deliberately worded differently from the Act 1 request — at the table, "an
+upright display head for a dev board on the same clip-on arm"; in the booth run, "… with an OLED
+window and a spinning medallion". Act 1 must return first (or second only to a closer match), and its
+three problems must be visible in the result.
 
 **Impact read of Act 2.** Same clock, same measurement, second design. The pitch puts the two rows
 side by side: the delta is the reuse dividend, and it is the only number that has to be believable.
 If the delta is small, we say so and the claim changes.
+
+The table run measures a different four numbers from the button press — t(recall), t(tasks),
+t(first op), t(finish) — because the table claims recall, task creation and a part starting, not a
+finished head. They are recorded in `rehearsal.md` beside the full-run clock, and the pitch quotes
+whichever one it is actually showing.
 
 ### Sponsor mapping, beat by beat
 
@@ -422,7 +442,9 @@ If the delta is small, we say so and the claim changes.
 | Act 2 | new brief/members | build trace | live again | 2 new findings | recall + 5 lessons |
 
 Read a column for one partner's arc, a row for what the room sees at that moment. Every row is a
-claim the demo makes, and the card on screen is the evidence that it happened.
+claim the demo makes, and the card on screen is the evidence that it happened. The judging-table run
+covers the Act 2 row only as far as the recall, the tasks, the refusal and the first part; the review
+findings, the new lessons and the finished head in that row belong to the booth run and the video.
 
 ### Three formats
 
@@ -433,30 +455,41 @@ card on the table do that job.
 
 | Format | Length | Act 1 | Act 2 | FEA/Lighten | Elastic |
 |---|---|---|---|---|---|
-| **Judging table** | 2′ + Q&A | `table-ready` snapshot, reports open | three live driver steps (below) | pre-run, show reports | recall live, lessons pre-run |
-| **Full live** (booth) | 40–50′ | live | live | live | Workflow run live |
+| **Judging table** | 2′ + Q&A | restore `act-1-ready`; Act 1's design doc and lessons are already in Elastic; reports open | **live from the phone at 0:30, still building through Q&A** | pre-run, shown while the build runs | recall live, lessons pre-run |
+| **Full live** (booth) | 40–50′ | live | live, all three parts | live | Workflow run live |
 | **Video** | 2:45 | timelapse | live or recorded | cutaways | Kibana cutaways |
 
-The two-minute run of show:
+The two-minute run of show. The product is never sitting still: the build starts at 0:30 and does not
+stop when the pitch does.
 
 | Time | Beat |
 |---|---|
 | 0:00–0:15 | the problem, one sentence, bare board in hand |
-| 0:15–0:35 | The Perch on screen; one artifact each from FEA, the lattice and a review finding |
-| 0:35–1:15 | **press the button**: steer → refusal → recall or one Creao turn; the cards move |
-| 1:15–1:40 | what the reviewer caught and what the simulation says |
-| 1:40–2:00 | who it is for, the video QR, the sponsor strip |
+| 0:15–0:30 | The Perch on screen: the arm and the cradle; "the second head is the test" |
+| 0:30–0:40 | **press the button**; the Podium brief leaves Sam's phone |
+| 0:40–1:00 | the planner recalls the Perch before it plans; Act 1's design doc and its three problems return |
+| 1:00–1:15 | tasks appear with named owners; the Creao mention goes out on the held body |
+| 1:15–1:30 | the refusal lands on Creao's card; the first part starts to build |
+| 1:30–1:45 | one artifact each from FEA, the lattice and round 1 while the build runs |
+| 1:45–2:00 | who it is for; the video QR; "it is still building" — the run continues through Q&A |
+
+**The build outlives the pitch.** The driver does not stop at 2:00. A judge who stays watches the
+body take shape and the tasks turn over; a judge who asks "what happens next" gets to see it. The
+panel clock keeps the claim honest: the pitch claims recall, tasks, a refusal and a part starting,
+not a finished head. `rehearsal.md` records when each of those landed, and that is what the impact
+table quotes.
 
 The video is **2:45, including 30 seconds of testimonials from people outside the team**. The build
 is a timelapse; the takeover and the second brief get real time. Each testimonial names one specific
 thing that person actually did or saw; the clips do not call them customers, and we do not script
 their words.
 
-### Demo driver: one button, live models
+### Demo driver: one button, a live Act 2 build
 
-Two minutes cannot be eight live beats, and a canned video cannot answer a judge's "try this". The
-answer is a thin local driver with a big button: a person starts a real sequence against the real
-models, and the sequence is a file that can change between runs.
+A canned video cannot answer a judge's "try this", and a finished model on screen cannot show that
+the product is doing anything. The answer is a thin local driver with one big button: a person
+presses it, the Podium brief goes out from the phone, and the real helpers start building against the
+real models. The sequence is a file, so it can change between judging visits.
 
 #### Why it lives outside the product
 
@@ -464,24 +497,38 @@ models, and the sequence is a file that can change between runs.
 submit a brief, set a param, say something — and reads the same snapshot the cards read. The host
 prints one extra human invite for it, and it appears in the team as a normal human member, so
 nothing in the state is special-cased. Nothing ships with FreeCAD, the host or the module. The
-sequence is `timeline.json`, editable the night before or between judging visits.
+sequence is `timeline.json` (booth) or `table.json` (judging), editable the night before.
 
 #### The sequence waits on state, not seconds
 
-| Step | Action | Done when |
-|---|---|---|
-| 1 | steer `arm_reach = 160 mm` | the parts' bbox changes and the owners are notified |
-| 2 | `@lid-creao thicken Arm_Distal by 2 mm` | an op is refused for `Arm_Distal` (locked by `arm-opencode`) and the refusal shows on Creao's card |
-| 3 | recall the Podium, or one Creao turn | the recall row or the helper's reply appears and the card's trace moves |
+| # | Action | Done when | Deadline |
+|---|---|---|---|
+| 1 | Sam sends the table brief from the phone (the driver shows it; Sam pastes and taps Send) | the brief appears in FreeCAD and the web, posted by the phone's member | 10 s |
+| 2 | The planner recalls the Perch before it plans | the `recall_designs` op returns Act 1's design doc, its three problems and the lesson list | 25 s |
+| 3 | Tasks appear with named owners | `Podium_Body` and `Podium_Lid` rows exist with owners, and no free host worker took them | 30 s |
+| 4 | The presenter types `@lid-creao thicken Podium_Body by 2 mm` (the driver sends it) | an op is refused for the held body and the refusal shows on Creao's card | 40 s |
+| 5 | The first part starts to land | a revision or op exists for either part — **never the whole build** | 45 s |
 
-The two-minute run uses those three. The booth run uses the long timeline — brief, build, refusal,
-takeover, handoff, review, fix, FEA, lighten, export, recall — on the same engine.
+Steps 4 and 5 overlap the plan: the mention goes out once the body is held, and the builders are
+already working, so the refusal and the first op can arrive in either order. Step 4 depends on the
+body still being held at that moment; if the lock has moved, the driver skips it and says so.
+
+One gate is absolute: **the first op by 1:45**. Before that, a step that misses its deadline is
+skipped and said out loud. These numbers are rehearsal targets; `rehearsal.md` records the measured
+waits, and those — not the targets — are what the pitch quotes.
+
+After step 5 the driver stops advancing and just watches: the build keeps running through Q&A, and
+the task list on the second screen is the honest progress bar.
+
+The booth run uses the long timeline — brief, build, refusal, takeover, handoff, review, fix, FEA,
+lighten, export, recall — on the same engine.
 
 #### Controls
 
-- **Start** — begins at step 1.
+- **Start** — arms the sequence and shows the brief to paste on the phone; Sam sends it. If the tunnel
+  is down, Start submits the same brief from the laptop and says so.
 - **Next / Skip** — advance now; the driver logs the step as skipped and moves on.
-- **Pause / Resume** — hold the sequence while answering a judge.
+- **Pause / Resume** — hold the sequence while answering a judge; the build keeps going.
 - **Say box** — free text that submits a real brief or steer, so a judge's own scenario runs live.
 - **Probe** — checks Claude, Creao, Droid and Elastic before Start and refuses to begin if one fails.
 
@@ -489,6 +536,8 @@ takeover, handoff, review, fix, FEA, lighten, export, recall — on the same eng
 
 - **State is the checkpoint.** A step is done when the module says so: task, op, lock, review, bbox,
   artifact. Never treat an agent's prose as evidence.
+- **Never wait for the finish.** The table claims recall, tasks, the refusal and a part starting.
+  The finished podium belongs to the booth run, the video and `rehearsal.md`.
 - **Every wait has a deadline.** A timed-out step is logged and skipped out loud, not waited on in
   silence.
 - **The driver is a presenter, not an agent.** It never writes geometry, claims a task or posts as a
@@ -498,8 +547,26 @@ takeover, handoff, review, fix, FEA, lighten, export, recall — on the same eng
 
 #### If it stops
 
-The fallback is `table-ready` plus the exported STL, the FEA and lattice reports, and the video —
-shown and labelled as a replay, never passed off as live.
+`table-safe.json` is a pre-flight choice, not a mid-pitch trick. If the last rehearsal did not start a
+part before 1:30, the table runs the safe sequence from the start: the same brief as a lid-only job
+("the same Podium lid, 2.4 mm wall, same board and fits; recall the Perch before planning"), which is
+one small part a single helper can start fast. The presenter says the body is the next run.
+
+Mid-run, if nothing has started by 1:45, the driver says so on the status line and stops claiming a
+part. The presenter points at the recall and the tasks that did land, plays the video for the finish,
+and says plainly which is live and which is recorded. The fallback is a smaller live job or a labelled
+replay, never a recorded run passed off as live.
+
+#### Reset between judges
+
+Restore `act-1-ready`, restart the helpers and the host, and leave Act 1's design doc and lessons in
+Elastic. A previous table run's podium document stays too; if it ranks first for the next recall, say
+so out loud — the system is returning our own earlier run, which is the point. The reset order and its
+timing are in `checklist.md`, and the driver refuses to Start until the state is back.
+
+If the reset cannot finish before the next judge, do not fake it: the next pitch starts from the
+running Act 2, says the recall already happened, and lets the card and the video carry Act 1. The
+reset is rehearsed and timed for exactly this reason.
 
 ### Fallbacks
 
@@ -509,7 +576,10 @@ shown and labelled as a replay, never passed off as live.
 - **Host worker poaches** — every manual task is assigned by name; keep manual helpers active.
 - **Droid not signed in** — run `droid` once on the host, or let the new reviewer autostart path
   read `cadswarm.env`; the host fails the brief with a clear message otherwise.
-- **Phone tunnel dies** — submit the same brief from the web app on a laptop.
+- **Phone tunnel dies** — submit the same brief from the web app on a laptop; the brief and the
+  sequence are the same, only the member differs.
+- **The Act 2 plan is slow to appear** — skip to step 4 (the refusal) and say the tasks are next; the
+  log records it, and `table-safe.json` is the smaller job if the wait runs past 1:30.
 - **Lighten overruns** — let it run, continue export/index, show the result at the close.
 - **Elastic board lookup down** — local Params still seed; design memory and lessons are the proof.
 - **Agent Builder returns 429** — show the agent definition, its four tools and the last successful
@@ -573,6 +643,9 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
 - **Agent Builder is quota-limited.** It is probed in pre-flight and shown live when it answers; when
   the trial model returns `429`, the demo shows the agent definition, its four tools and the last
   successful trace, and says the quota is the limit. The other three Elastic criteria are unaffected.
+- **The table run does not finish the head.** Two minutes buys the recall, the tasks, one refusal and
+  a part starting. The finished podium is the booth run and the video, and the presenter says which
+  is which.
 - **Testimonials are outside voices, not customers.** The clips are from people outside the team;
   each says what that person actually did or saw, and no clip implies a paying customer or production
   use.
@@ -632,9 +705,11 @@ equally: the impact, the engineering, the stack.
 | `demo/perch/prompts.md` | copy-paste briefs, steers, handoff note, phone lines, style rules |
 | `demo/perch/checklist.md` | pre-flight, live cue sheet, reset order |
 | `demo/perch/pitch.md` | the two-minute judge script and the 60-second Q&A answers |
-| `demo/perch/rehearsal.md` | measured wall clock, human minutes and defects caught per act — the source of every number the pitch quotes |
+| `demo/perch/rehearsal.md` | measured wall clock, human minutes and defects caught per act, plus Act 2's t(recall)/t(tasks)/t(first op)/t(finish) — the source of every number the pitch quotes |
 | `demo/perch/driver.py` | the local driver: presenter join, button page, timeline runner, probes, run log |
-| `demo/perch/timeline.json` | the editable sequence: steps, state predicates, deadlines, skip labels |
+| `demo/perch/timeline.json` | the booth sequence: steps, state predicates, deadlines, skip labels |
+| `demo/perch/table.json` | the two-minute Act 2 sequence: the phone brief, recall, tasks, refusal, first part |
+| `demo/perch/table-safe.json` | the lid-only sequence used when rehearsal starts no part before 1:30 |
 | `demo/perch/table-card.html` | the one-page evidence card that stands in for a poster |
 | `web/src/ui/sponsors.ts` | Anthropic + Creao cards, trace titles |
 | `web/src/style.css` | five-card auto-fit grid |
@@ -673,8 +748,15 @@ release, no module publish, no host restart is required for the cards.
     fallback;
   - the driver's Probe passes for Claude, Creao, Droid and Elastic, and a failed probe refuses to
     start;
-  - each two-minute step lands inside its deadline, Skip advances the run, and the log records the
-    step, the wait and the outcome;
+  - the press of the button starts the clock, and `rehearsal.md` records t(recall), t(tasks),
+    t(first op) and t(finish) for Act 2; the first op lands before 1:30 in three consecutive
+    rehearsals;
+  - the `table-safe` lid-only sequence is rehearsed and starts a part, so the fallback is not theory;
+  - a reset from a finished table run returns to `act-1-ready` in the recorded time, and the driver
+    refuses Start until the state is back;
+  - each step lands inside its deadline, Skip advances the run, and the log records the step, the
+    wait and the outcome;
+  - after 2:00 the build is still moving: a judge who stays sees at least one more state change;
   - every testimonial clip is from someone outside the team and names one specific thing that
     person did or saw;
   - each of the five cards is visibly doing its own job during the beat that claims it.
@@ -693,12 +775,14 @@ release, no module publish, no host restart is required for the cards.
 | Sponsor cards change a shipping UI | Read-only from existing state, unit tests, visual check, no schema/binding change |
 | Judges cannot tell what is real | Every live number is labelled live, the Elastic/Droid footer stays stamped, and `rehearsal.md` is on the table |
 | Two minutes is not enough | One artifact per claim; the table card carries the rest; the 40–50′ booth run is the long version |
-| A judge arrives mid-build | The table card opens with the four claims and where each artifact is |
+| A judge arrives mid-build | The run is already going; the driver's status line says which step it is on and what it is waiting for; the table card carries the claims |
 | "How is this different from one agent?" | The refusal, the takeover, the handoff and the second-brief recall are the difference, and each is a beat |
 | The demo machine dies mid-run | `act-1-ready`, the STL and the reports live on disk, so the second machine can show the same artifacts |
 | The impact claim sounds generic | A named community, the before/after table, and only measured numbers |
 | Agent Builder's trial quota returns 429 at judging | Probe it in pre-flight; keep the agent definition, tool list and last trace open; the other three Elastic criteria carry the track |
 | A driver step stalls at the table | Every step has a deadline; Skip advances and says so; the labelled replay is the fallback |
+| No visible part by 1:30 | `table-safe.json` sends the lid as its own small job; the presenter says the body is the next run; the video carries the finish |
+| The build is mistaken for finished | The pitch claims recall, tasks, a refusal and a part starting; the task list stays on screen and the finish is the booth run's claim |
 | A testimonial reads as a customer claim | Each clip names the person's role and what they actually did; the copy says "outside tester", never customer |
 
 ## Scope
