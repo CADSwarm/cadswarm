@@ -1,6 +1,8 @@
 """SpaceClient against a tiny fake SpacetimeDB HTTP server."""
 import json
 import threading
+import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -133,6 +135,49 @@ def test_a_dropped_read_is_retried_but_a_dropped_reducer_is_not():
         with pytest.raises(SpaceError):
             SpaceClient(uri, "db", "tok", timeout=5).call("send_message", 1, "m1", "all", "hi", "chat", "")
         assert Drops.seen == 1
+    finally:
+        srv.shutdown()
+
+
+class ClosesAfterReply(Fake):
+    """Answers keep-alive, then closes the socket anyway (a server's idle timeout, early)."""
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        super().do_POST()
+        self.close_connection = True
+
+
+def test_a_socket_the_server_closed_while_idle_is_not_reused_for_a_reducer():
+    """A sent reducer is never retried, so it must not go out on a socket the server already closed."""
+    srv = serve(ClosesAfterReply)
+    try:
+        client = SpaceClient(f"http://127.0.0.1:{srv.server_port}", "db", "tok", timeout=5)
+        client.sql("SELECT * FROM v_member")
+        assert len(client._idle) == 1
+        dead, used = client._idle[0][0], []
+        real = dead.request
+        dead.request = lambda *a, **k: (used.append(1), real(*a, **k))
+        time.sleep(0.2)  # the server's close reaches the pooled socket
+        client.call("heartbeat", 1, "")
+        assert SEEN[-1][0] == "/v1/database/db/call/heartbeat"
+        # On Linux a write to it "succeeds" and only the read fails, after which a reducer can't be retried.
+        assert used == []
+    finally:
+        srv.shutdown()
+
+
+def test_a_configured_proxy_is_still_used(monkeypatch):
+    """Kept-alive sockets go straight to the server, so behind a proxy the client goes through it instead."""
+    srv = serve(Fake)
+    try:
+        for var in ("no_proxy", "NO_PROXY", "https_proxy", "HTTPS_PROXY", "HTTP_PROXY"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{srv.server_port}")
+        monkeypatch.setattr(urllib.request, "_opener", None)  # urlopen built its opener before the proxy was set
+        rows = SpaceClient("http://spacetime.invalid", "db", "tok", timeout=5).sql("SELECT * FROM v_member")
+        assert rows[0]["name"] == "alice"
+        assert SEEN[-1][0] == "http://spacetime.invalid/v1/database/db/sql"  # the proxy saw the full URL
     finally:
         srv.shutdown()
 
