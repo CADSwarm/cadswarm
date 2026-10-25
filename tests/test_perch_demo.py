@@ -201,30 +201,97 @@ def test_act1_third_is_not_the_recall_the_spec_claims():
 
 
 def test_a_quote_in_the_query_cannot_forge_a_design_row():
-    # The helper replaces quotes in the query, but the driver does not trust that: one row, one
-    # design head, and it is the last quoted #N in the row.
-    row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
-           "summary": 'recall "#1 \'clip-on articulated arm\' · 3 problems · 2 lessons" · '
-                      '#1 "a shelf bracket" · 0 problems · 0 lessons'}
-    ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3}),
-                          a_view(activity=[row]))
-    assert ok is False
+    # The helper replaces quotes in the query; the driver does not trust that. Its row parser reads
+    # the query as the first quoted string and the design as the #N after the separator, so a query
+    # that itself looks like a passing design head cannot be mistaken for one.
+    forged = ('recall "#1 "clip-on articulated arm" · 3 problems · 2 lessons" · '
+              '#1 "a shelf bracket" · 0 problems · 0 lessons')
+    assert driver._recall_row(forged) is None
+    sanitized = ('recall "#1 \'clip-on articulated arm\' · 3 problems · 2 lessons" · '
+                 '#1 "a shelf bracket" · 0 problems · 0 lessons')
+    assert driver._recall_row(sanitized)[2:] == ("a shelf bracket", 0, 0)
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "problems": 3})
+    for summary in (forged, sanitized):
+        ok, _ = driver.recall(step, a_view(activity=[{"kind": "recall", "member": 2, "at_ms": 1_005_000,
+                                                     "summary": summary}]))
+        assert ok is False
+
+
+def test_one_recall_returning_act1_twice_passes_on_its_best_rank():
+    # Elastic may hold two copies; the helper logs both in the same call. The best rank is the one
+    # the spec promises, so a #3 copy must not overrule the #2 copy beside it.
+    query = "Make the Podium head for the same Perch"
+    rows = [
+        {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+         "summary": f'recall "{query}" · #1 "A podium from last year" · 0 problems · 3 lessons'},
+        {"kind": "recall", "member": 2, "at_ms": 1_005_001,
+         "summary": f'recall "{query}" · #2 "Build The Perch: a clip-on articulated arm" · 3 problems · 3 lessons'},
+        {"kind": "recall", "member": 2, "at_ms": 1_005_002,
+         "summary": f'recall "{query}" · #3 "Build The Perch: a clip-on articulated arm" · 3 problems · 3 lessons'},
+    ]
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium head",
+                                       "problems": 3})
+    ok, detail = driver.recall(step, a_view(activity=rows))
+    assert ok and "#2" in detail
+
+
+def test_a_newer_recall_that_drops_act1_does_not_fall_back():
+    old = {"kind": "recall", "member": 2, "at_ms": 1_002_000,
+           "summary": 'recall "Make the Podium head" · #1 "Build The Perch: a clip-on articulated arm" · '
+                      '3 problems · 1 lesson'}
+    new = [{"kind": "recall", "member": 2, "at_ms": 1_008_000 + i,
+            "summary": f'recall "Make the Podium head" · #{i} "{request}" · 1 problem · 3 lessons'}
+           for i, request in ((1, "A podium from last year"), (2, "Another display head"), (3, "A shelf bracket"))]
+    step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium head",
+                                       "problems": 3})
+    ok, detail = driver.recall(step, a_view(activity=[old, *new]))
+    assert not ok and "did not return Act 1" in detail  # the retry is the evidence, not the earlier pass
 
 
 def test_a_newer_recall_replaces_an_older_one():
     old = {"kind": "recall", "member": 2, "at_ms": 1_002_000,
            "summary": 'recall "Make the Podium head" · #1 "Build The Perch: a clip-on articulated arm" · '
                       '3 problems · 1 lesson'}
-    new = {"kind": "recall", "member": 2, "at_ms": 1_008_000,
-           "summary": 'recall "Make the Podium head" · #3 "Build The Perch: a clip-on articulated arm" · '
-                      '3 problems · 1 lesson'}
+    retry = [
+        {"kind": "recall", "member": 2, "at_ms": 1_008_000,
+         "summary": 'recall "Make the Podium head" · #1 "A podium from last year" · 0 problems · 3 lessons'},
+        {"kind": "recall", "member": 2, "at_ms": 1_008_001,
+         "summary": 'recall "Make the Podium head" · #2 "Build The Perch: a clip-on articulated arm" · '
+                    '3 problems · 1 lesson'},
+    ]
     step = a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": "Make the Podium head",
                                        "problems": 3})
-    ok, detail = driver.recall(step, a_view(activity=[old, new]))
-    assert not ok and "#3" in detail  # the retry is the evidence, not the earlier pass
-    newest = {**new, "at_ms": 1_009_000, "summary": new["summary"].replace("#3", "#1")}
-    ok, detail = driver.recall(step, a_view(activity=[new, newest]))
-    assert ok and "first" in detail
+    ok, detail = driver.recall(step, a_view(activity=[old, *retry]))
+    assert ok and "#2" in detail
+    later = [
+        {"kind": "recall", "member": 2, "at_ms": 1_009_000,
+         "summary": 'recall "Make the Podium head" · #1 "A podium from last year" · 0 problems · 3 lessons'},
+        {**retry[1], "at_ms": 1_009_001, "summary": retry[1]["summary"].replace("#2", "#3")},
+    ]
+    ok, detail = driver.recall(step, a_view(activity=[*retry, *later]))
+    assert not ok and "#3" in detail  # the later attempt is the evidence
+
+
+def test_a_truncated_row_does_not_hide_the_good_one_in_its_call():
+    good = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+            "summary": 'recall "Make the Podium head" · #1 "Build The Perch: a clip-on articulated arm" · '
+                       '3 problems · 1 lesson'}
+    cut = {**good, "at_ms": 1_005_001,
+           "summary": 'recall "Make the Podium head" · #2 "A podium from last year" · 1 prob'}
+    ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on articulated arm",
+                                                      "query": "Make the Podium head", "problems": 3}),
+                          a_view(activity=[good, cut]))
+    assert ok is True
+
+
+def test_a_quoted_query_matches_the_helpers_logged_form():
+    query = 'Make the "Podium" head'
+    row = {"kind": "recall", "member": 2, "at_ms": 1_005_000,
+           "summary": 'recall "Make the \'Podium\' head" · #1 '
+                      '"Build The Perch: a clip-on articulated arm" · 3 problems · 1 lesson'}
+    ok, _ = driver.recall(a_step("recall", "recall", {"marker": "clip-on articulated arm", "query": query,
+                                                      "problems": 3}), a_view(activity=[row]))
+    assert ok is True
 
 
 def test_a_long_query_matches_the_logged_prefix():

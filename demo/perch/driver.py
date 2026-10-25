@@ -181,20 +181,49 @@ def _activity_seconds(row):
     return float(row.get("at_ms") or 0) / 1000.0
 
 
-def _recall_row(summary, marker):
-    """Rank, own problem count and lesson count of the design whose logged request carries `marker`."""
-    heads = list(re.finditer(r'#(\d+)\s+"([^"]*)"', str(summary or "")))
-    if not heads:
+RECALL_ROW = re.compile(r'^recall "(?P<query>[^"]*)"\s+·\s+#(?P<rank>\d+)\s+"(?P<request>[^"]*)"\s+·\s+'
+                        r'(?P<problems>\d+)\s+problems?\s+·\s+(?P<lessons>\d+)\s+lessons?', re.I)
+
+
+def _recall_row(summary):
+    """One `recall` row's query, rank, request, own problem count and lesson count, or None.
+
+    The helper quotes the query and the design request, so a query that contains a `"` cannot
+    forge a head: this parses the row from the left, with the query as the first quoted string.
+    A row the activity view cut off mid-way parses as None; it is not evidence of anything.
+    """
+    m = RECALL_ROW.search(str(summary or ""))
+    if not m:
         return None
-    head = heads[-1]  # the query is quoted too; the design head is the last one in the row
-    if marker not in head.group(2).lower():
-        return None
-    tail = summary[head.end():]
-    problems = re.search(r"(\d+)\s+problems?\b", tail, re.I)
-    lessons = re.search(r"(\d+)\s+lessons?\b", tail, re.I)
-    if not problems or not lessons:
-        return None
-    return int(head.group(1)), int(problems.group(1)), int(lessons.group(1))
+    return (m.group("query"), int(m.group("rank")), m.group("request"),
+            int(m.group("problems")), int(m.group("lessons")))
+
+
+def _recall_calls(activity, run_started, query):
+    """Every `recall_designs` call since the press, as lists of its design rows, oldest call first.
+
+    The helper logs one row per design, ranked from #1, so a #1 (or a new query) starts a call.
+    A row it could not parse stays with the call above it: it may be the same call, cut short.
+    `query` (when a timeline sets it) drops calls made for a different brief, so Act 1's planning
+    recall cannot stand in for Act 2's.
+    """
+    calls, current = [], None
+    for row in activity:
+        if row.get("kind") != "recall" or _activity_seconds(row) < run_started:
+            continue
+        parsed = _recall_row(row.get("summary"))
+        if parsed is None:
+            if current is not None:
+                current[1].append(None)
+            continue
+        logged, rank, request, problems, lessons = parsed
+        if current is None or rank == 1 or logged != current[0]:
+            current = (logged, [])
+            calls.append(current)
+        current[1].append((rank, request, problems, lessons))
+    if query:
+        calls = [c for c in calls if query in c[0].lower()]
+    return [c[1] for c in calls]
 
 
 # --------------------------------------------------------------------------- predicates
@@ -221,31 +250,29 @@ def recall(step, view):
     """The host's own recall makes no op: it logs one `recall` activity row per returned design.
     Filter by the press, not this step's start: the host may recall while a step's deadline runs out.
     `query` (when a timeline sets it) keeps Act 1's planning recall from standing in for Act 2's.
-    The row names the design's rank, request and its own problem count: a sum across designs, or a
-    marker found anywhere in the summary, would let an unrelated hit certify Act 1's three problems."""
+    Only the newest matching call counts, and within it the best-ranked copy of Act 1: a retry that
+    dropped Act 1 must not be certified by the attempt before it, and a recall that returned Act 1
+    twice passes on its best rank, not its worst."""
     marker = str(step.args["marker"]).lower()
-    query = str(step.args.get("query") or "").lower()[:60]  # the helper logs the query's first 60 chars
+    query = str(step.args.get("query") or "").lower()[:60].replace('"', "'")  # the helper's logged form
     need = int(step.args.get("problems", 3))
     within = int(step.args.get("within", 2))
-    for row in reversed(view.activity):  # newest first: a retry's rows are the ones that count
-        if row.get("kind") != "recall" or _activity_seconds(row) < view.run_started:
-            continue
-        summary = str(row.get("summary") or "")
-        if query and query not in summary.lower():
-            continue
-        found = _recall_row(summary, marker)
-        if found is None:
-            continue
-        rank, problems, lessons = found
-        if rank > within:
-            return False, f"Act 1 came back #{rank}, need top {within}"
-        if problems < need:
-            return False, f"Act 1 returned with {problems} problems, need {need}"
-        if not lessons:
-            return False, "Act 1 returned, but no lessons came with it"
-        where = "first" if rank == 1 else f"#{rank}"
-        return True, f"Act 1 {where} · {problems} problems · {lessons} lessons"
-    return False, "waiting for the host's recall"
+    calls = _recall_calls(view.activity, view.run_started, query)
+    if not calls:
+        return False, "waiting for the host's recall"
+    designs = [d for d in calls[-1] if d is not None]
+    hits = [d for d in designs if marker in d[1].lower()]
+    if not hits:
+        return False, "the newest recall did not return Act 1"
+    rank, _request, problems, lessons = min(hits, key=lambda d: d[0])
+    if rank > within:
+        return False, f"Act 1 came back #{rank}, need top {within}"
+    if problems < need:
+        return False, f"Act 1 returned with {problems} problems, need {need}"
+    if not lessons:
+        return False, "Act 1 returned, but no lessons came with it"
+    where = "first" if rank == 1 else f"#{rank}"
+    return True, f"Act 1 {where} · {problems} problems · {lessons} lessons"
 
 
 def tasks_landed(step, view):
