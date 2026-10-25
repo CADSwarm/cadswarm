@@ -100,8 +100,9 @@ note after the steps.
 7. **Log it.** One line in `rehearsal.md`: time the reset took, and anything that had to be skipped.
 
 At the booth there is no reset between judges. `timeline.json` starts from an empty model and refuses Start
-once Act 1 parts exist; a second booth run needs a fresh workspace (a new host data folder and fresh helper
-invites), not a restore of `act-1-ready`.
+once Act 1 parts exist; a second booth run needs a new database (`-Db`, with the module published into it),
+the presenter and reviewer folders reset (their stored identities point at the old database), and fresh
+invites for the whole cast, not a restore of `act-1-ready`.
 
 If the table reset cannot finish before the next judge: start from the running Act 2, say the recall
 already happened, and let the panel carry Act 1. Never present a recorded run as live.
