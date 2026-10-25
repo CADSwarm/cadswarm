@@ -13,6 +13,14 @@
       "outcome": {"type": "keyword"}, "findings": {"type": "text"}, "problems": {"type": "keyword"},
       "params": {"type": "flattened"}, "finished_at": {"type": "date"}, "text": {"type": "text"},
       "content": {"type": "semantic_text", "inference_id": "cadswarm-jina"}}}},
+    "cadswarm-fea": {"mappings": {"properties": {
+      "report_id": {"type": "keyword"}, "project": {"type": "keyword"}, "title": {"type": "text"},
+      "target": {"type": "keyword"},
+      "analysis": {"type": "keyword"}, "verdict": {"type": "keyword"}, "headline": {"type": "text"},
+      "material": {"type": "keyword"}, "safety_factor": {"type": "float"}, "max_stress_mpa": {"type": "float"},
+      "max_displacement_mm": {"type": "float"}, "problems": {"type": "text"}, "by": {"type": "keyword"},
+      "published_at": {"type": "date"}, "text": {"type": "text"},
+      "content": {"type": "semantic_text", "inference_id": "cadswarm-jina"}}}},
     "cadswarm-lessons": {"mappings": {"properties": {
       "board_id": {"type": "keyword"}, "problem": {"type": "keyword"}, "count": {"type": "integer"},
       "lesson": {"type": "text"}, "updated_at": {"type": "date"}}}},

@@ -66,7 +66,9 @@ def test_recall_designs_filters_by_board_and_reads_lessons(tmp_path):
     r = helper.handle(project(tmp_path, fake), {"id": 1, "op": "recall_designs",
                                                 "args": {"query": "pico case", "board": "raspberry-pi-pico"}})
     assert r["ok"]
-    assert fake.calls == [("cadswarm-designs", "pico case", 3, {"board_id": "raspberry-pi-pico"})]
+    assert fake.calls == [("cadswarm-designs", "pico case", 3, {"board_id": "raspberry-pi-pico"}),
+                          ("cadswarm-fea", "pico case", 3, None)]  # and the team's past simulations
+    assert "simulations" in r["result"]
     assert r["result"]["designs"][0]["board_id"] == "raspberry-pi-pico"
     assert r["result"]["lessons"] == ["Seen 2 time(s) on raspberry-pi-pico: clips usb plug. Design to avoid it."]
 

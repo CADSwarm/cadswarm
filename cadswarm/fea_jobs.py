@@ -206,6 +206,7 @@ class FeaJobs:
                                        "analysis": job["analysis"], "verdict": report["verdict"],
                                        "headline": report["headline"], "placeholders": len(job["placeholders"]),
                                        "auto": auto})
+            threading.Thread(target=self.remember, args=(report,), daemon=True).start()
             return {"published": True, "folder": f"files/{folder}", "files": paths, "verdict": report["verdict"],
                     "headline": report["headline"], "improvements": len(report["improvements"])}
 
@@ -219,7 +220,27 @@ class FeaJobs:
                 self.db.execute("UPDATE fea_jobs SET status='failed', result=? WHERE id=?",
                                 (json.dumps({"ok": False, "code": "publish_failed", "error": str(e)}), r["id"]))
 
-    def reports(self, limit=100):
+    def remember(self, report):
+        """Keep a published report in Elastic's design memory (cadswarm-fea), so later designs and other teams'
+        helpers can recall what failed and why. Best effort: without Elastic keys, or offline, it is skipped."""
+        try:
+            from .knowledge import fea_doc
+            project = os.path.basename(os.path.dirname(os.path.normpath(self.p.files.full(""))))
+            self.p.elastic.index_fea(fea_doc(report, project))
+            return True
+        except Exception:
+            return False
+
+    def reports(self, limit=100, ref=None):
+        """Every published report, newest first; with `ref` (a report id or its folder), that one report as a
+        digest an AI helper can act on (fea.digest)."""
+        if ref:
+            ref = str(ref).removeprefix("files/").rstrip("/")
+            row = self.db.execute("SELECT report, folder FROM fea_jobs WHERE status='published' AND (id=? OR folder=?)",
+                                  (ref, ref)).fetchone()
+            if not row:
+                raise FeaJobError("not_found", f"No published simulation report {ref}; fea_reports lists them")
+            return fea.digest(json.loads(row["report"]), f"files/{row['folder']}")
         rows = self.db.execute("SELECT id, report, folder, published_at FROM fea_jobs WHERE status='published' "
                                "ORDER BY published_at DESC LIMIT ?", (limit,)).fetchall()
         out = []

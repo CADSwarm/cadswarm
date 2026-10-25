@@ -179,7 +179,22 @@ def env(tmp_path, monkeypatch):
         return json.loads(json.dumps(STATIC_RESULT)), b"\x89PNG fake"
     monkeypatch.setattr(fea_jobs, "freecad_python", lambda: "freecad-python")
     p._fea = fea_jobs.FeaJobs(p, clock, runner=fake_run)
+    p.elastic = FakeElastic()  # publishing remembers the report; never index test data into a real cluster
     return p, tmp_path, clock, calls
+
+
+class FakeElastic:
+    def __init__(self):
+        self.fea = []
+
+    def index_fea(self, doc):
+        self.fea.append(doc)
+
+    def search(self, index, query, k=5, filters=None):
+        return [{"source": d} for d in self.fea][:k] if index == "cadswarm-fea" else []
+
+    def lessons(self, board, k=5):
+        return []
 
 
 def ask(p, op, actor=AGENT, **args):
@@ -434,3 +449,102 @@ def test_lighten_hint_detects_requests_to_save_weight():
         assert "lighten_part" in lattice_hint(text), text
     for text in ("what colour is it", "move the light switch", "add a fillet"):
         assert lattice_hint(text) == "", text
+
+
+def test_the_plot_keeps_a_thin_parts_short_axis_readable():
+    from cadswarm.worker.fea_runner import box_aspect
+    assert box_aspect([240, 240, 20]) == [240, 240, 60.0]  # a 20 mm plate gets room for its z ticks
+    assert box_aspect([100, 80, 60]) == [100, 80, 60]  # chunky parts keep their true proportions
+    assert box_aspect([0, 0, 0]) == [0.25e-6, 0.25e-6, 0.25e-6]  # degenerate input never divides by zero
+
+
+def test_a_helper_reads_a_published_report_as_problems_and_a_rerun(env):
+    p, _, _, _ = env
+    jid = start(p, label="shelf load")["job_id"]
+    finished(p, jid)
+    folder = ask(p, "fea_publish", job_id=jid, summary="It yields at the wall.",
+                 improvements=[{"text": "Thicken the root", "severity": "warning"}])["result"]["folder"]
+    d = ask(p, "fea_reports", report=jid)["result"]
+    assert d["id"] == jid and d["folder"] == folder and d["verdict"] == "fail" and d["target"] == ["Beam"]
+    sev = [x["severity"] for x in d["problems"]]
+    assert sev == sorted(sev, key=lambda s: fea.SEVERITY_ORDER[s]) and sev[0] == "critical"  # worst first
+    assert any(x["text"] == "Thicken the root" for x in d["problems"])
+    assert d["results"]["safety_factor"] == 0.788
+    rerun = d["rerun_args"]  # run_fea(**rerun_args) repeats the same analysis after the fix
+    assert rerun["target"] == ["Beam"] and rerun["fixed"] == ["xmin"] and rerun["material"] == "steel_s235"
+    assert rerun["loads"][0]["newtons"] == 1000 and rerun["label"] == "shelf load"
+    assert ask(p, "fea_reports", report=folder)["result"]["id"] == jid  # its folder works too
+    assert ask(p, "fea_reports", report="fea_nope")["code"] == "not_found"
+
+
+def test_a_published_report_is_remembered_in_elastic(env):
+    p, _, _, _ = env
+    jid = start(p)["job_id"]
+    finished(p, jid)
+    ask(p, "fea_publish", job_id=jid, summary="Bends a lot.")
+    import time
+    for _ in range(100):  # indexing runs off the critical path
+        if p.elastic.fea:
+            break
+        time.sleep(0.01)
+    doc, = p.elastic.fea
+    assert doc["report_id"] == jid and doc["target"] == ["Beam"] and doc["title"] and doc["verdict"] == "fail"
+    assert doc["safety_factor"] == 0.788 and doc["problems"] and doc["content"] == doc["text"]
+    assert "Bends a lot." in doc["text"]
+    sims = ask(p, "recall_designs", query="beam safety factor")["result"]["simulations"]
+    assert sims[0]["target"] == ["Beam"] and sims[0]["verdict"] == "fail"
+
+
+def test_without_elastic_publishing_still_works(env, monkeypatch):
+    p, _, _, _ = env
+    from cadswarm.knowledge import ElasticError
+
+    def not_configured():
+        raise ElasticError(0, "Elastic is not configured on this host")
+    monkeypatch.setattr(helper.Elastic, "from_env", staticmethod(not_configured))  # no keys on this host
+    p.elastic = None
+    jid = start(p)["job_id"]
+    finished(p, jid)
+    assert ask(p, "fea_publish", job_id=jid, summary="ok")["ok"]
+    assert p.fea.remember({"id": jid}) is False
+
+
+def test_the_panel_builds_a_run_fea_request_from_what_a_person_typed():
+    body = fea.panel_request("Bracket", "static", "pla", "zmin, cyl r=2.5", "50", "down (-z)", "zmax")
+    assert body["target"] == "Bracket" and body["fixed"] == ["zmin", "cyl r=2.5"] and body["material"] == "pla"
+    assert body["loads"] == [{"type": "force", "faces": ["zmax"], "newtons": 50.0, "direction": [0, 0, -1]}]
+    modal = fea.panel_request("Bracket", "modal", "pla", "zmin")
+    assert modal["modes"] == 6 and "loads" not in modal
+    for bad in (("", "static", "pla", "zmin", "50"), ("B", "thermal", "pla", "zmin", "50"),
+                ("B", "static", "unobtainium", "zmin", "50"), ("B", "static", "pla", " ", "50"),
+                ("B", "static", "pla", "zmin", "0"), ("B", "static", "pla", "zmin", "lots")):
+        with pytest.raises(fea.FeaInputError):
+            fea.panel_request(*bad)
+
+
+class FakeHub:
+    def __init__(self, statuses):
+        self.statuses, self.calls = list(statuses), []
+
+    def post(self, path, body=None):
+        self.calls.append(("POST", path, body))
+        if path == "/fea/run":
+            return {"job_id": "fea_1", "status": self.statuses.pop(0)}
+        return {"published": True, "folder": "files/fea/x"}
+
+    def get(self, path, **params):
+        self.calls.append(("GET", path, params))
+        return {"job_id": "fea_1", "status": self.statuses.pop(0), "error": "CalculiX stopped"}
+
+
+def test_the_panel_runs_a_simulation_then_publishes_it_as_the_persons_report():
+    hub = FakeHub(["queued", "running", "done"])
+    body = fea.panel_request("Bracket", "static", "pla", "zmin", "50", "down (-z)", "zmax")
+    assert fea.run_and_publish(hub, body, "ann", wait=1)["folder"] == "files/fea/x"
+    assert [c[1] for c in hub.calls] == ["/fea/run", "/fea/jobs/fea_1", "/fea/jobs/fea_1", "/fea/jobs/fea_1/publish"]
+    publish = hub.calls[-1][2]
+    assert publish["improvements"] == [] and "by ann" in publish["summary"] and "50 N on zmax" in publish["summary"]
+    with pytest.raises(fea.FeaInputError, match="CalculiX"):
+        fea.run_and_publish(FakeHub(["running", "failed"]), body, "ann", wait=1)
+    with pytest.raises(fea.FeaInputError, match="still running"):
+        fea.run_and_publish(FakeHub(["running"] * 5), body, "ann", wait=1, polls=3)

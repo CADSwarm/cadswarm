@@ -411,8 +411,9 @@ class SpaceHub(LibraryRoutes):
         return self._fea_op("fea_publish", {"job_id": jid, "summary": body.get("summary") or "",
                                             "improvements": body.get("improvements") or []})
 
-    def fea_reports(self):
-        return self._fea_op("fea_reports", {})
+    def fea_reports(self, report=None, limit=100):
+        """Published reports; ?report=<id or folder> returns that one as a digest a helper can act on."""
+        return self._fea_op("fea_reports", {"report": report, "limit": int(limit)} if report else {"limit": int(limit)})
 
     # ------------------------------------------------------------------ lattice
 

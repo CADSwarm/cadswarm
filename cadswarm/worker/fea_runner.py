@@ -424,11 +424,19 @@ def extract(job, analysis, geom, size, dat_path):
     return out
 
 
+def box_aspect(extents, floor=0.25):
+    """The plot box's proportions: true to the part, but no side under `floor` of the longest, so a thin
+    plate still reads as thin while its short axis keeps room for readable ticks and its label."""
+    longest = max(max(extents), 1e-6)
+    return [max(e, floor * longest) for e in extents]
+
+
 def plot(spec, modes, path):
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        from matplotlib.ticker import MaxNLocator
     except Exception:
         return False
     title, pts, vals = spec
@@ -440,14 +448,20 @@ def plot(spec, modes, path):
     ax.set_xlabel("x (mm)")
     ax.set_ylabel("y (mm)")
     ax.set_zlabel("z (mm)")
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis.set_major_locator(MaxNLocator(5))
     try:
-        ax.set_box_aspect([max(1e-6, max(p.x for p in pts) - min(p.x for p in pts)),
-                           max(1e-6, max(p.y for p in pts) - min(p.y for p in pts)),
-                           max(1e-6, max(p.z for p in pts) - min(p.z for p in pts))])
+        ax.set_box_aspect(box_aspect([max(p.x for p in pts) - min(p.x for p in pts),
+                                      max(p.y for p in pts) - min(p.y for p in pts),
+                                      max(p.z for p in pts) - min(p.z for p in pts)]))
     except Exception:
         pass
     ax.set_title(title, fontsize=10)
-    fig.colorbar(sc, ax=ax, shrink=0.7)
+    # Padded away from the axes so it never sits on the z label.
+    bar = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.12)
+    unit = title[title.rfind("(") + 1:title.rfind(")")] if title.endswith(")") and "(" in title else ""
+    if unit:
+        bar.set_label(unit)
     if modes:
         bx = fig.add_subplot(1, 2, 2)
         bx.bar([str(m["mode"]) for m in modes], [m["hz"] for m in modes], color="#3e9be9")

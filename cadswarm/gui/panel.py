@@ -31,7 +31,7 @@ from ..invite import InviteError, read_invite
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
-from . import library_ui, lighten_ui, overlay, panes, sponsors as sponsors_ui, style_ui, theme
+from . import fea_ui, library_ui, lighten_ui, overlay, panes, sponsors as sponsors_ui, style_ui, theme
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -646,8 +646,9 @@ class TeamPanel(QtGui.QDockWidget):
         self.banner_text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         bl.addWidget(self.banner_text)
         brow = QtGui.QHBoxLayout()
-        self.invite_button = action_button("Invite a teammate", "Show the code and QR a teammate's phone scans",
-                                           self.show_remote)
+        # A teammate joins from their own FreeCAD with the code; a phone's QR lives in the Remote tab.
+        self.invite_button = action_button("Invite a teammate", "Copy a single-use invite code for a teammate",
+                                           invite_teammates)
         self.banner_button = action_button("", "", self.banner_action)
         brow.addWidget(self.invite_button)
         brow.addWidget(self.banner_button)
@@ -926,6 +927,8 @@ class TeamPanel(QtGui.QDockWidget):
                 ("Project", (("Project files…", "Notes, plans and scripts your team saved", show_project_files),
                              ("Open project folder", "Open the folder the team saves into", open_project_folder),
                              ("Save a snapshot…", "Keep this version of the model", save_snapshot),
+                             ("Run a simulation…", "Check how a part holds up under a load, without asking a helper",
+                              fea_ui.show_run_simulation),
                              ("Simulation reports…", "The strength checks (FEA) your helpers ran",
                               show_fea_reports),
                              ("Storage and free up space…", "What uses the project's room", show_storage))),
@@ -3672,6 +3675,11 @@ class FeaReportDialog(QtGui.QDialog):
         self.view.setHtml(page)
         lay.addWidget(self.view, 1)
         row = QtGui.QHBoxLayout()
+        if r["verdict"] != "ok":  # an AI helper reads the report (fea_report), fixes its parts and reruns it
+            self.fix_button = QtGui.QPushButton("Ask a helper to fix this…")
+            self.fix_button.setToolTip("A helper reads this report, fixes the problems in the parts and runs it again")
+            self.fix_button.clicked.connect(self.ask_fix)
+            row.addWidget(self.fix_button)
         for label, fn in (("Export HTML…", self.export_html), ("Export JSON…", self.export_json)):
             b = QtGui.QPushButton(label)
             b.clicked.connect(fn)
@@ -3683,6 +3691,22 @@ class FeaReportDialog(QtGui.QDialog):
         close.clicked.connect(self.close)
         row.addWidget(close)
         lay.addLayout(row)
+
+    def ask_fix(self):
+        helpers = [x["name"] for x in SESSION.model["participants"] if takes_instructions(x)]
+        if not helpers:
+            hint("No AI helper has joined yet. Click ＋ New helper.")
+            return
+        helper, ok = QtGui.QInputDialog.getItem(self, "Ask a helper to fix this", "Which helper should fix it?",
+                                                helpers, 0, False)
+        if not ok:
+            return
+        r = self.report
+        body = (f"The simulation report “{r['title']}” ({r['id']}) says {VERDICT_WORDS.get(r['verdict'], ('', ''))[1].lower()}: "
+                f"{r['headline']}. Read it with fea_report('{r['id']}'), fix its critical and warning problems in "
+                f"{', '.join(r['model']['target'])}, then rerun it with its rerun_args and publish the new report.")
+        SESSION.act_async("POST", "/messages", {"to": helper, "kind": "command", "body": body},
+                          done=f"Asked {helper} to fix “{r['title']}”", purpose="ask a helper to fix a simulation")
 
     def _save(self, title, ext, pattern, data):
         name = f"{safe_name(self.report['title'])} report.{ext}"
@@ -3811,6 +3835,8 @@ def register_commands():
     Gui.addCommand("CadSwarm_Export", Cmd("Save as 3D file…", "Save the shared model as a STEP file", run_export))
     Gui.addCommand("CadSwarm_FeaReports", Cmd("Simulation reports…", "Open the team's FEA (simulation) reports",
                                               show_fea_reports))
+    Gui.addCommand("CadSwarm_RunFea", Cmd("Run a simulation…", "Check how a part holds up under a load, no helper "
+                                          "needed", fea_ui.show_run_simulation))
     Gui.addCommand("CadSwarm_NewTask", Cmd("New task…", "Give the team (or yourself) something to do", lambda: (
         show_panel(), SESSION.panel.new_task())))
     Gui.addCommand("CadSwarm_EditPart", Cmd("Edit a part…", "Change a part yourself and share the change", edit_part))

@@ -422,6 +422,92 @@ def build_report(jid, job, result, by, requested_at, finished_at, revs, seq, sum
     return report
 
 
+DIRECTIONS = {"down (-z)": [0, 0, -1], "up (+z)": [0, 0, 1], "+x": [1, 0, 0], "-x": [-1, 0, 0],
+              "+y": [0, 1, 0], "-y": [0, -1, 0], "into the face (normal)": "normal"}
+
+
+def panel_request(target, analysis, material, fixed, newtons=None, direction="down (-z)", load_faces="zmax",
+                  modes=6):
+    """run_fea's body for a person who clicked Run a simulation: the part, how it is held and loaded, as typed.
+    Face fields take the same selectors as list_faces ("zmin", "cyl r=2.5", "Face3"), comma separated."""
+    if not target:
+        raise FeaInputError("Pick the part to simulate")
+    if analysis not in ("static", "modal"):
+        raise FeaInputError("From the panel you can run a static or a modal analysis; ask a helper for heat")
+    if material not in PRESETS:
+        raise FeaInputError(f"Unknown material {material!r}")
+    held = [s.strip() for s in str(fixed or "").split(",") if s.strip()]
+    if not held:
+        raise FeaInputError("Say which faces are held still, e.g. zmin for the bottom face")
+    body = {"target": target, "analysis": analysis, "material": material, "fixed": held,
+            "label": f"{target} ({'load test' if analysis == 'static' else 'vibration'}, from the panel)"}
+    if analysis == "static":
+        faces = [s.strip() for s in str(load_faces or "").split(",") if s.strip()]
+        n = _num(newtons, "The force")
+        if n <= 0 or not faces:
+            raise FeaInputError("Give the force in newtons (more than 0) and the faces it pushes on")
+        if direction not in DIRECTIONS:
+            raise FeaInputError(f"Unknown direction {direction!r}")
+        body["loads"] = [{"type": "force", "faces": faces, "newtons": n, "direction": DIRECTIONS[direction]}]
+    else:
+        body["modes"] = int(modes)
+    return body
+
+
+PANEL_WAIT, PANEL_POLLS = 45, 40  # each poll waits on the host like the MCP tools; ~30 min in all for big meshes
+
+
+def run_and_publish(client, body, person, wait=PANEL_WAIT, polls=PANEL_POLLS):
+    """Run a panel_request through the hub, wait for the solver and publish it as `person`'s report.
+    Returns the publish reply (its folder pops up for the team) or raises FeaInputError saying what went wrong."""
+    out = client.post("/fea/run", {**body, "wait": wait})
+    for _ in range(polls):
+        if out.get("status") not in ("queued", "running"):
+            break
+        out = client.get(f"/fea/jobs/{out['job_id']}", wait=wait)
+    if out.get("status") == "failed":
+        raise FeaInputError(f"The simulation failed: {out.get('error') or 'see the team activity'}")
+    if out.get("status") != "done":
+        raise FeaInputError("The simulation is still running; its report is published automatically when it ends")
+    loads = body.get("loads") or []
+    summary = (f"Run from the panel by {person}: {ANALYSES[body['analysis']].split(' (')[0].lower()} analysis of "
+               f"{body['target']} in {PRESETS[body['material']]['name']}, held at {', '.join(body['fixed'])}"
+               + (f", {loads[0]['newtons']:g} N on {', '.join(loads[0]['faces'])}." if loads else "."))
+    return client.post(f"/fea/jobs/{out['job_id']}/publish", {"summary": summary, "improvements": []})
+
+
+SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
+
+
+def digest(report, folder=""):
+    """A published report as an AI helper needs it to fix the design: the problems worst first, the numbers
+    behind them, and the run_fea arguments that repeat the same analysis after the change."""
+    inp, model = report.get("inputs") or {}, report.get("model") or {}
+    material = inp.get("material") or {}
+    problems = sorted((p for p in report.get("improvements") or []),
+                      key=lambda p: SEVERITY_ORDER.get(p.get("severity"), 3))
+    rerun = {"target": model.get("target") or [], "analysis": report.get("analysis"),
+             "material": material.get("preset") or material or None, "fixed": inp.get("fixed"),
+             "loads": inp.get("loads"), "thermal": inp.get("thermal"), "mesh": inp.get("mesh"),
+             "label": report.get("label") or None}
+    if report.get("analysis") == "modal":
+        rerun.update(modes=inp.get("modes"), excitation_hz=inp.get("excitation_hz"))
+    return {
+        "id": report.get("id"), "folder": folder, "title": report.get("title"), "by": report.get("by"),
+        "verdict": report.get("verdict"), "headline": report.get("headline"), "summary": report.get("summary"),
+        "target": model.get("target") or [], "model_revs": model.get("revs") or {},
+        "results": report.get("results") or {},
+        "problems": [{"severity": p.get("severity"), "text": p.get("text"), "source": p.get("source")}
+                     for p in problems],
+        "placeholders": [p.get("text") for p in inp.get("placeholders") or []],
+        "rerun_args": {k: v for k, v in rerun.items() if v not in (None, [], {})},
+        "how_to_fix": ("Fix the critical and warning problems in parts you hold (lock them first; ask the owner "
+                       "otherwise). Placeholder inputs are guesses: ask a person for the real ones. Then call "
+                       "run_fea with rerun_args (face numbers like Face7 change when geometry changes: check "
+                       "them with list_faces) and publish the new report so the team can compare."),
+    }
+
+
 # --------------------------------------------------------------------------
 # HTML (QTextBrowser renders a subset of HTML 4 / CSS 2, so keep it to tables and inline styles)
 # --------------------------------------------------------------------------
