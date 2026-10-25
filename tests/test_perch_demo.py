@@ -427,3 +427,63 @@ def test_the_run_log_records_each_step_and_the_numbers_the_pitch_quotes(tmp_path
     assert [s["state"] for s in out["steps"]] == ["done", "done", "done"]
     rows = [json.loads(line) for line in log.path.read_text(encoding="utf-8").splitlines()]
     assert any(row["kind"] == "step.done" and "recall" in row["detail"] for row in rows)
+
+
+# --------------------------------------------------------------------------- review fixes
+
+def test_a_previous_runs_events_cannot_satisfy_this_run():
+    clock = Clock()
+    snap = ready_snapshot()
+    snap["model"]["participants"].append({"id": 9, "name": "sam", "client": "phone", "status": "active"})
+    snap["model"]["seq"] = 100
+    io = FakeIO(snapshot=snap, events=[{"kind": "brief", "actor": 9, "seq": 90,
+                                       "text": "Make the Podium head"}])
+    r = a_runner(io, clock)
+    r.start()
+    clock.advance(2)
+    r.tick()
+    assert r.steps[0].state == "waiting"  # the seq-90 brief came before the press
+    io.ev.append({"kind": "brief", "actor": 9, "seq": 101, "text": "Make the Podium head"})
+    clock.advance(2)
+    r.tick()
+    assert r.steps[0].state == "done"
+
+
+def test_the_gate_ignores_a_previous_runs_part():
+    clock = Clock()
+    snap = ready_snapshot()
+    snap["model"]["seq"] = 100
+    io = FakeIO(snapshot=snap, events=[{"kind": "op", "op": "create_extrusion", "seq": 90,
+                                       "created": ["Podium_Body"], "modified": [], "deleted": [],
+                                       "recomputed": [], "broken": []}])
+    steps = [{"id": "first_part", "label": "f", "at": 0, "deadline": 300, "predicate": "first_part",
+              "args": {"parts": ["Podium_Body"]}}]
+    r = a_runner(io, clock, steps=steps,
+                 gate={"first_op_by": 10, "if_missed": "No part has started yet."})
+    r.start()
+    clock.advance(11)
+    r.tick()
+    assert r.gate_failed is True
+
+
+def test_a_cancelled_task_is_not_a_landed_task():
+    tasks = [{"title": "Podium_Body", "status": "cancelled", "assignee": "lead-claude"}]
+    snap = {"model": {"objects": [], "participants": []}, "tasks": tasks, "briefs": [], "reviews": []}
+    ok, detail = driver.tasks_landed(a_step("tasks", "tasks_landed",
+                                            {"owners": {"Podium_Body": "lead-claude"}}),
+                                     a_view(snapshot=snap))
+    assert ok is False and "Podium_Body" in detail
+
+
+def test_a_skipped_step_is_not_a_number_for_the_pitch(tmp_path):
+    clock = Clock()
+    steps = [{"id": "first_part", "label": "f", "at": 0, "deadline": 30, "predicate": "first_part",
+              "args": {"parts": ["Podium_Body"]}}]
+    log = driver.RunLog(tmp_path, "test")
+    r = a_runner(FakeIO(snapshot=ready_snapshot()), clock, steps=steps, log=log)
+    r.start()
+    clock.advance(31)
+    r.tick()
+    assert r.steps[0].state == "skipped"
+    out = json.loads(log.summary_path.read_text(encoding="utf-8"))
+    assert out["t_first_op"] is None

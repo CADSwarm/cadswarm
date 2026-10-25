@@ -212,7 +212,7 @@ def tasks_landed(step, view):
     found, why = {}, []
     for part, owner in wanted.items():
         row = next((t for t in tasks if part.lower() in (t.get("title") or "").lower()
-                    and (t.get("status") or "") != "done"), None)
+                    and (t.get("status") or "") in ("open", "claimed")), None)
         if not row:
             why.append(f"no open task for {part}")
             continue
@@ -442,6 +442,10 @@ class Runner:
             raise RunnerError("Probe has not passed: " + (why or "run Probe first"))
         if not self.reset_ok():
             raise RunnerError("The team is not back at act-1-ready: " + self.reset_why)
+        # Events from before the press are not this run's evidence: the between-judge reset never
+        # prunes the hub's log, so a previous run's brief or op would satisfy this one's first steps.
+        # `model.seq` is the hub's latest event seq (SpaceHub.latest_seq() reads v_event).
+        self.seq = int((self.io.snapshot().get("model") or {}).get("seq") or 0)
         self.started_at = self.clock()
         self._log("run", "start", self.plan["name"])
         self._begin(self.current)
@@ -601,14 +605,16 @@ class RunLog:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def summary(self, state):
-        t = {s["id"]: s["t"] for s in state["steps"] if s["t"] is not None}
-        ended = [v for v in t.values() if v is not None]
+        # The numbers the pitch quotes come only from steps the module actually closed as done; a
+        # skipped step still has a `t`, but it is the deadline, not a result.
+        done = {s["id"]: s["t"] for s in state["steps"] if s["state"] == "done" and s["t"] is not None}
+        ended = [s["t"] for s in state["steps"] if s["t"] is not None]
         out = {
             "timeline": state["timeline"],
             "log": self.path.name,
-            "t_recall": t.get("recall"),
-            "t_tasks": t.get("tasks"),
-            "t_first_op": t.get("first_part"),
+            "t_recall": done.get("recall"),
+            "t_tasks": done.get("tasks"),
+            "t_first_op": done.get("first_part"),
             "t_finish": max(ended) if ended else None,
             "gate_failed": state["gate"]["failed"],
             "steps": [{"id": s["id"], "state": s["state"], "t": s["t"]} for s in state["steps"]],
