@@ -190,9 +190,9 @@ When everything above is handled, stop. Don't call wait_for_changes: you're woke
 """
 
 
-def agent_command(client, exe, folder, prompt, resume):
+def agent_command(client, exe, folder, prompt, resume, model=None):
     """(argv, stdin text). The prompt goes in on stdin where the CLI accepts that: a .cmd launcher would
-    mangle a multi-line argument."""
+    mangle a multi-line argument. `model` is the folder's pinned model (agent_setup.save_helper_model)."""
     if client == "claude":
         argv = [exe] + (["--continue"] if resume else []) + [
             "-p", "--max-turns", "80", "--allowedTools", "mcp__cadswarm",
@@ -209,7 +209,7 @@ def agent_command(client, exe, folder, prompt, resume):
         argv = [exe, "run", "--standalone", "--auto"]
         if resume:
             argv.append("--continue")
-        model = os.environ.get("CADSWARM_HELPER_MODEL")
+        model = model or os.environ.get("CADSWARM_HELPER_MODEL")
         if model:
             argv += ["--model", model]
         return argv, prompt
@@ -322,7 +322,8 @@ class Runner:
             return False
         prompt = wake_prompt(self.cfg.get("name") or "an AI helper", self.project or "your team's project",
                              [line for _, line in work], first)
-        argv, stdin_text = agent_command(client, exe, self.folder, prompt, resume=bool(self.state.get("started")))
+        argv, stdin_text = agent_command(client, exe, self.folder, prompt, resume=bool(self.state.get("started")),
+                                         model=self.cfg.get("model"))
         self.log(f"waking the helper for {len(work)} new thing(s): {', '.join(k for k, _ in work) or 'first start'}")
         self.child = self.spawn(argv, stdin_text)
         self.child_started = self.clock()

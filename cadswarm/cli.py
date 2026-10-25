@@ -32,7 +32,8 @@ def cmd_setup(a):
     project = os.path.abspath(a.dir)
     try:
         t = read_invite(a.invite)
-        written = write_agent_config(project, a.client, t, a.name, sys.executable, a.fresh, ephemeral=a.ephemeral)
+        written = write_agent_config(project, a.client, t, a.name, sys.executable, a.fresh, ephemeral=a.ephemeral,
+                                     model=a.model)
     except (InviteError, ValueError) as e:
         raise SystemExit(f"cadswarm: {e}")
     except Exception as e:  # SpaceError from redeeming: used, expired or unreachable
@@ -124,6 +125,8 @@ def main(argv=None):
     s.add_argument("--fresh", action="store_true", help="forget the stored identity and join as a new member")
     s.add_argument("--ephemeral", action="store_true",
                    help="a one-job agent (the host's planners and workers): it leaves the team when its session ends")
+    s.add_argument("--model", default=None,
+                   help="pin the helper's model (OpenCode: provider/model; Creao: a model id); \"\" unpins it")
     s.set_defaults(fn=cmd_setup)
     r = sub.add_parser("creao", help="Creao AI helper housekeeping")
     rs = r.add_subparsers(dest="creao_cmd", required=True)

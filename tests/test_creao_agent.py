@@ -236,3 +236,12 @@ def test_a_fenced_or_chatty_reply_is_still_read_as_json():
 def test_catalogue_lists_names_descriptions_and_argument_schemas():
     text = creao_agent.catalogue_text([Tool("model_status")])
     assert "- model_status: does a thing" in text and '"detail"' in text
+
+
+def test_the_model_picked_for_this_helper_is_used_on_every_run(tmp_path, monkeypatch):
+    from cadswarm import agent_setup
+    project = helper(tmp_path, monkeypatch)
+    monkeypatch.setenv("CREAO_MODEL", "env-model")
+    agent_setup.save_helper_model(project, "picked-model")
+    _, client, _ = bridge(project, ['{"done": true, "summary": "ok"}'])
+    assert client.inputs[0]["model"] == "picked-model"

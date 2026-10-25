@@ -131,6 +131,47 @@ def test_opencode_gets_its_mcp_config_and_agents_md(tmp_path, monkeypatch):
     assert open(tmp_path / "AGENTS.md").read().count("cadswarm:begin") == 1
 
 
+def test_a_picked_model_sticks_to_the_helper_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1, "fence": 1,
+                                                                 "name": n, "role": "member", "kind": "agent"})
+    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
+    agent_setup.write_agent_config(str(tmp_path), "opencode", t, "dana-opencode", python="python",
+                                   model="anthropic/claude-sonnet-5-5")
+    assert agent_setup.helper_model(str(tmp_path)) == "anthropic/claude-sonnet-5-5"
+    # OpenCode reads it from its own config too, so the helper opened in a terminal uses it as well.
+    assert json.load(open(tmp_path / "opencode.json"))["model"] == "anthropic/claude-sonnet-5-5"
+    # Setting it up again without a model keeps the pick; clearing it goes back to the CLI's default.
+    agent_setup.write_agent_config(str(tmp_path), "opencode", {**t, "token": ""}, "dana-opencode", python="python")
+    assert agent_setup.helper_model(str(tmp_path)) == "anthropic/claude-sonnet-5-5"
+    agent_setup.save_helper_model(str(tmp_path), "")
+    assert agent_setup.helper_model(str(tmp_path)) == ""
+    assert "model" not in json.load(open(tmp_path / "opencode.json"))
+    assert json.load(open(tmp_path / ".cadswarm" / "config.json"))["db"] == "d"
+
+
+def test_opencode_models_are_read_from_its_cli(monkeypatch):
+    out = "anthropic/claude-sonnet-5-5\nopenai/gpt-5.1\n\nsome log line\nanthropic/claude-sonnet-5-5\n"
+    monkeypatch.setattr(agent_setup, "find_agent_cli", lambda c: "/bin/opencode")
+    monkeypatch.setattr(agent_setup.subprocess, "run", lambda argv, **kw: type(
+        "R", (), {"returncode": 0, "stdout": out, "argv": argv})())
+    assert agent_setup.list_models("opencode") == ["anthropic/claude-sonnet-5-5", "openai/gpt-5.1"]
+    assert agent_setup.list_models("claude") == []
+
+
+def test_creao_models_come_from_its_api(monkeypatch):
+    class Api:
+        def list_models(self):
+            return ["claude-sonnet", "gpt-5"]
+    monkeypatch.setattr(creao, "Creao", lambda: Api())
+    assert agent_setup.list_models("creao") == ["claude-sonnet", "gpt-5"]
+
+    class Down:
+        def list_models(self):
+            raise creao.CreaoError("Couldn't reach Creao")
+    monkeypatch.setattr(creao, "Creao", lambda: Down())
+    assert agent_setup.list_models("creao") == []
+
+
 def test_opencode_config_keeps_other_servers_and_settings(tmp_path):
     (tmp_path / "opencode.json").write_text(json.dumps(
         {"$schema": "https://example.test/schema.json", "theme": "dark",

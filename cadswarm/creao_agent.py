@@ -155,7 +155,8 @@ async def run_bridge(project, prompt, client=None, tools=None, clock=time.monoto
     cfg = creao.load_config(project)
     agent_id = (os.environ.get("CREAO_AGENT_ID") or cfg.get("agent_id")
                 or creao.load_shared().get("agent_id") or "").strip()
-    model = (os.environ.get("CREAO_MODEL") or cfg.get("model") or "").strip() or None
+    from .agent_setup import helper_model  # the model picked for this helper sticks, over CREAO_MODEL
+    model = (helper_model(project) or os.environ.get("CREAO_MODEL") or cfg.get("model") or "").strip() or None
     api = client or creao.Creao()
     tool_set = tools
     if tool_set is None:
