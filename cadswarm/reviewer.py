@@ -226,6 +226,10 @@ def main(argv=None):
     p.add_argument("--round", type=int, default=1)
     p.add_argument("--dir", required=True)
     a = p.parse_args(argv)
+    # The host is started from the desktop app, not scripts/with-env.ps1: Droid signs in with the
+    # FACTORY_API_KEY in cadswarm.env (never overriding a real env var).
+    from .creao import load_env_file
+    load_env_file()
     asyncio.run(review(os.path.abspath(a.dir), a.brief, a.round))
 
 
