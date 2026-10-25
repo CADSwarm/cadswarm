@@ -49,20 +49,50 @@ pitch plus a live demo. The demo is built backwards from those four words.
 
 ### Judging map
 
-| Criterion the guide names | What this demo puts in front of the judge |
+| Criterion | What this demo puts in front of the judge |
 |---|---|
 | **Impact** | a named community with a lived problem (hardware teams and student makerspaces that can wire but not CAD) and a part they can use on Monday |
 | **Quality** | two review rounds with real findings, clash and min-wall checks, a closed solid, a real bed, exportable STEP/STL |
 | **Technical complexity** | rules in the database (fences, locks, stale sweep, takeover), a transactional FreeCAD worker, expression-driven fits, FEA, lattice verification, memory recall |
 | **Creativity** | two agents and two people building one physical object live; a phone-submitted second brief that reuses the first; a referee agent that cannot touch the model |
 | **Live demo** (required) | every act runs live in a fresh document; no slide can show this |
-| **Anthropic track: named community, real problem, it works, thoughtful use and known failure modes** | the community in one sentence, the object in the room, one thing done well, and the failure-mode table below |
-| **Factory track: Droid SDK, a trigger you designed, safety, visible work** | the host triggers the reviewer when parts finish; an allowlist plus a server-side write refusal; the activity feed shows plans, steps and the verdict |
+| **Anthropic track** (named community, real problem, it works, thoughtful use, known failure modes) | the community in one sentence, the object in the room, one thing done well, and the failure-mode table below |
+| **Factory track** (Droid SDK, a trigger you designed, safety, visible work) | the host triggers the reviewer when parts finish; an allowlist plus a server-side write refusal; the activity feed shows plans, steps and the verdict |
+| **Creao tracks** (agent-first disruption, team empowerment) | a Creao helper takes a real part, one tool call per turn; two people plus four kinds of agent share one model; a person hands a part to an agent and takes it back |
+| **Elastic track** (depth, JINA, Agent Builder + Workflows, Serverless) | the four-row table below, shown in Kibana and on the card |
 
 Best Hardware is out (no printer). The two general prizes this build is shaped for are **Most
-Technically Complex** and **Best People-First Hack**; the sponsor tracks it fits are Anthropic and
-Factory, and for Creao the claim is narrower than a track: a Creao helper does real work in the
-build, and the card shows it.
+Technically Complex** and **Best People-First Hack**. The sponsor tracks it targets are Anthropic,
+Factory, Creao and Elastic.
+
+### Creao, on its tracks
+
+Creao's tracks reward agents that do real work and teams that are empowered by them. The build is
+that shape, not a chatbot demo:
+
+- **Agent-first disruption.** A Creao helper takes a real part — the cradle lid, and the podium lid
+  after the restart — and every turn is one JSON tool call on the card, not a conversation.
+- **Team empowerment.** Two people and four kinds of agent share one model. The humans keep
+  authority: they set shared parameters, approve the style rules, take a lock back, and hand a
+  half-finished clamp to an agent with a note. The takeover beat is the same story in the other
+  direction: when the helper stops, the team does not.
+
+### Elastic, on the poster's four criteria
+
+The booth poster is explicit: qualified projects must use Elasticsearch, and are judged on four
+things. This is where each one lives.
+
+| Poster criterion | What this build does | Where a judge sees it |
+|---|---|---|
+| **Depth and creativity of the implementation** | hybrid `semantic_text` search over measured board datasheets, ES\|QL filtering by `board_id`, design memory written back by the host and recalled by meaning, lessons distilled from review findings | Kibana: the three indices, the ingest pipeline, the host's `index_design` round trip, `recall_designs` |
+| **JINA models for embeddings** | the `cadswarm-jina` endpoint embeds on ingest and on query; `.jina-reranker-v3.5` reranks the candidate passages | a board question whose reranked hit is the right passage, plus the inference endpoint list |
+| **Elastic Agent Builder and Workflows** | `cadswarm-board-expert` with four tools (board docs, lessons, design memory, team style) and the `distil-lessons` Workflow on a 10-minute schedule | a live `converse` when the quota answers, the agent's tool list, and a Workflow execution with both steps completed |
+| **Elastic Cloud Serverless** | the project is Elasticsearch Serverless 9.6 in us-east-1, with Kibana on the same project | the project page and the Kibana URL the host uses |
+
+Agent Builder is quota-limited on the trial tier: when the model quota is exhausted, `converse`
+returns a bare `429`. The checklist probes it in pre-flight. If it does not answer during judging,
+we show the agent definition, its four tools and the last successful trace, and say the quota is the
+limit. The other three criteria do not depend on that model.
 
 ### Sponsor stack, equally load-bearing
 
@@ -70,9 +100,9 @@ build, and the card shows it.
 |---|---|---|
 | **SpacetimeDB** | every member, lock, op, task and revision in one database | the shared state is real, not a slide |
 | **Anthropic** | planner, lead and worker agents plan, build and hand off | the design work is done by Claude agents, visible in their traces |
-| **Creao** | a cheap always-on helper takes the small parts, one tool call per turn | a second vendor's agent speaks the same protocol |
+| **Creao** | a second vendor's agent takes a real part, one tool call per turn | the agent does the work, and a person still holds the lock |
 | **Factory.ai** | Droid reviews each round and files findings as tasks | a referee that cannot write, and knows when to ask |
-| **Elastic** | board knowledge, design memory, FEA reports, distilled lessons | the second job starts from what the first learned |
+| **Elastic** | JINA-backed board search, design memory, FEA reports, distilled lessons | the second job starts from what the first learned |
 
 ## Who it is for, and why it matters
 
@@ -322,7 +352,7 @@ Brief, typed in the panel:
 | 11 | Correct + style | 2–3′ | Human sets the lid wall to 2.4 mm and saves; Tools ▸ Learned design style: add the two rules below | Human correction recorded; rules active; later turns carry "Team design style" |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
 | 13 | Snapshot + Lighten | 5–10′ | Save snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | Verifier console; mass saved; cut-open preview; `Add to model` leaves the original |
-| 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons` (or show the 10-minute schedule) | `cadswarm-designs` doc with params + 3 problems; 3 lesson docs |
+| 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons`; open Kibana on the board search, the design doc and the Workflow execution | `cadswarm-designs` doc with params + 3 problems; 3 lesson docs; reranked hit, Workflow steps completed, Agent Builder trace if the quota answers |
 | 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | Spacetime counts, Anthropic traces, Creao live again, Factory verdict, Elastic findings |
 
 Handoff note:
@@ -340,6 +370,10 @@ Style rules:
 beat 2 and stops at beat 14; that wall clock, the human minutes at beats 5, 6, 9, 11 and 13, and the
 three defects caught at beat 10 are recorded in `rehearsal.md` and become the impact numbers in the
 pitch.
+
+**Elastic evidence, prepared.** Before beat 1, four Kibana tabs are already open: the reranked board
+query, `cadswarm-designs`, the `distil-lessons` execution, and `cadswarm-board-expert`. They are
+booth setup, not a slide, and they are what the Elastic track is judged on.
 
 ### Act 2 — "The Podium" (from Sam's phone)
 
@@ -416,6 +450,8 @@ It is not a feature tour; the full walkthrough of every tool is the booth format
 - **Phone tunnel dies** — submit the same brief from the web app on a laptop.
 - **Lighten overruns** — let it run, continue export/index, show the result at the close.
 - **Elastic board lookup down** — local Params still seed; design memory and lessons are the proof.
+- **Agent Builder returns 429** — show the agent definition, its four tools and the last successful
+  trace in Kibana, say the trial quota is the limit, and lean on the other three criteria.
 
 ## Sponsor window: five live cards
 
@@ -436,7 +472,7 @@ answer to "is this real?"
 - **Factory.ai** — reviewer member, pointer, last round, findings, tasks filed, tool trace. Live.
 - **Elastic** — the brief's board, design-memory line, and "what the Workflow distils". The footer
   line with index counts and Droid versions is a **stamped snapshot**, labelled "checked …"; it is
-  never presented as live. Index counts and Workflow executions are shown in Kibana.
+  never presented as live. Index counts, Agent Builder and Workflow executions are shown in Kibana.
 
 The two new cards show "not joined" rather than disappearing, so the window is stable at five.
 
@@ -472,8 +508,9 @@ Tests: `web/test/sponsors.test.ts` (five cards, populated and empty, trace filte
   stock 608, M8, M4 and M3 hardware.
 - **The reviewer is optional in the product, live in this run.** If Droid is not signed in, the
   brief still finishes; the Factory card is then empty.
-- **Elastic Agent Builder is not in the demo.** Board search, design memory, FEA indexing and the
-  lessons Workflow are; the trial-quota model is not.
+- **Agent Builder is quota-limited.** It is probed in pre-flight and shown live when it answers; when
+  the trial model returns `429`, the demo shows the agent definition, its four tools and the last
+  successful trace, and says the quota is the limit. The other three Elastic criteria are unaffected.
 - **No staged failures.** Round 1 findings are the first draft's natural errors. If a round passes,
   the runbook uses a real tight-fit change, not a fake defect.
 - **No module, rules, schema, host-orchestration or phone-app changes.** The only product change is
@@ -563,6 +600,9 @@ release, no module publish, no host restart is required for the cards.
     where it could fail);
   - each Factory-track "what scores well" item is visible: a trigger we designed, an allowlist plus
     the server-side write refusal, and plans, steps and the verdict in the feed;
+  - the Elastic checklist is complete: a reranked board hit, the design document, a Workflow
+    execution with both steps completed, and Agent Builder either live or shown with its labelled
+    fallback;
   - each of the five cards is visibly doing its own job during the beat that claims it.
 
 ## Risks
@@ -583,6 +623,7 @@ release, no module publish, no host restart is required for the cards.
 | "How is this different from one agent?" | The refusal, the takeover, the handoff and the second-brief recall are the difference, and each is a beat |
 | The demo machine dies mid-run | `act-1-ready`, the STL and the reports live on disk, so the second machine can show the same artifacts |
 | The impact claim sounds generic | A named community, the before/after table, and only measured numbers |
+| Agent Builder's trial quota returns 429 at judging | Probe it in pre-flight; keep the agent definition, tool list and last trace open; the other three Elastic criteria carry the track |
 
 ## Scope
 
