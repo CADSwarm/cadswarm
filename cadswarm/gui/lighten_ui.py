@@ -10,6 +10,7 @@ Runs on FreeCAD's GUI thread; the job itself is a separate FreeCAD process, poll
 import html
 import os
 import threading
+import time
 import uuid
 
 import FreeCAD as App
@@ -18,6 +19,7 @@ from PySide import QtCore, QtGui
 
 from .. import fea
 from ..client import HubRequestError
+from ..files import MAX_BINARY_MB
 from ..lattice_jobs import CELLS, LatticeJobError, LatticeJobs, cell_library, estimate, freecad_python
 from . import theme
 
@@ -83,12 +85,18 @@ class LocalJob:
                         {"analysis": "static", "target": "Part", "material": request.get("material"),
                          "fixed": ["zmin"], "loads": [{"type": "gravity"}]})["material"]}
         self.state = {"status": "queued", "phase": None, "progress": 0.0, "note": ""}
+        self.log = []
+        self.started = time.time()
+        self.finished = None
         self.cancel_flag = False
         self.result = None
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
         def on_progress(p):
+            entry = {"at": p.get("at") or time.time(), "phase": p.get("phase"),
+                     "text": p.get("text") or "", "fraction": p.get("fraction")}
+            self.log = (self.log + [entry])[-400:]
             self.state.update(status="generating", phase=p.get("phase"), progress=p.get("fraction"),
                               note=p.get("text"))
         try:
@@ -96,13 +104,17 @@ class LocalJob:
                                                    lambda: self.cancel_flag)
         except Exception as e:
             self.result = {"ok": False, "code": "lattice_error", "error": f"{type(e).__name__}: {e}"}
+        self.finished = time.time()
         if self.result.get("ok"):
             self.state["status"] = "done"
         else:
             self.state["status"] = "cancelled" if self.result.get("code") == "cancelled" else "failed"
 
     def status(self):
-        out = dict(self.state, job_id=self.id)
+        log = list(self.log)
+        out = dict(self.state, job_id=self.id, log=log, started_at=self.started, finished_at=self.finished,
+                   updated_at=log[-1].get("at") if log else None,
+                   elapsed_s=round((self.finished or time.time()) - self.started, 1))
         if self.result and not self.result.get("ok"):
             out.update(error=self.result.get("error"), code=self.result.get("code"))
         if self.result and self.result.get("ok"):
@@ -127,6 +139,9 @@ class LightenDialog(QtGui.QDialog):
         self.shape = obj.Shape.copy()
         self.job = None          # team: job id; local: LocalJob
         self.last = None
+        self._log_at = None      # newest progress line shown, so a poll never repeats one
+        self._note = None        # latest note, for a server too old to send the log
+        self._started = time.time()
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self.poll)
         bb = self.shape.BoundBox
@@ -341,10 +356,36 @@ class LightenDialog(QtGui.QDialog):
         if out.get("build_voxels"):
             lines.append(f"About {out['build_voxels'] / 1e6:.1f} M voxels at {out['build_voxel_mm']:g} mm, roughly "
                          f"{out.get('minutes_estimate', '?')} min.")
+        big = self._mesh_size_note(out.get("build_voxel_mm"))
+        if big:
+            lines.append(f"<span style='color:#ff7b72'>• {big}</span>")
         for w in out.get("warnings") or []:
             colour = "#e3b341" if w["severity"] == "warning" else "#b9b5af"
             lines.append(f"<span style='color:{colour}'>• {html.escape(w['text'])}</span>")
         self.check_out.setText("<br>".join(lines) or "Looks good.")
+
+    def _mesh_size_note(self, voxel_mm):
+        """Warn before a long run when the STL would be too big for the project files (MAX_BINARY_MB per file)."""
+        if not self.team:
+            return ""  # on this computer the files are not project files, so the limit does not apply
+        try:
+            voxel_mm = float(voxel_mm)
+            volume, area = abs(self.shape.Volume), self.shape.Area
+            cell = _num(self.cell_size, 8) or 8
+        except (TypeError, ValueError, AttributeError):
+            return ""
+        if voxel_mm <= 0:
+            return ""
+        # A stress-graded TPMS at about 30 % material has ~3 mm² of wall per mm³ of cell; marching cubes
+        # makes ~2 triangles per voxel of surface and a binary STL is 50 bytes per triangle.
+        megabytes = 2 * (area + 3 * volume / cell) / voxel_mm ** 2 * 50 / 1e6
+        warn_at = MAX_BINARY_MB * 0.9  # leave room for the 3MF and the report in the same folder
+        if megabytes <= warn_at:
+            return ""
+        fit = voxel_mm * (megabytes / warn_at) ** 0.5
+        return (f"At {voxel_mm:.2f} mm detail the STL will be roughly {megabytes:.0f} MB. Project files take at "
+                f"most {MAX_BINARY_MB} MB per file, so it may be too big to save. Use Detail {fit:.2f} mm or "
+                "more, or a smaller part.")
 
     def choose_cell(self):
         args = {"target": "density", "value": 0.3, "cell_size_mm": _num(self.cell_size, 8),
@@ -399,7 +440,21 @@ class LightenDialog(QtGui.QDialog):
         self.summary = QtGui.QLabel("")
         self.summary.setWordWrap(True)
         self.summary.setTextFormat(QtCore.Qt.RichText)
-        lay.addWidget(self.summary, 1)
+        lay.addWidget(self.summary)
+        head = QtGui.QHBoxLayout()
+        head.addWidget(QtGui.QLabel("Activity"))
+        head.addStretch(1)
+        self.activity = QtGui.QLabel("")
+        self.activity.setObjectName("hint")
+        head.addWidget(self.activity)
+        lay.addLayout(head)
+        self.log_view = QtGui.QPlainTextEdit()
+        self.log_view.setObjectName("code")
+        self.log_view.setReadOnly(True)
+        self.log_view.setLineWrapMode(QtGui.QPlainTextEdit.NoWrap)
+        self.log_view.setMaximumBlockCount(600)
+        self.log_view.setPlaceholderText("What the job is doing appears here while it runs.")
+        lay.addWidget(self.log_view, 1)
         row = QtGui.QHBoxLayout()
         self.preview_btn = QtGui.QPushButton("Show it")
         self.preview_btn.clicked.connect(self.show_preview)
@@ -427,6 +482,11 @@ class LightenDialog(QtGui.QDialog):
             _p().hint(str(e))
             return
         self.summary.setText("")
+        self.log_view.clear()
+        self._log_at = None
+        self._note = None
+        self._started = time.time()
+        self.activity.setText("")
         for b in (self.preview_btn, self.section_btn, self.apply_btn, self.files_btn):
             b.setEnabled(False)
         try:
@@ -437,6 +497,8 @@ class LightenDialog(QtGui.QDialog):
         except (HubRequestError, LatticeJobError, ValueError, fea.FeaInputError) as e:
             QtGui.QMessageBox.warning(self, "CadSwarm", str(e))
             return
+        where = f"the team server, job {self.job}" if self.team else f"this computer, job {self.job.id}"
+        self._add_log(self._started, f"Started on {where}.")
         self.run_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.phase.setText("Starting…")
@@ -450,7 +512,52 @@ class LightenDialog(QtGui.QDialog):
                 _p().hint(str(e))
         elif isinstance(self.job, LocalJob):
             self.job.cancel_flag = True
+        self._add_log(time.time(), "Stop asked for.")
         self.phase.setText("Stopping…")
+
+    def _add_log(self, at, text):
+        """Append one timestamped line, following the tail unless the person scrolled up to read."""
+        if not text:
+            return
+        bar = self.log_view.verticalScrollBar()
+        follow = bar.value() >= bar.maximum() - 2
+        stamp = time.strftime("%H:%M:%S", time.localtime(at)) if at else "--:--:--"
+        self.log_view.appendPlainText(f"{stamp}  {text}")
+        if follow:
+            bar.setValue(bar.maximum())
+
+    def _show_log(self, s):
+        entries = s.get("log") or []
+        if entries:
+            newest = self._log_at
+            for e in entries:
+                at = e.get("at")
+                if newest is None or (isinstance(at, (int, float)) and at > newest):
+                    self._add_log(at, e.get("text"))
+                    if isinstance(at, (int, float)):
+                        newest = at
+            self._log_at = newest
+        elif s.get("note") and s["note"] != self._note:  # a team server from before the log field
+            self._add_log(time.time(), s["note"])
+        self._note = s.get("note")
+
+    @staticmethod
+    def _duration(seconds):
+        seconds = int(max(0, seconds or 0))
+        if seconds < 3600:
+            return f"{seconds // 60}:{seconds % 60:02d}"
+        return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+    def _update_activity(self, s, ended=False):
+        elapsed = s.get("elapsed_s")
+        if elapsed is None:
+            elapsed = time.time() - (s.get("started_at") or self._started)
+        if ended:
+            self.activity.setText(f"finished in {self._duration(elapsed)}")
+            return
+        updated = s.get("updated_at")
+        age = time.time() - updated if updated else elapsed
+        self.activity.setText(f"running {self._duration(elapsed)} · updated {self._duration(age)} ago")
 
     def poll(self):
         try:
@@ -461,16 +568,21 @@ class LightenDialog(QtGui.QDialog):
         self.bar.setValue(int(100 * (s.get("progress") or 0)))
         if s.get("note"):
             self.phase.setText(s["note"])
+        self._show_log(s)
+        self._update_activity(s)
         if s["status"] not in ("done", "failed", "cancelled", "expired"):
             return
         self.timer.stop()
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         self.last = s
+        self._update_activity(s, ended=True)
         if s["status"] != "done":
             self.bar.setValue(0)
             self.phase.setText("Stopped." if s["status"] == "cancelled" else "It didn't work.")
             self.summary.setText(f"<span style='color:#ff7b72'>{html.escape(str(s.get('error') or ''))}</span>")
+            # A failed publish keeps the lattice files: let the person reach them.
+            self.files_btn.setEnabled(bool(s.get("out_dir")) or isinstance(self.job, LocalJob))
             return
         self.bar.setValue(100)
         self.phase.setText("Done.")
@@ -585,7 +697,14 @@ class LightenDialog(QtGui.QDialog):
 
     def open_files(self):
         if self.team:  # the files live on the hosting computer: show them in the team's project files
-            _p().hint(f"The STL, 3MF and report are in the project files: {(self.last or {}).get('folder')}")
+            folder = (self.last or {}).get("folder")
+            if not folder:
+                out = (self.last or {}).get("out_dir")
+                _p().hint(f"The job could not save the lattice into the project files. Its files are still on "
+                          f"the hosting computer in {out}." if out else
+                          "The job did not save any files.")
+                return
+            _p().hint(f"The STL, 3MF and report are in the project files: {folder}")
             show = getattr(_p(), "show_project_files", None)
             if show:
                 show()

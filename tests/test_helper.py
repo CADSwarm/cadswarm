@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from cadswarm import helper
@@ -230,12 +232,34 @@ def test_a_lighten_job_runs_publishes_its_files_and_announces_itself(tmp_path, m
     done = _wait(p, r["result"]["job_id"])
     assert done["status"] == "done" and done["weight_saving_pct"] == 40.0 and done["verdict"] == "passed"
     assert done["warnings"] == ["A closed skin traps powder"] and "lattice_apply" in done["next_step"]
+    assert [e["phase"] for e in done["log"]] == ["simulate", "mesh"]
+    assert done["log"][-1]["text"] == "Meshing" and done["started_at"] and done["elapsed_s"] is not None
     assert (tmp_path / done["folder"] / "result.stl").exists() and (tmp_path / done["folder"] / "report.json").exists()
     EVENTS.extend(e["kind"] for e in helper.handle(p, {"id": 2, "op": "lattice_list", "args": {}})["result"]
                   .get("_events", []))
     assert "lattice_report" in EVENTS and "lattice_progress" in EVENTS
     res = helper.handle(p, {"id": 3, "op": "lattice_result", "args": {"job_id": r["result"]["job_id"]}})["result"]
     assert res["file"].startswith("lattice/") and res["file"].endswith("/result.stl") and res["target"] == "Bracket"
+
+
+def test_a_lattice_that_cannot_be_published_keeps_its_files(tmp_path, monkeypatch):
+    from cadswarm.storage import FileError
+
+    p = _lighten_project(tmp_path, monkeypatch, fake_lighten)
+    real_save = p.files.save
+
+    def save(path, author, **kwargs):  # a 600 MB STL meets the project's 512 MB binary limit
+        if path.endswith("result.stl"):
+            raise FileError(413, "too_big", "Binary files like this can be at most 512 MB (this one is 600 MB).")
+        return real_save(path, author, **kwargs)
+
+    monkeypatch.setattr(p.files, "save", save)
+    r = helper.handle(p, {"id": 1, "op": "lattice_start", "args": {"target": "Bracket"}})
+    done = _wait(p, r["result"]["job_id"])
+    assert done["status"] == "failed" and done["code"] == "publish_failed"
+    assert "Nothing was deleted" in done["error"] and done["out_dir"] in done["error"]
+    assert any(name.startswith("result.stl (") for name in done["out_files"])
+    assert os.path.exists(os.path.join(done["out_dir"], "result.stl"))
 
 
 def test_lighten_requests_are_checked_before_anything_runs(tmp_path, monkeypatch):

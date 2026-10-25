@@ -34,7 +34,8 @@ from .storage import FileError, Storage  # FileError is re-exported: callers imp
 TEXT_EXT = {".md", ".txt", ".json", ".csv", ".py", ".fcmacro", ".svg", ".yaml", ".yml", ".toml", ".html", ".xml"}
 BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".step", ".stp", ".stl", ".fcstd", ".dxf", ".3mf", ".zip"}
 MAX_TEXT_BYTES = 5 * 1024 * 1024       # agents write text token by token, so it stays small
-MAX_BINARY_BYTES = 100 * 1024 * 1024   # CAD/media files come from programs; see the README for the memory cost
+MAX_BINARY_BYTES = 512 * 1024 * 1024   # CAD/media files come from programs; see the README for the memory cost
+MAX_BINARY_MB = MAX_BINARY_BYTES // (1024 * 1024)
 MAX_DEPTH = 8
 MAX_PATH_CHARS = 180
 RESERVED = {"con", "prn", "aux", "nul", "conin$", "conout$",
@@ -308,21 +309,27 @@ class ProjectFiles:
         return f"{stem}-{n}{ext}"
 
     @_guard
-    def save(self, path, author, text=None, base64_data=None, if_exists="error", expected_version=None):
+    def save(self, path, author, text=None, base64_data=None, if_exists="error", expected_version=None, data=None):
+        """Save one file. Pass exactly one of `text`, `base64_data` (what agents send) or `data` (raw bytes:
+        the host uses this for its own big files, so they are not base64-encoded in memory first)."""
         clean = requested = self.clean(path)
         expected_version = _version(expected_version)
-        if (text is None) == (base64_data is None):
-            raise FileError(400, "bad_args", "Pass exactly one of text or base64.")
+        if sum(x is not None for x in (text, base64_data, data)) != 1:
+            raise FileError(400, "bad_args", "Pass exactly one of text, base64 or data.")
         ext = os.path.splitext(clean)[1].lower()
         if text is not None:
             if ext not in TEXT_EXT:
                 raise FileError(400, "bad_type", f"{ext} files are binary; send them as base64.")
             data = text.encode("utf-8")
-        else:
+        elif base64_data is not None:
             try:
                 data = base64.b64decode(base64_data, validate=True)
             except Exception:
                 raise FileError(400, "bad_args", "base64 content couldn't be decoded.")
+        elif not isinstance(data, (bytes, bytearray)):
+            raise FileError(400, "bad_args", "data must be bytes.")
+        else:
+            data = bytes(data)
         limit = self._limit_for(clean)
         if len(data) > limit:
             kind = "Text files" if limit == MAX_TEXT_BYTES else "Binary files like this"
