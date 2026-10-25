@@ -360,7 +360,7 @@ Brief, typed in the panel:
 
 | # | Beat | Time | Action / line | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | Anthropic/Creao go from "not joined" to live as helpers join |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | The five cards are already live (the manual helpers join at T-30) and the board is bare; Act 1 starts now |
 | 2 | Plan + board | 2′ | Submit the brief | Planner calls `lookup_board`; board Params fill; Elastic card shows `esp32-s3-devkitc-1`; tasks appear with names |
 | 3 | Build | 8–12′ | Let the builders work | Parts in owner colors; Creao's one-call-per-turn trace; Claude workers take clamp/cradle |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused "locked by arm-opencode"; it messages the owner |
@@ -633,7 +633,7 @@ answer to "is this real?"
 - **Creao** — members with `client=creao`: helper/status, "local bridge · one JSON tool call per
   turn", tasks done, ops, own conversation thread, live trace (web only). When it is killed, the
   card goes stale and the trace stops; that is the takeover proof.
-- **Factory.ai** — reviewer member, pointer, last round, findings, tasks filed, tool trace. Live.
+- **Factory.ai** — reviewer member, pointer, last round, findings, tasks filed, tool trace, all live. The member's own status can read "stale": `init-reviewer` mints an HTTP-only identity that never heartbeats.
 - **Elastic** — the brief's board, design-memory line, and "what the Workflow distils". The footer
   line with index counts and Droid versions is a **stamped snapshot**, labelled "checked …"; it is
   never presented as live. Index counts, Agent Builder and Workflow executions are shown in Kibana.

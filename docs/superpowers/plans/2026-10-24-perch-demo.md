@@ -691,6 +691,21 @@ def test_a_leftover_act2_part_also_refuses_start():
     assert not r.reset_ok() and "Podium_Body" in r.reset_why
 
 
+def test_a_stale_helper_refuses_start_but_a_stale_reviewer_does_not():
+    # `init-reviewer` mints an HTTP-only member that never heartbeats: it is stale by T-5 either way.
+    snap = ready_snapshot()
+    snap["model"]["participants"] = [
+        {"id": 1, "name": "presenter", "client": "presenter", "kind": "human", "status": "active"},
+        {"id": 2, "name": "dee-droid", "client": "droid", "kind": "reviewer", "status": "stale"},
+    ]
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    assert r.reset_ok(), r.reset_why
+    snap["model"]["participants"].append(
+        {"id": 3, "name": "lead-claude", "client": "claude", "kind": "agent", "status": "stale"})
+    r = a_runner(FakeIO(snapshot=snap), Clock())
+    assert not r.reset_ok() and "lead-claude" in r.reset_why and "dee-droid" not in r.reset_why
+
+
 def test_laptop_mode_sends_the_brief_and_says_the_tunnel_is_down():
     io = FakeIO(snapshot=ready_snapshot())
     r = a_runner(io, Clock(), brief={**a_plan()["brief"], "from": "laptop"})
@@ -1287,7 +1302,11 @@ class Runner:
                         if (b.get("status") or "") in ("open", "planning", "working")]
             if open_ids:
                 problems.append("brief still open: " + ", ".join(open_ids))
-        stale = [m.get("name") for m in model.get("participants") or [] if m.get("status") == "stale"]
+        # The reviewer is HTTP-only: `init-reviewer` mints it, then it never heartbeats, so the sweep marks
+        # it stale by T-5 with no work at risk. Probe still shows it (and Droid on PATH); only a stale
+        # *helper* can strand a part, so only helpers block Start.
+        stale = [m.get("name") for m in model.get("participants") or []
+                 if m.get("status") == "stale" and (m.get("kind") or "") != "reviewer"]
         if stale:
             problems.append("stale helpers: " + ", ".join(stale))
         self.reset_why = "; ".join(problems)
@@ -2127,7 +2146,7 @@ Expected: FAIL — the files do not exist.
 ```json
 {
   "name": "table",
-  "note": "The two-minute Act 2 run at the judging table. Press at 0:30 of the pitch; the first op must land by 1:45. Nothing here claims a finished head.",
+  "note": "The two-minute Act 2 run at the judging table. Press at 0:30 of the pitch; the first op must land by 1:45, 75 s after the press. Nothing here claims a finished head.",
   "brief": {
     "from": "phone",
     "board": "esp32-s3-devkitc-1",
@@ -2256,7 +2275,7 @@ Expected: FAIL — the files do not exist.
   },
   "gate": {
     "first_op_by": 2400,
-    "if_missed": "Forty minutes in, no part has started. Stop the build, say so, and run the smaller job in table-safe.json."
+    "if_missed": "Forty minutes in, no part has started. Stop the build, say so, and show the Act 1 recording labelled as a replay."
   },
   "ready": {
     "parts_any": [],
@@ -2270,7 +2289,7 @@ Expected: FAIL — the files do not exist.
     "lid-creao": "creao",
     "arm-opencode": "opencode"
   },
-  "probe": ["planner-claude", "lead-claude", "lid-creao", "arm-opencode"],
+  "probe": ["lead-claude", "lid-creao", "arm-opencode"],
   "steps": [
     {
       "id": "brief", "label": "Act 1's brief is typed in the panel",
@@ -2329,7 +2348,7 @@ Expected: FAIL — the files do not exist.
     {
       "id": "handoff", "label": "The clamp handoff is accepted",
       "at": 1500, "deadline": 400, "predicate": "handoff",
-      "say": "Sam holds the clamp, edits the M8 pocket, and hands it to base-claude with the note."
+      "say": "Sam takes the clamp on the phone, sends the note, and leaves; the host's handoff agent accepts."
     },
     {
       "id": "review1", "label": "Round 1 comes back with findings",
@@ -2436,15 +2455,20 @@ does not depend on any of them.
 | Who | Client | Job | How it joins |
 |---|---|---|---|
 | `presenter` | presenter | presses Start, sends the steers, answers judges | `driver.py` (this folder) |
-| `you` | FreeCAD | builds, corrects by hand, runs Auto-constrain | `cadswarm setup --client freecad` |
+| `you` | FreeCAD | builds, corrects by hand, runs Auto-constrain | the CadSwarm workbench's join/invite flow (registers `client = "freecad"`) |
 | `Sam` | phone | types and sends the Act 2 brief | the host's phone invite / QR |
-| `planner-claude` | claude | turns a brief into assigned tasks, then stops | host-spawned |
+| `planner-claude` | claude | turns a brief into assigned tasks, then stops | host-spawned as `planner-<brief>` when the brief is submitted |
 | `lead-claude` | claude | `Shoulder_Hub`, Params, coordination, takeover | manual Claude Code |
-| `worker-1/2/3-claude` | claude | unassigned tasks: `Clamp_Base`, `Cradle_Base` | host-spawned |
+| `worker-1/2/3-claude` | claude | unassigned tasks: `Clamp_Base`, `Cradle_Base` | host-spawned worker labels |
 | `arm-opencode` | opencode | arm segments, FEA, Lighten | manual OpenCode |
 | `lid-creao` | creao | the lid; killed for the takeover; back for Act 2 | Creao bridge |
-| `base-claude` | claude | finishes the clamp after the handoff | host-spawned on handoff |
+| `base-claude` | claude | finishes the clamp after the handoff | host-spawned at the handoff as `handoff-<id>` |
 | `reviewer` | droid | review rounds 1 and 2 | host `init-reviewer` |
+
+The host-spawned names are call-sheet labels in this runbook, not literal member names. The host names the
+planner `planner-<brief>` when the brief is submitted, the workers `worker<n>-<brief>`, and the handoff
+agent `handoff-<id>`. Those are the names the panel's Team tab shows. `lead-claude`, `arm-opencode` and
+`lid-creao` are the manual helpers and keep the names above.
 
 The three card claims the window makes about people are these members: `client = "claude"` is the
 Anthropic card, `client = "creao"` is the Creao card, `kind = "reviewer"` is the Factory card. The
@@ -2459,8 +2483,9 @@ Run from the repo root, with the venv already installed (`python -m venv .venv;
 .venv\Scripts\pip install -e ".[test]"`).
 
 ```powershell
-# 1. The stack: builds the host and web app, runs it against Maincloud, prints a phone invite.
-powershell -File scripts\demo-up.ps1 -SkipBuild
+# 1. The stack: builds the host and web app the first time, runs it against Maincloud, prints a phone
+#    invite. After one successful build, add -SkipBuild to start it faster.
+powershell -File scripts\demo-up.ps1
 
 # 2. One human invite for the presenter (the host prints a cadswarm-2: string).
 host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects\cadswarm-demo invite --kind human --role lead
@@ -2468,11 +2493,15 @@ host\target\release\cadswarm-host.exe --data $env:USERPROFILE\Documents\Projects
 # 3. The presenter folder: joins once, then reuses its identity on every later run.
 .venv\Scripts\python demo\perch\driver.py --project demo\perch\presenter --invite "cadswarm-2:..."
 
-# 4. The manual helpers, each in its own folder (invites come from the host).
-.venv\Scripts\cadswarm setup --client claude   --invite "cadswarm-2:..." --name lead-claude  --dir ..\perch\lead-claude
-.venv\Scripts\cadswarm setup --client opencode --invite "cadswarm-2:..." --name arm-opencode --dir ..\perch\arm-opencode
-.venv\Scripts\cadswarm setup --client creao    --invite "cadswarm-2:..." --name lid-creao    --dir ..\perch\lid-creao
+# 4. The manual CLI helpers, each in its own folder (invites come from the host).
+.venv\Scripts\cadswarm setup --client claude   --invite "cadswarm-2:..." --name lead-claude  --dir demo\perch\lead-claude
+.venv\Scripts\cadswarm setup --client opencode --invite "cadswarm-2:..." --name arm-opencode --dir demo\perch\arm-opencode
+.venv\Scripts\cadswarm setup --client creao    --invite "cadswarm-2:..." --name lid-creao    --dir demo\perch\lid-creao
 ```
+
+`you` (FreeCAD) does not use `setup`: open the CadSwarm workbench in FreeCAD and use its join/invite flow;
+the panel registers `client = "freecad"`. `cadswarm setup` only has the CLI clients:
+`--client <claude|opencode|creao>` covers the three helpers above.
 
 `demo/perch/presenter/.cadswarm/` holds the presenter's SpacetimeDB token; `.cadswarm/` is already
 ignored. The driver's `--project` points at that folder, **not** at the repo root.
@@ -2484,8 +2513,8 @@ checks that `droid` is on `PATH`.
 ## Before every pitch
 
 Read `checklist.md` top to bottom. It is ordered: stack, helpers, Elastic tabs, `act-1-ready`, probe,
-then the replay window. The driver refuses to Start unless the probe passes and the team is back at
-`act-1-ready`.
+then the replay window. The driver refuses to Start unless the probe passes and the team is at the
+timeline's ready state: `act-1-ready` for the table, the empty model below for the booth.
 
 ## Act 1: "The Perch" (booth, 40–50 minutes)
 
@@ -2494,7 +2523,7 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 
 | # | Beat | Time | Action | What the room sees |
 |---|---|---|---|---|
-| 1 | Cold open | 1′ | Sponsor window on the second screen | Anthropic/Creao go from `not joined` to live |
+| 1 | Cold open | 1′ | Sponsor window on the second screen | Booth: the five cards are already live (the manual helpers joined at T-30), and the board is bare; Act 1 starts now. At the table the helpers are also joined by T-30 |
 | 2 | Plan + board | 2′ | Submit the brief | `lookup_board`, board Params, tasks with names |
 | 3 | Build | 8–12′ | Let them work | Parts in owner colours; Creao one call per turn |
 | 4 | Protection | 1′ | `@lid-creao thicken Arm_Distal by 2 mm; it flexes.` | Refused; it messages the owner |
@@ -2502,16 +2531,21 @@ lookup, the owners, the 180 mm bed, "the distal arm is what we'll simulate and l
 | 6 | Auto-constrain | 2′ | Owners release; Tools ▸ Auto-constrain… → apply; `tol_press_fit = -0.08 mm` | Aliases, M4 pattern, bearing fit; the bore shrinks |
 | 7 | FEA | 3–6′ | `@arm-opencode linear static …` | Report pops up for the team; Elastic indexes it |
 | 8 | Kill + takeover | 2′ | Kill the Creao bridge; `@lead-claude take_over("lid-creao")` | Creao goes stale, its trace stops, the lock moves |
-| 9 | Handoff | 2–3′ | You hold `Clamp_Base`, edit the M8 pocket, let go; Sam takes the lock on the phone, sends the note, arms **Continue my work if I leave**, closes the tab | Sam goes quiet; the handoff opens; `handoff-<id>` accepts, finishes, messages back |
+| 9 | Handoff | 2–3′ | You hold `Clamp_Base`, edit the M8 pocket, and let go; Sam takes the lock in the phone's Model tab, sends the handoff note in Team chat, arms **Continue my work if I leave**, and closes the tab | Sam goes quiet; the handoff opens; the host's handoff agent accepts, finishes, and messages back |
 | 10 | Review 1 | 2–4′ | Automatic when tasks are done | Droid pointer, trace, three findings |
 | 11 | Correct + style | 2–3′ | Set the lid wall to 2.4 mm; add the three rules in Learned design style | The correction is recorded; rules are active |
 | 12 | Review 2 | 1–2′ | Fix tasks, automatic re-review | Factory card: round 2 · approved |
 | 13 | Snapshot + Lighten | 5–10′ | Snapshot `act-1-ready`; `@arm-opencode lighten Arm_Distal …` | Verifier console, mass saved, cut-open preview |
 | 14 | Export + memory | 1–2′ | Export STEP + STL; run `distil-lessons`; open Kibana | Design doc + 3 lessons + Workflow execution |
-| 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | Five cards, all live again |
+| 15 | Sponsor recap | 1′ | Leave the window up; restart Creao for Act 2 | The same five cards, each carrying the work this run gave it |
 
 Set the snapshot name `act-1-ready` exactly: `reset_ok()` and every table run depend on the six parts
 being present and no `Podium_`/`Medallion` object being left behind.
+
+The booth starts from a blank model: `timeline.json` has `parts_any: []`, no Act 1 parts, because Act 1 is
+built live. The T-15 state section of `checklist.md` is the table pre-flight only; the booth state is an
+empty model, no `Clamp_`/`Shoulder_`/`Arm_`/`Cradle_`/`Podium_`/`Medallion`, no open brief, and the manual
+helpers joined.
 
 ## Act 2: "The Podium"
 
@@ -2544,13 +2578,15 @@ same owners, same recall. The medallion and its 608 bearing are **booth only**.
 
 The page opens at `http://127.0.0.1:8765/` (`--port` changes it, `--no-browser` stops the tab).
 
-- **Start** — refuses unless Probe passed and the team is back at `act-1-ready`; opens the sequence and
-  shows the brief to paste on the phone. Sam sends it from the phone.
+- **Start** — refuses unless Probe passed and the team is at the timeline's ready state (`act-1-ready`
+  for the table, the empty model for the booth); opens the sequence and shows the brief. At the table
+  Sam sends it from the phone; at the booth you type it in the panel.
 - **Next** — advance now. A manual step is logged `confirmed`; a module step `skipped`. Both say why.
 - **Pause / Resume** — holds the sequence while a judge talks. The build keeps running.
 - **Probe** — Claude, Creao, Droid, Elastic, then every other owner in the timeline's `probe` list.
-  The booth's `base-claude` joins at the handoff, twenty-five minutes in, so it is not probed at Start.
-  Re-run Probe after touching any helper.
+  The booth's planner joins when the brief is submitted (`planner-<brief>`), and the handoff agent
+  (`handoff-<id>`, called `base-claude` here) joins at the handoff, twenty-five minutes in, so neither is
+  probed at Start. Re-run Probe after touching any helper.
 - **Say box** — `@lid-creao …` is a real steer; anything else is a real brief. This is how a judge's own
   idea runs live.
 
@@ -2561,10 +2597,12 @@ numbers, not the targets, are what the pitch quotes.
 
 ## What the table claims
 
-At the table the presenter claims exactly four things: the recall returned Act 1 with its three problems,
+At the table the `table.json` run claims four things: the recall returned Act 1 with its three problems,
 the tasks appeared with the same named owners, the held body refused Creao, and a real part started to
-build. Never a finished head. The absolute gate is **the first op by 1:45**; the driver says the
-fallback line out loud if it is missed and stops claiming a part.
+build. The safe run (`table-safe.json`) claims three of those: the recall, the tasks, and a real part
+started to build; it has no refusal beat. Never a finished head. The absolute gate is **the first op by
+1:45 on the pitch clock — 75 s after the 0:30 press**. The presenter says the fallback line if it is
+missed; the page shows it in `Runner.status`.
 
 The build continues after 2:00 and through Q&A. The driver never stops the team.
 
@@ -2572,28 +2610,38 @@ The build continues after 2:00 and through Q&A. The driver never stops the team.
 
 | Symptom | Do this |
 |---|---|
-| Probe fails on Claude/Creao | check that helper's folder is running; re-run Probe; if it stays down, run `table-safe.json` with that helper out of `cast` — never fake its card |
+| Probe fails on Claude | check that helper's folder is running; re-run Probe. If it stays down, use the labelled replay: a timeline will not load with a `probe` name removed from `cast`, and dropping the name from both leaves its tasks unowned. Never fake its card |
+| Probe fails on Creao | check the Creao bridge; re-run Probe. The safe run's only task is the lid, owned by `lid-creao`, so taking Creao out of `cast` would leave it unowned: recover with the labelled replay, not a cast edit |
 | Probe fails on Droid | run `droid` once on the host (sign-in), or let the host's reviewer autostart path read `cadswarm.env` |
+| The reviewer shows `stale` | expected: `init-reviewer` mints an HTTP-only member that never heartbeats. Probe still passes it (with `droid` on PATH) and a stale reviewer does not block Start. A stale *helper* does |
 | Probe fails on Elastic | check `ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` in `cadswarm.env`; the recall needs them |
-| Nothing started by 1:45 | the driver says so; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
+| Nothing started by 1:45 (75 s after the press) | the presenter says the fallback line and the page shows it in `Runner.status`; point at the recall and the tasks that did land, replay the booth recording **labelled as a replay**, and say which is live |
 | The phone tunnel died | restart the driver with `--laptop`; same brief, same sequence, the member is the laptop |
-| A step hangs | Next; it is logged skipped and the sequence moves on |
+| A step hangs | Next; a `confirm` step is logged `confirmed`, a module step `skipped`, and the sequence moves on |
 | The page is closed | reopen the URL; the run and the log are unaffected |
 | Creao stalls mid-Act 1 | kill it earlier: that is the takeover beat; restart it for Act 2 |
 | A host worker claims a manual part | cancel that task and re-assign by name; the module only rebalances busy or stale assignees |
 | Review passes round 1 | steer a legitimate tight-fit change (thin the podium lid to 1.6 mm so the OLED bezel fits) and wait for the style finding — never invent one |
 
-## Reset between judges
+## Reset between table judges
+
+The operative order is in `checklist.md`; this is the same order. It is for the table only.
 
 1. Restore the `act-1-ready` snapshot; delete `Podium_*` and `Medallion*`; hide the lattice mesh; move the
    cradle back; delete or cancel Act 2's tasks and the open brief.
 2. Leave Act 1's design doc and lessons in Elastic. Leave the previous podium document too: if it ranks
    first for the next recall, say so out loud — the system is returning our own earlier run.
-3. Restart Creao and any helper you killed; re-run Probe.
-4. Confirm the driver page says `ready — press Start`, and that the first step is `pending`.
+3. Restart Creao and any helper you killed; wait for `active`.
+4. Restart `driver.py`: the runner refuses a second Start and the page disables Start after a run.
+5. Re-run Probe. Confirm the page says `ready — press Start`, Probe is all ✓, and the first step is
+   `pending`.
 
-If the reset cannot finish before the next judge, do not fake it: start from the running Act 2, say the
-recall already happened, and let the panel and `rehearsal.md` carry Act 1.
+At the booth there is no table reset: `timeline.json` starts from an empty model and refuses Start once
+Act 1 parts exist. A second booth run needs a fresh workspace (a new host data folder and fresh helper
+invites), not a restore of `act-1-ready`.
+
+If the table reset cannot finish before the next judge, do not fake it: start from the running Act 2, say
+the recall already happened, and let the panel and `rehearsal.md` carry Act 1.
 ````
 
 - [ ] **Step 2: Write `demo/perch/prompts.md`**
@@ -2625,12 +2673,14 @@ simulate and lighten.
 | 6 | Tools ▸ Auto-constrain… → Apply, then Tools ▸ Change a shared size…: `tol_press_fit = -0.08` | (panel) |
 | 7 | `linear static on Arm_Distal: fixed at the elbow, 4.9 N down at the head, PETG. Publish it and tell us if it's overbuilt.` | `@arm-opencode` |
 | 8 | `take_over("lid-creao")` | `@lead-claude` |
-| 9 | Take `Clamp_Base` on the phone, send the handoff note below in Team chat, arm **Continue my work if I leave**, close the tab | (Sam's phone) |
+| 9 | Take `Clamp_Base` in the phone's Model tab, send the handoff note below in Team chat, arm **Continue my work if I leave**, then close the tab | (Sam's phone) |
 | 11 | Tools ▸ Learned design style: add the three rules | (panel) |
 | 13 | `lighten Arm_Distal to 90% stiffness, gyroid, 5 mm cells, held at the elbow, loaded at the head.` | `@arm-opencode` |
 | 14 | `distil-lessons` | (Elastic workflow) |
 
-Handoff note, sent in Team chat before arming (the handoff snapshot carries the last five messages):
+Handoff note, sent in Team chat before arming. The handoff's `note` field is empty here; the agent gets this
+text through the snapshot's `recent_messages`, which keeps Sam's last five messages, 300 characters each, so
+send it as one short message.
 
 ```
 Jaw opening is 34 mm; the M8 nut pocket is 0.2 mm tight. Finish the insert pocket, add 0.4 mm clearance,
@@ -2691,12 +2741,17 @@ Said while typing, not instead of typing:
 - "That refusal is the lock, not a prompt. Creao cannot edit a part lead-claude holds."
 - "It is still building. Ask me anything and we will watch it answer."
 
-## The two sentences that bound the claims
+## The lines that bound the claims
 
-- Before Start: "The team is back at the state we finished Act 1 in; the build you are about to see is new."
-- If the gate is missed: "No part has started yet. The recall and the tasks are real; the body is the next
-  run." Then show the recall and the task rows, and switch to the labelled replay if the judge wants to
-  see the finished head.
+- Before Start (table): "The team is back at the state we finished Act 1 in; the build you are about to
+  see is new."
+- Before Start (booth): "We start from a bare board; Act 1 is built live."
+- If the gate is missed (`table.json`): "No part has started yet. The recall and the tasks are real; the body
+  is the next run." Then show the recall and the task rows, and switch to the labelled replay if the judge
+  wants to see the finished head.
+- If the gate is missed (`table-safe.json`): "No part has started yet. The recall and the task are real; the
+  lid is the smallest job we have and it is still running." Then show the recall and the task row, and
+  switch to the labelled replay if the judge wants to see the finished head.
 
 ## Never say
 
@@ -2715,8 +2770,11 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 
 ## T-45 minutes: the stack
 
-- [ ] `powershell -File scripts\demo-up.ps1 -SkipBuild` finished; the host is running.
-- [ ] The web panel is open on the second screen at the sponsor tab; the FreeCAD panel is on the laptop.
+- [ ] `powershell -File scripts\demo-up.ps1` finished; the host is running. Add `-SkipBuild` only after a
+      successful build on this machine.
+- [ ] The web panel is open on the second screen; its **Sponsors** dialog opens with `?debug` or Shift+D.
+      The FreeCAD panel on the laptop has its own **Sponsors** tab. They are two separate panels reading
+      the same live sponsor state, not one "sponsor tab".
 - [ ] `cadswarm-host … invite --kind human --role lead` printed a fresh presenter invite (or the presenter
       folder already has an identity).
 - [ ] Elastic tabs open: the reranked board query, `cadswarm-designs`, the `distil-lessons` execution,
@@ -2727,7 +2785,8 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] `lead-claude`, `arm-opencode`, `lid-creao` are joined and `active` in the panel.
 - [ ] The host's planner and up to three workers are enabled.
 - [ ] `droid` is signed in (`droid` once on the host) and `cadswarm-host … init-reviewer` has run.
-- [ ] Sam's phone is joined and can see the briefs tab; the tunnel or the phone invite is live.
+- [ ] Sam's phone is joined and can see the Model, Tasks and Team tabs (Model for the handoff, Tasks for
+      Act 2, Team for the handoff switch); the tunnel or the phone invite is live.
 - [ ] The numbers: the last rehearsal's `runs/*.json` summary is open in a second tab.
 
 ## T-15 minutes: the state
@@ -2735,21 +2794,29 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 - [ ] `act-1-ready` is restored; the six parts are present (`Clamp_Base`, `Shoulder_Hub`,
       `Arm_Proximal`, `Arm_Distal`, `Cradle_Base`, `Cradle_Lid`).
 - [ ] No `Podium_*`, no `Medallion*`, no lattice mesh left visible.
-- [ ] No open brief, no stale helper, no lock held by a dead member.
+- [ ] No open brief, no stale helper, no lock held by a dead member. The reviewer is the one exception:
+      `init-reviewer` mints an HTTP-only member that never heartbeats, so the sweep will mark it `stale`
+      by T-5. Probe still counts it (with `droid` on PATH), and a stale reviewer does not block Start.
 - [ ] The FEA report and the lattice report are open in the panel for beats 7 and 13.
 - [ ] Act 1's design doc and lessons are in Elastic; the previous podium doc is still there.
+
+These T-15 bullets are the table pre-flight only. For the booth, `timeline.json` starts from an empty
+model (`parts_any: []`): no `Clamp_`/`Shoulder_`/`Arm_`/`Cradle_`/`Podium_`/`Medallion`, no open brief, and
+the manual helpers joined. Act 1 is built live.
 
 ## T-5 minutes: the driver
 
 - [ ] `.venv\Scripts\python demo\perch\driver.py --project demo\perch\presenter` is running.
 - [ ] The page says `ready — press Start`, Probe is all ✓, and step 1 is `pending`.
-- [ ] The timeline is the one you decided on (see below), and its brief is the brief Sam has on the phone.
+- [ ] The timeline is the one you decided on (see below). At the table its brief is the one Sam has on the
+      phone; at the booth you type the same text in the panel.
 - [ ] The replay recording is open, muted, in a window **labelled "replay"**.
 
 ## The timeline decision (made now, never mid-pitch)
 
-- [ ] Open the last `runs/*.json`. If `t_first_op` is **under 60 s**, run `table.json`.
-- [ ] If it is **60 s or more**, or the last run missed the gate, run `table-safe.json`.
+- [ ] Open the last `runs/*.json`. If `t_first_op` is **under 60 s** (before 1:30 on the pitch clock), run
+      `table.json`.
+- [ ] If it is **60 s or more** (1:30 or later), or the last run missed the gate, run `table-safe.json`.
 - [ ] Write the choice and the reason on the top line of `rehearsal.md`. Do not change it after the first
       judge arrives.
 
@@ -2758,17 +2825,21 @@ Times assume the pitch starts on the hour. The driver is the clock that matters.
 | Time | Presenter | Driver step | If it has not landed |
 |---|---|---|---|
 | 0:00 | "One bare board, one arm, two heads." | — | — |
-| 0:15 | point at the window: "five services, all live" | — | — |
-| 0:30 | **press Start**; Sam types the brief on the phone | `brief` (10 s) | say the phone line, keep going; Next at 0:45 |
-| 0:45 | "it recalls the first head before it plans" | `recall` (25 s) | Next; the recall is still real, say it is running |
-| 1:00 | "the same owners as Act 1" | `tasks` (30 s) | Next; read the task rows that exist |
-| 1:15 | "the body is held; Creao is asked anyway" | `refusal` (40 s) | Next; say the lock is on the body either way |
-| 1:30 | one artifact each: FEA, lattice, round 1 | `first_part` (45 s) | — |
-| 1:45 | "it is still building" | gate check | say the fallback line; stop claiming a part |
+| 0:15 | point at the window: "five services, all wired in" | — | — |
+| 0:30 | **press Start**; Sam types the brief on the phone | `brief` (10 s) | say the phone line, keep going; Next by 0:40 (the brief auto-skips at 0:40) |
+| 0:45 (narration) | "it recalls the first head before it plans" | `recall` (25 s) | Next; the recall is still real, say it is running |
+| 1:00 (narration) | "the same owners as Act 1" | `tasks` (30 s) | Next; read the task rows that exist |
+| 1:15 (narration) | "the body is held; Creao is asked anyway" | `refusal` (40 s) | Next; if the page says `lid-creao refused: …`, claim the refusal. If it shows the body held by another helper or says the step was skipped, say the lock moved and do not claim it |
+| 1:30 (narration) | one artifact each: FEA, lattice, round 1 | `first_part` (45 s) | — |
+| 1:45 (75 s after the press) | "it is still building" | gate check | say the fallback line; the page shows it in `Runner.status`; stop claiming a part |
 | 2:00 | hand to Q&A; leave the page up | still running | — |
 
-Cue sheet (`table-safe.json`): same first three beats, then `first_part` at 1:15 with 55 s; the presenter
-says "the body is the next run" at 1:30.
+The 0:45, 1:00, 1:15 and 1:30 times are narration cues. The JSON's cue values are 10, 20, 35 and 45 s
+after the press; the driver starts each step as soon as the previous one closes, not at its cue value, so
+the page can run a beat ahead of the spoken line.
+
+Cue sheet (`table-safe.json`): same first three beats, then `first_part` (55 s), narration at 1:15; the
+presenter says "the body is the next run" at 1:30.
 
 ## During Q&A
 
@@ -2777,17 +2848,28 @@ says "the body is the next run" at 1:30.
 - If a card looks empty, read it: `not joined` is a fact, not a failure to hide.
 - If asked for a finished part, show `runs/` and the booth capture **as a recording**.
 
-## Reset between judges (12 minutes)
+## Reset between table judges (12 minutes)
+
+This is the single operative table reset order; `README.md` mirrors it. The booth does not use it: see the
+note after the steps.
 
 1. **Stop claiming.** Pause the driver. Leave the build running; it is evidence.
 2. **Snapshot.** Restore `act-1-ready`.
-3. **Delete Act 2.** `Podium_*`, `Medallion*`, the lattice mesh; cancel Act 2's tasks and any open brief.
+3. **Delete Act 2.** `Podium_*`, `Medallion*`, the lattice mesh; move the cradle back; cancel Act 2's tasks
+   and any open brief.
 4. **Restart helpers.** Creao bridge, any killed Claude/OpenCode folder; wait for `active`.
-5. **Re-probe.** The page must be all ✓ and `ready — press Start`.
-6. **Log it.** One line in `rehearsal.md`: time the reset took, and anything that had to be skipped.
+5. **Restart the driver.** Stop `driver.py` and start it again with the chosen timeline: the runner refuses
+   a second Start and the page disables Start after a run.
+6. **Re-probe.** Probe must be all ✓; the page must say `ready — press Start`, and the first step must be
+   `pending`.
+7. **Log it.** One line in `rehearsal.md`: time the reset took, and anything that had to be skipped.
 
-If the reset cannot finish before the next judge: start from the running Act 2, say the recall already
-happened, and let the panel carry Act 1. Never present a recorded run as live.
+At the booth there is no reset between judges. `timeline.json` starts from an empty model and refuses Start
+once Act 1 parts exist; a second booth run needs a fresh workspace (a new host data folder and fresh helper
+invites), not a restore of `act-1-ready`.
+
+If the table reset cannot finish before the next judge: start from the running Act 2, say the recall
+already happened, and let the panel carry Act 1. Never present a recorded run as live.
 
 ## End of day
 
@@ -2836,6 +2918,14 @@ Create `demo/perch/rehearsal.md`:
 ````markdown
 # Rehearsal: the numbers the pitch may quote
 
+Status: **not yet rehearsed.** R1–R3 were not run in the environment that built this folder (no SpacetimeDB
+host, no Claude Code / OpenCode / Creao helpers, no Droid key, no Elastic, no phone). Every cell below is
+blank on purpose; none is an estimate. The runs happen on the demo machine, and each row is filled from a
+`runs/<stamp>-<timeline>.json` summary or a clock a person started and stopped.
+
+Until R2 and R3 are filled, the pitch may quote **no timing number at all** and the table decision below
+stays unmade. The first judge does not arrive until it is written.
+
 Rules:
 
 - Every number here comes from a `runs/<stamp>-<timeline>.json` summary, a FreeCAD reading, or a clock a
@@ -2854,12 +2944,16 @@ Rules:
 - Reason, one line: ______
 - Decided at (time): ______
 
+The gate is wall clock, not the run clock: the first op must land by 1:45 on the pitch clock, which is 75 s
+after the 0:30 press (`first_op_by: 75`). A `t_first_op` of 60 s or more leaves too little room for a slow
+beat on stage, so the safe timeline is chosen before the first judge and never swapped mid-pitch.
+
 ## Table runs (from the button press)
 
 | Run | Date | Timeline | Probe | `t_recall` | `t_tasks` | `t_first_op` | `t_finish` | Gate failed | Steps skipped | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
-| R2 |  | table.json |  |  |  |  |  |  |  |  |
-| R3 |  | table-safe.json |  |  |  |  |  |  |  |  |
+| R2 | — | table.json | not run | | | | | | | rehearsal not performed: no live stack |
+| R3 | — | table-safe.json | not run | | | | | | | rehearsal not performed: no live stack |
 
 What each column means:
 
@@ -2875,7 +2969,7 @@ What each column means:
 
 | Run | Date | Clock start (brief submitted) | Clock stop (STEP + STL exported) | Wall clock, min | Human minutes (beats 5, 6, 9, 11, 13) | Defects caught at review 1 | Notes |
 |---|---|---|---|---|---|---|---|
-| R1 |  |  |  |  |  |  |  |
+| R1 | — |  |  |  |  |  | rehearsal not performed: no live stack |
 
 The three defects are the ones review 1 actually filed. Write them as filed, not as expected:
 
@@ -2902,7 +2996,7 @@ The three defects are the ones review 1 actually filed. Write them as filed, not
 
 | Run | Date | Timeline | Act 1 wall clock | Act 2 wall clock | Delta | Same owners? | Recall returned Act 1 first? |
 |---|---|---|---|---|---|---|---|
-| R4 (booth Act 2) |  | timeline.json / phone |  |  |  |  |  |
+| R4 (booth Act 2) | — | timeline.json / phone |  |  |  |  |  |
 
 If the delta is small, the sheet says so and the pitch says so. The delta is the only Act 2 number that
 has to be believable.
@@ -2922,6 +3016,11 @@ has to be believable.
 | R2 |  |  |
 | R3 |  |  |
 ````
+
+The sheet is written blank, and stays blank until a rehearsal runs. R1-R3 need the live stack (the
+SpacetimeDB host, the helpers, Droid, Elastic and the phone), so they cannot be filled from a machine
+that only has the repo. An unfilled row says so in its Notes column; the table decision is not made
+until R2 and R3 exist, and until then the pitch quotes no timing number.
 
 - [ ] **Step 2: Rehearse Act 1 (R1)**
 
@@ -2986,7 +3085,7 @@ whether `tests/test_panel_gui.py` ran or skipped (`CADSWARM_TEST_PANEL_GUI=1` ne
 - [ ] **Step 7: Verify the three timelines against the documents**
 
 ```powershell
-python - <<'PY'
+@'
 import json, pathlib
 here = pathlib.Path("demo/perch")
 doc = " ".join((here / "prompts.md").read_text(encoding="utf-8").split())
@@ -2997,7 +3096,7 @@ for name in ("table.json", "table-safe.json", "timeline.json"):
     ids = [s["id"] for s in plan["steps"]]
     assert len(ids) == len(set(ids)), f"{name}: duplicate step id"
 print("briefs match prompts.md; step ids unique")
-PY
+'@ | python -
 ```
 
 Expected: `briefs match prompts.md; step ids unique`. The check normalises whitespace, so a brief may be
