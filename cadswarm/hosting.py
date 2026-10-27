@@ -330,6 +330,92 @@ def _unlink(path):
         pass
 
 
+def _aside_path(dest):
+    return f"{dest}.old-{os.getpid()}-{int(time.time() * 1000)}"
+
+
+def _set_aside_and_replace(part, dest):
+    """Move `part` to `dest` after setting `dest` aside. Windows locks a running program's file
+    against replacement but allows renaming it, so an update that arrives while the old host is
+    still running lands now and the running copy carries on from the name we moved it to.
+    Anything else (a read-only folder, say) leaves `dest` as it was and returns False."""
+    if not os.path.isfile(dest):
+        return False
+    aside = _aside_path(dest)
+    try:
+        os.replace(dest, aside)
+    except OSError:
+        return False
+    try:
+        os.replace(part, dest)
+    except OSError:
+        try:
+            os.replace(aside, dest)  # put the old one back
+        except OSError:
+            pass
+        return False
+    _unlink(aside)  # best effort: it can only go once the program using it exits
+    return True
+
+
+def _sweep_aside(dest):
+    """Remove copies set aside by an earlier update, once nothing is running from them."""
+    folder, prefix = os.path.dirname(dest), os.path.basename(dest) + ".old-"
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith(prefix):
+            _unlink(os.path.join(folder, name))
+
+
+def _runs_from(path):
+    """PIDs of programs running from `path` (Windows keeps their file open and locked)."""
+    if os.name != "nt":
+        return []
+    name = os.path.basename(path).replace("'", "''")
+    exe = path.replace("'", "''")
+    ps = (f"Get-CimInstance Win32_Process -Filter \"Name='{name}'\" | "
+          f"Where-Object {{ $_.ExecutablePath -eq '{exe}' }} | ForEach-Object {{ $_.ProcessId }}")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                             capture_output=True, text=True, timeout=20,
+                             creationflags=NO_WINDOW).stdout
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return []
+    return [int(t) for t in out.split() if t.isdigit()]
+
+
+def _in_place_error(dest, err):
+    """Plain words for a program we couldn't put in place, naming the team still running it."""
+    name = os.path.basename(dest)
+    pids = _runs_from(dest)
+    if pids:
+        m = re.search(r'--data\s+(?:"([^"]+)"|(\S+))', _command_line(pids[0]))
+        where = (m.group(1) or m.group(2)) if m else ""
+        team = f"the team in “{where}”" if where else "a CADSwarm team"
+        return (f"Couldn't put {name} in place: {team} is still running (pid {pids[0]}) and Windows "
+                f"won't let a running program be replaced. Stop that team, then click “Try again”."
+                f"\n\nDetails:\n{err}")
+    return (f"Couldn't put {name} in place. If CADSwarm is running, stop the team and click “Try again”."
+            f"\n\nDetails:\n{err}")
+
+
+def _put_in_place(part, dest):
+    """Finish a download by moving it onto `dest`, keeping a running program out of the way."""
+    try:
+        os.replace(part, dest)
+    except OSError as e:
+        if not _set_aside_and_replace(part, dest):
+            _unlink(part)
+            raise RuntimeError(_in_place_error(dest, e))
+    if os.name != "nt":
+        os.chmod(dest, 0o755)
+    _sweep_aside(dest)
+    return dest
+
+
 def _release_sums():
     """The checksums published with the release's CADSwarm assets."""
     url = f"{release_base()}/{SUMS_ASSET}"
@@ -372,15 +458,7 @@ def _download(url, dest, expect=None, on_line=None):
         _unlink(part)
         raise RuntimeError(f"{os.path.basename(dest)} downloaded but was damaged, so it was thrown away. "
                            "Try again; if it keeps happening, download CADSwarm again.")
-    try:
-        os.replace(part, dest)
-    except OSError as e:
-        _unlink(part)
-        raise RuntimeError(f"Couldn't put {os.path.basename(dest)} in place. If CADSwarm is running, stop "
-                           f"the team and click “Try again”.\n\nDetails:\n{e}")
-    if os.name != "nt":
-        os.chmod(dest, 0o755)
-    return dest
+    return _put_in_place(part, dest)
 
 
 def _sha256(path):
@@ -452,8 +530,14 @@ def _install_spacetime(archive):
         if stem not in wanted:
             return
         out = os.path.join(tools_dir(), wanted[stem] + suffix)
-        with read() as src, open(out, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+        part = out + ".part"
+        try:
+            with read() as src, open(part, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        except OSError:
+            _unlink(part)  # never leave half a program behind
+            raise
+        _put_in_place(part, out)
         found[stem] = out
 
     if zipfile.is_zipfile(archive):
