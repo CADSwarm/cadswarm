@@ -10,7 +10,7 @@ What needs the republish right now (this branch):
 | Feature | New op kinds / events the module must know |
 |---|---|
 | Lighten without losing stiffness | `lattice_capabilities`, `lattice_cells`, `lattice_estimate`, `lattice_start`, `lattice_status`, `lattice_list`, `lattice_cancel`, `lattice_result`, `insert_mesh`; events `lattice_started`, `lattice_progress`, `lattice_report`, `lattice_failed` |
-| Learned design style | `style_context`, `list_style`, `teach_style`, `resolve_style`, `learn_style` |
+| Learned design style | `style_context`, `style_inbox`, `list_style`, `teach_style`, `resolve_style`, `learn_style` |
 
 The team database is **`cadswarm-calhacks-0180`** on Maincloud (the default in `scripts/demo-up.ps1`). The
 steps below use PowerShell from the repository's `cadswarm/` folder.

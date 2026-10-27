@@ -31,7 +31,7 @@ pub const QUERIES: &[&str] = &[
     "library_search", "library_recommend", "library_get", "library_export_pack", "standard_parts",
     "analyze_component", "suggest_settings",
     // The team's learned design style (the host's helper, cadswarm/style_memory.py).
-    "style_context", "list_style",
+    "style_context", "style_inbox", "list_style",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
 pub const FILE_WRITES: &[&str] = &[
@@ -644,10 +644,11 @@ mod tests {
 
     #[test]
     fn reading_the_team_style_is_a_query_and_changing_it_is_a_write() {
-        for k in ["style_context", "list_style", "teach_style", "resolve_style", "learn_style"] {
+        for k in ["style_context", "style_inbox", "list_style", "teach_style", "resolve_style", "learn_style"] {
             assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
         }
-        assert!(!is_write("style_context") && !is_write("list_style"));
+        assert!(!is_write("style_context") && !is_write("style_inbox") && !is_write("list_style"));
+        assert!(is_query("style_inbox") && !is_query("teach_style"));
         assert!(is_write("teach_style") && is_write("resolve_style") && !is_mutating("teach_style"));
     }
 

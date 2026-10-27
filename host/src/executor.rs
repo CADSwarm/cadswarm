@@ -17,7 +17,7 @@ pub const HELPER_KINDS: &[&str] = &[
     "restore_file", "snapshot", "storage_status", "prune_storage", "lookup_board", "recall_designs",
     "board_spec", "index_design",
     // The team's learned design style (cadswarm/style_memory.py).
-    "style_context", "list_style", "teach_style", "resolve_style", "learn_style",
+    "style_context", "style_inbox", "list_style", "teach_style", "resolve_style", "learn_style",
     "fea_run", "fea_status", "fea_publish", "fea_reports",
     // Lighten without losing stiffness (cadswarm/lattice_jobs.py).
     "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status", "lattice_list",
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn style_ops_go_to_the_helper_and_observing_is_not_an_op() {
-        for k in ["style_context", "list_style", "teach_style", "resolve_style", "learn_style"] {
+        for k in ["style_context", "style_inbox", "list_style", "teach_style", "resolve_style", "learn_style"] {
             assert!(is_helper_kind(k), "{k}");
         }
         // The host reports ops to the style memory itself; nobody may submit an observation.
