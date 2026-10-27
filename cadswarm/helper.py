@@ -1,5 +1,5 @@
-"""Host-side helper for ops that are not FreeCAD geometry: project files and storage, Elastic
-board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design), the team's
+"""Host-side helper for ops that are not FreeCAD geometry: project files and storage, the project's
+local board knowledge and design memory (lookup_board, board_spec, recall_designs, index_design), the team's
 learned design style (observe_op, observe_brief, learn_style, style_context, teach_style, resolve_style;
 see style_memory.py), and FEA jobs
 (fea_run, fea_status, fea_publish, fea_reports; see fea_jobs.py), lighten-without-losing-stiffness lattice jobs
@@ -13,8 +13,7 @@ First line out is {"ready": true}; then one request per line {"id", "op", "args"
 line {"id", "ok": true, "result"} or {"id", "ok": false, "code", "error", ...details}. A bad request
 never kills it. The host adds args["_actor"] = {"id", "name", "kind"} for authorship and people-only
 actions. Op args follow the contract (plan 00): list_files {folder}, move_file {from_path, to_path}.
-The Elastic key comes from the host's ELASTIC_URL, KIBANA_URL and ELASTIC_API_KEY and never leaves
-this process.
+Knowledge lives in the project's own internal/knowledge.db, so it needs no account, keys or internet.
 
 Stdlib only (with everything it imports): the host may run it with FreeCAD's Python.
 """
@@ -24,20 +23,19 @@ import os
 import shutil
 import sqlite3
 import sys
-import threading
 import time
 
 if __package__ in (None, ""):  # run as a script by the host: make `cadswarm` importable
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cadswarm.files import ProjectFiles, safe_label, unique_path  # noqa: E402
-from cadswarm.knowledge import Elastic, ElasticError, design_doc  # noqa: E402
+from cadswarm.knowledge import Knowledge, KnowledgeError, design_doc  # noqa: E402
 from cadswarm.paths import project_layout  # noqa: E402
 from cadswarm.fea_jobs import FeaJobError  # noqa: E402
 from cadswarm.lattice_jobs import LatticeJobError  # noqa: E402
 from cadswarm.storage import FileError  # noqa: E402
 from cadswarm.library.ops import HANDLERS as LIBRARY_HANDLERS, LibraryError  # noqa: E402
-from cadswarm.style_memory import ANALYST_ID, StyleError, StyleMemory  # noqa: E402
+from cadswarm.style_memory import StyleError, StyleMemory  # noqa: E402
 
 
 class HelperError(Exception):
@@ -56,7 +54,7 @@ class Project:
         self.db.row_factory = sqlite3.Row
         self.files = ProjectFiles(self.layout, self.db, clock)
         self.clock = clock
-        self._elastic = None
+        self._knowledge = None
         self._fea = None
         self._lattice = None
         self._style = None
@@ -107,18 +105,15 @@ class Project:
         self._lattice = value
 
     @property
-    def elastic(self):
-        """The Elastic client, built from the host's keys on first use (tests set a fake)."""
-        if self._elastic is None:
-            try:
-                self._elastic = Elastic.from_env()
-            except ElasticError as e:
-                raise HelperError("not_configured", str(e))
-        return self._elastic
+    def knowledge(self):
+        """The project's own design memory, opened on first use (tests set their own)."""
+        if self._knowledge is None:
+            self._knowledge = Knowledge.for_project(self.layout, self.clock)
+        return self._knowledge
 
-    @elastic.setter
-    def elastic(self, value):
-        self._elastic = value
+    @knowledge.setter
+    def knowledge(self, value):
+        self._knowledge = value
 
 
 def _actor(a):
@@ -176,7 +171,7 @@ def prune_storage(p, a):
 def lookup_board(p, a):
     question = a.get("question") or _need(a, "board")  # a board alone asks about that board
     filters = {"board_id": a["board"]} if a.get("board") else None
-    hits = p.elastic.search("cadswarm-boards", question, 5, filters)
+    hits = p.knowledge.search("cadswarm-boards", question, 5, filters)
     return {"answers": [{"board_id": h["source"].get("board_id"), "title": h["source"].get("title"),
                          "source_url": h["source"].get("source_url"), "score": h["score"],
                          "text": " … ".join(h["chunks"][:2])[:1500]} for h in hits]}
@@ -185,9 +180,9 @@ def lookup_board(p, a):
 def board_spec(p, a):
     board = _need(a, "board")
     try:
-        return p.elastic.board_spec(board, a.get("question", ""))
-    except ValueError as e:  # the expert's answer failed validation (unsourced or implausible numbers)
-        raise HelperError("spec_unverified", f"No sourced spec for {board}: {e}")
+        return p.knowledge.board_spec(board)
+    except KnowledgeError as e:  # the library has no entry (or is unreadable)
+        raise HelperError("spec_unverified", str(e))
 
 
 def _host_hub(root):
@@ -242,12 +237,10 @@ def _log_recall(p, query, out, actor=None):
 def recall_designs(p, a):
     query = a.get("query") or _need(a, "board")
     board = a.get("board")
-    designs = p.elastic.search("cadswarm-designs", query, 3, {"board_id": board} if board else None)
-    lessons = p.elastic.lessons(board, 5) if board else []
-    try:  # simulations the team published (cadswarm-fea): what broke, bent or was over-built before
-        sims = [d["source"] for d in p.elastic.search("cadswarm-fea", query, 3)]
-    except Exception:  # an older Elastic setup without the index still answers designs and lessons
-        sims = []
+    designs = p.knowledge.search("cadswarm-designs", query, 3, {"board_id": board} if board else None)
+    lessons = p.knowledge.lessons(board, 5) if board else []
+    # Simulations the team published: what broke, bent or was over-built before.
+    sims = [d["source"] for d in p.knowledge.search("cadswarm-fea", query, 3)]
     out = {"designs": [d["source"] for d in designs], "lessons": [l.get("lesson") for l in lessons],
            "simulations": [{k: s.get(k) for k in ("title", "target", "verdict", "headline", "problems", "material")}
                            for s in sims]}
@@ -260,36 +253,14 @@ def recall_designs(p, a):
 
 def index_design(p, a):
     brief = _need(a, "brief")
-    p.elastic.index_design(design_doc(brief, a.get("plan") or {}, a.get("reviews") or [], a.get("params") or {}))
+    p.knowledge.index_design(design_doc(brief, a.get("plan") or {}, a.get("reviews") or [], a.get("params") or {}))
     return {"indexed": brief["id"]}
 
 
-def _optional_elastic(p):
-    try:
-        return p.elastic
-    except HelperError:  # not configured: style still learns locally
-        return None
-
-
-def _learn(p, reword=True):
-    """Re-distil now, then mirror to Elastic and let the analyst reword rules off the host's critical path.
-
-    `profile` is the team-wide style block the host publishes for every agent's per-turn context."""
+def _learn(p):
+    """Re-distil the rules now; profile is the team-wide style block the host gives every agent turn."""
     out = p.style.distil()
     out["profile"] = p.style.context("", "", 6)["text"]
-    es = _optional_elastic(p)
-    if es is not None:
-        def converse(text):
-            return es.converse(text, agent_id=ANALYST_ID)
-
-        def after():
-            try:
-                p.style.mirror(es.es)
-            except Exception:  # best effort: the next distil mirrors what is left
-                pass
-        threading.Thread(target=after, daemon=True).start()
-        if reword and out["changed"]:
-            out["rewording"] = p.style.write_up_in_background(converse, set(out["changed"]))
     return out
 
 
@@ -391,8 +362,8 @@ def handle(project, req):
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
     except FeaJobError as e:
         return {**e.data, "id": rid, "ok": False, "code": e.code, "error": str(e)}
-    except ElasticError as e:
-        return {"id": rid, "ok": False, "code": "elastic_error", "error": str(e)}
+    except KnowledgeError as e:
+        return {"id": rid, "ok": False, "code": e.code, "error": str(e)}
     except Exception as e:  # report, never die: the host keeps one helper for the whole session
         return {"id": rid, "ok": False, "code": "op_error", "error": f"{type(e).__name__}: {e}"}
 

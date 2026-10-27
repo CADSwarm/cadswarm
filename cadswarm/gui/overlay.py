@@ -188,7 +188,7 @@ class DemoSource:
     members = [{"id": 1, "name": "planner", "kind": "agent", "status": "active", "status_text": "planning the case"},
                {"id": 2, "name": "worker1", "kind": "agent", "status": "active", "status_text": "cutting the lid"},
                {"id": 3, "name": "worker2", "kind": "agent", "status": "active", "status_text": "checking holes"},
-               # The Factory.ai reviewer has a pointer like anyone else, in its own colour.
+               # The reviewer has a pointer like anyone else, in its own colour.
                {"id": 4, "name": "reviewer", "kind": "reviewer", "status": "active", "status_text": "reviewing"}]
     objects = [{"name": "Base", "label": "Base", "bbox": [0, 0, 0, 60, 40, 12], "visible": True},
                {"name": "Lid", "label": "Lid", "bbox": [0, 0, 18, 60, 40, 30], "visible": True},

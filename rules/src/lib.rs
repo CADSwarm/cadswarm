@@ -17,7 +17,7 @@ pub const MUTATING: &[&str] = &[
     // A mesh from project files (a lattice from lighten_part) as a Mesh::Feature.
     "insert_mesh",
 ];
-/// Read-only ops the host answers: FreeCAD queries, Elastic lookups, project file reads.
+/// Read-only ops the host answers: FreeCAD queries, board knowledge lookups, project file reads.
 pub const QUERIES: &[&str] = &[
     "get_object", "interference", "export", "dependents", "printability",
     "lookup_board", "recall_designs",
@@ -265,9 +265,9 @@ pub struct SweepPlan {
 
 /// Connected WebSocket clients (phone, host) never go stale; HTTP-only agents rely on heartbeats.
 /// A connected member is never retired, however long ago it went quiet.
-/// The reviewer is HTTP-only by design: `init-reviewer` mints it, and it only connects during a
-/// review round. Retiring it would erase the Factory card between rounds (and `rejoin` after a
-/// retirement mints a second member row), so a quiet reviewer stays `stale` and is never orphaned.
+/// The reviewer is spawned by the host for one round at a time, so it is offline between rounds.
+/// Retiring it would lose the team member the next round reuses (and `rejoin` after a retirement
+/// mints a second member row), so a quiet reviewer stays `stale` and is never orphaned.
 pub fn plan_sweep(now: u64, members: &[Presence]) -> SweepPlan {
     SweepPlan {
         to_stale: members
@@ -706,8 +706,8 @@ mod tests {
 
     #[test]
     fn a_quiet_reviewer_goes_stale_but_is_never_orphaned() {
-        // `init-reviewer` mints an HTTP-only member that only connects during a round. Between rounds it
-        // is offline for far longer than ORPHAN_AFTER_MS, and the Factory card and Probe both need it.
+        // The host spawns the reviewer for one round at a time. Between rounds it is offline for far
+        // longer than ORPHAN_AFTER_MS, and the next round and the review card both need the member.
         let now = 1_000_000;
         let reviewer = |id, status: &str, last_seen_ms, stale_since_ms| Presence {
             id, kind: "reviewer".into(), status: status.into(), last_seen_ms, stale_since_ms, online: false,

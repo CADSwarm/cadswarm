@@ -1,5 +1,11 @@
 # The Perch: the live demo
 
+> **Historical record.** This runbook describes the 2026-10-24 hackathon demo, when CADSwarm used
+> Elastic for board knowledge, Factory Droid as the reviewer and Creao AI as an optional helper. None
+> of those are part of the product any more: knowledge is local and the reviewer is an ordinary
+> spawned helper. Keep this folder (and `docs/devpost-submission.md`) as the record of that run; the
+> commands below are not expected to work against current `main`.
+
 Two acts, one object family, one screen that changes because a team is working. The judging table runs
 Act 2 for two minutes; the booth runs both acts for forty. Nothing on either screen is canned: every
 part is made by a real helper against the real model, and every claim on a card is read from the module.

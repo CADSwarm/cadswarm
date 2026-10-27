@@ -11,7 +11,7 @@
 # -Data <dir>          data folder; default $env:USERPROFILE\Documents\Projects\cadswarm-demo
 # -Db <name>           SpacetimeDB database name on Maincloud
 # -Python <exe>        Python with the cadswarm package (runs `cadswarm setup` and the helper)
-# -Agent <name>        claude | codex | droid | opencode | creao: the AI that builds briefs
+# -Agent <name>        claude | codex | opencode: the AI that builds briefs
 # -AgentCommand <argv> override agent_command in host.json ({prompt} is replaced)
 # -WebPort <n>         local vite preview port (default 4173)
 # -WebUrl <url>        use this public URL as-is instead of starting a tunnel
@@ -26,7 +26,7 @@ param(
   [string]$Data = "$env:USERPROFILE\Documents\Projects\cadswarm-demo",
   [string]$Db = "cadswarm-calhacks-0180",
   [string]$Python = "",
-  [ValidateSet("claude","codex","droid","opencode","creao")][string]$Agent = "claude",
+  [ValidateSet("claude","codex","opencode")][string]$Agent = "claude",
   [string[]]$AgentCommand = @(),
   [int]$WebPort = 4173,
   [string]$WebUrl = "",

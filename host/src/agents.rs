@@ -103,20 +103,37 @@ pub fn agent_command(client: &str, override_cmd: &[String], dir: &Path, prompt: 
         "claude" => ("claude".into(), vec!["-p".into(), p, "--max-turns".into(), "80".into(), "--allowedTools".into(),
                      "mcp__cadswarm".into(), "--mcp-config".into(), dir.join(".mcp.json").display().to_string()]),
         "codex" => ("codex".into(), vec!["exec".into(), "--full-auto".into(), "--skip-git-repo-check".into(), p]),
-        "droid" => ("droid".into(), vec!["exec".into(), "--auto".into(), "low".into(), p]),
         // --standalone: a private server per run, not whatever the person's desktop app is running.
         // The prompt goes in on stdin (see spawn): an npm .cmd shim would split a multi-line argument.
         "opencode" => ("opencode".into(), vec!["run".into(), "--standalone".into(), "--auto".into()]),
-        other => bail!("unknown agent client {other:?}; use claude, codex, droid or opencode \
-                        (creao runs its bridge), or set agent_command"),
+        other => bail!("unknown agent client {other:?}; use claude, codex or opencode, or set agent_command"),
     })
 }
 
-/// Creao AI has no CLI to find: the bridge (mcp_server's tools, driven over Creao's HTTP API) runs from
-/// the same Python package that just ran `cadswarm setup`.
-pub fn creao_command(python: &Path, dir: &Path) -> (String, Vec<String>) {
-    (python.display().to_string(), vec!["-m".into(), "cadswarm.creao_agent".into(),
-     "--dir".into(), dir.display().to_string()])
+/// Find the CLI this host would run, before an invite is minted for an agent that cannot start.
+pub fn preflight(cfg: &HostConfig) -> Result<()> {
+    if !cfg.agent_command.is_empty() {
+        if cfg.agent_command[0].trim().is_empty() {
+            bail!("agent_command starts with an empty program name");
+        }
+        return Ok(());
+    }
+    let (program, _) = agent_command(&cfg.agent_client, &[], Path::new("."), "")?;
+    find_cli(&program).map(|_| ())
+}
+
+/// The end of an agent's own log, for a failure message a person can act on.
+pub fn log_tail(cfg: &HostConfig, name: &str, lines: usize) -> String {
+    let path = cfg.data_dir.join("agents").join(name).join("agent.log");
+    let Ok(text) = std::fs::read_to_string(&path) else { return String::new() };
+    let tail: Vec<String> = text.lines().filter(|l| !l.trim().is_empty())
+        .rev().take(lines).collect::<Vec<_>>().into_iter().rev()
+        .map(|l| l.trim().chars().take(300).collect()).collect();
+    if tail.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nIts log ended with:\n{}", tail.join("\n"))
+    }
 }
 
 impl Agent {
@@ -153,18 +170,12 @@ impl Agent {
             );
         }
         let log = std::fs::File::create(dir.join("agent.log"))?;
-        let creao = cfg.agent_command.is_empty() && cfg.agent_client == "creao";
-        let (program, args) = if creao {
-            creao_command(&cfg.cadswarm_python, &dir)
-        } else {
-            agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?
-        };
-        let exe = if cfg.agent_command.is_empty() && !creao { find_cli(&program)? } else { PathBuf::from(&program) };
+        let (program, args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
+        let exe = if cfg.agent_command.is_empty() { find_cli(&program)? } else { PathBuf::from(&program) };
         let mut cmd = Command::new(exe);
         cmd.args(&args)
             .current_dir(&dir)
-            .stdin(if (cfg.agent_client == "opencode" || cfg.agent_client == "creao")
-                && cfg.agent_command.is_empty() {
+            .stdin(if cfg.agent_client == "opencode" && cfg.agent_command.is_empty() {
                 Stdio::piped()
             } else {
                 Stdio::null()
@@ -176,11 +187,6 @@ impl Agent {
             stdin.write_all(prompt.as_bytes()).context("sending the prompt to the agent")?;
         }
         Ok(Agent { name: name.into(), child, started: Instant::now() })
-    }
-
-    /// An already-spawned process (the reviewer runs `python -m cadswarm.reviewer`, not an agent CLI).
-    pub fn from_child(name: &str, child: Child) -> Agent {
-        Agent { name: name.into(), child, started: Instant::now() }
     }
 
     /// False once it exited or was killed for running past the timeout.
@@ -234,6 +240,35 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
     )
 }
 
+/// The reviewer is an ordinary spawned agent with a reviewer identity: the module lets it read and report
+/// but refuses every write op from a `reviewer` member, so it cannot change the model it judges.
+pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], round: u32, style: &str) -> String {
+    let style_check = if style.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n5. Team design style: the rules below are how this team designs. Each part that breaks one is a \
+                 problem; write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n{style}\n")
+    };
+    format!(
+        "You are the design REVIEWER for CadSwarm brief {brief_id} (review round {round}).\n\
+         The person asked: \"{text}\". Board: {board}. Printer bed: {} x {} x {} mm.\n\
+         Check, using the tools only (you cannot change geometry):\n\
+         0. Your arrow shows the team which part you are on: call point_at(\"<part>\") before you check it,\n\
+            and point_at again when you move to the next one. It only moves your pointer, never the model.\n\
+         1. model_status: read the Params sheet (the board's measured dimensions) and the parts.\n\
+         2. check_interference on all parts: any clash between separate parts is a problem.\n\
+         3. Fit: the enclosure's inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs must sit at\n\
+            hole_N_x/hole_N_y; each port cutout must be centred on its <port>_pos and <port>_z.\n\
+         4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n\
+         {style_check}\
+         For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
+         precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
+         Finish by calling report_review(brief_id=\"{brief_id}\", round={round}, passed=<true only if no problems>,\n\
+         findings=[{{\"object\", \"problem\", \"task_id\"}}]).",
+        bed[0], bed[1], bed[2]
+    )
+}
+
 /// The first line is `accept_handoff` on purpose: it hands over the locks and tasks atomically,
 /// so the new agent owns the work before it reads anything else.
 pub fn handoff_prompt(handoff_id: &str, context_json: &str) -> String {
@@ -279,19 +314,50 @@ mod tests {
         assert!(a.contains(&"build it".to_string()) && a.contains(&"--mcp-config".to_string()));
         let (p, a) = agent_command("codex", &[], dir, "build it").unwrap();
         assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("codex", "exec", "build it"));
-        let (p, a) = agent_command("droid", &[], dir, "build it").unwrap();
-        assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("droid", "exec", "build it"));
         let (p, a) = agent_command("opencode", &[], dir, "build it").unwrap();
         assert_eq!((p.as_str(), a[0].as_str(), a[1].as_str()), ("opencode", "run", "--standalone"));
         assert!(!a.contains(&"build it".to_string()), "the prompt goes in on stdin: {a:?}");
         assert!(agent_command("gpt", &[], dir, "x").is_err());
     }
 
+    fn cfg(client: &str, command: Vec<String>, data: PathBuf) -> HostConfig {
+        HostConfig {
+            mode: "local".into(), uri: "http://127.0.0.1:3000".into(), db: "db".into(), token: "t".into(),
+            data_dir: data, freecad_python: PathBuf::from("freecad"), worker_script: PathBuf::from("w.py"),
+            web_url: String::new(), cadswarm_python: PathBuf::from("python"), agent_client: client.into(),
+            agent_command: command,
+        }
+    }
+
     #[test]
-    fn creao_runs_the_bridge_with_the_python_that_has_the_package() {
-        let (p, a) = creao_command(Path::new("C:/py/python.exe"), Path::new("D:/agents/w1"));
-        assert_eq!(p, "C:/py/python.exe");
-        assert_eq!(a, vec!["-m", "cadswarm.creao_agent", "--dir", "D:/agents/w1"]);
+    fn preflight_checks_the_command_before_a_start() {
+        let dir = std::env::temp_dir().join(format!("cadswarm-preflight-{}", std::process::id()));
+        // A custom command line is taken as given (a person's own wrapper script).
+        assert!(preflight(&cfg("claude", vec!["my-wrapper".into(), "{prompt}".into()], dir.clone())).is_ok());
+        // An empty program name or an unknown client can never start, so no invite should be spent.
+        assert!(preflight(&cfg("claude", vec!["  ".into()], dir.clone())).is_err());
+        assert!(preflight(&cfg("gpt", Vec::new(), dir)).is_err());
+    }
+
+    #[test]
+    fn an_agents_log_tail_names_why_it_died() {
+        let dir = std::env::temp_dir().join(format!("cadswarm-logtail-{}", std::process::id()));
+        let agent = dir.join("agents").join("planner-1");
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(agent.join("agent.log"), "first\n\nstarting\nworkspace has not been trusted\n").unwrap();
+        let tail = log_tail(&cfg("claude", Vec::new(), dir.clone()), "planner-1", 2);
+        assert!(tail.contains("trusted") && !tail.contains("first"), "{tail}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_reviewer_prompt_checks_fit_and_reports_a_verdict() {
+        let p = review_prompt("b_x", "a case for my board", "esp32", [220.0, 220.0, 250.0], 2, "");
+        assert!(p.contains("check_interference") && p.contains("check_printability"));
+        assert!(p.contains("report_review") && p.contains("round=2") && p.contains("esp32"));
+        assert!(!p.contains("Team design style"), "no style rules learned yet");
+        let with_style = review_prompt("b_x", "a case", "esp32", [220.0, 220.0, 250.0], 1, "- walls are 2.4 mm");
+        assert!(with_style.contains("walls are 2.4 mm"));
     }
 
     #[test]

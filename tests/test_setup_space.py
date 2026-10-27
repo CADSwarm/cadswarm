@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from cadswarm import agent_setup, cli, creao, ticket
+from cadswarm import agent_setup, cli, ticket
 from cadswarm.invite import make_invite
 
 T = {"v": 1, "uri": "http://127.0.0.1:3000", "db": "cadswarm", "token": "ab" * 32, "kind": "agent",
@@ -39,18 +39,6 @@ def test_fresh_forgets_the_identity_and_redeems_again(tmp_path, monkeypatch):
     agent_setup.write_agent_config(str(tmp_path), "claude", T, "alice-claude", python="python")
     agent_setup.write_agent_config(str(tmp_path), "claude", T, "alice-claude", python="python", fresh=True)
     assert len(calls) == 2
-
-
-def test_droid_gets_a_factory_mcp_config(tmp_path, monkeypatch):
-    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1, "fence": 1,
-                                                                 "name": n, "role": "member", "kind": "agent"})
-    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
-    written = agent_setup.write_agent_config(str(tmp_path), "droid", t, "bob-droid", python="python")
-    mcp = json.load(open(tmp_path / ".factory" / "mcp.json"))
-    assert mcp["mcpServers"]["cadswarm"]["args"] == [agent_setup.LAUNCHER, "mcp"]
-    assert mcp["mcpServers"]["cadswarm"]["command"] == "python"
-    assert mcp["mcpServers"]["cadswarm"]["env"]["CADSWARM_PROJECT"] == str(tmp_path)
-    assert str(tmp_path / ".factory" / "mcp.json") in written
 
 
 @pytest.mark.parametrize("code", [lambda: make_invite(T, "Lid"), lambda: ticket.encode(T),
@@ -158,20 +146,6 @@ def test_opencode_models_are_read_from_its_cli(monkeypatch):
     assert agent_setup.list_models("claude") == []
 
 
-def test_creao_models_come_from_its_api(monkeypatch):
-    class Api:
-        def list_models(self):
-            return ["claude-sonnet", "gpt-5"]
-    monkeypatch.setattr(creao, "client", lambda: Api())
-    assert agent_setup.list_models("creao") == ["claude-sonnet", "gpt-5"]
-
-    class Down:
-        def list_models(self):
-            raise creao.CreaoError("Couldn't reach Creao")
-    monkeypatch.setattr(creao, "client", lambda: Down())
-    assert agent_setup.list_models("creao") == []
-
-
 def test_opencode_config_keeps_other_servers_and_settings(tmp_path):
     (tmp_path / "opencode.json").write_text(json.dumps(
         {"$schema": "https://example.test/schema.json", "theme": "dark",
@@ -188,175 +162,7 @@ def test_opencode_launcher_puts_the_prompt_behind_its_flag():
     assert agent_setup.launcher_argv("claude", "join us") == ["join us"]
 
 
-@pytest.fixture(autouse=True)
-def keep_creao_account_cache_in_the_test(tmp_path, monkeypatch):
-    """The shared Creao agent lives in the user's app folder: no test may write the real one."""
-    monkeypatch.setattr(creao, "shared_path", lambda: str(tmp_path / "shared-creao.json"))
-
-
-class FakeCreaoApi:
-    """Stands in for creao.Creao in setup tests, recording every call."""
-
-    instances = []
-
-    def __init__(self, key=None, **kw):
-        self.key = key
-        self.calls = []
-        FakeCreaoApi.instances.append(self)
-
-    def usage(self):
-        self.calls.append(("usage",))
-        return {"creditBalance": 10}
-
-    def create_agent(self, description, model=None):
-        self.calls.append(("create", description, model))
-        return "agent-new"
-
-    def install_skill(self, content, files=None, enabled=True):
-        self.calls.append(("skill", content, files, enabled))
-        return {}
-
-    def update_agent(self, agent_id, **fields):
-        self.calls.append(("update", agent_id, fields))
-        return {}
-
-
-def creao_invite():
-    return {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
-
-
-def test_creao_setup_checks_the_key_makes_an_agent_and_installs_the_skill(tmp_path, monkeypatch):
-    FakeCreaoApi.instances = []
-    monkeypatch.setattr(creao, "Creao", FakeCreaoApi)
-    monkeypatch.setenv("CREAO_API_KEY", "cr_sk_test")
-    calls = []
-    monkeypatch.setattr(agent_setup, "redeem", fake_redeem(calls))
-    written = agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao",
-                                             python="python")
-    api = FakeCreaoApi.instances[-1]
-    assert api.key == "cr_sk_test"
-    assert [c[0] for c in api.calls] == ["usage", "create", "skill", "update"]
-    assert api.calls[1][1] == creao.AGENT_DESCRIPTION and api.calls[1][2] is None
-    assert creao.SKILL_NAME in api.calls[2][1]
-    assert "scripts/validate_turn.py" in api.calls[2][2]
-    assert api.calls[3] == ("update", "agent-new", {"write_autonomy": "full_auto"})
-    saved = creao.load_config(str(tmp_path))
-    assert saved == {"agent_id": "agent-new"}
-    assert creao.load_shared() == {"agent_id": "agent-new"}
-    assert "cr_sk_test" not in open(creao.config_path(str(tmp_path)), encoding="utf-8").read()
-    assert calls == [("x", "alice-creao", "creao")]
-    assert json.load(open(tmp_path / ".cadswarm" / "config.json"))["client"] == "creao"
-    assert "cadswarm:begin" in open(tmp_path / "AGENTS.md").read()
-    assert str(tmp_path / "AGENTS.md") in written and creao.config_path(str(tmp_path)) in written
-
-
-def test_creao_setup_reuses_its_agent_and_keeps_the_conversation(tmp_path, monkeypatch):
-    FakeCreaoApi.instances = []
-    monkeypatch.setattr(creao, "Creao", FakeCreaoApi)
-    monkeypatch.setenv("CREAO_API_KEY", "cr_sk_test")
-    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1,
-                                                               "fence": 1, "name": n, "role": "member"})
-    creao.save_config(str(tmp_path), agent_id="agent-old", conversation_id="conv-old")
-    agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao", python="python")
-    api = FakeCreaoApi.instances[-1]
-    assert not any(c[0] == "create" for c in api.calls)
-    assert ("update", "agent-old", {"write_autonomy": "full_auto"}) in api.calls
-    assert creao.load_config(str(tmp_path)) == {"agent_id": "agent-old", "conversation_id": "conv-old"}
-    assert creao.load_shared() == {"agent_id": "agent-old"}  # a folder from before the shared cache hands it up
-
-
-def test_a_second_helper_folder_reuses_the_shared_creao_agent(tmp_path, monkeypatch):
-    FakeCreaoApi.instances = []
-    monkeypatch.setattr(creao, "Creao", FakeCreaoApi)
-    monkeypatch.setenv("CREAO_API_KEY", "cr_sk_test")
-    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1,
-                                                               "fence": 1, "name": n, "role": "member"})
-    creao.save_shared("agent-shared")
-    folder = tmp_path / "second"
-    agent_setup.write_agent_config(str(folder), "creao", creao_invite(), "bob-creao", python="python")
-    api = FakeCreaoApi.instances[-1]
-    assert not any(c[0] == "create" for c in api.calls)  # one agent per computer, not one per helper
-    assert ("update", "agent-shared", {"write_autonomy": "full_auto"}) in api.calls
-    assert creao.load_config(str(folder)) == {"agent_id": "agent-shared"}
-    assert creao.load_shared() == {"agent_id": "agent-shared"}
-
-
-def test_creao_fresh_setup_forgets_the_conversation(tmp_path, monkeypatch):
-    FakeCreaoApi.instances = []
-    monkeypatch.setattr(creao, "Creao", FakeCreaoApi)
-    monkeypatch.setenv("CREAO_API_KEY", "cr_sk_test")
-    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1,
-                                                               "fence": 1, "name": n, "role": "member"})
-    creao.save_config(str(tmp_path), agent_id="agent-old", conversation_id="conv-old")
-    agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao", fresh=True,
-                                   python="python")
-    assert creao.load_config(str(tmp_path)) == {"agent_id": "agent-old"}
-
-
-def test_a_bad_creao_key_fails_before_the_invite_is_redeemed(tmp_path, monkeypatch):
-    class BadKey(FakeCreaoApi):
-        def usage(self):
-            raise creao.CreaoError("Creao rejected the API key", "AUTHENTICATION_REQUIRED")
-
-    monkeypatch.setattr(creao, "Creao", BadKey)
-    monkeypatch.setenv("CREAO_API_KEY", "cr_sk_bad")
-    calls = []
-    monkeypatch.setattr(agent_setup, "redeem", fake_redeem(calls))
-    with pytest.raises(ValueError, match="rejected the API key"):
-        agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao", python="python")
-    assert calls == []  # the single-use invite is still good
-
-
-def test_creao_setup_without_a_key_never_touches_the_invite(tmp_path, monkeypatch):
-    monkeypatch.setattr(creao, "api_key", lambda: "")
-    calls = []
-    monkeypatch.setattr(agent_setup, "redeem", fake_redeem(calls))
-    with pytest.raises(ValueError, match="CREAO_API_KEY"):
-        agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao", python="python")
-    assert calls == [] and not os.path.exists(creao.config_path(str(tmp_path)))
-
-
-def test_creao_has_no_cli_but_its_bridge_launcher_runs_the_runner(tmp_path, monkeypatch):
-    assert agent_setup.find_agent_cli("creao") is None
-    monkeypatch.setattr(creao, "api_key", lambda: "cr_sk_test")
-    assert agent_setup.agent_ready("creao") is True
-    monkeypatch.setattr(creao, "api_key", lambda: "")
-    assert agent_setup.agent_ready("creao") is False
-    (tmp_path / ".cadswarm").mkdir()
-    path = agent_setup.write_launcher(str(tmp_path), "creao", "Team project")
-    text = open(path, encoding="utf-8").read()
-    assert "runner" in text and str(tmp_path) in text
-    with pytest.raises(RuntimeError, match="no terminal"):
-        agent_setup.open_agent_terminal("creao", str(tmp_path))
-
-
-def test_creao_is_described_by_the_models_it_offers():
-    assert agent_setup.CLIENTS["creao"]["description"] == "Use various frontier models"
-    assert agent_setup.CLIENTS["creao"]["exe"] is None
-    assert all(info["label"] for info in agent_setup.CLIENTS.values())
-
-
 def test_nvm_installs_are_ordered_by_version_not_text():
     paths = [f"/h/.nvm/versions/node/v{v}/bin/claude" for v in ("9.11.2", "22.1.0", "18.20.4")]
     newest = sorted(paths, key=agent_setup._node_version, reverse=True)[0]
     assert "v22.1.0" in newest
-
-
-def test_creao_setup_with_an_app_key_uses_the_agent_built_on_agent_creao_ai(tmp_path, monkeypatch):
-    FakeCreaoApi.instances = []
-    monkeypatch.setattr(creao, "Creao", FakeCreaoApi)
-    monkeypatch.setenv("CREAO_API_KEY", "capi_test")
-    monkeypatch.setenv("CREAO_AGENT_ID", "agent-web")
-    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1,
-                                                               "fence": 1, "name": n, "role": "member"})
-    agent_setup.write_agent_config(str(tmp_path), "creao", creao_invite(), "alice-creao", python="python")
-    assert FakeCreaoApi.instances == []  # no /v1 calls: the agent, its skill and autonomy live on its page
-    assert creao.load_config(str(tmp_path)) == {"agent_id": "agent-web"}
-    assert "cadswarm:begin" in open(tmp_path / "AGENTS.md").read()
-
-
-def test_creao_setup_with_an_app_key_needs_the_agent_id(tmp_path, monkeypatch):
-    monkeypatch.setenv("CREAO_API_KEY", "capi_test")
-    monkeypatch.delenv("CREAO_AGENT_ID", raising=False)
-    with pytest.raises(ValueError, match="CREAO_AGENT_ID"):
-        agent_setup.setup_creao(str(tmp_path), "python")

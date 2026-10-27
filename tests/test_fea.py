@@ -179,22 +179,7 @@ def env(tmp_path, monkeypatch):
         return json.loads(json.dumps(STATIC_RESULT)), b"\x89PNG fake"
     monkeypatch.setattr(fea_jobs, "freecad_python", lambda: "freecad-python")
     p._fea = fea_jobs.FeaJobs(p, clock, runner=fake_run)
-    p.elastic = FakeElastic()  # publishing remembers the report; never index test data into a real cluster
     return p, tmp_path, clock, calls
-
-
-class FakeElastic:
-    def __init__(self):
-        self.fea = []
-
-    def index_fea(self, doc):
-        self.fea.append(doc)
-
-    def search(self, index, query, k=5, filters=None):
-        return [{"source": d} for d in self.fea][:k] if index == "cadswarm-fea" else []
-
-    def lessons(self, board, k=5):
-        return []
 
 
 def ask(p, op, actor=AGENT, **args):
@@ -477,32 +462,33 @@ def test_a_helper_reads_a_published_report_as_problems_and_a_rerun(env):
     assert ask(p, "fea_reports", report="fea_nope")["code"] == "not_found"
 
 
-def test_a_published_report_is_remembered_in_elastic(env):
+def test_a_published_report_is_remembered_in_the_projects_design_memory(env):
     p, _, _, _ = env
     jid = start(p)["job_id"]
     finished(p, jid)
     ask(p, "fea_publish", job_id=jid, summary="Bends a lot.")
     import time
     for _ in range(100):  # indexing runs off the critical path
-        if p.elastic.fea:
+        if p.knowledge.search("cadswarm-fea", "beam"):
             break
         time.sleep(0.01)
-    doc, = p.elastic.fea
+    [hit] = p.knowledge.search("cadswarm-fea", "beam")
+    doc = hit["source"]
     assert doc["report_id"] == jid and doc["target"] == ["Beam"] and doc["title"] and doc["verdict"] == "fail"
-    assert doc["safety_factor"] == 0.788 and doc["problems"] and doc["content"] == doc["text"]
-    assert "Bends a lot." in doc["text"]
+    assert doc["safety_factor"] == 0.788 and doc["problems"]
+    assert "Bends a lot." in hit["chunks"][0]
     sims = ask(p, "recall_designs", query="beam safety factor")["result"]["simulations"]
     assert sims[0]["target"] == ["Beam"] and sims[0]["verdict"] == "fail"
 
 
-def test_without_elastic_publishing_still_works(env, monkeypatch):
+def test_a_store_that_cannot_be_written_never_breaks_publishing(env):
     p, _, _, _ = env
-    from cadswarm.knowledge import ElasticError
 
-    def not_configured():
-        raise ElasticError(0, "Elastic is not configured on this host")
-    monkeypatch.setattr(helper.Elastic, "from_env", staticmethod(not_configured))  # no keys on this host
-    p.elastic = None
+    class Broken:
+        def index_fea(self, doc):
+            raise OSError("disk full")
+
+    p.knowledge = Broken()
     jid = start(p)["job_id"]
     finished(p, jid)
     assert ask(p, "fea_publish", job_id=jid, summary="ok")["ok"]

@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from cadswarm import style_memory
-from cadswarm.style_memory import StyleMemory, validate_write_up
+from cadswarm.style_memory import StyleMemory
 
 DAY = 86400.0
 ALICE = {"id": 1, "name": "alice", "kind": "human"}
@@ -236,36 +236,3 @@ def test_failed_ops_that_keep_failing_become_a_problem(env):
     style.distil()
     [rule] = by_type(style, "recurring_problem")
     assert "boolean keeps failing with recompute_error" in rule["statement"]
-
-
-def test_the_write_up_keeps_only_wording_the_evidence_backs(env):
-    style, clock = env
-    for _ in range(6):
-        set_param(style, ALICE, "wall", "2.4")
-        clock.t += DAY
-    style.distil()
-    [rule] = by_type(style, "param_convention")
-    good = json.dumps({"rules": [{"id": rule["id"], "statement": "Make walls 2.4 mm thick."}]})
-    assert style.write_up(lambda prompt: "Here you go: " + good) == {"rewritten": 1}
-    assert style.rule(rule["id"])["statement"] == "Make walls 2.4 mm thick."
-    style.distil()  # same facts: the wording survives a re-distil
-    assert style.rule(rule["id"])["statement"] == "Make walls 2.4 mm thick."
-
-    with pytest.raises(ValueError, match="does not back"):
-        validate_write_up({"rules": [{"id": rule["id"], "statement": "Make walls 3 mm thick."}]}, [rule])
-    with pytest.raises(ValueError, match="did not send"):
-        validate_write_up({"rules": [{"id": "r_invented", "statement": "x"}]}, [rule])
-
-
-def test_mirror_sends_new_events_and_rules_once(env):
-    style, _ = env
-    set_param(style, ALICE, "wall", "2.4")
-    style.distil()
-    sent = []
-    first = style.mirror(lambda method, path, body: sent.append((method, path, body)))
-    assert first == {"events": 1, "rules": 1} and sent[0][1] == "/_bulk"
-    lines = [json.loads(x) for x in sent[0][2].strip().split("\n")]
-    assert lines[0] == {"index": {"_index": "cadswarm-usage", "_id": f"{style.project}-1"}}
-    assert lines[1]["project"] == style.project and len(style.project) == 12
-    assert lines[3]["statement"] == lines[3]["content"]
-    assert style.mirror(lambda *a: sent.append(a)) == {"events": 0, "rules": 0}

@@ -1,7 +1,4 @@
-"""Connecting an AI helper (Claude Code, Codex, Factory Droid or OpenCode) in a project folder to a team.
-
-Also Creao AI, which has no local CLI: its runs go through a small adapter (cadswarm.creao_agent)
-rather than a config file for a terminal helper.
+"""Connecting an AI helper (Claude Code, Codex or OpenCode) in a project folder to a team.
 
 Shared by `cadswarm setup` and the FreeCAD setup wizard, so stdlib only. Agent
 configs launch `cadswarm_launch.py` by absolute path with an explicit Python
@@ -27,13 +24,9 @@ CLIENTS = {
     "claude": {"label": "Claude Code", "exe": "claude",
                "install_url": "https://code.claude.com/docs/en/setup"},
     "codex": {"label": "Codex", "exe": "codex", "install_url": "https://learn.chatgpt.com/docs/codex/cli"},
-    "droid": {"label": "Factory Droid", "exe": "droid", "install_url": "https://docs.factory.ai/cli/getting-started/quickstart"},
     # Deliberately last: the first installed client in this order is what the guide preselects, so
     # OpenCode stays opt-in and never displaces someone's Claude Code.
     "opencode": {"label": "OpenCode", "exe": "opencode", "install_url": "https://opencode.ai/docs/"},
-    # No local CLI: Creao AI runs through a local bridge (cadswarm.creao_agent) and needs its API key.
-    "creao": {"label": "Creao AI", "exe": None, "install_url": "https://developer.creao.ai/",
-              "description": "Use various frontier models"},
 }
 
 # OpenCode reads AGENTS.md by itself; this is the schema its config wants.
@@ -86,19 +79,6 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
 - Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
   team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
   `model_status` and `get_inbox` yourself first.
-{end}
-"""
-
-CREAO_DOC = """{begin}
-## CadSwarm: you are part of a team building one shared FreeCAD model
-
-This folder belongs to a Creao AI helper. The CadSwarm bridge on this computer sends Creao one wake-up
-prompt per task and executes each tool call Creao asks for against the team's shared model.
-
-Creao has no direct tool access: every reply must be exactly one JSON object,
-`{{"tool": "<name>", "args": {{...}}}}` to act or `{{"done": true, "summary": "..."}}` to finish. The
-bridge adds the current tool catalog to the first message of each conversation. Never edit .FCStd files
-directly: all CAD work goes through the CadSwarm tools.
 {end}
 """
 
@@ -260,19 +240,6 @@ def trust_in_codex(project):
     return True
 
 
-def setup_droid(project, python):
-    path = os.path.join(project, ".factory", "mcp.json")
-    cfg = _read_config(path)
-    _dict_at(cfg, "mcpServers", path)["cadswarm"] = {
-        "type": "stdio", "command": python, "args": [LAUNCHER, "mcp"],
-        "env": {"CADSWARM_PROJECT": project}}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2)
-    upsert_block(os.path.join(project, "AGENTS.md"), AGENT_DOC.format(begin=BEGIN, end=END))
-    return [path, os.path.join(project, "AGENTS.md")]
-
-
 def setup_opencode(project, python):
     """opencode.json: the cadswarm MCP server, and AGENTS.md for the instructions (OpenCode reads it
     natively, so unlike Claude and Codex there is no prompt hook to install)."""
@@ -293,63 +260,6 @@ def setup_opencode(project, python):
         json.dump(cfg, f, indent=2)
     upsert_block(os.path.join(project, "AGENTS.md"), AGENT_DOC.format(begin=BEGIN, end=END))
     return [path, os.path.join(project, "AGENTS.md")]
-
-
-def setup_creao(project, python):
-    """Creao has no config file for a terminal helper: resolve the Creao agent (one per computer/account,
-    shared by every helper; cached ids only, never the key), install the account-level tool skill, and
-    let full-auto writes through.
-
-    This runs before the invite is redeemed (write_agent_config writes the client config first), so a
-    bad key or a failed agent creation never burns a single-use invite.
-    """
-    from . import creao
-    key = creao.api_key()
-    if not key:
-        raise ValueError("Creao needs CREAO_API_KEY on this computer: create a cr_sk_ key in Creao's "
-                         "Developer Console and add it to cadswarm.env (see .env.example)")
-    if creao.is_app_key(key):
-        # An agent built on agent.creao.ai: its id, model, skill and autonomy all live on its page.
-        agent_id = (os.environ.get("CREAO_AGENT_ID") or "").strip()
-        if not agent_id:
-            raise ValueError("A capi_ key runs one agent built on agent.creao.ai: add that agent's id "
-                             "(shown on its page) to cadswarm.env as CREAO_AGENT_ID")
-        creao.save_config(project, agent_id=agent_id)
-        upsert_block(os.path.join(project, "AGENTS.md"), CREAO_DOC.format(begin=BEGIN, end=END))
-        return [os.path.join(project, "AGENTS.md"), creao.config_path(project)]
-    api = creao.Creao(key=key)
-    try:
-        api.usage()  # a cheap authenticated call: proves the key works before anything is spent
-    except creao.CreaoError as e:
-        raise ValueError(str(e))
-    cfg = creao.load_config(project)
-    shared = creao.load_shared()
-    agent_id = (os.environ.get("CREAO_AGENT_ID") or cfg.get("agent_id")
-                or shared.get("agent_id") or "").strip()
-    model = (os.environ.get("CREAO_MODEL") or cfg.get("model") or "").strip() or None
-    if not agent_id:
-        try:
-            agent_id = api.create_agent(creao.AGENT_DESCRIPTION, model=model)
-        except creao.CreaoError as e:
-            raise ValueError(str(e))
-        creao.save_shared(agent_id)  # every Creao helper on this computer shares this account's agent
-    elif not shared.get("agent_id"):
-        creao.save_shared(agent_id)  # a folder set up before the cache existed hands it up
-    creao.save_config(project, agent_id=agent_id, model=model)
-    # Both are best-effort and idempotent: a team whose account can't install skills still runs on the
-    # protocol the bridge sends with every task.
-    try:
-        api.install_skill(creao.SKILL_MD, files={"scripts/validate_turn.py": creao.VALIDATE_TURN})
-    except creao.CreaoError as e:
-        print(f"cadswarm: warning: couldn't install the {creao.SKILL_NAME} Creao skill ({e}); tasks still "
-              "carry the tool protocol", file=sys.stderr)
-    try:
-        # A /v1 run cannot collect approvals, so approval_required would silently skip guarded writes.
-        api.update_agent(agent_id, write_autonomy="full_auto")
-    except creao.CreaoError as e:
-        print(f"cadswarm: warning: couldn't set full_auto write autonomy on the Creao agent ({e})", file=sys.stderr)
-    upsert_block(os.path.join(project, "AGENTS.md"), CREAO_DOC.format(begin=BEGIN, end=END))
-    return [os.path.join(project, "AGENTS.md"), creao.config_path(project)]
 
 
 def redeem(t, name, client):
@@ -387,13 +297,9 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False, 
     ident_path = os.path.join(state_dir(project), "identity.json")
     if fresh and os.path.exists(ident_path):
         os.remove(ident_path)
-    if fresh and client == "creao":
-        from .creao import clear_conversation  # a new identity gets a fresh Creao conversation too
-        clear_conversation(project)
     with open(os.path.join(state_dir(project), ".gitignore"), "w") as f:
         f.write("*\n")  # identity.json holds a SpacetimeDB token
-    writers = {"claude": setup_claude, "codex": setup_codex, "droid": setup_droid,
-               "opencode": setup_opencode, "creao": setup_creao}
+    writers = {"claude": setup_claude, "codex": setup_codex, "opencode": setup_opencode}
     written = writers[client](project, python)
     if not identity_matches(project, invite):
         if not invite.get("token"):
@@ -413,9 +319,9 @@ def helper_model(project):
 
 
 def save_helper_model(project, model):
-    """Pin (or with "" unpin) the model this helper runs on. It sticks: the runner and the Creao bridge
-    prefer it over CADSWARM_HELPER_MODEL / CREAO_MODEL, and OpenCode's own opencode.json gets it too,
-    so the helper opened in a terminal uses the same model."""
+    """Pin (or with "" unpin) the model this helper runs on. It sticks: the runner prefers it over
+    CADSWARM_HELPER_MODEL, and OpenCode's own opencode.json gets it too, so the helper opened in a
+    terminal uses the same model."""
     model = (model or "").strip()
     path = os.path.join(state_dir(project), "config.json")
     cfg = load_json(path) or {}
@@ -437,8 +343,8 @@ def save_helper_model(project, model):
 
 
 def list_models(client):
-    """Models to offer in the picker: OpenCode's `opencode models` (provider/model ids) or the Creao
-    account's models. [] when the list can't be had (the picker then takes a typed id)."""
+    """Models to offer in the picker: OpenCode's `opencode models` (provider/model ids). [] when the
+    list can't be had (the picker then takes a typed id)."""
     if client == "opencode":
         exe = find_agent_cli("opencode")
         if not exe:
@@ -455,12 +361,6 @@ def list_models(client):
             if re.fullmatch(r"[\w.-]+/[\w.:@/-]+", line) and line not in ids:
                 ids.append(line)
         return ids
-    if client == "creao":
-        from . import creao
-        try:
-            return creao.client().list_models()
-        except (creao.CreaoError, OSError, ValueError, KeyError, AttributeError):
-            return []
     return []
 
 
@@ -473,8 +373,6 @@ def find_agent_cli(client):
     """Absolute path of the AI helper's command, or None. Looks beyond PATH because apps
     started from the Start menu don't always see what a terminal sees."""
     exe = CLIENTS[client]["exe"]
-    if not exe:  # Creao AI has no local CLI: it runs through the bridge, and needs only a key
-        return None
     found = shutil.which(exe)
     if found:
         return found
@@ -520,16 +418,8 @@ def opencode_paths():
     return [os.path.join(d, n) for d in dirs for n in names]
 
 
-def creao_configured():
-    """Creao has no binary to detect: a CREAO_API_KEY is what makes it usable on this computer."""
-    from .creao import api_key
-    return bool(api_key())
-
-
 def agent_ready(client):
-    """Whether this computer can run `client` now: its CLI is installed, or Creao has its key."""
-    if client == "creao":
-        return creao_configured()
+    """Whether this computer can run `client` now: its CLI is installed."""
     return bool(find_agent_cli(client))
 
 
@@ -557,8 +447,6 @@ def launcher_argv(client, text):
 def write_launcher(project, client, project_name, role="member"):
     """The start script for this helper: starts the agent CLI with its first message, so nobody has to paste it;
     later starts send a short "carry on" message instead."""
-    if client == "creao":
-        return _write_runner_launcher(project, project_name)
     exe = find_agent_cli(client) or CLIENTS[client]["exe"]
     first = FIRST_PROMPT.format(project=project_name)
     resume = RESUME_PROMPT.format(project=project_name)
@@ -587,40 +475,11 @@ def write_launcher(project, client, project_name, role="member"):
     return path
 
 
-def _write_runner_launcher(project, project_name):
-    """Creao has no terminal CLI to open: its start script runs the background runner, which wakes the
-    bridge (cadswarm.creao_agent) whenever the team has something for this helper."""
-    python = sys.executable
-    sd = state_dir(project)
-    if os.name == "nt":
-        q = lambda t: '"' + t.replace('"', "'") + '"'  # noqa: E731
-        text = "\r\n".join([
-            "@echo off", "rem Keeps this CadSwarm Creao AI helper running (written by the CadSwarm guide).",
-            f'cd /d "{project}"',
-            f'"{python}" "{LAUNCHER}" runner {q(project)} {q(project_name)}', ""])
-        path = os.path.join(sd, "start-helper.cmd")
-    else:
-        text = "\n".join([
-            "#!/bin/sh", "# Keeps this CadSwarm Creao AI helper running (written by the CadSwarm guide).",
-            f"cd {_sh_quote(project)} || exit 1",
-            f"exec {_sh_quote(python)} {_sh_quote(LAUNCHER)} runner {_sh_quote(project)} "
-            f"{_sh_quote(project_name)}", ""])
-        path = os.path.join(sd, "start-helper.sh")
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-    if os.name != "nt":
-        os.chmod(path, 0o700)
-    return path
-
-
 def open_agent_terminal(client, project):
     """Open a terminal window in `project` running the AI helper (through its start script when the guide wrote
     one, which also sends the first message). Returns the agent's path."""
     exe = find_agent_cli(client)
     if not exe:
-        if client == "creao":
-            raise RuntimeError("Creao AI runs in the background through CadSwarm's runner; there's no terminal "
-                               "to open. Use the CadSwarm panel's Tools tab to restart it.")
         raise FileNotFoundError(f"{CLIENTS[client]['label']} isn't installed on this computer yet.")
     launcher = os.path.join(state_dir(project), "start-helper.cmd" if os.name == "nt" else "start-helper.sh")
     # Not FreeCAD's bundle settings: an AppImage's PYTHONHOME would break any other Python the agent starts.

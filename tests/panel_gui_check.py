@@ -36,7 +36,7 @@ snap = {
                                member(2, "ann-claude", task={"id": "t_1", "title": "Base with port cutouts"},
                                       locks=["Base"]),
                                member(3, "bob-codex", client="codex", doing="listening for instructions"),
-                               member(4, "dee-droid", client="droid", status="stale")]},
+                               member(4, "dee-opencode", client="opencode", status="stale")]},
     "tasks": [{"id": "t_1", "title": "Base with port cutouts for the USB-C and HDMI connectors", "status": "claimed",
                "owner_name": "ann-claude", "assignee": "ann-claude", "brief": "b_1", "detail": ""},
               {"id": "t_2", "title": "Lid", "status": "open", "owner_name": None, "assignee": "bob-codex", "brief": "b_1",
@@ -226,11 +226,28 @@ class Recorder:
 
 s.ensure_connected = lambda purpose: True
 s.run_async = lambda work, done=None, purpose="", failed=None: work(Recorder())
-s.act_async = lambda method, path, body=None, done=None, purpose="", failed=None: sent.append((path, body))
+
+
+def fake_act(method, path, body=None, done=None, purpose="", failed=None):
+    sent.append((path, body))
+    if callable(done):
+        done({})  # the real client runs the done callback once the server accepted the request
+    return {}
+
+
+s.act_async = fake_act
 p.msg.setText("@bob-codex make the lid 20 mm tall")
 p.send()
 p.msg.setText("@team a stand for a 7 mm phone")
 p.send()
+# A brief is not a chat message, so it must not leave a "sending…" bubble waiting for an echo, and the
+# chat says where the request went instead.
+team_outbox = [o["body"] for o in p.outbox]
+team_notice = [n["text"] for n in s.notices]
+team_chat = p.chat.toPlainText()
+# Handing the brief over moved the panel to Tasks (that is where the request now lives); suggestions
+# stay on the Team tab, so go back to read them.
+p.show_tab(p.team_page)
 suggestions_shown = p.suggest_box.isVisibleTo(p) and p.suggest_lay.count() == 3  # heading + two cards
 p.answer(p.suggestions["setting"][0], True)
 p.answer(p.suggestions["style"][0], False)
@@ -336,6 +353,9 @@ result = {
     "offered_b": offered_b,
     "filled": filled,
     "sent": sent[:3],
+    "team_outbox": team_outbox,
+    "team_notice": team_notice,
+    "team_chat": team_chat,
     "answered": sent[3:],
     "suggestions_shown": suggestions_shown,
     "suggestions_cleared": not p.suggest_box.isVisibleTo(p),
@@ -347,8 +367,6 @@ result = {
     "tasks_grouped_under_request": brief.text(0).startswith("🧠") and brief.childCount() == 2,
     "away_tip": p.team_tip.text(),
     "review": p.review_box.text(),
-    "sponsors_tab": [p.tabs.tabText(i) for i in range(p.tabs.count())],
-    "sponsors": p.sponsors_box.text(),
     "chat_jump": {"followed": followed, "jump_shown": jump_shown, "kept_place": kept_place,
                   "unseen_text": unseen_text, "back_down": back_down},
     "toast": toast,

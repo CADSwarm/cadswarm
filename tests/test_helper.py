@@ -4,80 +4,119 @@ import os
 import pytest
 
 from cadswarm import helper
-from cadswarm.knowledge import ElasticError
+from cadswarm.knowledge import KnowledgeError, design_doc
 
 
-class FakeElastic:
-    def __init__(self):
-        self.calls = []
-
-    def search(self, index, query, k=5, filters=None):
-        self.calls.append((index, query, k, filters))
-        return [{"score": 1.0, "source": {"board_id": "raspberry-pi-pico", "source_url": "https://d/p.pdf",
-                                          "title": "Pico datasheet"}, "chunks": ["holes are 47 x 11.4 mm apart"]}]
-
-    def lessons(self, board, k=5):
-        return [{"board_id": board, "problem": "clips usb plug", "count": 2,
-                 "lesson": "Seen 2 time(s) on raspberry-pi-pico: clips usb plug. Design to avoid it."}]
-
-    def board_spec(self, board, question=""):
-        return {"label": "Pico", "pcb": [51.0, 21.0, 1.0], "sources": {"pcb": "https://d/p.pdf"}}
-
-    def index_design(self, doc):
-        self.indexed = doc
+def project(tmp_path):
+    return helper.Project(tmp_path)
 
 
-def project(tmp_path, elastic):
-    p = helper.Project(tmp_path)
-    p.elastic = elastic
-    return p
+def seed_board(p, text="The mounting holes are 47 x 11.4 mm apart.", board="raspberry-pi-pico",
+               url="https://d/p.pdf", title="Pico datasheet"):
+    p.knowledge.index_board({"doc_id": f"doc:{board}", "board_id": board, "title": title,
+                             "source_url": url, "source_type": "datasheet", "text": text, "content": text})
+
+
+def seed_design(p, brief_id="b_1", request="case for a pico", board="raspberry-pi-pico", problems=(), at=1000):
+    reviews = [{"round": 1, "passed": not problems,
+                "findings_json": json.dumps([{"object": "Base", "problem": x} for x in problems])}]
+    doc = design_doc({"id": brief_id, "text": request, "board": board, "status": "ready"},
+                     {"parts": [{"name": "Base"}]}, reviews, {"wall": 2.0})
+    doc["finished_at"] = at
+    p.knowledge.index_design(doc)
+    return doc
+
+
+@pytest.fixture
+def library(tmp_path, monkeypatch):
+    """A copy of the local board library, so specs come from the project's own files, not a service."""
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    (folder / "boards.json").write_text(json.dumps({
+        "raspberry-pi-pico": {"label": "Raspberry Pi Pico", "pcb": [51.0, 21.0, 1.0],
+                              "holes": [[2.0, 4.8], [49.0, 4.8]], "hole_d": 2.1,
+                              "clear_top": 4.0, "clear_bottom": 2.0, "verified": True,
+                              "ports": [{"name": "usb", "side": "-x", "center": [10.5, 1.4],
+                                         "size": [8.5, 3.2]}]},
+    }), encoding="utf-8")
+    (folder / "sources.json").write_text(json.dumps([
+        {"board_id": "raspberry-pi-pico", "title": "Pico datasheet", "type": "datasheet",
+         "url": "https://d/pico.pdf"}]), encoding="utf-8")
+    monkeypatch.setenv("CADSWARM_BOARDS", str(folder / "boards.json"))
+    return folder
 
 
 def test_lookup_returns_passages_with_their_sources(tmp_path):
-    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "lookup_board", "args": {"question": "pico holes"}})
-    assert r["ok"] and r["result"]["answers"][0]["source_url"] == "https://d/p.pdf"
-    assert "47 x 11.4" in r["result"]["answers"][0]["text"]
+    p = project(tmp_path)
+    seed_board(p)
+    r = helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "pico holes"}})
+    assert r["ok"]
+    answer = next(a for a in r["result"]["answers"] if a["source_url"] == "https://d/p.pdf")
+    assert "47 x 11.4" in answer["text"]
 
 
 def test_a_board_alone_is_enough_to_look_up_or_recall(tmp_path):
-    p = project(tmp_path, FakeElastic())
+    p = project(tmp_path)
+    seed_board(p)
+    seed_design(p)
     assert helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "", "board": "raspberry-pi-pico"}})["ok"]
     assert helper.handle(p, {"id": 2, "op": "recall_designs", "args": {"query": "", "board": "raspberry-pi-pico"}})["ok"]
     assert helper.handle(p, {"id": 3, "op": "lookup_board", "args": {"question": "", "board": ""}})["code"] == "bad_args"
 
 
 def test_unknown_ops_and_failures_are_errors_not_crashes(tmp_path):
-    assert helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "nope", "args": {}})["code"] == "unknown_op"
+    assert helper.handle(project(tmp_path), {"id": 1, "op": "nope", "args": {}})["code"] == "unknown_op"
 
-    class Broken(FakeElastic):
+    class Broken:
         def search(self, *a, **k):
             raise RuntimeError("down")
-    r = helper.handle(project(tmp_path, Broken()), {"id": 2, "op": "recall_designs", "args": {"query": "x"}})
+
+    p = project(tmp_path)
+    p.knowledge = Broken()
+    r = helper.handle(p, {"id": 2, "op": "recall_designs", "args": {"query": "x"}})
     assert r["ok"] is False and "down" in r["error"]
 
 
 def test_index_design_builds_the_document(tmp_path):
-    fake = FakeElastic()
-    r = helper.handle(project(tmp_path, fake), {"id": 1, "op": "index_design", "args": {
+    p = project(tmp_path)
+    r = helper.handle(p, {"id": 1, "op": "index_design", "args": {
         "brief": {"id": "b_1", "text": "case", "board": "raspberry-pi-pico", "status": "ready"},
         "plan": {"parts": []}, "reviews": [], "params": {"wall": 2.0}}})
-    assert r["ok"] and fake.indexed["brief_id"] == "b_1"
+    assert r["ok"] and r["result"]["indexed"] == "b_1"
+    [hit] = p.knowledge.search("cadswarm-designs", "case")
+    assert hit["source"]["brief_id"] == "b_1"
 
 
 def test_recall_designs_filters_by_board_and_reads_lessons(tmp_path):
-    fake = FakeElastic()
-    r = helper.handle(project(tmp_path, fake), {"id": 1, "op": "recall_designs",
-                                                "args": {"query": "pico case", "board": "raspberry-pi-pico"}})
+    p = project(tmp_path)
+    seed_design(p, "b_1", problems=["clips usb plug"])
+    seed_design(p, "b_2", board="esp32-s3-devkitc-1", request="case for an esp32")
+    r = helper.handle(p, {"id": 1, "op": "recall_designs",
+                          "args": {"query": "pico case", "board": "raspberry-pi-pico"}})
     assert r["ok"]
-    assert fake.calls == [("cadswarm-designs", "pico case", 3, {"board_id": "raspberry-pi-pico"}),
-                          ("cadswarm-fea", "pico case", 3, None)]  # and the team's past simulations
-    assert "simulations" in r["result"]
-    assert r["result"]["designs"][0]["board_id"] == "raspberry-pi-pico"
-    assert r["result"]["lessons"] == ["Seen 2 time(s) on raspberry-pi-pico: clips usb plug. Design to avoid it."]
+    assert [d["brief_id"] for d in r["result"]["designs"]] == ["b_1"]
+    assert r["result"]["lessons"] == ["Seen 1 time(s) on raspberry-pi-pico: clips usb plug. Design to avoid it."]
+    assert r["result"]["simulations"] == []
+
+
+def test_recall_designs_reads_past_simulations(tmp_path):
+    from cadswarm.knowledge import fea_doc
+    p = project(tmp_path)
+    p.knowledge.index_fea(fea_doc({
+        "id": "fr_1", "title": "Lid load", "analysis": "static", "verdict": "warning",
+        "headline": "The lid bends 1.2 mm", "summary": "", "published_at": 1_700_000_000,
+        "inputs": {"material": {"name": "PLA"}}, "model": {"target": ["Lid"]},
+        "results": {"safety_factor": 1.4, "max_von_mises_mpa": 31.0, "max_displacement_mm": 1.2},
+        "improvements": [{"severity": "warning", "text": "thicken the lid ribs"}]}))
+    r = helper.handle(p, {"id": 1, "op": "recall_designs", "args": {"query": "lid"}})
+    assert r["ok"] and r["result"]["simulations"][0]["title"] == "Lid load"
+    assert r["result"]["simulations"][0]["problems"] == ["thicken the lid ribs"]
 
 
 def test_recall_without_a_board_skips_lessons(tmp_path):
-    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "recall_designs", "args": {"query": "pico case"}})
+    p = project(tmp_path)
+    seed_design(p, problems=["clips usb plug"])
+    r = helper.handle(p, {"id": 1, "op": "recall_designs", "args": {"query": "pico case"}})
     assert r["ok"] and r["result"]["lessons"] == []
 
 
@@ -89,28 +128,18 @@ def test_a_recall_leaves_one_activity_row_per_design_with_its_own_problems(tmp_p
         def log_activity(self, kind, summary, targets=None):
             self.rows.append((kind, summary, targets))
 
-    class TwoDesigns(FakeElastic):
-        def search(self, index, query, k=5, filters=None):
-            if index == "cadswarm-designs":
-                return [
-                    {"score": 0.9, "source": {"request": "A podium from last year", "problems": []}},
-                    {"score": 0.8, "source": {"request": "Build The Perch: a clip-on articulated arm",
-                                              "problems": ["missing OTG cutout", "cradle 8.0 mm",
-                                                           "lid wall 1.0 mm"]}},
-                ]
-            return super().search(index, query, k, filters)
-
-    p = project(tmp_path, TwoDesigns())
+    p = project(tmp_path)
+    seed_design(p, "b_1", request="A podium from last year", problems=[], at=1000)
+    seed_design(p, "b_2", request="Build The Perch: a clip-on articulated arm",
+                problems=["missing OTG cutout", "cradle 8.0 mm", "lid wall 1.0 mm"], at=2000)
     space = Logged()
     p.host_space = space
-    r = helper.handle(p, {"id": 1, "op": "recall_designs",
-                          "args": {"query": "the same Perch", "board": "raspberry-pi-pico"}})
+    r = helper.handle(p, {"id": 1, "op": "recall_designs", "args": {"query": "design"}})
     assert r["ok"]
     first, second = [row[1] for row in space.rows]
     assert all(row[0] == "recall" and row[2] == [] for row in space.rows)
-    assert "#1" in first and "A podium" in first and "0 problems" in first
-    assert "#2" in second and "clip-on articulated arm" in second
-    assert "3 problems" in second and "1 lesson" in second
+    assert "#1" in first and "clip-on articulated arm" in first and "3 problems" in first
+    assert "#2" in second and "A podium" in second and "0 problems" in second
 
 
 def test_a_quote_in_the_query_is_not_a_design_head(tmp_path):
@@ -121,13 +150,8 @@ def test_a_quote_in_the_query_is_not_a_design_head(tmp_path):
         def log_activity(self, kind, summary, targets=None):
             self.rows.append(summary)
 
-    class OneDesign(FakeElastic):
-        def search(self, index, query, k=5, filters=None):
-            if index == "cadswarm-designs":
-                return [{"score": 0.9, "source": {"request": "A shelf bracket", "problems": []}}]
-            return super().search(index, query, k, filters)
-
-    p = project(tmp_path, OneDesign())
+    p = project(tmp_path)
+    seed_design(p, request="A shelf bracket")
     space = Logged()
     p.host_space = space
     query = '#1 "clip-on articulated arm" · 3 problems · 2 lessons'
@@ -146,11 +170,12 @@ def test_a_helpers_recall_is_not_logged_as_the_hosts(tmp_path):
         def log_activity(self, *a, **k):
             self.rows.append(a)
 
-    p = project(tmp_path, FakeElastic())
+    p = project(tmp_path)
+    seed_design(p)
     space = Logged()
     p.host_space = space
     r = helper.handle(p, {"id": 1, "op": "recall_designs",
-                          "args": {"query": "x", "_actor": {"id": 2, "name": "lid-creao", "kind": "agent"}}})
+                          "args": {"query": "x", "_actor": {"id": 2, "name": "lid-builder", "kind": "agent"}}})
     assert r["ok"] and space.rows == []
 
 
@@ -191,51 +216,49 @@ def test_no_host_json_or_no_member_leaves_recall_without_a_row(tmp_path, monkeyp
 
 
 def test_a_recall_without_a_host_still_answers(tmp_path):
-    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "recall_designs", "args": {"query": "x"}})
+    p = project(tmp_path)
+    seed_design(p)
+    r = helper.handle(p, {"id": 1, "op": "recall_designs", "args": {"query": "x"}})
     assert r["ok"] and r["result"]["designs"]
 
 
 def test_missing_args_are_bad_args(tmp_path):
-    p = project(tmp_path, FakeElastic())
+    p = project(tmp_path)
     for op, args in (("lookup_board", {}), ("recall_designs", {}), ("board_spec", {}), ("index_design", {})):
         assert helper.handle(p, {"id": 1, "op": op, "args": args})["code"] == "bad_args"
 
 
-def test_elastic_errors_are_reported_with_their_own_code(tmp_path):
-    class Busy(FakeElastic):
-        def search(self, *a, **k):
-            raise ElasticError(503, '{"error": {"reason": "busy"}}')
-
-    r = helper.handle(project(tmp_path, Busy()), {"id": 1, "op": "lookup_board", "args": {"question": "x"}})
-    assert r["ok"] is False and r["code"] == "elastic_error" and "busy" in r["error"]
+def test_knowledge_lives_in_the_project_folder(tmp_path):
+    p = project(tmp_path)
+    seed_board(p)
+    assert helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "holes"}})["ok"]
+    assert os.path.isfile(os.path.join(tmp_path, ".cadswarm-team", "knowledge.db"))
 
 
-def no_env_file(monkeypatch):
-    """Keep a developer's own cadswarm.env (next to the checkout) out of an "unconfigured" test."""
-    from cadswarm import creao
-    monkeypatch.setattr(creao, "env_candidates", lambda: [])
+def test_the_board_library_is_searchable_without_any_setup(tmp_path, library):
+    p = project(tmp_path)
+    r = helper.handle(p, {"id": 1, "op": "lookup_board",
+                          "args": {"question": "mounting holes", "board": "raspberry-pi-pico"}})
+    assert r["ok"]
+    assert r["result"]["answers"][0]["board_id"] == "raspberry-pi-pico"
+    assert "mounting holes" in r["result"]["answers"][0]["text"].lower()
 
 
-def test_unconfigured_host_reports_not_configured_but_files_still_work(tmp_path, monkeypatch):
-    for var in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
-        monkeypatch.delenv(var, raising=False)
-    no_env_file(monkeypatch)
-    p = helper.Project(tmp_path)
-    assert helper.handle(p, {"id": 1, "op": "lookup_board", "args": {"question": "x"}})["code"] == "not_configured"
-    assert helper.handle(p, {"id": 2, "op": "list_files", "args": {}})["ok"] is True
-
-
-def test_board_spec_passes_through(tmp_path):
-    r = helper.handle(project(tmp_path, FakeElastic()), {"id": 1, "op": "board_spec", "args": {"board": "raspberry-pi-pico"}})
+def test_board_spec_comes_from_the_local_library(tmp_path, library):
+    r = helper.handle(project(tmp_path), {"id": 1, "op": "board_spec", "args": {"board": "raspberry-pi-pico"}})
     assert r["ok"] and r["result"]["pcb"] == [51.0, 21.0, 1.0]
+    assert r["result"]["sources"]["pcb"] == "https://d/pico.pdf"  # every measured number keeps a link
 
 
-def test_an_unsourced_board_spec_is_reported_as_unverified(tmp_path):
-    class Unsourced(FakeElastic):
-        def board_spec(self, board, question=""):
-            raise ValueError("pcb has no source_url")
-    r = helper.handle(project(tmp_path, Unsourced()), {"id": 9, "op": "board_spec", "args": {"board": "mystery-board"}})
-    assert r["ok"] is False and r["code"] == "spec_unverified" and "source_url" in r["error"]
+def test_an_unknown_board_is_reported_as_unverified(tmp_path, library):
+    r = helper.handle(project(tmp_path), {"id": 9, "op": "board_spec", "args": {"board": "mystery-board"}})
+    assert r["ok"] is False and r["code"] == "spec_unverified" and "No local spec" in r["error"]
+
+
+def test_an_unreadable_library_is_reported_not_guessed(tmp_path, library):
+    (library / "boards.json").write_text("{not json", encoding="utf-8")
+    r = helper.handle(project(tmp_path), {"id": 9, "op": "board_spec", "args": {"board": "raspberry-pi-pico"}})
+    assert r["ok"] is False and r["code"] == "spec_unverified" and "unreadable" in r["error"]
 
 
 # ------------------------------------------------------------- team design style
@@ -244,10 +267,7 @@ HUMAN = {"id": 1, "name": "alice", "kind": "human"}
 AGENT = {"id": 9, "name": "worker1", "kind": "agent"}
 
 
-def test_style_learns_locally_without_elastic(tmp_path, monkeypatch):
-    for k in ("ELASTIC_URL", "KIBANA_URL", "ELASTIC_API_KEY"):
-        monkeypatch.delenv(k, raising=False)
-    no_env_file(monkeypatch)
+def test_style_learns_locally(tmp_path):
     p = helper.Project(tmp_path)
     r = helper.handle(p, {"id": 1, "op": "observe_op", "args": {
         "kind": "set_param", "args": {"alias": "wall", "value": "2.4 mm"}, "ok": True, "actor": HUMAN}})
@@ -259,7 +279,7 @@ def test_style_learns_locally_without_elastic(tmp_path, monkeypatch):
 
 
 def test_people_teach_style_and_agents_only_propose_it(tmp_path):
-    p = project(tmp_path, FakeElastic())
+    p = project(tmp_path)
     r = helper.handle(p, {"id": 1, "op": "teach_style", "args": {"statement": "Use M2 inserts", "_actor": AGENT}})
     assert r["ok"] and r["result"]["rule"]["status"] == "candidate" and "M2" not in r["result"]["profile"]
     r = helper.handle(p, {"id": 2, "op": "teach_style", "args": {"statement": "Use M3 everywhere", "_actor": HUMAN}})
@@ -274,29 +294,12 @@ def test_people_teach_style_and_agents_only_propose_it(tmp_path):
     assert "[confirmed] Use M3 everywhere" in ctx["text"]
 
 
-def test_a_finished_brief_relearns_and_mirrors_to_elastic(tmp_path):
-    class Mirror(FakeElastic):
-        def __init__(self):
-            super().__init__()
-            self.bulk = []
-
-        def es(self, method, path, body=None, timeout=None):
-            self.bulk.append(path)
-
-        def converse(self, text, timeout=180, agent_id=None):
-            return "{}"
-    fake = Mirror()
-    p = project(tmp_path, fake)
+def test_a_finished_brief_relearns_locally(tmp_path):
+    p = project(tmp_path)
     r = helper.handle(p, {"id": 1, "op": "observe_brief", "args": {
         "brief": {"id": "b_1", "text": "case", "board": "pico"},
         "reviews": [{"round": 1, "findings_json": '[{"object": "Lid", "problem": "lid too thin"}]'}]}})
     assert r["ok"] and r["result"]["problems"] == 1 and r["result"]["distilled"]["candidate"] == 1
-    import time
-    for _ in range(50):
-        if fake.bulk:
-            break
-        time.sleep(0.02)
-    assert fake.bulk == ["/_bulk"]
 
 
 # --------------------------------------------------------------- lighten jobs (fake runner)

@@ -5,7 +5,7 @@
 FreeCAD starts this in the background for each AI helper set up on this computer. While the helper has
 nothing to do, the runner keeps it on the team as "Ready for instructions". When a person messages it,
 another helper asks it for something, a task is handed to it, or a task it handed out is finished, the
-runner starts the agent CLI headless in the helper's folder (`claude -p`, `codex exec`, `droid exec`,
+runner starts the agent CLI headless in the helper's folder (`claude -p`, `codex exec`,
 `opencode run`) with a
 short note of what's new. The agent does the work with the cadswarm MCP tools, answers in the team chat and
 exits; the runner goes back to waiting.
@@ -29,9 +29,8 @@ import time
 if __package__ in (None, ""):  # run as a script: make `cadswarm` importable
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cadswarm.agent_setup import agent_ready, find_agent_cli  # noqa: E402
+from cadswarm.agent_setup import find_agent_cli  # noqa: E402
 from cadswarm.client import HubRequestError, load_json, save_json, state_dir  # noqa: E402
-from cadswarm.paths import LAUNCHER  # noqa: E402
 from cadswarm.space_hub import POLL_VIEWS, SpaceHub  # noqa: E402
 
 POLL_SECONDS = 1            # one poll is now a single cheap read, so news is noticed within about a second
@@ -229,12 +228,6 @@ def agent_command(client, exe, folder, prompt, resume, model=None):
         if model:
             argv += ["--model", model]
         return argv, prompt
-    if client == "droid":
-        return [exe, "exec", "--auto", "low", " ".join(prompt.split())], None
-    if client == "creao":
-        # No CLI: the bridge joins the team itself and asks Creao for one JSON tool call per turn.
-        # LAUNCHER, not `-m`: FreeCAD's Python finds the package through the launcher.
-        return [sys.executable, LAUNCHER, "creao", "--dir", folder], prompt
     raise ValueError(f"unknown AI helper {client!r}")
 
 
@@ -347,11 +340,8 @@ class Runner:
     def wake(self, work, first):
         client = self.cfg.get("client") or "claude"
         exe = find_agent_cli(client)
-        # Creao has no CLI (exe is None) and needs only its key; every other helper needs the CLI just found.
-        if not (agent_ready(client) if client == "creao" else exe):
-            detail = ("Creao AI needs CREAO_API_KEY on this computer" if client == "creao"
-                      else f"{client} isn't installed on this computer")
-            self.write_status("missing", detail)
+        if not exe:
+            self.write_status("missing", f"{client} isn't installed on this computer")
             return False
         prompt = wake_prompt(self.cfg.get("name") or "an AI helper", self.project or "your team's project",
                              [line for _, line in work], first)

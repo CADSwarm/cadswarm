@@ -1,5 +1,0 @@
-{"id": "cadswarm.team_style", "type": "esql",
- "description": "The design-style rules CadSwarm learned from how this team works (confirmed and active first).",
- "configuration": {
-   "query": "FROM cadswarm-style | WHERE status IN (\"confirmed\", \"active\") | SORT confidence DESC | KEEP rule_id, type, scope, status, statement, confidence | LIMIT 30",
-   "params": {}}}

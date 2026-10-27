@@ -651,6 +651,31 @@ def host_config(data_dir):
         return {}
 
 
+def set_agent_client(data_dir, agent):
+    """Record which AI helper CLI the host should start for briefs.
+
+    The running host re-reads host.json every couple of seconds (host/src/briefs.rs), so a choice made
+    after the team was created takes effect without a restart. Best effort: a folder that has never
+    hosted has no host.json yet, and `start_team`'s `init` writes the choice then."""
+    if not agent or not data_dir:
+        return False
+    path = os.path.join(data_dir, "host.json")
+    data = host_config(data_dir)
+    if not data.get("db"):
+        return False
+    if data.get("agent_client") == agent:
+        return True
+    data["agent_client"] = agent
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    return True
+
+
 def _details(r):
     text = ((r.stderr or "") + (r.stdout or "")).strip()
     tail = [ln for ln in text.splitlines() if ln.strip()][-12:]

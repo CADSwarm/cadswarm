@@ -8,15 +8,13 @@ The loop (observe -> distil -> gate -> recall -> observe again):
 - distil: plain statistics over those events become rules: the values the team uses for a Param, the
   corrections people keep making to agent work, preferred standard parts, modelling habits (Params
   expressions vs hard-coded numbers) and problems reviews keep finding. A rule's id is a hash of what it is
-  about, so re-distilling updates it in place. An LLM (Elastic Agent Builder) may reword rules afterwards;
-  its wording is refused if it names a rule we did not send or a number not in the evidence.
+  about, so re-distilling updates it in place.
 - gate: a rule with broad, consistent, recent evidence is `active` and goes into prompts; a weaker one is
   a `candidate` for a person to confirm or dismiss. Confirmed rules are always used and never demoted;
   dismissed ones come back only once their evidence has doubled. People can also teach a rule directly.
 - recall: `context()` gives planners, workers, the reviewer and every agent turn the rules that apply.
 
-SQLite in the project database is the source of truth, so learning works without Elastic; when Elastic is
-configured, events and rules are mirrored to `cadswarm-usage` and `cadswarm-style`.
+SQLite in the project database is the source of truth: learning needs no account, keys or network.
 
 Stdlib only.
 """
@@ -62,7 +60,6 @@ ACTIVE_CONFIDENCE = 0.7
 MIN_OBSERVATIONS = 5
 HALF_LIFE_DAYS = 30.0
 WINDOW_EVENTS = 5000       # distil looks at this many most recent events
-ANALYST_ID = "cadswarm-style-analyst"
 
 
 class StyleError(Exception):
@@ -130,48 +127,14 @@ def _numbers_in(text):
     return {float(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(text))}
 
 
-def validate_write_up(reply, rules):
-    """The analyst's rewording, keyed by rule id, keeping only what the evidence backs.
-
-    Refuses ids we did not send and any number that is not already in that rule's statement or evidence."""
-    by_id = {r["id"]: r for r in rules}
-    items = reply.get("rules") if isinstance(reply, dict) else reply
-    if not isinstance(items, list):
-        raise ValueError("the style analyst did not return a list of rules")
-    out = {}
-    for item in items:
-        if not isinstance(item, dict) or item.get("id") not in by_id:
-            raise ValueError(f"the style analyst named a rule we did not send: {item!r:.80}")
-        r = by_id[item["id"]]
-        statement = str(item.get("statement") or "").strip()
-        if not statement or len(statement) > 300:
-            raise ValueError(f"rule {r['id']} came back empty or too long")
-        allowed = _numbers_in(r["template"]) | _numbers_in(json.dumps(r.get("evidence") or {})) \
-            | _numbers_in(json.dumps(r.get("value")))
-        invented = _numbers_in(statement) - allowed
-        if invented:
-            raise ValueError(f"rule {r['id']} has numbers the evidence does not back: {sorted(invented)}")
-        out[r["id"]] = statement
-    return out
-
-
-def _first_json(text):
-    m = re.search(r"[\[{].*[\]}]", text or "", re.S)
-    if not m:
-        raise ValueError("the style analyst did not return JSON")
-    return json.loads(m.group(0))
-
-
 class StyleMemory:
     def __init__(self, db, clock=time.time):
         self.db, self.clock = db, clock
         self.lock = threading.RLock()
         self.db.executescript(SCHEMA)
-        # Projects can share one Elastic project: mirrored docs are keyed by this project's own id.
         self.db.execute("INSERT OR IGNORE INTO style_meta (key, value) VALUES ('project', ?)", (uuid.uuid4().hex[:12],))
         self.project = self.db.execute("SELECT value FROM style_meta WHERE key='project'").fetchone()[0]
         self._since_distil = 0
-        self._writing = False
 
     # ---------------------------------------------------------------- observe
 
@@ -444,42 +407,6 @@ class StyleMemory:
             counts = dict(self.db.execute("SELECT status, COUNT(*) FROM style_rules GROUP BY status").fetchall())
             return {"changed": changed, "rules": {s: counts.get(s, 0) for s in STATUSES}}
 
-    # -------------------------------------------------------- LLM write-up
-
-    def write_up(self, converse, ids=None, limit=20):
-        """Ask the style analyst to reword rules; keep its wording only where it passes validation."""
-        rules = [r for r in self.rules(statuses=("active", "candidate", "confirmed"))
-                 if r["source"] == "learned" and (ids is None or r["id"] in ids)][:limit]
-        if not rules:
-            return {"rewritten": 0}
-        payload = [{"id": r["id"], "type": r["type"], "scope": r["scope"], "statement": r["template"],
-                    "evidence": r["evidence"], "value": r["value"]} for r in rules]
-        reply = converse("Reword these CADSwarm team design-style rules. Answer with JSON only: "
-                         '{"rules": [{"id": ..., "statement": ...}]}. Keep every id, use only numbers that '
-                         "appear in a rule's statement or evidence, one imperative sentence each.\n"
-                         + json.dumps(payload))
-        wording = validate_write_up(_first_json(reply), [dict(r, template=r["template"]) for r in rules])
-        with self.lock:
-            for rid, statement in wording.items():
-                self.db.execute("UPDATE style_rules SET statement=?, mirrored=0 WHERE id=?", (statement, rid))
-        return {"rewritten": len(wording)}
-
-    def write_up_in_background(self, converse, ids=None):
-        """The host waits on the helper, so a slow LLM call must not hold it up."""
-        if self._writing:
-            return False
-        self._writing = True
-
-        def run():
-            try:
-                self.write_up(converse, ids)
-            except Exception:  # best effort: the templated wording stays
-                pass
-            finally:
-                self._writing = False
-        threading.Thread(target=run, daemon=True).start()
-        return True
-
     # ----------------------------------------------------------------- people
 
     def teach(self, statement, by, scope="team", proposed=False):
@@ -551,34 +478,6 @@ class StyleMemory:
         return {"text": text, "rules": [{k: r[k] for k in ("id", "type", "scope", "statement", "status",
                                                            "confidence")} for r in use],
                 "pending": pending}
-
-    # ----------------------------------------------------------------- mirror
-
-    def mirror(self, es, limit=500):
-        """Copy new events and changed rules to Elastic; returns how many went. Errors propagate."""
-        events = self.db.execute("SELECT * FROM style_events WHERE mirrored=0 ORDER BY id LIMIT ?",
-                                 (limit,)).fetchall()
-        rules = self.db.execute("SELECT * FROM style_rules WHERE mirrored=0 LIMIT ?", (limit,)).fetchall()
-        lines = []
-        for e in events:
-            lines.append({"index": {"_index": "cadswarm-usage", "_id": f"{self.project}-{e['id']}"}})
-            lines.append({"project": self.project, "at": int(e["at"] * 1000), "actor_name": e["actor_name"], "actor_kind": e["actor_kind"],
-                          "kind": e["kind"], "op_kind": e["op_kind"], "ok": bool(e["ok"]),
-                          "error_code": e["error_code"], "brief": e["brief"], "board_id": e["board"],
-                          "data": e["data"]})
-        for r in rules:
-            lines.append({"index": {"_index": "cadswarm-style", "_id": f"{self.project}-{r['id']}"}})
-            lines.append({"project": self.project, "rule_id": r["id"], "type": r["type"], "scope": r["scope"], "key": r["key"],
-                          "status": r["status"], "source": r["source"], "confidence": r["confidence"],
-                          "evidence": r["evidence"], "statement": r["statement"], "content": r["statement"],
-                          "updated_at": int((r["updated_at"] or 0) * 1000)})
-        if not lines:
-            return {"events": 0, "rules": 0}
-        es("POST", "/_bulk", "\n".join(json.dumps(x) for x in lines) + "\n")
-        with self.lock:
-            self.db.executemany("UPDATE style_events SET mirrored=1 WHERE id=?", [(e["id"],) for e in events])
-            self.db.executemany("UPDATE style_rules SET mirrored=1 WHERE id=?", [(r["id"],) for r in rules])
-        return {"events": len(events), "rules": len(rules)}
 
 
 def _same_words(text):

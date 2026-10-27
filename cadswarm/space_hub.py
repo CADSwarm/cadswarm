@@ -156,7 +156,7 @@ class SpaceHub(LibraryRoutes):
             ("GET", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)", self.lattice_job),
             ("POST", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)/cancel", self.lattice_cancel),
             ("POST", r"/lattice/jobs/(?P<jid>lj_[0-9a-f]+)/apply", self.lattice_apply),
-            # Elastic board knowledge and design memory (plan 05): helper ops on the host, which holds the key.
+            # Local board knowledge and design memory (plan 05): helper ops in the host's project store.
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
             # The team's learned design style (cadswarm/style_memory.py), kept by the host helper.
             ("GET", r"/style", self.style_get), ("POST", r"/style/rules", self.style_rules),
@@ -965,7 +965,7 @@ class SpaceHub(LibraryRoutes):
         return self.workspace()
 
     def reviews(self, limit=10):
-        """The Droid reviewer's rounds, newest first, with findings as sentences a person can read."""
+        """The reviewer's rounds, newest first, with findings as sentences a person can read."""
         out = []
         for r in sorted(self._rows("v_review"), key=lambda r: r["at_ms"], reverse=True)[:int(limit)]:
             out.append({"id": r["id"], "brief": r["brief"], "round": r["round"], "passed": bool(r["passed"]),

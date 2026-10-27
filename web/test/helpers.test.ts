@@ -9,7 +9,7 @@ const m = (id: number, name: string, kind = 'agent', status = 'active', statusTe
 function world(): State {
   const s = emptyState();
   s.meId = 1;
-  s.members = [m(1, 'sam', 'human'), m(2, 'alice-claude'), m(3, 'bob-codex'), m(4, 'old-droid', 'agent', 'left')];
+  s.members = [m(1, 'sam', 'human'), m(2, 'alice-claude'), m(3, 'bob-codex'), m(4, 'old-opencode', 'agent', 'left')];
   return s;
 }
 

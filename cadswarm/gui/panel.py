@@ -32,7 +32,7 @@ from ..mentions import mention_prefix, parse_mentions, strip_mentions
 from ..paths import app_dir
 from ..space_hub import SpaceHub
 from ..teams import recent_teams, remember_team
-from . import fea_ui, library_ui, lighten_ui, overlay, panes, sponsors as sponsors_ui, style_ui, theme
+from . import fea_ui, library_ui, lighten_ui, overlay, panes, style_ui, theme
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 MIRROR_DOC = "CadSwarmLive"
@@ -160,6 +160,9 @@ class Session:
         self.commands = []     # instructions I sent to helpers, with sent/seen/done
         self.briefs = []       # requests handed to the whole team (the host plans and builds them)
         self.reviews = []      # the reviewer's rounds, newest first, findings as sentences
+        # Local chat lines for things that are not messages (a brief handed to the team), so the person
+        # sees what happened without a "sending..." row waiting for an echo that never comes.
+        self.notices = []
         self.workspace = {"bed": [180.0, 180.0, 180.0], "bed_x_mm": 180.0, "bed_y_mm": 180.0, "bed_z_mm": 180.0}
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
@@ -310,6 +313,15 @@ class Session:
 
     def request_refresh(self):
         self.wake.set()
+
+    def notice(self, text):
+        """Show a local line in the chat about something that is not a message (a brief handed to the team).
+
+        It is never sent to the team: it only tells the person what this window just did."""
+        self.notices.append({"at": time.time(), "text": text})
+        del self.notices[:-NOTICES_KEPT]
+        if self.panel is not None:
+            self.panel.render_chat(self)
 
     def _mirror_loop(self, stop, events, c, wake, applied):
         """Keep the live model equal to the team's. Each pass fetches only the parts that differ from what this
@@ -931,22 +943,6 @@ class TeamPanel(QtGui.QDockWidget):
         tl.addStretch(1)
         self.remote_page = page
         self.tabs.addTab(page, "Remote")
-        # ------------------------------------------------------------ Sponsors
-        page = QtGui.QWidget()
-        tl = page_layout(page)
-        tl.addWidget(caption("Sponsors"))
-        intro = QtGui.QLabel("The outside services this build runs on, and what this workspace is doing with them.")
-        intro.setWordWrap(True)
-        tl.addWidget(intro)
-        self.sponsors_box = QtGui.QLabel("")
-        self.sponsors_box.setWordWrap(True)
-        self.sponsors_box.setTextFormat(QtCore.Qt.RichText)
-        self.sponsors_box.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        tl.addWidget(self.sponsors_box)
-        tl.addStretch(1)
-        self.sponsors_page = page
-        self.tabs.addTab(page, "Sponsors")
-
         # --------------------------------------------------------------- Tools
         page = QtGui.QWidget()
         tl = page_layout(page)
@@ -977,7 +973,7 @@ class TeamPanel(QtGui.QDockWidget):
                                  library_ui.show_settings),
                                 ("Learned design style…", "The design rules CADSwarm learned from your team",
                                  style_ui.show_style))),
-                ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex, Droid or OpenCode",
+                ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex or OpenCode",
                                  add_helper),
                                 ("Invite a teammate…", "Copy a single-use invite code", invite_teammates),
                                 ("Restart my AI helpers", "Restart the helpers that run on this computer",
@@ -1328,40 +1324,6 @@ class TeamPanel(QtGui.QDockWidget):
             self.keys["suggestions_read"] = True
             self.fetch_suggestions()
         self.render_review(s)
-        self.render_sponsors(s)
-
-    def render_sponsors(self, s):
-        """The five outside services, from the snapshot this refresh already read, plus the stamped evidence."""
-        client = getattr(s, "client", None)
-        database = (getattr(client, "cfg", {}) or {}).get("db", "")
-        uri = (getattr(client, "cfg", {}) or {}).get("uri") or getattr(client, "hub", "") or ""
-        server = hosting.server_label(uri)
-        # The sign-in only matters for Maincloud, and only on the computer hosting it: a teammate joins with
-        # an invite, and a team on this computer needs no account at all.
-        if server == "SpacetimeDB Maincloud":
-            if prefs().GetString("HostMode") == "maincloud" and prefs().GetString("HostDataDir"):
-                account = hosting.maincloud_login()
-                sign_in = f"signed in as {account}" if account else "not signed in"
-            else:
-                sign_in = "joined by invite"
-        else:
-            sign_in = "no account needed"
-        parts = []
-        for card in sponsors_ui.cards(s, database, server, sign_in):
-            facts = "<br>".join(
-                f"<span style='color:#8b949e'>{html.escape(key)}</span>&nbsp; {html.escape(str(value))}"
-                for key, value in card["facts"])
-            extra = ""
-            if card.get("list"):
-                extra = (f"<br><span style='color:#8b949e'>{html.escape(card['list']['title'])}</span><br>"
-                         + "<br>".join("· " + html.escape(row) for row in card["list"]["rows"]))
-            calls = ("<br>" + "<br>".join(
-                f"<span style='font-family:monospace'>{html.escape(call)}</span>" for call in card["calls"]))
-            parts.append(f"<p><b>{html.escape(card['name'])}</b>"
-                         f" <span style='color:#8b949e'>· {html.escape(card['role'])}</span><br>"
-                         f"{facts}{extra}{calls}</p>")
-        parts.append(f"<p><span style='color:#8b949e'>{html.escape(sponsors_ui.evidence_line())}</span></p>")
-        self.sponsors_box.setText("".join(parts))
 
     def render_review(self, s):
         """The newest reviewer round and the team's printer bed, in the words a teammate can act on."""
@@ -1525,7 +1487,7 @@ class TeamPanel(QtGui.QDockWidget):
         sent = {m["body"] for m in shown if m["from"] == me}
         self.outbox = [o for o in self.outbox if o["body"] not in sent and time.time() - o["at"] < 60]
         key = (tuple((m["id"], states[m["id"]]["state"] if m["id"] in states else "") for m in shown),
-               tuple(o["body"] for o in self.outbox))
+               tuple(o["body"] for o in self.outbox), tuple(n["text"] for n in s.notices))
         if not self.changed("chat", key):
             return
         bar = self.chat.verticalScrollBar()
@@ -1557,6 +1519,10 @@ class TeamPanel(QtGui.QDockWidget):
         for o in self.outbox:
             lines.append(chat_line(o["at"], "You", "#8b949e", "", o["body"],
                                    " <span style='color:#8b949e'>sending…</span>"))
+        for n in s.notices:
+            stamp = time.strftime('%H:%M', time.localtime(n["at"]))
+            lines.append(f"<p style='margin:0 0 8px 0'><span style='color:#8b949e'>{stamp} "
+                         f"{html.escape(n['text'])}</span></p>")
         if not lines:
             lines.append("<p style='color:#8b949e'>No messages yet. Type <b>@</b> and pick a helper to give it "
                          "something to build. It answers here as it works.</p>")
@@ -1730,10 +1696,11 @@ class TeamPanel(QtGui.QDockWidget):
         self.msg.clear()
         what = strip_mentions(text) or text
         if "team" in special:
+            # A brief is not a chat message, so nothing will ever echo this row back. Posting it in the
+            # outbox left a "sending..." bubble that never resolved (and re-sent the text as another brief);
+            # a local notice in the chat says where the request went instead.
             self.session.act_async("POST", "/briefs", {"text": what}, purpose="hand the request to the team",
-                                   done=lambda r: (self.show_tasks(), say(
-                                       "Handed the request to the team: it plans it into tasks and starts AI helpers")))
-            self.outbox.append({"body": text, "at": time.time()})
+                                   done=lambda r: self.handed_to_team())
         elif helpers:
             for h in helpers:
                 self.give_task(h, text, what)
@@ -1742,6 +1709,12 @@ class TeamPanel(QtGui.QDockWidget):
         else:
             self.post(text, "chat", "all")
         self.render_chat(self.session)
+
+    def handed_to_team(self):
+        """The brief was accepted: say so in the chat (it is not a message) and open the tracker it lives in."""
+        self.session.notice(TEAM_HANDED)
+        self.show_tasks()
+        say(TEAM_HANDED)
 
     def post(self, text, kind, to):
         self.outbox.append({"body": text, "at": time.time()})
@@ -2093,8 +2066,8 @@ def chat_line(at, who, colour, after_name, body, status):
             f"<b style='color:{colour}'>{who}</b>{after_name}{status}<br>{text}</p>")
 
 
-CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper", "droid": "Droid helper",
-                "opencode": "OpenCode helper", "creao": "Creao AI helper"}
+CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper",
+                "opencode": "OpenCode helper"}
 # Readable next to the 3D view, but narrow enough for a laptop screen: the panel scrolls when it's short.
 PANEL_MIN_WIDTH = 300
 PANEL_WIDTH = 520
@@ -2103,6 +2076,8 @@ PANEL_SHARE = 0.3   # of the FreeCAD window's width, until someone drags the pan
 PANEL_STYLE = theme.PANEL
 SUGGEST_SECONDS = 20     # how often the panel re-reads what AI helpers suggested
 SUGGESTIONS_SHOWN = 4    # cards on the Team tab; any more wait in Tools
+NOTICES_KEPT = 20        # local chat lines kept (a brief handed to the team, and the like)
+TEAM_HANDED = "Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."
 
 
 def page_layout(page):
@@ -2453,7 +2428,7 @@ class NewTaskDialog(QtGui.QDialog):
         kind, name = self.who.currentData() or ("me", None)
         if kind == "team":
             self.session.act_async("POST", "/briefs", {"text": text}, purpose="hand the request to the team",
-                                   done="Handed the request to the team: it plans it into tasks and starts AI helpers")
+                                   done=lambda r: (self.session.notice(TEAM_HANDED), say(TEAM_HANDED)))
             self.accept()
             return
         title = text.splitlines()[0][:90]
@@ -2639,83 +2614,7 @@ def create_helper(client, name, team, model=""):
     return folder
 
 
-class CreaoKeyDialog(QtGui.QDialog):
-    """Ask for the Creao API key and save it where this computer's helpers read it."""
-
-    def __init__(self, parent=None):
-        from .. import creao
-        super().__init__(parent or Gui.getMainWindow())
-        theme.apply(self)
-        self.path = ""
-        self.setWindowTitle("CadSwarm: Creao AI key")
-        fit_to_screen(self, 540, 320)
-        lay = QtGui.QVBoxLayout(self)
-        title = QtGui.QLabel("Connect Creao AI")
-        title.setStyleSheet("font-size: 15pt; font-weight: 600;")
-        lay.addWidget(title)
-        lead = QtGui.QLabel("Creao AI gives your helper various frontier models with one API key: there is "
-                            "nothing to install and no terminal to sign in to.")
-        lead.setWordWrap(True)
-        lay.addWidget(lead)
-        form = QtGui.QFormLayout()
-        self.key = QtGui.QLineEdit()
-        self.key.setEchoMode(QtGui.QLineEdit.Password)
-        self.key.setPlaceholderText("cr_sk_…")
-        form.addRow("API key", self.key)
-        lay.addLayout(form)
-        show = QtGui.QCheckBox("Show the key")
-        show.toggled.connect(lambda on: self.key.setEchoMode(
-            QtGui.QLineEdit.Normal if on else QtGui.QLineEdit.Password))
-        lay.addWidget(show)
-        where = QtGui.QLabel(f"Saved only on this computer, in <code>{html.escape(creao.env_file())}</code>. "
-                             "CadSwarm never adds it to a project folder or the team.")
-        where.setWordWrap(True)
-        lay.addWidget(where)
-        self.note = QtGui.QLabel("")
-        self.note.setWordWrap(True)
-        lay.addWidget(self.note)
-        lay.addStretch(1)
-        row = QtGui.QHBoxLayout()
-        get = QtGui.QPushButton("Get a key…")
-        get.setToolTip("Open Creao's Developer Console in your browser")
-        get.clicked.connect(lambda _=False: QtGui.QDesktopServices.openUrl(
-            QtCore.QUrl("https://developer.creao.ai/")))
-        row.addWidget(get)
-        row.addStretch(1)
-        cancel = QtGui.QPushButton("Cancel")
-        cancel.clicked.connect(self.reject)
-        save = QtGui.QPushButton("Save key")
-        save.setDefault(True)
-        save.clicked.connect(self.save)
-        row.addWidget(cancel)
-        row.addWidget(save)
-        lay.addLayout(row)
-        self.key.returnPressed.connect(self.save)
-
-    def save(self):
-        from .. import creao
-        key = self.key.text().strip()
-        if not key:
-            self.note.setText("Paste the key from the Creao Developer Console first.")
-            return
-        if not key.startswith("cr_sk_"):
-            self.note.setText("That doesn't look like a Creao key: they start with <code>cr_sk_</code>.")
-            return
-        try:
-            self.path = creao.save_api_key(key)
-        except OSError as e:
-            self.note.setText(f"Couldn't save the key: {e}")
-            return
-        self.accept()
-
-
-def ask_creao_key(parent=None):
-    """Ask for and save the Creao API key. Returns the env file written, or "" when cancelled."""
-    dlg = CreaoKeyDialog(parent)
-    return dlg.path if dlg.exec_() == QtGui.QDialog.Accepted else ""
-
-
-MODEL_PICKER_CLIENTS = ("opencode", "creao")
+MODEL_PICKER_CLIENTS = ("opencode",)
 MODEL_DEFAULT_TEXT = "Default (the AI's own choice)"
 
 
@@ -2743,7 +2642,7 @@ class NewHelperDialog(QtGui.QDialog):
             ready = agent_ready(key)
             if ready:
                 installed.append(key)
-            if ready or key == "creao":  # Creao only needs a key, which create() can ask for
+            if ready:
                 label_ = info["label"] + (f" — {info['description']}" if info.get("description") else "")
                 self.client.addItem(label_, key)
         try:
@@ -2751,7 +2650,7 @@ class NewHelperDialog(QtGui.QDialog):
         except (KeyError, TypeError, IndexError):
             self.client.activated.connect(lambda *_: self.picked_client())
         form.addRow("AI", self.client)
-        # OpenCode and Creao reach many models: the pick is saved in the helper's folder and sticks.
+        # OpenCode reaches many models: the pick is saved in the helper's folder and sticks.
         self.model = QtGui.QComboBox()
         self.model.setEditable(True)
         self.model.setInsertPolicy(QtGui.QComboBox.NoInsert)
@@ -2779,20 +2678,13 @@ class NewHelperDialog(QtGui.QDialog):
         row.addWidget(self.ok)
         lay.addLayout(row)
         if not installed:
-            links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values()
-                                if i.get("exe"))
+            links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values())
             self.note.setText(f"No AI helper is installed on this computer yet. Install {links}, sign in to it "
-                              "once, then try again. Creao AI needs only an API key, and CadSwarm asks for it "
-                              "when you start one.")
+                              "once, then try again.")
             self.note.setOpenExternalLinks(True)
         self.show_models()
 
     def picked_client(self):
-        """Choosing Creao without a key asks for it right away, like clicking it in the setup guide."""
-        from ..agent_setup import agent_ready
-        if self.client.currentData() == "creao" and not agent_ready("creao"):
-            if ask_creao_key(self):
-                self.note.setText("")
         self.show_models()
 
     def show_models(self):
@@ -2836,11 +2728,7 @@ class NewHelperDialog(QtGui.QDialog):
         return "" if text == MODEL_DEFAULT_TEXT else text
 
     def create(self):
-        from ..agent_setup import agent_ready
         client = self.client.currentData()
-        if client == "creao" and not agent_ready("creao"):
-            if not ask_creao_key(self):
-                return
         typed = re.sub(r"[^A-Za-z0-9_-]+", "-", self.name.text().strip()).strip("-_")[:40]
         taken = {p["name"].lower() for p in self.session.model.get("participants", [])}
         if typed and typed.lower() in taken:
@@ -4076,8 +3964,8 @@ def release_selected():
 def register_commands():
     Gui.addCommand("CadSwarm_Connect", Cmd("Get started…", "Start or join a team, step by step",
                                            lambda: connect_dialog(), False))
-    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect an AI helper (Claude Code, Codex, "
-                                                              "Droid or OpenCode) to your team", add_helper))
+    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect an AI helper (Claude Code, Codex "
+                                                              "or OpenCode) to your team", add_helper))
     Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy a new invite code for a teammate", invite_teammates))
     Gui.addCommand("CadSwarm_StopHosting", Cmd("Stop hosting", "Stop the team server on this computer",
                                                stop_hosting, False))

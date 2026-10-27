@@ -3,11 +3,12 @@
 **Build 3D designs together with your team's AI helpers: no CAD or coding experience needed.**
 
 Describe a part, say "an enclosure for this Raspberry Pi", and a swarm of AI helpers (Claude Code,
-Codex, Droid, OpenCode, or the agent CLI you already use) builds it together in one shared FreeCAD
-model, live, while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts
-yourself when that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one SpacetimeDB
-database, the hosting computer runs the only copy of the model, Elastic supplies board datasheets and
-design memory, and a Factory Droid reviewer checks fit and printability before the STL is exported.
+Codex, OpenCode, or the agent CLI you already use) builds it together in one shared FreeCAD model,
+live, while you and your teammates watch from FreeCAD or a phone, steer them, and edit parts yourself
+when that's quicker. The whole team's state (members, locks, tasks, messages, ops) lives in one
+SpacetimeDB database, the hosting computer runs the only copy of the model, and the project keeps its
+own board knowledge and design memory. Before the STL is exported, the host starts one more AI helper as
+the reviewer to check fit and printability.
 
 ## Get started (about 5 minutes)
 
@@ -52,12 +53,10 @@ page. Your sign-in for each team is kept, so you don't need a new invite code.
 
 **Good to know**
 - You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup),
-  [Codex](https://learn.chatgpt.com/docs/codex/cli),
-  [Factory Droid](https://docs.factory.ai/cli/getting-started/quickstart), or
+  [Codex](https://learn.chatgpt.com/docs/codex/cli), or
   [OpenCode](https://opencode.ai/docs/). The guide detects which ones
-  you have and links to install instructions. ([Creao AI](#creao-ai-optional-helper) is optional and
-  needs an API key instead of an installed CLI.)
-- Your AI helper must be signed in once on this computer (open `claude`, `codex`, `droid` or `opencode`
+  you have and links to install instructions.
+- Your AI helper must be signed in once on this computer (open `claude`, `codex` or `opencode`
   in a terminal and follow its sign-in). After that CADSwarm starts it by itself whenever FreeCAD is open, and wakes it
   when someone messages it or hands it a task. Its log is under **the Tools tab ▸ Show my AI helper's log**.
 - AI helpers always join as ordinary members. The people on the team lead it, and only a person's computer
@@ -93,8 +92,7 @@ more or less room) and scrolls when the window is short. It has three parts:
 
 - **AI helpers**: every helper on the team in three columns: its name, the **Task** it's on (or `next: …`
   when one is waiting for it) and its status (**◐ Working**, **Ready**, or why it's away). **＋ New helper**
-  starts another one on this computer: pick the AI (Claude Code, Codex, Droid, OpenCode or Creao AI) and,
-  if you like, a name
+  starts another one on this computer: pick the AI (Claude Code, Codex or OpenCode) and, if you like, a name
   (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
   one of yours to **Rename** it, **Restart** it or see its log; right-click any helper (even one running on a
   teammate's computer) to **Remove from the team**. Removing releases its locks, returns the work it held and
@@ -104,7 +102,8 @@ more or less room) and scrolls when the window is short. It has three parts:
     the chat with what it'll do, then what it did. Typing `@` lists the helpers to pick from. Your message
     shows **⏳ not read yet**, **👀 read, working on it** or **✓ done**. `@a @b ...` gives each one the task.
   - `@team what to build` hands a whole request ("a stand for a 7 mm thick phone") to the team: the team server
-    plans it into parts and starts AI helpers itself (with the agent CLI on the hosting computer).
+    plans it into parts and starts AI helpers itself (with the agent CLI on the hosting computer). The chat
+    notes where the request went and opens Tasks; that note is local, not a message to the team.
   - `@all ...` tells every helper something (pause, status...).
   - No `@` is chat between people. AI helpers never see it.
   Tasks only go to AI helpers: people pick their own work.
@@ -143,7 +142,8 @@ Phone stand/
   snapshots/           saved versions of the model ("2026-10-23 20.32 first draft.FCStd"), never auto-deleted
   library/             the team's components library: one folder per part (part.step + meta.json)
   AI helpers/          each helper's own workspace on this computer (holds its sign-in; not shared)
-  .cadswarm-team/      the team server's data, plus older versions of files (the last 20 of each)
+  .cadswarm-team/      the team server's data, board knowledge and design memory (knowledge.db),
+                       plus older versions of files (the last 20 of each)
   README.txt           explains the above to anyone browsing the folder
 ```
 
@@ -295,9 +295,8 @@ Team tab (and under **Tools ▸ Learned design style…**) for a person to **Mak
 You can also type a rule yourself. It is confirmed at once. The reviewer flags parts that break a rule as
 `style:` findings, and those findings feed the next round of learning.
 
-Rules live in the project database on the hosting computer, so learning works with or without Elastic.
-`python -m cadswarm.style_memory show --project <folder>` lists them. With Elastic configured, the rules
-are also mirrored and an LLM rewords them: see [ELASTIC.md](ELASTIC.md).
+Rules live in the project database on the hosting computer; learning needs no account, keys or
+network. `python -m cadswarm.style_memory show --project <folder>` lists them.
 
 ---
 
@@ -321,7 +320,7 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
 ```
  alice: Claude Code ─┐  MCP (stdio)          ┌──── SpacetimeDB: the team's database ────┐
  bob:   Codex  ──────┼──► cadswarm MCP ──────► members · fences · locks · revisions ·    │
- dana:  Droid  ──────┘   + prompt hook       │ tasks · messages · briefs · stale sweep   │
+ dana:  OpenCode ────┘   + MCP tools         │ tasks · messages · briefs · stale sweep   │
                                              └───▲──────────────────▲──────────────▲────┘
  carol: FreeCAD GUI ─── CADSwarm workbench ──────┘                  │              │
         (mirror + team panel)                                       │   phone / browser: web app
@@ -333,72 +332,32 @@ and human steering ahead of peer requests), applied to CAD objects instead of gi
                                            ▼                             ▼
                           FreeCAD worker (FreeCAD's python):    helper (cadswarm/helper.py):
                           THE live .FCStd, transactions,        project files, storage limits,
-                          lock-checked rollback                 Elastic lookups and design memory
+                          lock-checked rollback                 board knowledge and design memory
 ```
 
-## Where Droid runs
+## How review works
 
-CADSwarm uses the Factory Droid SDK (`cadswarm/reviewer.py`) as the swarm's design reviewer.
+The host starts one more AI helper as the team's reviewer whenever every task of a brief is done, and
+again after the owners fix what it found. It is an ordinary helper folder under
+`team-model\agents\reviewer`, run with the same agent CLI as the planners and workers, and it joins the
+team as a `reviewer` member.
 
-- **What starts it:** `cadswarm-host`, when every task of a brief is done (SpacetimeDB subscription), and again after the owners fix what it found. Nobody prompts it.
-- **What it checks:** collisions between parts, that the board actually fits (measured board dimensions, mounting holes, port cutouts), and printability (print bed size, closed solids, walls under 1.2 mm).
-- **What it can touch:** only inspection, its own pointer and reporting tools (`restrict_tools`). It joins as a `reviewer` member, and the SpacetimeDB module refuses every write op from that kind (`submit_op`), so it cannot change geometry even if a tool slipped through.
-- **Where you see its work:** every tool call and finding is written to the `activity` table and shown live in the app, and its verdict is stored in `review` and shown as a review card on the brief.
-- **Its arrow:** it is a member like any other, so it gets its own pointer in its own colour. The round parks it on the brief's first part and `point_at` moves it to whichever part it is checking, in FreeCAD's 3D view and the web viewer alike.
+- **What it checks:** collisions between parts, that the board actually fits (measured board dimensions,
+  mounting holes, port cutouts), and printability (print bed size, closed solids, walls under 1.2 mm).
+- **What it can touch:** the SpacetimeDB module refuses every write op from a `reviewer` member, so it
+  cannot change geometry even if a tool slipped through.
+- **Where you see its work:** every tool call and finding is written to the `activity` table and shown
+  live in the app, and its verdict is stored in `review` and shown as a review card on the brief.
+- **Its arrow:** it is a member like any other, so it gets its own pointer in its own colour. The round
+  parks it on the brief's first part and `point_at` moves it to whichever part it is checking, in
+  FreeCAD's 3D view and the web viewer alike.
+- **When it cannot start:** the host checks the agent CLI before minting the reviewer's invite. If the
+  reviewer still cannot start three times in a row, the brief fails with the tail of
+  `team-model\agents\reviewer\agent.log` instead of retrying forever.
 
-Setup, once per team (needs `pip install droid-sdk` or `pip install -e ".[reviewer]"`, the `droid` CLI, and `FACTORY_API_KEY`):
-
-```powershell
-host\target\release\cadswarm-host --data .\team-model init-reviewer
-```
-
-That mints a reviewer invite and writes the reviewer's folder under `team-model\agents\reviewer`. Until that folder exists briefs skip review and export directly, so a team without Droid still works. If the reviewer exits without a verdict (for example Droid is not logged in) the brief fails with that message instead of waiting forever, and its log is `team-model\agents\reviewer\review-<brief>-<round>.log`.
-
-People can also hand work to an agent mid-design: while holding a part, "Hand off now" with a note spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks and tasks), reads their note and recent ops, and continues instead of starting over.
-
-## Creao AI (optional helper)
-
-Creao AI gives your helper **various frontier models with one API key**: there is no command-line tool
-to install or sign in to, and it can't be given a custom MCP server, so CadSwarm talks to it through a
-small local bridge (`cadswarm/creao_agent.py`). The bridge joins the team exactly like any other
-helper, sends Creao the wake-up prompt, and executes each tool call Creao asks for in-process with the
-same MCP tools, so activity logging and fencing work the same way.
-
-**Our agent on agent.creao.ai:** *CadSwarm Helper*, agent ID `ff2a16be-068b-4fbb-a7ca-709bfd97b75f`.
-A run of it building a part: [TBD — share link from the agent's Recent runs].
-
-### With an agent built on agent.creao.ai (`capi_` key)
-
-1. Build the agent on [agent.creao.ai](https://agent.creao.ai) with one text input named `message` and
-   the reply rule in `cadswarm/creao.py` (`AGENT_DESCRIPTION`), and turn its **Autonomy** to Auto: a
-   bridged run can't stop for approvals.
-2. On the agent's page, create its API key (`capi_...`). Put the key and the agent ID from that page in
-   `cadswarm.env`: `CREAO_API_KEY=capi_...` and `CREAO_AGENT_ID=<id>`.
-3. Set up the helper as below. With a `capi_` key the bridge runs that agent through its API Trigger
-   (`agent.creao.ai/api/v1/apps/<id>/runs`), continues one thread per helper, and every run shows up
-   under the agent's **Recent runs**, where it can be shared. The agent's model, skill and autonomy are
-   its own settings on that page, so setup makes no other Creao calls.
-
-### With a Creao CLI account key (`cr_sk_`)
-
-1. In the setup guide click **Creao AI** (or **Add key…**) and paste the key in the box that opens;
-   **Get a key…** in that box opens Creao's [Developer Console](https://developer.creao.ai) to make
-   an account-scoped `cr_sk_` key. CadSwarm saves the key on this computer only, in the CadSwarm
-   env file this computer already uses (otherwise `%APPDATA%\CadSwarm\cadswarm.env` on Windows), and
-   never in the project folder or the team.
-   For a terminal instead: `cadswarm setup --client creao --invite "cadswarm-2:..." --name carol-creao`
-   with `CREAO_API_KEY=cr_sk_...` in `cadswarm.env` (see `.env.example`).
-2. The first Creao helper on a computer creates the account's Creao agent (its id is cached in the
-   CadSwarm app folder, `%APPDATA%\CadSwarm\creao.json` on Windows) and every later Creao helper
-   reuses it; the key is never written there. Setup also installs the account-level
-   `cadswarm-tools` skill and lets the agent's writes run without approval prompts.
-3. Open CadSwarm in FreeCAD. The background runner wakes it like any other helper.
-
-Each helper keeps its own Creao conversation across tasks (cached in `.cadswarm/creao.json` next to
-its other state) so it remembers the project. `cadswarm creao reset` (or `cadswarm setup --fresh`)
-starts its next task in a new conversation and keeps the shared agent. `CREAO_AGENT_ID` reuses an
-agent you made yourself, as long as it accepts one text input named `message` (the setup guide
-creates one that does), and `CREAO_MODEL` pins a model.
+People can also hand work to an agent mid-design: while holding a part, "Hand off now" with a note
+spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks
+and tasks), reads their note and recent ops, and continues instead of starting over.
 
 ## Run the demo
 
@@ -414,7 +373,7 @@ powershell -File scripts\demo-down.ps1             # stop everything demo-up sta
 ```
 
 Options: `-Data <dir>` (data folder), `-Db <name>` (Maincloud database), `-Python <exe>` (Python with
-the cadswarm package), `-Agent claude|codex|droid|opencode|creao`, `-AgentCommand <argv>` (see below),
+the cadswarm package), `-Agent claude|codex|opencode`, `-AgentCommand <argv>` (see below),
 `-WebPort <n>` (default 4173), `-WebUrl <url>` (use a fixed public URL instead of a tunnel). Everything it starts is
 recorded in `<Data>\.cadswarm-team\demo-pids.json`; `demo-down.ps1` stops only those processes, and
 only after checking each one's command line. See [demo/README.md](demo/README.md) for a three-agent
@@ -426,7 +385,7 @@ The agents that build briefs run on whichever agent CLI the host's owner already
 account and model provider. Pick one when you set up the host:
 
 ```powershell
-host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | droid | opencode | creao
+host\target\release\cadswarm-host --data .\team-model init --agent codex   # claude (default) | codex | opencode
 ```
 
 Or run any other CLI by setting `agent_command` in `team-model\host.json`; `{prompt}` is replaced by the
@@ -436,9 +395,8 @@ task prompt:
 "agent_command": ["aider", "--message", "{prompt}", "--yes"]
 ```
 
-A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX`, `CADSWARM_DROID` or
-`CADSWARM_OPENCODE`. Creao AI (`--agent creao`) has no CLI: it needs `CREAO_API_KEY` (see
-[Creao AI](#creao-ai-optional-helper)).
+A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX` or
+`CADSWARM_OPENCODE`. The same CLI runs the planners, the workers and the reviewer.
 
 ## For developers: command line
 
@@ -468,10 +426,8 @@ powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --da
 ```
 
 `-EnvFile <path>` or `CADSWARM_ENV_FILE` picks a specific file. `.env.example` lists every variable:
-Elastic (`ELASTIC_URL`, `KIBANA_URL`, `ELASTIC_API_KEY` for board knowledge and design memory),
-Factory's reviewer (`FACTORY_API_KEY`), agent API-key fallbacks, and
-developer overrides. SpacetimeDB publishing uses the CLI's stored login (`spacetime login`), not an
-environment variable.
+agent API-key fallbacks and developer overrides. SpacetimeDB publishing uses the CLI's stored login
+(`spacetime login`), not an environment variable.
 
 ```powershell
 cd cadswarm
@@ -490,7 +446,7 @@ host\target\release\cadswarm-host --data .\team-model invite --kind human --role
 # 3. Each person: join with the invite and wire their own AI helper in their own folder.
 .venv\Scripts\cadswarm setup --client claude --invite "cadswarm-2:..." --name alice --dir ..\alice
 .venv\Scripts\cadswarm setup --client codex  --invite "cadswarm-2:..." --name bob   --dir ..\bob
-#    then run `claude` / `codex` / `droid` / `opencode` in that folder. (Codex: trust the project so
+#    then run `claude` / `codex` / `opencode` in that folder. (Codex: trust the project so
 #    .codex/config.toml loads, then type `/hooks` in Codex and trust the CADSwarm hook.)
 
 # 4. Install this checkout into FreeCAD as the CADSwarm add-on (same as the double-click installer).
@@ -540,14 +496,12 @@ files.
 |---|---|
 | Claude Code | `.mcp.json` (cadswarm server), `.claude/settings.json` (UserPromptSubmit hook, `enabledMcpjsonServers`, `mcp__cadswarm` allowed), `CLAUDE.md` section |
 | Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CADSwarm hook (again after updating CADSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
-| Droid | `.factory/mcp.json` (cadswarm server), `AGENTS.md` section |
 | OpenCode | `opencode.json` (cadswarm MCP server), `AGENTS.md` section |
-| Creao AI | `.cadswarm/creao.json` (this helper's conversation and the shared Creao agent id, never the key), `AGENTS.md` section. No CLI: the bridge (`cadswarm.creao_agent`) runs through the background runner |
 | all | `.cadswarm/config.json` (uri, db, name, client, role), and after first run `.cadswarm/identity.json` (SpacetimeDB token, git-ignored) |
 
 The prompt hook (Claude Code and Codex) injects a team block before every prompt: who holds which
 parts, open tasks, what changed since your last prompt, and unread messages. It fails open: if the
-team's database is unreachable, the prompt goes through without it. Droid gets the same context
+team's database is unreachable, the prompt goes through without it. OpenCode gets the same context
 through the MCP tools instead.
 
 ## Agent tools (MCP)
@@ -568,10 +522,11 @@ through the MCP tools instead.
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,
   `get_inbox`, `ack_messages`, `take_over`
 
-Elastic is a core part of CADSwarm: with an Elastic project configured on the host, board datasheets,
-design memory and reviewer lessons are available to the same agents, and an Agent Builder expert can
-supply a board spec the local library lacks. Without one, CADSwarm falls back to the local board
-library. See [ELASTIC.md](ELASTIC.md).
+Board knowledge and design memory are local to the project. The host's helper process reads the board
+library (`boards/boards.json`, plus datasheet text added with
+`python -m cadswarm.ingest boards/sources.json --project <folder>`) and keeps finished designs and
+simulation reports in `knowledge.db` inside the project's `.cadswarm-team` folder (`recall_designs`,
+`lookup_board`, `board_spec`). Nothing leaves the hosting computer, and no account or key is needed.
 
 ## Rules the team enforces
 
@@ -602,9 +557,13 @@ cargo test --release --manifest-path rules\Cargo.toml
 cd web; npm test
 ```
 
-Latest CI run on `main` (Windows, macOS and Linux): Python 435–437 passed depending on the platform
-(20–22 skipped where FreeCAD or the platform sandbox is unavailable), host 35 passed, web 36 passed;
-rules 17 passed locally.
+Current counts on a Windows checkout: Python 677 passed (14 skipped where FreeCAD or the platform
+sandbox is unavailable), host 47, rules 26, web 107.
+
+`tests\freecad_panel_live.py` is a manual live check, not part of pytest: it opens a real FreeCAD
+window, joins a running team as a person, sends `@team ...` through the panel, waits for the host to
+plan, build and review it, and exercises the CLI picker. Pass it an output folder, the joined project
+folder and the host data folder; it writes `freecad-report.json` and screenshots of each step.
 
 ## Known limits (hackathon MVP)
 

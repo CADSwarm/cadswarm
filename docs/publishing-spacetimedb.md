@@ -15,7 +15,7 @@ What needs the republish right now (this branch):
 The team database is **`cadswarm-calhacks-0180`** on Maincloud (the default in `scripts/demo-up.ps1`). The
 steps below use PowerShell from the repository's `cadswarm/` folder.
 
-Adding a helper client (`opencode`, `creao`) needs **no republish and no new bindings**: a member's
+Adding a helper client (`opencode`) needs **no republish and no new bindings**: a member's
 `client` is a free-form string in the existing schema, and the new clients reuse the same MCP tools.
 
 ```powershell
@@ -83,12 +83,6 @@ powershell -File scripts\demo-up.ps1 -Db $db
 
 Or by hand: `cargo build --release --manifest-path host\Cargo.toml`, then
 `powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --data <data folder> run`.
-
-If the Elastic memory is used, its indices and agents are set up idempotently (safe to repeat):
-
-```powershell
-powershell -File scripts\with-env.ps1 .venv\Scripts\python.exe -c "import json; from cadswarm.knowledge import Elastic; e = Elastic.from_env(); print(e.setup(json.load(open('elastic/setup.json')))); e.install_agent('elastic')"
-```
 
 ## Step 5: Check it worked
 
