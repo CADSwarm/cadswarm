@@ -1,0 +1,1195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="The CADSwarm guide: install, start or join a team, the FreeCAD panel, AI helpers, shared sizes, files, checks and troubleshooting.">
+<meta property="og:title" content="The CADSwarm guide">
+<meta property="og:description" content="Everything CADSwarm does, in plain words: teams, helpers, the panel, files, checks and what to do when something breaks.">
+<meta name="theme-color" content="#0a0a0a">
+<title>Guide · CADSwarm</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html" aria-label="CADSwarm home">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.6">
+        <path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4Z" stroke="#f4f3f1"/>
+        <path d="M12 12 20 7.4M12 12 4 7.4M12 12v9.2" stroke="#f4f3f1" opacity=".45"/>
+        <circle cx="12" cy="12" r="2.2" fill="#4c9be0" stroke="none"/>
+        <circle cx="17" cy="9.2" r="1.5" fill="#f0913a" stroke="none"/>
+        <circle cx="7" cy="9.2" r="1.5" fill="#4fb35a" stroke="none"/>
+      </svg>
+      CADSwarm <span class="tag">docs</span>
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="docs.html" aria-current="page">Guide</a>
+      <a href="developer.html">Developers</a>
+      <a href="index.html#install">Install</a>
+    </nav>
+    <a class="btn nav-cta" href="index.html#waitlist">Join the waitlist</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="doc-head">
+    <span class="eyebrow">The full guide</span>
+    <h1>Everything CADSwarm does.</h1>
+    <p class="lede">Teams, hosting, the FreeCAD panel, AI helpers, shared sizes, the project folder, checks, the phone
+      view, and what to do when something breaks. Read it top to bottom once, or jump to the chapter you need.</p>
+    <p class="meta">
+      <span>18 chapters</span>
+      <span>FreeCAD 1.0+</span>
+      <span>Last updated October 2026</span>
+      <span><a href="quickstart.html">In a hurry? Start with the quickstart</a></span>
+    </p>
+  </div>
+
+  <div class="docshell">
+    <nav class="side" aria-label="Chapters">
+      <details class="toc" open>
+      <summary>Chapters</summary>
+      <div class="side-in" id="chapters">
+        <h4>Get started</h4>
+        <a href="#overview"><span class="n">01</span>Overview</a>
+        <a href="#install"><span class="n">02</span>Install and update</a>
+        <a href="#teams"><span class="n">03</span>Start a team</a>
+        <a href="#join"><span class="n">04</span>Join a team</a>
+        <h4>In FreeCAD</h4>
+        <a href="#panel"><span class="n">05</span>The panel</a>
+        <a href="#chat"><span class="n">06</span>Talking to helpers</a>
+        <a href="#editing"><span class="n">07</span>Edit a part yourself</a>
+        <a href="#sizes"><span class="n">08</span>Shared sizes</a>
+        <a href="#files"><span class="n">09</span>Files and storage</a>
+        <a href="#checks"><span class="n">10</span>Checks and reports</a>
+        <a href="#library"><span class="n">11</span>Parts library</a>
+        <a href="#phone"><span class="n">12</span>Phone and browser</a>
+        <h4>Teamwork</h4>
+        <a href="#helpers"><span class="n">13</span>AI helpers</a>
+        <a href="#style"><span class="n">14</span>Learned design style</a>
+        <h4>Help</h4>
+        <a href="#troubleshooting"><span class="n">15</span>Troubleshooting</a>
+        <a href="#faq"><span class="n">16</span>Limits and questions</a>
+        <h4>Reference</h4>
+        <a href="#menu"><span class="n">17</span>Menu and panel</a>
+        <a href="#env"><span class="n">18</span>Environment variables</a>
+        <p style="margin:16px 0 0;display:grid;gap:6px;font:400 13px/1.5 var(--font-body);color:var(--muted)">
+          <a class="aside-link" href="quickstart.html" style="padding:0;border:0">Quickstart (10 minutes) →</a>
+          <a class="aside-link" href="developer.html" style="padding:0;border:0">Developers: CLI, MCP, architecture →</a>
+        </p>
+      </div>
+      </details>
+    </nav>
+
+    <article class="prose">
+
+      <section id="overview">
+        <span class="section-kicker">Chapter 01</span>
+        <h2>Overview</h2>
+        <p>CADSwarm is a shared FreeCAD workspace. Everyone on a team opens the same live model, and so do their AI
+          helpers: Claude Code, Codex, OpenCode or another agent CLI you already use. A helper can build a part, and it
+          appears in everyone's window a moment later, coloured by who made it. People watch, chat, steer, and can take
+          over a part by hand when that's quicker than describing it.</p>
+        <p>There is no cloud account and no CADSwarm server. One person's computer hosts the team — the model file, the
+          files the team saves, and a SpacetimeDB database that holds who is here, what is held, and what was said.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Who</th><th>What they do</th></tr></thead>
+            <tbody>
+              <tr><td>People</td><td>Join with an invite code, watch the model, message helpers, hand out work, edit parts
+                by hand, run checks, export. Only a person can change team settings or delete snapshots and exports.</td></tr>
+              <tr><td>AI helpers</td><td>Build and change parts through a set of CAD tools, claim tasks, message each other,
+                ask the helper holding a part to change it. They are always ordinary team members — never admins.</td></tr>
+              <tr><td>The host's computer</td><td>Runs the team server: it applies every change to the real
+                <code>model.FCStd</code> one at a time, serves files, and starts the planner, workers and reviewer for
+                whole-team requests.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>What's shared, what's local</h3>
+        <ul>
+          <li><strong>Shared:</strong> the model (objects, revisions, locks), the <code>Params</code> sheet, tasks, chat,
+            briefs, reviews, pointers, and the team's files and library — all through the team's database.</li>
+          <li><strong>On the host's disk:</strong> the live <code>model.FCStd</code>, <code>files/</code>,
+            <code>exports/</code>, <code>snapshots/</code>, <code>library/</code> and the team's local knowledge and
+            design memory.</li>
+          <li><strong>On each person's disk:</strong> their AI helper's workspace and sign-in, under
+            <code>AI helpers\</code>. Not shared, never uploaded.</li>
+        </ul>
+
+        <div class="code">
+          <div class="code-bar"><span>How it fits together</span></div>
+          <pre>people (FreeCAD panel, phone)  ─┐
+                                ├─► SpacetimeDB: members · locks · revisions ·
+AI helpers (Claude, Codex, …)  ─┘     tasks · chat · briefs · stale sweep
+                                                   │
+                                                   ▼
+                                     host computer: cadswarm-host
+                                     ├─ FreeCAD worker: the live model.FCStd
+                                     └─ files · exports · snapshots · library</pre>
+        </div>
+
+        <h3>Why parts don't collide</h3>
+        <ul>
+          <li><strong>Object locks.</strong> You can only change objects you hold, and anything you create is yours.</li>
+          <li><strong>Transactional rollback.</strong> A change that touches an object you don't hold is aborted inside
+            FreeCAD before anything is saved.</li>
+          <li><strong>A shared <code>Params</code> sheet.</strong> Geometry binds to shared dimensions with FreeCAD
+            expressions, so changing one size recomputes every dependent part and tells its owner.</li>
+          <li><strong>Heartbeats and takeover.</strong> If a helper dies, its parts stay protected until a teammate takes
+            over its locks and tasks (or ten minutes pass and they're released).</li>
+        </ul>
+        <div class="callout info">
+          <span class="ct">Where to go next</span>
+          <p>New to this? The <a href="quickstart.html">quickstart</a> walks one build end to end. The rest of this page
+            is the reference you'll come back to.</p>
+        </div>
+      </section>
+
+      <section id="install">
+        <span class="section-kicker">Chapter 02</span>
+        <h2>Install and update</h2>
+        <p>CADSwarm is a FreeCAD workbench plus a small program that the installer puts in place. Installing it does not
+          touch your FreeCAD settings or your documents.</p>
+
+        <h3>What you need</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Requirement</th><th>Details</th></tr></thead>
+            <tbody>
+              <tr><td>FreeCAD 1.0 or newer</td><td>From <a href="https://www.freecad.org/downloads.php" target="_blank" rel="noopener">freecad.org</a>.
+                On Linux, use the official AppImage — snap, Flatpak and distro packages ship no Python, so with them you
+                can join a team but not host one or run a helper.</td></tr>
+              <tr><td>An AI helper</td><td>Claude Code, Codex, OpenCode, or any agent CLI you can point at a prompt. It must
+                be signed in once on this computer. Each person connects their own; nobody shares an account.</td></tr>
+              <tr><td>A terminal</td><td>Only for the install line (and for signing the agent CLI in). After that, everything
+                happens in FreeCAD.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Quick install</h3>
+        <p>One line downloads CADSwarm, finds FreeCAD (offering to install it if it's missing), copies the workbench into
+          place, offers a desktop shortcut, and opens FreeCAD with the setup guide.</p>
+        <div class="code">
+          <div class="code-bar"><span>Windows · PowerShell</span>
+            <button class="copy" type="button" data-copy="irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex">Copy</button></div>
+          <pre><span class="p">&gt; </span>irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex</pre>
+        </div>
+        <div class="code">
+          <div class="code-bar"><span>macOS and Linux · Terminal</span>
+            <button class="copy" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash">Copy</button></div>
+          <pre><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash</pre>
+        </div>
+
+        <h3>Install by hand</h3>
+        <ol class="steps">
+          <li><div><b>Install FreeCAD 1.0+</b><p class="fine">Default options are fine. On Linux, the official AppImage.</p></div></li>
+          <li><div><b>Download CADSwarm</b><p class="fine">On <a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a>,
+            <b>Code ▸ Download ZIP</b>, then unzip it anywhere.</p></div></li>
+          <li><div><b>Run the installer</b><p class="fine">Windows: <code>Install CadSwarm.cmd</code>. macOS:
+            <code>Install CadSwarm.command</code> (right-click ▸ Open the first time). Linux:
+            <code>bash "Install CadSwarm.sh"</code>.</p></div></li>
+          <li><div><b>Follow the guide in FreeCAD</b><p class="fine">Start a new team project, or paste a teammate's invite
+            code to join one.</p></div></li>
+        </ol>
+
+        <h3>What gets downloaded</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Download</th><th>When</th><th>Where</th></tr></thead>
+            <tbody>
+              <tr><td>About 70 MB of helper software</td><td>First install</td><td>CADSwarm's app folder
+                (<code>%APPDATA%\CadSwarm</code> on Windows, <code>~/Library/Application Support/CadSwarm</code> on macOS,
+                <code>~/.local/share/CadSwarm</code> on Linux)</td></tr>
+              <tr><td>The team server and SpacetimeDB, about 50 MB</td><td>First time you host a team</td><td>The same app
+                folder, each file checked by SHA-256</td></tr>
+              <tr><td>Official FreeCAD (Linux, optional)</td><td>If you accept the offer and have no AppImage</td><td>The app
+                folder, about 3 GB unpacked</td></tr>
+              <tr><td>Gmsh, once</td><td>First strength check (FEA) that needs it</td><td>The app folder's
+                <code>tools</code>, pinned build and checksum; never into FreeCAD or the system</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Nothing is installed into FreeCAD itself, and a team server or SpacetimeDB already on your <code>PATH</code> is
+          used as it is.</p>
+
+        <h3>Updating</h3>
+        <p>Run the installer again — the same command, or the same file. It replaces the workbench with a clean copy and
+          leaves your projects in <code>Documents</code> alone. Close FreeCAD first when the installer asks.</p>
+        <p>Two things update themselves: CADSwarm's app folder (the team server, SpacetimeDB and the database module are
+          replaced when a release publishes a different file, checked by SHA-256) and any helper software it manages. If a
+          team server is running while a new one lands, the old file is set aside and the update completes — no need to
+          kill a process.</p>
+        <div class="callout warn">
+          <span class="ct">Restart FreeCAD after updating</span>
+          <p>FreeCAD loads the workbench once at start-up. An update shows up the next time you open it. Teams and hosts
+            keep running through the update.</p>
+        </div>
+
+        <h3>Uninstalling</h3>
+        <p>Close FreeCAD, then delete the <code>CadSwarm</code> folder from FreeCAD's <code>Mod</code> directory (the one
+          the installer printed, usually under <code>%APPDATA%\FreeCAD\&lt;version&gt;\Mod</code>) and the shortcut if you
+          made one. Delete the app folder too if you want the downloaded tools gone. Your projects stay where they are;
+          they're ordinary folders.</p>
+      </section>
+
+      <section id="teams">
+        <span class="section-kicker">Chapter 03</span>
+        <h2>Start a team</h2>
+        <p>One person starts the team and becomes its host. Pick the computer that will stay on while people work: a
+          desktop is a better host than a laptop that leaves the house.</p>
+
+        <h3>The guide, step by step</h3>
+        <ol class="steps">
+          <li><div><b>CADSwarm ▸ Get started…</b><p class="fine">Also the first page you see after installing. Past projects
+            are listed above the two buttons if this computer has joined any.</p></div></li>
+          <li><div><b>Start a new team project</b><p class="fine">Project name, your name, and where the project is saved.</p></div></li>
+          <li><div><b>Choose where the database lives</b><p class="fine">On this computer, or SpacetimeDB Maincloud.</p></div></li>
+          <li><div><b>Create my team</b><p class="fine">The first time, this downloads the team server and SpacetimeDB and
+            publishes the team's database.</p></div></li>
+          <li><div><b>Copy the invite code</b><p class="fine">Then connect your own AI helper and finish.</p></div></li>
+        </ol>
+
+        <h3>Where the project lives</h3>
+        <p>The default is <code>Documents\CadSwarm\&lt;project name&gt;</code>. If you pick a folder that already has other
+          things in it, CADSwarm makes its own subfolder there, so nothing you already had is mixed in or overwritten. If
+          the folder is already a CADSwarm project, you continue that one.</p>
+        <p>The folder is the project. Copy it and you've copied the work; open it with <b>Get started ▸ Open a previous
+          project…</b> and CADSwarm rejoins the team it belongs to. What it can't do is move a team to another computer
+          for you — a local team's database lives in the host's app data, so keep the folder with the host.</p>
+
+        <h3>Local or Maincloud?</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>On this computer (default)</th><th>SpacetimeDB Maincloud</th></tr></thead>
+            <tbody>
+              <tr><td>Account</td><td>None</td><td>Free SpacetimeDB sign-in, once, in your browser</td></tr>
+              <tr><td>Who can join</td><td>People on the same network as the host</td><td>Anyone with an invite, anywhere</td></tr>
+              <tr><td>Works offline</td><td>Yes, on the local network</td><td>No</td></tr>
+              <tr><td>Encryption</td><td>No TLS — use it with people you trust on your own network</td><td>TLS handled by SpacetimeDB</td></tr>
+              <tr><td>The model still lives</td><td>On the host</td><td>On the host</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Either way the database only holds state — members, locks, tasks, chat. The model and files stay on the host's
+          computer, and only the host writes them.</p>
+        <div class="callout warn">
+          <span class="ct">Windows firewall</span>
+          <p>The first time you host a local team, Windows may ask whether to allow CADSwarm through the firewall. Allow
+            it on private networks, or teammates can't reach the team.</p>
+        </div>
+
+        <h3>Invite codes</h3>
+        <ul>
+          <li>One code per person or helper, each <strong>single-use</strong> and valid for <strong>one day</strong>.</li>
+          <li>Make one from the guide's invite page, or any time from <b>Tools ▸ AI helpers ▸ Invite a teammate…</b>.</li>
+          <li>Codes carry the database address, so a teammate needs nothing else. They can be pasted as text, as a bare
+            ticket, or opened as a phone link.</li>
+          <li>Lost one? Make another. An unused code simply expires.</li>
+        </ul>
+
+        <h3>Hosting duties</h3>
+        <ul>
+          <li><b>Keep the computer on</b> while the team works. The host program keeps running even if you close
+            FreeCAD, but not through a reboot.</li>
+          <li><b>Start it again after a reboot</b> by opening CADSwarm — the guide offers to restart the team's server,
+            and the team's session picks up where it was.</li>
+          <li><b>Watch disk space.</b> Exports, snapshots and file versions live on your disk; the panel shows what's
+            using it (see <a href="#files">Files and storage</a>).</li>
+          <li><b>Stop hosting</b> from <b>Tools ▸ Stop hosting the team</b> or <b>CADSwarm ▸ Stop hosting</b>. That ends
+            the session for everyone until it's started again; nothing is deleted.</li>
+        </ul>
+        <div class="callout info">
+          <span class="ct">If the host goes offline</span>
+          <p>Teammates can still see the team's state — who's here, tasks, chat — but the model stops changing and files
+            can't be saved until the host is back. That's the trade for your designs staying on your machines.</p>
+        </div>
+      </section>
+
+      <section id="join">
+        <span class="section-kicker">Chapter 04</span>
+        <h2>Join a team</h2>
+        <p>Joining is the short path: install CADSwarm, paste a code, connect your helper.</p>
+        <ol class="steps">
+          <li><div><b>Install CADSwarm</b><p class="fine">Same installer as the host. Only the host downloads the team
+            server.</p></div></li>
+          <li><div><b>Get started ▸ Join a teammate's project</b><p class="fine">Paste the invite code. It's checked, then
+            used up.</p></div></li>
+          <li><div><b>Connect your AI helper</b><p class="fine">Pick the CLI you use and give it a name. It joins as a
+            member of the team, running on your computer.</p></div></li>
+          <li><div><b>That's it</b><p class="fine">The live model opens in its own read-only tab, and the panel shows the
+            team.</p></div></li>
+        </ol>
+
+        <h3>What you can do as a member</h3>
+        <p>Everything except the host-only actions: you can add parts, edit parts by hand, run checks, save files,
+          export, invite people (if you have a code to give) and message helpers. <b>Stop hosting</b>, <b>Open project
+          folder</b> and the storage dialog belong to the host, because those are the host's computer and disk.</p>
+
+        <h3>Coming back later</h3>
+        <p>Your sign-in is kept per team on this computer, so reopening the project needs no new code: pick it from
+          <b>CADSwarm ▸ Get started ▸ Open a previous project…</b>, or from the list on the guide's first page. To leave
+          deliberately, use <b>CADSwarm ▸ Leave team</b> — that releases the parts you hold.</p>
+        <div class="callout warn">
+          <span class="ct">Same network</span>
+          <p>On a team hosted on someone's computer, you must be on the same network as the host. Maincloud teams work
+            from anywhere.</p>
+        </div>
+      </section>
+
+      <section id="panel">
+        <span class="section-kicker">Chapter 05</span>
+        <h2>The panel</h2>
+        <p>The <b>CADSwarm Team</b> panel is a dock on the right of the FreeCAD window. Drag its edge to give it more or
+          less room; it scrolls when the window is short. The title shows the team and project, with the connection state
+          beside it.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Tab</th><th>What's in it</th></tr></thead>
+            <tbody>
+              <tr><td>Team</td><td>Everyone here: each helper's name, the task it's on (or <code>next: …</code>), its
+                status, and the parts it holds. People are listed underneath. Suggestions from helpers wait at the top.</td></tr>
+              <tr><td>Chat</td><td>One box for everything: tasks for helpers, requests for the whole team, and talk between
+                people. See <a href="#chat">Talking to helpers</a>.</td></tr>
+              <tr><td>Tasks</td><td>Open work, whole-team requests with their parts underneath, and what the reviewer
+                found. <b>Start it</b>, <b>I'll do it</b>, <b>Mark done</b>.</td></tr>
+              <tr><td>Activity</td><td>What happened, in order: parts added, tasks finished, files saved, renames, clashes,
+                and the 🤝 messages helpers send each other.</td></tr>
+              <tr><td>Sizes</td><td>The team's shared dimensions, editable in place. See <a href="#sizes">Shared sizes</a>.</td></tr>
+              <tr><td>Files</td><td>Notes, plans, BOMs and scripts the team saved, with version, author and time. See
+                <a href="#files">Files and storage</a>.</td></tr>
+              <tr><td>Library</td><td>The team's parts shelf: your own parts and the standard screws, bearings and inserts.
+                See <a href="#library">Parts library</a>.</td></tr>
+              <tr><td>Remote</td><td>A single-use code and QR for a phone. See <a href="#phone">Phone and browser</a>.</td></tr>
+              <tr><td>Tools</td><td>Everything else, in groups: Build, Print, Project, Team rules, AI helpers, Parts, 3D
+                view, and <b>Stop hosting the team</b>. The full list is in <a href="#menu">Menu and panel</a>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Reading the Team tab</h3>
+        <ul>
+          <li>The dot is the helper's colour — the same colour its parts get in the 3D view, so you can tell at a glance
+            who built what.</li>
+          <li><span class="pill ok">Ready</span> means it's listening. <b>◐ Working</b> means it's mid-task. A quiet helper
+            shows how long it's been silent instead.</li>
+          <li><b>Holding</b> lists the parts only that helper can change right now.</li>
+          <li>Right-click one of your own helpers to <b>Rename</b>, <b>Restart</b> or see its log. Right-click any helper,
+            including one on a teammate's computer, to <b>Remove from the team</b>.</li>
+        </ul>
+
+        <h3>The 3D view</h3>
+        <ul>
+          <li><b>Show helpers' arrows</b> puts an arrow in each helper's colour on the part it's working on. <b>Preview</b>
+            opens a demo model so you can see what that looks like before a real build.</li>
+          <li>The live model opens in its own tab named after the project, with <b>(live, read-only)</b> in the title
+            where the guide adds it. Refreshes, new parts and reconnects never switch you away from your own document;
+            only the guide's <b>Done, show me the model</b> brings it forward.</li>
+        </ul>
+      </section>
+
+      <section id="chat">
+        <span class="section-kicker">Chapter 06</span>
+        <h2>Talking to helpers</h2>
+        <p>One box does everything. What you type decides where it goes:</p>
+        <div class="table-wrap">
+          <table class="ref">
+            <thead><tr><th>You type</th><th>What happens</th></tr></thead>
+            <tbody>
+              <tr><td><code>@sam-claude …</code></td><td>A task for that helper, with the parts you have selected attached.
+                It wakes, answers with what it will do, then what it did.</td></tr>
+              <tr><td><code>@a @b …</code></td><td>The same task for each named helper.</td></tr>
+              <tr><td><code>@team …</code></td><td>A whole-team request: the host plans it into parts, starts helpers for
+                them, reviews the result and exports once. The chat notes where it went; that note is local to your
+                window.</td></tr>
+              <tr><td><code>@all …</code></td><td>A note to every helper (pause, status, a house rule). Not a task.</td></tr>
+              <tr><td>No <code>@</code></td><td>Chat between people. Helpers never see it.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Typing <code>@</code> alone lists the names you can use. Tasks only go to helpers: people pick their own work
+          from the Tasks tab.</p>
+
+        <h3>Did it land?</h3>
+        <p>Your message carries its own state: <b>⏳ not read yet</b>, <b>👀 read, working on it</b>, <b>✓ done</b>. If a
+          helper is what's missing, the panel says how long it has been quiet, and its log is one right-click away.</p>
+
+        <h3>Commands come first</h3>
+        <p>A person's instruction is a command, not chat: it sits at the top of the helper's inbox and is never treated as
+          one request among many. The sender sees sent → seen → done. Requests between helpers are requests, never
+          permissions — a helper can't let another helper change a part it holds.</p>
+
+        <h3>Whole-team requests</h3>
+        <p><code>@team</code> hands the job to the team server, which:</p>
+        <ol>
+          <li>plans the request into parts and tasks,</li>
+          <li>starts AI helpers for those tasks on the host's computer,</li>
+          <li>wakes the helpers as work becomes available,</li>
+          <li>starts the team's reviewer when every task is done,</li>
+          <li>exports the result once, to <code>exports/</code>.</li>
+        </ol>
+        <p>A failed start is retried a few times with a growing pause, then the brief fails with the tail of the agent's
+          log in the panel — instead of retrying forever. If the reviewer finds something, the owners are woken to fix it
+          and the reviewer runs again.</p>
+
+        <h3>Asking well</h3>
+        <ul>
+          <li><b>Say what and how big.</b> "A 120 × 80 × 6 mm plate, 3 mm chamfer, four M3 holes on a 100 × 60 grid"
+            beats "a plate".</li>
+          <li><b>Select first when it's about a part.</b> Selecting a part and then typing <code>@helper make this 10 mm
+            shorter</code> is unambiguous.</li>
+          <li><b>One change at a time.</b> Corrections land faster than a paragraph of new requirements.</li>
+          <li><b>Ask for the check.</b> "Then check it fits the printer" is a sentence the helper can act on.</li>
+        </ul>
+      </section>
+
+      <section id="editing">
+        <span class="section-kicker">Chapter 07</span>
+        <h2>Edit a part yourself</h2>
+        <p>Sometimes moving a hole two millimetres is faster than describing it. You don't need to be a CAD user for
+          this.</p>
+        <ol class="steps">
+          <li><div><b>Select the part</b><p class="fine">In the live model's 3D view.</p></div></li>
+          <li><div><b>Tools ▸ ✎ Edit a part yourself…</b><p class="fine">The editor opens on the part. While it's open the
+            part is held by you, so no helper can change it underneath you.</p></div></li>
+          <li><div><b>Change it</b><p class="fine">Type a new size or position, or move it with FreeCAD's own
+            <b>Edit ▸ Placement</b> / <b>Transform</b> — the editor picks the move up.</p></div></li>
+          <li><div><b>Save to team</b><p class="fine">One change, sent to everyone. <b>Done</b> just releases the part.</p></div></li>
+        </ol>
+        <ul>
+          <li><b>Held by a helper?</b> The editor offers <b>Ask … to let go</b>, and <b>Free it anyway</b> if that helper
+            has gone quiet.</li>
+          <li><b>Moving without the editor</b> is undone with an explanation, so your view never silently differs from the
+            team's.</li>
+          <li><b>Handing over:</b> while you hold a part, <b>Hand off now</b> with a note starts a helper that takes your
+            locks and tasks and carries on from your note and recent changes.</li>
+          <li><b>Limits:</b> sizes of primitives (box, cylinder, sphere, cone, torus) and position/rotation of any part.
+            Sketch-based or fused parts can be moved but not reshaped by hand — ask a helper for those.</li>
+        </ul>
+      </section>
+
+      <section id="sizes">
+        <span class="section-kicker">Chapter 08</span>
+        <h2>Shared sizes and precision</h2>
+        <p>Every project has a <code>Params</code> spreadsheet. Helpers bind geometry to it with FreeCAD expressions, so a
+          dimension lives in one place instead of being retyped in twenty parts.</p>
+
+        <h3>Changing a shared size</h3>
+        <ul>
+          <li>Use the <b>Sizes</b> tab, or <b>Tools ▸ Change a shared size…</b>.</li>
+          <li>Every part that reads the value recomputes. If that part belongs to someone else, its revision goes up and
+            its owner is told.</li>
+          <li>Values you'd expect are there already: wall thickness, hole pitches, fits, and anything the team settled on.</li>
+        </ul>
+        <p><b>Auto-constrain</b> looks at the model for sizes and fits it already repeats and offers to bind them to shared
+          sizes — a good first tidy-up when a project has grown organically.</p>
+
+        <h3>Precision settings</h3>
+        <p>One dialog for the whole team (Tools ▸ Team rules ▸ <b>Precision settings…</b>):</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Group</th><th>What it holds</th></tr></thead>
+            <tbody>
+              <tr><td>Fits and clearances</td><td>General clearance, slip fit and press fit — also shared sizes
+                (<code>Params.tol_clearance</code>, <code>Params.tol_press_fit</code>, …), so geometry bound to them moves
+                when they change.</td></tr>
+              <tr><td>Bolt holes</td><td>ISO 273 class: close, normal or loose.</td></tr>
+              <tr><td>Screws in printed parts</td><td>Heat-set inserts, tapped, or self-tapping — what the helper should
+                size a hole for.</td></tr>
+              <tr><td>Printing</td><td>XY compensation, thinnest wall, layer height.</td></tr>
+              <tr><td>Mesh</td><td>Precision for STL exports and previews.</td></tr>
+              <tr><td>Clash check</td><td>The smallest overlap worth reporting.</td></tr>
+              <tr><td>Part editor</td><td>Decimals shown, and the arrow-key step.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Only people change settings. When a part implies a different value — a press-fit bearing seat, holes so small a
+          coarse mesh would facet them — a helper <b>suggests</b> it with a reason. The suggestion waits at the top of the
+          Team tab and in Settings for someone to <b>Accept</b> or <b>Dismiss</b>.</p>
+      </section>
+
+      <section id="files">
+        <span class="section-kicker">Chapter 09</span>
+        <h2>Files, exports and storage</h2>
+        <p>The project folder is the whole project. It grows into subfolders as the team works:</p>
+        <div class="code">
+          <div class="code-bar"><span>Project folder</span></div>
+          <pre>Phone stand/
+  model.FCStd          the live shared model (only the team server writes it)
+  files/               notes, plans, BOMs and scripts, in subfolders that grow
+    parts/base/notes.md
+    docs/bom.csv
+    fea/2026-10-23 21.05 shelf bracket/   report.html · report.json · plot.png
+    lattice/           lightened parts and their reports
+  exports/             STEP and STL files, each with a new name
+  snapshots/           saved versions of the model
+  library/             the team's parts, one folder per part
+  AI helpers/          each helper's workspace on this computer (not shared)
+  .cadswarm-team/      the team server's data and design memory
+  README.txt           explains the above to anyone browsing the folder</pre>
+        </div>
+
+        <h3>Save safety</h3>
+        <p>The team server enforces these rules; helpers can't opt out of them:</p>
+        <ul>
+          <li><strong>Sandboxed to <code>files/</code>.</strong> Paths with <code>..</code>, absolute paths, hidden or
+            reserved names, and links pointing outside are refused. File types are on an allow-list.</li>
+          <li><strong>No silent overwrites.</strong> Saving onto an existing file is refused unless the helper asks for a
+            new name or for <code>replace</code> with the version it last read. If anyone changed it since — including a
+            person editing it by hand — the save is refused.</li>
+          <li><strong>History.</strong> Replaced, moved and deleted files keep their last 20 versions (and everything from
+            the last day) and can be restored. A deleted file always keeps its latest version.</li>
+          <li><strong>Atomic writes.</strong> A crash never leaves half a file.</li>
+        </ul>
+        <p>Limits: 5 MB per text file (notes, scripts, CSV), 512 MB per binary CAD or media file (STEP, STL, 3MF, FCStd,
+          DXF, PDF, images).</p>
+
+        <h3>Finding what the team saved</h3>
+        <p>The <b>Files</b> tab lists everything with its version, who saved it and when, and saves a copy wherever you
+          like. The host also gets <b>Tools ▸ Project ▸ Open project folder</b>.</p>
+
+        <h3>Exports and snapshots</h3>
+        <ul>
+          <li><b>Save as STL/STEP file…</b> writes into <code>exports/</code>. A second export gets a new name; nothing is
+            overwritten or auto-deleted.</li>
+          <li><b>Save a snapshot…</b> keeps a version of the model, named with the date, time and your label. Snapshots
+            are never deleted automatically.</li>
+        </ul>
+
+        <h3>Disk space</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Guard</th><th>Default</th></tr></thead>
+            <tbody>
+              <tr><td>Free space left on the host's drive</td><td>Never below 2 GB (or 10% of the drive, if that's smaller).
+                The save is refused with a plain reason instead of filling the disk.</td></tr>
+              <tr><td>Project limit</td><td>20 GB across files, history, snapshots and exports. Set by the host in
+                <b>Tools ▸ Project ▸ Storage and free up space…</b>, or with
+                <code>CADSWARM_PROJECT_LIMIT_GB</code>. <code>0</code> means no project limit.</td></tr>
+              <tr><td>History kept</td><td>20 versions per file, plus everything from the last day. Change it in the same
+                dialog.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><b>Storage and free up space</b> shows what is using the room and lets a person trim old versions, old
+          snapshots (always keeping the newest few) and old exports. Helpers can look, and are told to ask a person — they
+          can't delete.</p>
+      </section>
+
+      <section id="checks">
+        <span class="section-kicker">Chapter 10</span>
+        <h2>Checks and reports</h2>
+        <p>Four kinds of check, all reachable from the panel and all usable without a helper.</p>
+
+        <h3>Clashes</h3>
+        <p><b>Tools ▸ Build ▸ Check for clashes</b> finds parts that overlap and lists them. The smallest overlap worth
+          reporting is a <a href="#sizes">precision setting</a>. Helpers can run the same check with
+          <code>check_interference</code>.</p>
+
+        <h3>Will it print?</h3>
+        <p>Tell the team what you print on once (<b>Tools ▸ Print ▸ Printer bed…</b>), then <b>Check it fits the
+          printer…</b> checks three things: every part fits the bed, the solids are closed, and walls are thick enough to
+          print (under 1.2 mm is flagged).</p>
+
+        <h3>Strength checks (FEA)</h3>
+        <p>Ask in the chat: <em>“will this bracket hold 10 kg?”</em>, <em>“what's the natural frequency of the arm?”</em>,
+          <em>“how hot does the motor mount get?”</em>. The helper recognises a simulation request and asks, in one
+          message, which analysis to run — <b>linear static</b> (stress, deflection, safety factor), <b>modal</b> or
+          <b>steady-state thermal</b> — plus the material, the faces held still and the loads.</p>
+        <p>If you don't know, it uses clearly marked placeholders (generic steel, a 1000 N load on the top face, the
+          bottom face fixed) and the report says so in a yellow box. The analysis runs FreeCAD's own FEM tools on a
+          <b>copy</b> of the part, in a separate process, so the model, its locks and everyone else's work are untouched.</p>
+        <ul>
+          <li><b>Where it goes:</b> <code>files/fea/</code>, as a self-contained HTML page plus JSON.</li>
+          <li><b>Who sees it:</b> the report pops up in every teammate's FreeCAD. <b>Tools ▸ Project ▸ Simulation
+            reports…</b> lists the past ones.</li>
+          <li><b>What's in it:</b> the numbers, the automatic checks (safety factor, stress peaks at supports or sharp
+            corners, coarse mesh, resonance, temperature limits, placeholders) and the helper's own plain-words summary
+            and suggestions.</li>
+          <li><b>If a helper forgets to publish:</b> the host publishes the automatic checks after five minutes.</li>
+          <li><b>Gmsh:</b> if this FreeCAD has no Gmsh, the host installs the official 4.15.2 build once into the app
+            folder. <code>CADSWARM_NO_AUTO_INSTALL=1</code> turns that off.</li>
+        </ul>
+        <div class="callout warn">
+          <span class="ct">Read it as a design aid</span>
+          <p>Linear-elastic behaviour with idealised supports is a guide, not a certification. Check anything load-bearing
+            yourself.</p>
+        </div>
+
+        <h3>Lighten a part</h3>
+        <p><b>Tools ▸ Build ▸ Lighten part…</b> fills a part with a lattice that is thicker where the stress is high,
+          keeps a solid skin and solid zones where the part is held and loaded, then simulates the real lattice to check
+          it still has the stiffness you asked for (90% by default).</p>
+        <p>Pick the faces it's held by and loaded on, the material and how it's made. You get the weight saving, the
+          verified stiffness, a preview you can cut open, and STL, 3MF and a report in <code>files/lattice/</code>.
+          <b>Add to model</b> puts the lattice next to the original as a mesh — the original is never changed. Helpers use
+          <code>lighten_part</code> and suggest it when a part could be lighter, including when a strength check shows
+          room to spare.</p>
+
+        <h3>Optimize Part</h3>
+        <p>For simulation-guided material removal from supported, grid-aligned solids, the workbench also includes
+          <b>Optimize Part…</b>. It preserves the original and shares a new part only after you accept it. The method and
+          its limits are written up in the repository:
+          <a href="https://github.com/SachchitBalamurugan/cadswarm/blob/main/docs/structural-optimization.md" target="_blank" rel="noopener">structural optimization</a>.</p>
+
+        <h3>The team's reviewer</h3>
+        <p>Every <code>@team</code> request ends with one more helper started as the reviewer. It checks collisions
+          between parts, that the board actually fits (dimensions, mounting holes, port cutouts), printability (bed size,
+          closed solids, thin walls) and the team's learned rules. It is read-only by construction: the database refuses
+          every write from a reviewer, so it cannot change geometry even by accident.</p>
+        <p>Its tool calls and findings appear in Activity, its verdict lands as a review card on the request, and its
+          arrow parks on the part it's checking. If it can't start three times in a row, the request fails with the tail of
+          its log instead of retrying forever.</p>
+      </section>
+
+      <section id="library">
+        <span class="section-kicker">Chapter 11</span>
+        <h2>Parts library</h2>
+        <p>The team's parts shelf, in the <b>Library</b> tab (and in the browser app). It's for the things you shouldn't be
+          modelling by hand: screws, bearings, inserts, and parts someone already downloaded.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>What</th><th>How</th></tr></thead>
+            <tbody>
+              <tr><td>Your team's parts</td><td><b>Upload a part…</b> takes a STEP, FreeCAD or STL file. <b>Add from a
+                link…</b> takes a direct download link from a vendor or a repository. FreeCAD measures each one (size,
+                volume, holes) and makes a preview. The files live in the project's <code>library/</code>.</td></tr>
+              <tr><td>Standard parts</td><td>Built to their real dimensions: socket and button head screws (ISO 4762 /
+                7380), hex nuts, washers, heat-set inserts, ball bearings (608 and friends), dowel pins and disc
+                magnets.</td></tr>
+              <tr><td>Placing one</td><td><b>Place in model</b> puts it in the shared model, held by you, and offers to
+                position it.</td></tr>
+              <tr><td>Choosing one</td><td><b>Which part should I use?</b> describes a need (“an 8 mm axle that spins”) and
+                suggests parts, each with the hole the mating part needs.</td></tr>
+              <tr><td>Sharing a shelf</td><td><b>More ▾ › Export the library as a pack…</b> saves the team's parts and
+                settings as a zip in the project files; <b>Import a pack…</b> brings them into another project. Imported
+                settings arrive as suggestions only.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Helpers use the same shelf: they check it before modelling a screw or a bearing
+          (<code>recommend_components</code>, <code>search_components</code>), place parts
+          (<code>add_standard_part</code>, <code>insert_component</code>), size mating holes with the team's fits
+          (<code>hole_size</code>), and can add a part they found online with its license
+          (<code>import_component_from_url</code>).</p>
+      </section>
+
+      <section id="phone">
+        <span class="section-kicker">Chapter 12</span>
+        <h2>Phone and browser</h2>
+        <p>You don't need FreeCAD to watch a build or answer a helper. The <b>Remote</b> tab mints one single-use code
+          and shows it as a QR plus a link.</p>
+        <ol class="steps">
+          <li><div><b>Open the Remote tab</b><p class="fine">In the CADSwarm panel, on the host or any member's window.</p></div></li>
+          <li><div><b>Scan the QR</b><p class="fine">Or send the link. The phone opens the build in its browser.</p></div></li>
+          <li><div><b>Make another with New code</b><p class="fine">Each code works once, and only while the host's team
+            server is running.</p></div></li>
+        </ol>
+        <p>The browser app has tabs for <b>Chat</b>, <b>Model</b>, <b>Sizes</b>, <b>Library</b>, <b>Tasks</b>, <b>Files</b>
+          and <b>Team</b>. You can watch the model, follow the chat, send <code>@</code> commands, read tasks and files,
+          and answer a suggestion — the same session, from the sofa.</p>
+        <div class="callout warn">
+          <span class="ct">Two limits worth knowing</span>
+          <p>A phone link points at <code>https://cadswarm.design/app</code> unless the host was started with its own web
+            address. And a phone reaching the app through the public site can't reach a team hosted on a computer on your
+            home network — for those, watch from FreeCAD on a computer that's on the same network.</p>
+        </div>
+      </section>
+
+      <section id="helpers">
+        <span class="section-kicker">Chapter 13</span>
+        <h2>AI helpers</h2>
+        <p>A helper is an agent CLI (Claude Code, Codex, OpenCode, or your own) joined to the team, running on one person's
+          computer with that person's account. It gets a set of CAD tools and a workspace of its own under the project's
+          <code>AI helpers\</code> folder.</p>
+
+        <h3>Adding, naming, managing</h3>
+        <ul>
+          <li><b>New helper</b> in the Team tab, or <b>Tools ▸ AI helpers ▸ Set up a helper step by step…</b> (also
+            <b>CADSwarm ▸ Add AI helper…</b>). Pick the CLI, optionally a name; the default is your name and the AI, like
+            <code>carol-claude</code>.</li>
+          <li><b>Rename</b>, <b>Restart</b> and <b>Show log</b> are on the right-click menu for helpers on your computer.</li>
+          <li><b>Remove from the team</b> works on any helper, even one on a teammate's computer. Removing releases its
+            locks, returns the work it held, and stops it rejoining on its own — only a fresh invite brings it back.</li>
+          <li>Helpers always join as ordinary members. They can't change settings, delete snapshots or exports, or write
+            outside the project's <code>files/</code>.</li>
+        </ul>
+
+        <h3>When does a helper wake?</h3>
+        <ul>
+          <li>A message or task addressed to it wakes it. Your instruction is a command and comes first in its inbox.</li>
+          <li>When a task it handed to another helper finishes, it's woken with the result.</li>
+          <li>Each helper runs at most 30 times an hour, so two helpers can't keep waking each other in a loop.</li>
+          <li>A helper that hasn't checked in for 30 seconds shows as quiet. Its parts stay held, its tasks become
+            <em>awaiting takeover</em>, and anyone can take over its work. After ten minutes the locks are freed and the
+            tasks reopen.</li>
+        </ul>
+
+        <h3>Helpers working together</h3>
+        <p>A helper can see who is free (<code>list_helpers</code>), hand part of a job to another helper
+          (<code>delegate_task</code>, which wakes it), and ask whoever holds a part to change it. A request is a request:
+          it never grants permission to change something another helper holds.</p>
+
+        <h3>Which CLI runs what</h3>
+        <ul>
+          <li><b>Your helper</b> runs whichever CLI you connected, on your computer.</li>
+          <li><b>Planners, workers and the reviewer</b> for <code>@team</code> requests run on the <b>host's</b> computer
+            with the host's CLI. The host picks it when setting up the team; an unsupported CLI can be wired in with
+            <code>agent_command</code> in the project's <code>host.json</code>, where <code>{prompt}</code> is replaced by
+            the task.</li>
+          <li>A CLI that isn't on <code>PATH</code> can be pointed at with <code>CADSWARM_CLAUDE</code>,
+            <code>CADSWARM_CODEX</code> or <code>CADSWARM_OPENCODE</code>.</li>
+        </ul>
+
+        <h3>What a helper can do</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Group</th><th>Tools</th></tr></thead>
+            <tbody>
+              <tr><td>Awareness</td><td><code>model_status</code>, <code>get_object</code>, <code>wait_for_changes</code></td></tr>
+              <tr><td>Locks</td><td><code>lock_objects</code>, <code>release_objects</code></td></tr>
+              <tr><td>Modelling</td><td><code>create_primitive</code>, <code>create_extrusion</code>, <code>boolean</code>,
+                <code>set_props</code>, <code>set_placement</code>, <code>delete_object</code>, <code>set_param</code>,
+                <code>run_part_script</code></td></tr>
+              <tr><td>Checks and output</td><td><code>check_interference</code>, <code>export_model</code>,
+                <code>save_snapshot</code>, <code>storage_status</code></td></tr>
+              <tr><td>Simulation</td><td><code>list_faces</code>, <code>run_fea</code>, <code>fea_status</code>,
+                <code>publish_fea_report</code></td></tr>
+              <tr><td>Lighten</td><td><code>lighten_part</code>, <code>lattice_status</code>, <code>lattice_apply</code>,
+                <code>lattice_cancel</code>, <code>lattice_cells</code>, <code>lattice_estimate</code></td></tr>
+              <tr><td>Library</td><td><code>search_components</code>, <code>recommend_components</code>,
+                <code>get_component</code>, <code>insert_component</code>, <code>add_standard_part</code>,
+                <code>hole_size</code>, <code>import_component_from_url</code>, <code>add_component_from_file</code></td></tr>
+              <tr><td>Team settings</td><td><code>get_settings</code>, <code>suggest_setting</code> (people accept;
+                helpers never change them)</td></tr>
+              <tr><td>Design style</td><td><code>team_style</code>, <code>style_rules</code>, <code>teach_style</code></td></tr>
+              <tr><td>Project files</td><td><code>list_files</code>, <code>read_file</code>, <code>save_file</code>,
+                <code>make_folder</code>, <code>move_file</code>, <code>delete_file</code>, <code>file_history</code>,
+                <code>restore_file</code></td></tr>
+              <tr><td>Teamwork</td><td><code>list_tasks</code>, <code>create_task</code>, <code>claim_task</code>,
+                <code>report_result</code>, <code>send_message</code>, <code>get_inbox</code>, <code>ack_messages</code>,
+                <code>take_over</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Scripts run apart from the model</h3>
+        <p>When a helper runs <code>run_part_script</code>, CADSwarm starts a separate, throw-away FreeCAD process — never
+          the live model's own. The script works on a read-only copy and can hand back a shape and some data; anything
+          else it does to the copy is discarded, so it can't change other people's parts.</p>
+        <p>How tightly that process is locked down depends on your computer (the model server's <code>/health</code> shows
+          the level under <code>script_sandbox</code>):</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Level</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><code>appcontainer</code> (Windows 10/11)</td><td>No network, no access to your documents or profile,
+                can't start other programs, writes only to a scratch folder that's deleted afterwards. About 2 GB of memory
+                and 60 seconds. The first start gives the container read access to your FreeCAD folder, which can take a
+                few seconds.</td></tr>
+              <tr><td><code>lowintegrity</code> (Windows fallback)</td><td>Still can't write outside the scratch folder or
+                start programs, but <b>can</b> read your files and use the network. Use it with people you trust.</td></tr>
+              <tr><td><code>process-limits</code> (macOS, Linux)</td><td>Memory, time and open-file limits, but no file or
+                network isolation — it runs as you. Use it with people you trust.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Settings: <code>CADSWARM_SCRIPT_TIMEOUT</code> (seconds) and <code>CADSWARM_SCRIPT_MEMORY_MB</code>.
+          <code>CADSWARM_SCRIPT_SANDBOX=off</code> disables the sandbox for debugging and prints a loud warning. Whatever
+          the level, the sandbox protects your files and network, not the model: a script can return any shape, so review
+          what a teammate's helper adds.</p>
+
+        <h3>Context on every prompt</h3>
+        <p>Claude Code and Codex get a hook that adds a team block before each prompt: who holds which parts, open tasks,
+          what changed since your last prompt, unread messages. It fails open — if the database is unreachable, the prompt
+          goes through without it. OpenCode gets the same information through the tools instead. Codex only uses hooks you
+          have trusted: type <code>/hooks</code> in Codex and trust the CADSwarm hook (again after an update, since Codex
+          re-checks it when it changes).</p>
+
+        <h3>When a helper misbehaves</h3>
+        <p>Right-click ▸ <b>Show log</b> (or <b>Tools ▸ AI helpers ▸ Show my AI helpers' logs</b>) shows what it actually
+          wrote. The two usual causes are a CLI that never finished signing in, and a run limit — the panel shows how long
+          a helper has been quiet, and <b>Restart</b> starts a fresh process without losing its workspace.</p>
+      </section>
+
+      <section id="style">
+        <span class="section-kicker">Chapter 14</span>
+        <h2>Learned design style</h2>
+        <p>CADSwarm learns how your team designs and teaches it to every helper. The host notes each change to the model —
+          who made it, whether a person or a helper, and what changed — plus every finished request. From that it works
+          out rules:</p>
+        <ul>
+          <li><b>Shared sizes the team settles on</b> — “<code>Params.wall</code> is 2.4 mm”.</li>
+          <li><b>What people keep correcting</b> after a helper. The strongest signal, so it counts double.</li>
+          <li><b>Preferred parts</b> — “M3 heat-set inserts”.</li>
+          <li><b>Modelling habits</b> — binding sizes to <code>Params</code>.</li>
+          <li><b>Problems reviews keep finding</b> for a board.</li>
+        </ul>
+        <p>A rule with enough consistent, recent evidence from more than one person or day becomes <b>active</b>: planners,
+          workers, handed-off helpers and the reviewer get it in their prompts, and every helper turn shows it as “Team
+          design style”.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Kind of rule</th><th>What happens</th></tr></thead>
+            <tbody>
+              <tr><td>Suggested (weak, or proposed by a helper)</td><td>Waits at the top of the Team tab and under
+                <b>Tools ▸ Team rules ▸ Learned design style…</b> for a person to <b>Make it a rule</b> or
+                <b>Dismiss</b>.</td></tr>
+              <tr><td>Confirmed</td><td>Always followed, never fades. You can also type one yourself; it's confirmed at
+                once.</td></tr>
+              <tr><td>Dismissed</td><td>Stays away until its evidence doubles.</td></tr>
+              <tr><td>Unused and learned</td><td>Fades after about a month.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Rules live in the project database on the host's computer. Learning needs no account, keys or network.
+          <code>python -m cadswarm.style_memory show --project &lt;folder&gt;</code> prints them from a terminal.</p>
+      </section>
+
+      <section id="troubleshooting">
+        <span class="section-kicker">Chapter 15</span>
+        <h2>Troubleshooting</h2>
+        <p>Before anything else, check three things: the host's computer is on and CADSwarm is open there, you're on the
+          same network (local teams only), and your agent CLI is signed in on this computer.</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>What you see</th><th>What it means</th><th>What to do</th></tr></thead>
+            <tbody>
+              <tr><td>“Couldn't reach your team's server at …”</td><td>Nothing answered at that address.</td><td>Start
+                CADSwarm on the host. On a local team, check the network and the host's firewall. If the host's address
+                changed, ask for a new invite.</td></tr>
+              <tr><td>“That project's database isn't on this computer's team server any more”</td><td>The team's database
+                was rebuilt from empty — the id in your saved sign-in no longer exists (404).</td><td>Start the team again
+                from <b>Get started</b>. The model file and files/ are still in the project folder.</td></tr>
+              <tr><td>“That project's database is paused on SpacetimeDB”</td><td>A Maincloud database that isn't running
+                (503).</td><td>Open it on spacetimedb.com, click <b>Start Database</b>, reconnect. Or host a new team on
+                this computer.</td></tr>
+              <tr><td>“That invite code has already been used or has expired”</td><td>Codes are single-use and last a
+                day.</td><td>Ask for a fresh one (<b>Tools ▸ AI helpers ▸ Invite a teammate…</b>).</td></tr>
+              <tr><td>“Your saved sign-in isn't part of this team any more”</td><td>You were removed, or the team was
+                rebuilt.</td><td>Join again with a new invite.</td></tr>
+              <tr><td>“A teammate took over your session, so you were signed out”</td><td>The same sign-in is open in
+                another FreeCAD window.</td><td>Join again in the window you want to keep.</td></tr>
+              <tr><td>Panel says <b>Reconnecting</b></td><td>The host's team server stopped.</td><td>It starts again when
+                the host opens CADSwarm. Nothing is lost; the model simply pauses.</td></tr>
+              <tr><td>A helper never answers</td><td>Not signed in, out of runs, or its CLI failed to start.</td><td>Open
+                its log. Sign the CLI in once in a terminal. Codex: <code>/hooks</code> ▸ trust. Then
+                <b>Restart</b>.</td></tr>
+              <tr><td>Helpers can't be added at all</td><td>A CLI CADSwarm can't find, or a Linux package without
+                Python.</td><td>Run <code>claude</code> / <code>codex</code> / <code>opencode</code> once in a terminal;
+                on Linux switch to the official AppImage.</td></tr>
+              <tr><td>A save is refused: <code>disk_full</code></td><td>The host's drive would drop below the 2 GB guard,
+                or the project is at its limit.</td><td>Use <b>Tools ▸ Project ▸ Storage and free up space…</b> on the
+                host, or raise the limit.</td></tr>
+              <tr><td>“This part is held by …”</td><td>Someone (or their helper) holds it.</td><td>Message the owner, use
+                <b>Ask … to let go</b>, or <b>Free it anyway</b> when that helper has gone quiet.</td></tr>
+              <tr><td>Your move in the 3D view was undone</td><td>Hand moves outside the editor aren't shared with the
+                team.</td><td>Use <b>Tools ▸ ✎ Edit a part yourself…</b>.</td></tr>
+              <tr><td>The live model tab is read-only</td><td>By design: you edit through the panel, or through the part
+                editor which takes a lock for you.</td><td>Select a part and use the editor, or ask a helper.</td></tr>
+              <tr><td>FreeCAD doesn't show CADSwarm</td><td>The workbench isn't installed, or FreeCAD was open during
+                install.</td><td>Re-run the installer with FreeCAD closed, then reopen FreeCAD and pick
+                <b>CADSwarm</b>.</td></tr>
+              <tr><td>The installer says a file is in use / “Couldn't put cadswarm-host.exe in place”</td><td>An old team
+                server is running from the same file.</td><td>Update CADSwarm again — the installer sets the running file
+                aside and finishes. If it persists, stop hosting (<b>Tools ▸ Stop hosting the team</b>) and retry.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Where to look when the table doesn't cover it</h3>
+        <ul>
+          <li><b>Activity</b> — the last thing that happened, including refused changes and why.</li>
+          <li><b>A helper's log</b> — right-click it, or <b>Tools ▸ AI helpers ▸ Show my AI helpers' logs</b>. The tail of
+            that log is what a failed request shows in the panel.</li>
+          <li><b>FreeCAD's console</b> — <b>View ▸ Panels ▸ Report view</b>. CADSwarm writes plain-words lines there,
+            prefixed <code>[CADSwarm]</code>.</li>
+          <li><b>The model server's <code>/health</code></b> — on the host, shows whether it's ready and which script
+            sandbox level is active (<code>script_sandbox</code>).</li>
+        </ul>
+        <div class="callout info">
+          <span class="ct">Start over safely</span>
+          <p>If a team's state is beyond repair, the project folder is still worth keeping: <code>model.FCStd</code>,
+            <code>files/</code>, <code>exports/</code> and <code>snapshots/</code> are ordinary files. Start a new team and
+            bring the model in as a part, or keep working in the old folder with a fresh database.</p>
+        </div>
+      </section>
+
+      <section id="faq">
+        <span class="section-kicker">Chapter 16</span>
+        <h2>Limits and questions</h2>
+
+        <h3>Questions people ask first</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Question</th><th>Answer</th></tr></thead>
+            <tbody>
+              <tr><td>Do I need an account?</td><td>No CADSwarm account. Only a Maincloud-hosted team needs a free
+                SpacetimeDB sign-in, done once in the browser.</td></tr>
+              <tr><td>What does it cost?</td><td>CADSwarm is free and open source. You bring your own AI subscription and
+                your own FreeCAD.</td></tr>
+              <tr><td>Where does my model go?</td><td>Onto the host's disk, and the team's database (state only). Nothing is
+                uploaded to CADSwarm; there is no CADSwarm server.</td></tr>
+              <tr><td>Can I work offline?</td><td>On a team hosted on your own network, yes. Maincloud teams need the
+                internet.</td></tr>
+              <tr><td>Do I need to know CAD or code?</td><td>No. Describing parts in chat is the main way; the part editor
+                covers the small changes.</td></tr>
+              <tr><td>Which AI helpers work?</td><td>Claude Code, Codex, OpenCode, or another CLI wired in with
+                <code>agent_command</code>. Each person uses their own account.</td></tr>
+              <tr><td>Can a helper read my other files?</td><td>Its workspace is inside the project. Scripts it runs are
+                sandboxed (strictly on Windows, less so on macOS/Linux — see the table in <a href="#helpers">AI helpers</a>).
+                Model helpers can only save through <code>save_file</code>, inside <code>files/</code>.</td></tr>
+              <tr><td>What if the host's laptop sleeps?</td><td>Everyone's model pauses until it's back. The team's state
+                stays readable, but nothing changes and nothing saves.</td></tr>
+              <tr><td>Can two teams be open at once?</td><td>One session per FreeCAD window. Open another project from
+                <b>Get started ▸ Open a previous project…</b>; the current session ends first.</td></tr>
+              <tr><td>Does it work with FreeCAD 1.1?</td><td>Yes — 1.0 and newer. The workbench installs into whichever
+                FreeCAD the installer finds.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Known limits</h3>
+        <ul>
+          <li><b>Hand edits are limited.</b> Sizes of primitives and position/rotation of any part. Sketch-based or fused
+            parts can be moved but not reshaped by hand.</li>
+          <li><b>Locks are per object.</b> Editing a shared upstream object (say a sketch two features use) needs its
+            lock; there's no sub-object locking.</li>
+          <li><b>One host, one worker.</b> Each host drives a single FreeCAD worker, so changes apply one at a time.
+            Helpers work in parallel; their edits queue.</li>
+          <li><b>The host must stay on.</b> It serves the model, files, exports and snapshots.</li>
+          <li><b>Local teams have no TLS.</b> Use them with people you trust on your own network; Maincloud handles TLS and
+            sign-in.</li>
+          <li><b>A script's shape is trusted.</b> The sandbox protects your files and network, not the model. Review what
+            teammates' helpers add.</li>
+          <li><b>Phone links point at the public site.</b> A team hosted locally is reachable from FreeCAD on the same
+            network, not from a phone over the internet.</li>
+        </ul>
+      </section>
+
+      <section id="menu">
+        <span class="section-kicker">Chapter 17</span>
+        <h2>Menu and panel reference</h2>
+
+        <h3>The CADSwarm menu</h3>
+        <div class="table-wrap">
+          <table class="ref">
+            <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td>Get started…</td><td>Start, join or reopen a team, step by step.</td></tr>
+              <tr><td>Add AI helper…</td><td>Connect Claude Code, Codex or OpenCode to the team.</td></tr>
+              <tr><td>Invite…</td><td>Copy a new single-use invite code.</td></tr>
+              <tr><td>Team panel</td><td>Show the dock.</td></tr>
+              <tr><td>Chat with helpers</td><td>Focus the chat box with <code>@</code> already typed.</td></tr>
+              <tr><td>New task…</td><td>Give the team or yourself something to do.</td></tr>
+              <tr><td>Lock selected / Release selected</td><td>Hold or release the selected parts by hand.</td></tr>
+              <tr><td>Edit a part…</td><td>Open the part editor on the selection.</td></tr>
+              <tr><td>Check for clashes</td><td>Find overlapping parts.</td></tr>
+              <tr><td>Save as STL/STEP file…</td><td>Export to <code>exports/</code>.</td></tr>
+              <tr><td>Run a simulation… / Simulation reports…</td><td>Start a strength check, or open past reports.</td></tr>
+              <tr><td>Components library…</td><td>Screws, bearings, inserts and your team's parts.</td></tr>
+              <tr><td>Auto-constrain…</td><td>Bind repeated sizes to shared sizes.</td></tr>
+              <tr><td>Precision settings… / Learned design style…</td><td>The team's fits and precision, and its learned
+                rules.</td></tr>
+              <tr><td>Stop hosting</td><td>Stop the team server on this computer.</td></tr>
+              <tr><td>Leave team</td><td>Leave the session; releases your locks.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>The Tools tab</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Group</th><th>Entries</th></tr></thead>
+            <tbody>
+              <tr><td>Build</td><td>✎ Edit a part yourself · Change a shared size · Auto-constrain · Check for clashes ·
+                Save as STL/STEP file · Lighten part</td></tr>
+              <tr><td>Print</td><td>Printer bed · Check it fits the printer</td></tr>
+              <tr><td>Project</td><td>Open a previous project · Project files · Open project folder (host) · Save a
+                snapshot · Run a simulation · Simulation reports · Storage and free up space (host)</td></tr>
+              <tr><td>Team rules</td><td>Precision settings · Learned design style</td></tr>
+              <tr><td>AI helpers</td><td>Set up a helper step by step · Invite a teammate · Restart my AI helpers · Show my
+                AI helpers' logs</td></tr>
+              <tr><td>Parts</td><td>Hold the selected parts · Let go of the selected parts · Force-free the selected parts ·
+                Take over a teammate's work</td></tr>
+              <tr><td>3D view</td><td>Show helpers' arrows · Preview</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Panel tabs</h3>
+        <p><b>Team</b> · <b>Chat</b> · <b>Tasks</b> · <b>Activity</b> · <b>Sizes</b> · <b>Files</b> · <b>Library</b> ·
+          <b>Remote</b> · <b>Tools</b>. The browser app shows Chat, Model, Sizes, Library, Tasks, Files and Team.</p>
+      </section>
+
+      <section id="env">
+        <span class="section-kicker">Chapter 18</span>
+        <h2>Environment variables</h2>
+        <p>Optional. Set them where the team server or the workbench starts; nothing in the project depends on them.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
+            <tbody>
+              <tr><td><code>CADSWARM_PROJECT_LIMIT_GB</code></td><td>Project size limit in GB (default 20; <code>0</code> =
+                no limit). The free-space guard still applies.</td></tr>
+              <tr><td><code>CADSWARM_SCRIPT_TIMEOUT</code></td><td>Seconds a part script may run (default 60).</td></tr>
+              <tr><td><code>CADSWARM_SCRIPT_MEMORY_MB</code></td><td>Memory a part script may use (default 2048).</td></tr>
+              <tr><td><code>CADSWARM_SCRIPT_SANDBOX</code></td><td><code>off</code> disables the script sandbox. Debugging
+                only; it prints a warning.</td></tr>
+              <tr><td><code>CADSWARM_NO_AUTO_INSTALL</code></td><td><code>1</code> stops the host installing Gmsh by
+                itself.</td></tr>
+              <tr><td><code>CADSWARM_FREECAD_PYTHON</code></td><td>Path to the FreeCAD Python to use, when it isn't found
+                automatically.</td></tr>
+              <tr><td><code>CADSWARM_CLAUDE</code>, <code>CADSWARM_CODEX</code>, <code>CADSWARM_OPENCODE</code></td><td>Path to
+                an agent CLI that isn't on <code>PATH</code>.</td></tr>
+              <tr><td><code>CADSWARM_RELEASE_BASE</code></td><td>Where the host looks for release downloads (a local folder
+                works, for testing).</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Developer-only variables and the full list are in <a href="developer.html">Developers</a> and the
+          repository's <code>.env.example</code>.</p>
+      </section>
+
+      <div class="pager">
+        <a href="quickstart.html">
+          <span class="k">Previous</span>
+          <span class="t">Quickstart: your first build in 10 minutes</span>
+        </a>
+        <a class="next" href="developer.html">
+          <span class="k">Next</span>
+          <span class="t">Developers: CLI, MCP tools, architecture</span>
+        </a>
+      </div>
+
+    </article>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <a class="brand" href="index.html" style="margin-bottom:12px">CADSwarm</a>
+        <p>The shared FreeCAD workspace where your team and its AI agents build one model together.</p>
+      </div>
+      <div><h4>Docs</h4><ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="docs.html">Full guide</a></li>
+        <li><a href="docs.html#troubleshooting">Troubleshooting</a></li>
+        <li><a href="developer.html">Developers</a></li>
+      </ul></div>
+      <div><h4>Works with</h4><ul>
+        <li>FreeCAD 1.0+</li><li>Claude Code</li><li>Codex</li><li>OpenCode</li>
+      </ul></div>
+      <div><h4>Open source</h4><ul>
+        <li><a href="index.html#install">Install</a></li>
+        <li><a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="index.html#waitlist">Waitlist</a></li>
+      </ul></div>
+    </div>
+    <div class="copyline"><span>© 2026 CADSwarm</span><span>Free and open source. Your models stay on your machines.</span></div>
+  </div>
+</footer>
+
+<script>
+/* Copy buttons */
+document.querySelectorAll('.copy').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var text = btn.getAttribute('data-copy') || (btn.closest('.code').querySelector('pre') || {}).innerText || '';
+    var done = function () {
+      var old = btn.textContent;
+      btn.textContent = 'Copied'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = old; btn.classList.remove('done'); }, 1600);
+    };
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done, function () {}); }
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+  });
+});
+
+/* Chapter list: mark the chapter at the top of the window as you read. */
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#chapters a[href^="#"]'));
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+  var sections = Array.prototype.slice.call(document.querySelectorAll('.prose section[id]'));
+  if (!sections.length) return;
+  var current = null;
+  var mark = function (id) {
+    if (id === current) return;
+    if (current && byId[current]) byId[current].classList.remove('active');
+    current = id;
+    if (byId[id]) byId[id].classList.add('active');
+  };
+  var update = function () {
+    var line = 110;                       // just under the sticky bar
+    var pick = sections[0].id;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].getBoundingClientRect().top <= line) pick = sections[i].id;
+      else break;
+    }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+      pick = sections[sections.length - 1].id;   // the last chapter wins at the bottom
+    }
+    mark(pick);
+  };
+  window.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  window.addEventListener('hashchange', function () {
+    var id = location.hash.slice(1);
+    if (byId[id]) mark(id);
+  });
+  var start = location.hash.slice(1);
+  if (byId[start]) mark(start);
+  update();
+  /* A deep link: land on the chapter after the layout settles, not before. */
+  window.addEventListener('load', function () {
+    var id = location.hash.slice(1);
+    var target = id && document.getElementById(id);
+    if (target) target.scrollIntoView({ block: 'start' });
+    update();
+  });
+})();
+
+/* Chapter links: glide to the section and keep the address shareable. */
+document.querySelectorAll('a[href^="#"]').forEach(function (a) {
+  a.addEventListener('click', function (e) {
+    var id = a.getAttribute('href').slice(1);
+    var target = id && document.getElementById(id);
+    if (!target) return;
+    e.preventDefault();
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  });
+});
+
+/* On a narrow window the chapter list is a disclosure, not a column. */
+(function () {
+  var toc = document.querySelector('.toc');
+  if (!toc || !window.matchMedia) return;
+  var narrow = window.matchMedia('(max-width: 1000px)');
+  if (narrow.matches) toc.open = false;
+  toc.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('a') && narrow.matches) toc.open = false;
+  });
+})();
+</script>
+</body>
+</html>

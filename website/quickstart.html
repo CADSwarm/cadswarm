@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Install CADSwarm and run your first shared team build in about ten minutes: one install line, one invite code, one AI helper.">
+<meta property="og:title" content="CADSwarm quickstart">
+<meta property="og:description" content="From a bare computer to a shared FreeCAD model your team and its AI helpers build together.">
+<meta name="theme-color" content="#0a0a0a">
+<title>Quickstart · CADSwarm</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html" aria-label="CADSwarm home">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.6">
+        <path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4Z" stroke="#f4f3f1"/>
+        <path d="M12 12 20 7.4M12 12 4 7.4M12 12v9.2" stroke="#f4f3f1" opacity=".45"/>
+        <circle cx="12" cy="12" r="2.2" fill="#4c9be0" stroke="none"/>
+        <circle cx="17" cy="9.2" r="1.5" fill="#f0913a" stroke="none"/>
+        <circle cx="7" cy="9.2" r="1.5" fill="#4fb35a" stroke="none"/>
+      </svg>
+      CADSwarm <span class="tag">docs</span>
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="quickstart.html" aria-current="page">Quickstart</a>
+      <a href="docs.html">Guide</a>
+      <a href="developer.html">Developers</a>
+      <a href="index.html#install">Install</a>
+    </nav>
+    <a class="btn nav-cta" href="index.html#waitlist">Join the waitlist</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="doc-head">
+    <span class="eyebrow">Quickstart · 10 minutes</span>
+    <h1>Your first team build.</h1>
+    <p class="lede">One install line, one invite code, one AI helper. By the end of this page a part built by an
+      agent is sitting in a FreeCAD model that everyone on your team can see and steer.</p>
+    <p class="meta">
+      <span>FreeCAD 1.0+</span>
+      <span>Windows · macOS · Linux</span>
+      <span>Free and open source</span>
+    </p>
+  </div>
+
+  <div class="docshell">
+    <nav class="side" aria-label="On this page">
+      <details class="toc" open>
+      <summary>Chapters</summary>
+      <div class="side-in">
+        <h4>Before you start</h4>
+        <a href="#need">What you need</a>
+        <h4>Seven steps</h4>
+        <a href="#install"><span class="n">1</span>Install CADSwarm</a>
+        <a href="#team"><span class="n">2</span>Start a team</a>
+        <a href="#invite"><span class="n">3</span>Share the code</a>
+        <a href="#helper"><span class="n">4</span>Connect a helper</a>
+        <a href="#build"><span class="n">5</span>Ask for a part</a>
+        <a href="#steer"><span class="n">6</span>Watch and steer</a>
+        <a href="#save"><span class="n">7</span>Save your files</a>
+        <h4>Afterwards</h4>
+        <a href="#joining">If you're joining, not starting</a>
+        <a href="#snags">If something goes wrong</a>
+        <a href="#next">Where to next</a>
+        <p style="margin:14px 0 0;font:400 13px/1.5 var(--font-body);color:var(--muted)">
+          Prefer the whole picture? The <a class="aside-link" href="docs.html">full guide</a> covers every
+          button, every folder and every failure in plain words.</p>
+      </div>
+      </details>
+    </nav>
+
+    <article class="prose">
+
+      <section id="need">
+        <span class="section-kicker">Before you start</span>
+        <h2>What you need</h2>
+        <ul>
+          <li><strong>FreeCAD 1.0 or newer.</strong> Free, from <a href="https://www.freecad.org/downloads.php" target="_blank" rel="noopener">freecad.org</a>.
+            On Linux use the official AppImage: the snap, Flatpak and distro packages ship no Python of their own,
+            so with them you can join a team but not start one.</li>
+          <li><strong>One AI helper installed and signed in once.</strong>
+            <a href="https://code.claude.com/docs/en/setup" target="_blank" rel="noopener">Claude Code</a> (<code>claude</code>),
+            <a href="https://learn.chatgpt.com/docs/codex/cli" target="_blank" rel="noopener">Codex</a> (<code>codex</code>) or
+            <a href="https://opencode.ai/docs/" target="_blank" rel="noopener">OpenCode</a> (<code>opencode</code>).
+            Run it once in a terminal and finish its sign-in. CADSwarm starts it for you after that.</li>
+          <li><strong>A terminal, for one command.</strong> PowerShell on Windows, Terminal on macOS and Linux.</li>
+          <li><strong>Teammates are optional.</strong> One person and one helper is a working team; everyone else can
+            join later with a code.</li>
+        </ul>
+        <div class="callout info">
+          <span class="ct">What you'll be running</span>
+          <p>CADSwarm is a FreeCAD workbench plus a small team server. The server runs on one person's computer
+            (the <b>host</b>) next to the model file. Nobody needs a CADSwarm account.</p>
+        </div>
+      </section>
+
+      <section id="install">
+        <span class="section-kicker">Step 1</span>
+        <h2>Install CADSwarm</h2>
+        <p>Paste one line into a terminal. It fetches CADSwarm, finds FreeCAD, puts the workbench into it, offers a
+          shortcut, and opens FreeCAD.</p>
+
+        <div class="tabs" role="tablist" aria-label="Operating system">
+          <button type="button" role="tab" id="tab-win" aria-controls="os-win" aria-selected="true" data-os="win">Windows</button>
+          <button type="button" role="tab" id="tab-mac" aria-controls="os-mac" aria-selected="false" tabindex="-1" data-os="mac">macOS</button>
+          <button type="button" role="tab" id="tab-linux" aria-controls="os-linux" aria-selected="false" tabindex="-1" data-os="linux">Linux</button>
+        </div>
+
+        <div class="os" id="os-win" role="tabpanel" aria-labelledby="tab-win">
+          <div class="code">
+            <div class="code-bar"><span>PowerShell</span>
+              <button class="copy" type="button" data-copy="irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex">Copy</button></div>
+            <pre><span class="p">&gt; </span>irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex</pre>
+          </div>
+        </div>
+        <div class="os" id="os-mac" role="tabpanel" aria-labelledby="tab-mac" hidden>
+          <div class="code">
+            <div class="code-bar"><span>Terminal</span>
+              <button class="copy" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash">Copy</button></div>
+            <pre><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash</pre>
+          </div>
+        </div>
+        <div class="os" id="os-linux" role="tabpanel" aria-labelledby="tab-linux" hidden>
+          <div class="code">
+            <div class="code-bar"><span>Terminal</span>
+              <button class="copy" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash">Copy</button></div>
+            <pre><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.sh | bash</pre>
+          </div>
+          <div class="callout warn">
+            <span class="ct">Linux</span>
+            <p>Use the official FreeCAD AppImage. If you don't have one, the installer offers to download it
+              (about 3 GB unpacked). With a snap or Flatpak you can join a teammate's team but not start one.</p>
+          </div>
+        </div>
+
+        <p>About 70 MB of helper software lands in CADSwarm's app folder —
+          <code>%APPDATA%\CadSwarm</code> on Windows, <code>~/Library/Application Support/CadSwarm</code> on macOS,
+          <code>~/.local/share/CadSwarm</code> on Linux. Nothing is installed into FreeCAD itself.</p>
+
+        <div class="callout ok">
+          <span class="ct">Checkpoint</span>
+          <p>FreeCAD opens with the CADSwarm setup guide. If it doesn't, pick <b>CADSwarm</b> in FreeCAD's workbench
+            selector, or open the <b>CadSwarm</b> shortcut the installer made.</p>
+        </div>
+
+        <p>Prefer to install by hand, or need to update later? That's all in
+          <a href="docs.html#install">Install and update</a>.</p>
+      </section>
+
+      <section id="team">
+        <span class="section-kicker">Step 2</span>
+        <h2>Start a team</h2>
+        <p>You're the first person, so you're the host: your computer keeps the team's model, files and database
+          while everyone works.</p>
+        <ol class="steps">
+          <li><div><b>Choose “Start a new team project”.</b>
+            <p class="fine">If you've used CADSwarm before, your past projects are listed above it — pick one to reopen
+              instead.</p></div></li>
+          <li><div><b>Name the project and yourself.</b>
+            <p class="fine">The project name becomes the folder and the tab name of the live model. Your name is what
+              teammates and their helpers see (“Sam”, not an email).</p></div></li>
+          <li><div><b>Choose where it's saved.</b>
+            <p class="fine">The default is <code>Documents\CadSwarm\&lt;project name&gt;</code>. Pick another folder if
+              you like: if it already has other things in it, the project gets its own subfolder, so nothing is mixed in
+              or overwritten.</p></div></li>
+          <li><div><b>Choose where the database lives.</b>
+            <p class="fine"><b>On this computer</b> is the default: no account, works offline, teammates join over your
+              network. <b>Maincloud</b> lets teammates join from anywhere and needs a free SpacetimeDB sign-in, which
+              opens in your browser once.</p></div></li>
+        </ol>
+        <p>Click <b>Create my team</b>. The first time, this also downloads the team server and SpacetimeDB (about
+          50 MB, each checked by SHA-256). It happens once per computer.</p>
+        <div class="callout ok">
+          <span class="ct">Checkpoint</span>
+          <p>A page titled <b>Your team is ready!</b> shows an invite code that starts with <code>cadswarm-2:</code>.
+            That page also starts your AI helper connection next.</p>
+        </div>
+      </section>
+
+      <section id="invite">
+        <span class="section-kicker">Step 3</span>
+        <h2>Share the code</h2>
+        <p>Copy the invite code and send it however you like — chat, email, a sticky note. Each code works
+          <b>once</b> and expires after a day.</p>
+        <p>One code per teammate. Make more any time from the panel's <b>Tools ▸ AI helpers ▸ Invite a teammate…</b>,
+          or from the guide's invite page. Teammates paste it into CADSwarm's <b>Get started ▸ Join a teammate's
+          project</b>.</p>
+        <div class="callout">
+          <span class="ct">Working alone for now?</span>
+          <p>Skip this step. You can invite people after your first build; their code doesn't depend on what's already
+            in the model.</p>
+        </div>
+      </section>
+
+      <section id="helper">
+        <span class="section-kicker">Step 4</span>
+        <h2>Connect an AI helper</h2>
+        <p>The guide lists the agent CLIs it found on your computer. Pick one — Claude Code, Codex or OpenCode — and give
+          it a name, or keep the suggested one (<code>sam-claude</code>).</p>
+        <p>CADSwarm writes that helper's own workspace under the project's <code>AI helpers\</code> folder, connects it to
+          the team, and starts it in the background. There's no window to keep open and nothing to paste.</p>
+        <div class="callout warn">
+          <span class="ct">Sign in once, first</span>
+          <p>The CLI must already be signed in on this computer: run <code>claude</code>, <code>codex</code> or
+            <code>opencode</code> in a terminal once. Signing in is the only part CADSwarm can't do for you.</p>
+          <p><b>Codex only:</b> in Codex, trust the project so its config loads, then type <code>/hooks</code> and trust
+            the CADSwarm hook. Without that, the helper still works but gets its team context later, through tool calls.</p>
+        </div>
+        <div class="callout ok">
+          <span class="ct">Checkpoint</span>
+          <p>The CADSwarm panel appears on the right. In its <b>Team</b> tab your helper is listed with a green
+            <b>Ready</b> pill. A live-model tab, named after your project, opens with an empty document.</p>
+        </div>
+      </section>
+
+      <section id="build">
+        <span class="section-kicker">Step 5</span>
+        <h2>Ask for a part</h2>
+        <p>Type in the panel's chat box. Starting a message with <code>@</code> gives it to an AI helper; typing
+          <code>@</code> alone lists the names you can use.</p>
+        <div class="code">
+          <div class="code-bar"><span>Chat</span>
+            <button class="copy" type="button" data-copy="@sam-claude build a 120 x 80 x 6 mm plate with a 3 mm chamfer on the top edges and four M3 clearance holes on a 100 x 60 mm grid">Copy</button></div>
+          <pre>@sam-claude build a 120 x 80 x 6 mm plate with a 3 mm chamfer on the top edges
+and four M3 clearance holes on a 100 x 60 mm grid</pre>
+        </div>
+        <p>Or hand a whole request to the team, and let the team server plan it into parts and start the helpers:</p>
+        <div class="code">
+          <div class="code-bar"><span>Chat</span>
+            <button class="copy" type="button" data-copy="@team a phone stand for a 7 mm phone, printed in PLA, that leans back 20 degrees">Copy</button></div>
+          <pre>@team a phone stand for a 7 mm phone, printed in PLA, that leans back 20 degrees</pre>
+        </div>
+        <p>Plain text without an <code>@</code> is chat between people — helpers never see it. That's the whole
+          etiquette: <code>@name</code> = task, <code>@team</code> = brief, <code>@all</code> = a note to every helper,
+          no <code>@</code> = talk to your teammates.</p>
+        <div class="callout ok">
+          <span class="ct">Checkpoint</span>
+          <p>The helper answers in the chat — first what it's about to do, then what it did. Shapes appear in the live
+            model tab, coloured by owner. Your message shows <b>⏳ not read yet</b>, then <b>👀 read, working on it</b>,
+            then <b>✓ done</b>.</p>
+        </div>
+      </section>
+
+      <section id="steer">
+        <span class="section-kicker">Step 6</span>
+        <h2>Watch and steer</h2>
+        <p>The panel is the team, in one dock:</p>
+        <ul>
+          <li><b>Team</b> — who's here, what each helper is working on, and what each one holds (the parts only it can
+            change).</li>
+          <li><b>Tasks</b> — open work and whole-team requests with their parts underneath. <b>Start it</b>,
+            <b>I'll do it</b>, <b>Mark done</b>.</li>
+          <li><b>Activity</b> — what happened, in order: parts added, tasks finished, files saved, clashes found.</li>
+          <li><b>Sizes</b> — the shared dimensions every part can read from. Change one and dependent parts update.</li>
+          <li><b>Files</b> — notes, plans, BOMs and scripts the team saved, with history and a copy button.</li>
+          <li><b>Tools</b> — edit a part yourself, run a check, export, snapshots, library, settings, helpers' logs.</li>
+        </ul>
+        <p>Two habits make the whole thing click:</p>
+        <ol>
+          <li><strong>Correct in a sentence.</strong> “Make the holes 4 mm and move them in 5 mm” is a task the helper
+            can carry out; a new chat window is not needed.</li>
+          <li><strong>Drag nothing by accident.</strong> The live model is read-only for you — moving a part in the 3D
+            view without the editor is undone with an explanation. To change a part by hand use
+            <b>Tools ▸ ✎ Edit a part yourself…</b>, which holds the part while you edit and shares the change when you
+            press <b>Save to team</b>.</li>
+        </ol>
+        <div class="callout info">
+          <span class="ct">Your own drawing stays yours</span>
+          <p>The team model opens as a separate, read-only tab. Refreshes, new parts and reconnects never pull you away
+            from the document you're working in — only the guide's <b>Done, show me the model</b> brings it forward.</p>
+        </div>
+      </section>
+
+      <section id="save">
+        <span class="section-kicker">Step 7</span>
+        <h2>Save your files</h2>
+        <p>Everything lives in the project folder, in subfolders that grow as the project does:</p>
+        <div class="code">
+          <div class="code-bar"><span>Project folder</span></div>
+          <pre>Phone stand/
+  model.FCStd          the live model (only the team server writes it)
+  files/               notes, BOMs, scripts (history kept)
+  exports/             STL and STEP files, never overwritten
+  snapshots/           saved versions of the model
+  library/             the team's parts shelf
+  AI helpers/          each helper's own workspace
+  .cadswarm-team/      the team server's data and design memory</pre>
+        </div>
+        <p>To make a printable file: <b>Tools ▸ Save as STL/STEP file…</b>. To keep a version of the model:
+          <b>Tools ▸ Save a snapshot…</b>. Exporting twice is safe — the second file gets a new name.</p>
+        <div class="callout ok">
+          <span class="ct">Checkpoint</span>
+          <p>Press <b>Open project folder</b> in the same Tools group, and there's your STL in <code>exports/</code>,
+            next to the model and everything the helpers wrote.</p>
+        </div>
+      </section>
+
+      <section id="joining">
+        <h2>If you're joining, not starting</h2>
+        <p>Skip steps 2 and 3. After installing, open CADSwarm and choose <b>Join a teammate's project</b>, paste the
+          invite code they sent you, then connect your own AI helper (step 4) — helpers always run on their owner's
+          computer.</p>
+        <ul>
+          <li>You don't download the team server; only the host does.</li>
+          <li>Your sign-in is kept per team, so reopening the project later needs no new code.</li>
+          <li>On a team hosted on someone's computer, you must be on the same network (and so must your helper's
+            connection). Maincloud-hosted teams work from anywhere.</li>
+        </ul>
+      </section>
+
+      <section id="snags">
+        <h2>If something goes wrong</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>What you see</th><th>What it means and what to do</th></tr></thead>
+            <tbody>
+              <tr><td>“Couldn't reach your team's server at …”</td><td>The host's computer is off, CADSwarm isn't open
+                there, or you're on a different network. Ask the host to open CADSwarm; if you're on a local team,
+                check you're on the same Wi-Fi.</td></tr>
+              <tr><td>“That project's database isn't on this computer's team server any more”</td><td>The team was
+                rebuilt from empty (a fresh database). Start it again from <b>CADSwarm ▸ Get started</b> — your model
+                file is still in the project folder, so nothing is lost.</td></tr>
+              <tr><td>“That project's database is paused on SpacetimeDB”</td><td>Only for Maincloud teams. Open the
+                database on spacetimedb.com, click <b>Start Database</b>, then reconnect.</td></tr>
+              <tr><td>“That invite code has already been used or has expired”</td><td>Codes work once and last a day.
+                Ask for a new one from <b>Tools ▸ AI helpers ▸ Invite a teammate…</b>.</td></tr>
+              <tr><td>The helper never answers</td><td>Open <b>Tools ▸ AI helpers ▸ Show my AI helpers' logs</b>. The
+                usual cause is a CLI that isn't signed in yet, or (Codex) an untrusted hook — type <code>/hooks</code>
+                and trust it.</td></tr>
+              <tr><td>The panel says <b>Reconnecting</b></td><td>The host's team server stopped. It starts again when
+                the host opens CADSwarm; everything else waits for it.</td></tr>
+              <tr><td>Linux: helpers or team server won't start</td><td>You're on a snap, Flatpak or distro FreeCAD.
+                Switch to the official AppImage (the installer can fetch it).</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>The <a href="docs.html#troubleshooting">troubleshooting chapter</a> covers the rest, including disk space,
+          firewalls and what to do when a teammate's helper goes quiet.</p>
+      </section>
+
+      <section id="next">
+        <h2>Where to next</h2>
+        <div class="cards">
+          <a class="card" href="docs.html#panel">
+            <span class="ct">Guide</span>
+            <h3>The panel, tab by tab</h3>
+            <p>Every tab and every button, including the ones you'll only need on a bad day.</p>
+            <span class="go">Read →</span>
+          </a>
+          <a class="card" href="docs.html#helpers">
+            <span class="ct">Guide</span>
+            <h3>Working with AI helpers</h3>
+            <p>Waking, delegating, restarting, removing — and what a helper can and can't do.</p>
+            <span class="go">Read →</span>
+          </a>
+          <a class="card" href="docs.html#teams">
+            <span class="ct">Guide</span>
+            <h3>Running the team</h3>
+            <p>Hosting, invites, Maincloud, keeping the server healthy while people work.</p>
+            <span class="go">Read →</span>
+          </a>
+          <a class="card" href="developer.html">
+            <span class="ct">Developers</span>
+            <h3>CLI, MCP tools, architecture</h3>
+            <p>Run it from a checkout, script it, or read how the pieces fit.</p>
+            <span class="go">Read →</span>
+          </a>
+        </div>
+      </section>
+
+    </article>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <a class="brand" href="index.html" style="margin-bottom:12px">CADSwarm</a>
+        <p>The shared FreeCAD workspace where your team and its AI agents build one model together.</p>
+      </div>
+      <div><h4>Docs</h4><ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="docs.html">Full guide</a></li>
+        <li><a href="docs.html#troubleshooting">Troubleshooting</a></li>
+        <li><a href="developer.html">Developers</a></li>
+      </ul></div>
+      <div><h4>Works with</h4><ul>
+        <li>FreeCAD 1.0+</li><li>Claude Code</li><li>Codex</li><li>OpenCode</li>
+      </ul></div>
+      <div><h4>Open source</h4><ul>
+        <li><a href="index.html#install">Install</a></li>
+        <li><a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="index.html#waitlist">Waitlist</a></li>
+      </ul></div>
+    </div>
+    <div class="copyline"><span>© 2026 CADSwarm</span><span>Free and open source. Your models stay on your machines.</span></div>
+  </div>
+</footer>
+
+<script>
+/* OS tabs */
+document.querySelectorAll('.tabs [role="tab"]').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    var list = tab.parentElement;
+    list.querySelectorAll('[role="tab"]').forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tabIndex = on ? 0 : -1;
+      var panel = document.getElementById(t.getAttribute('aria-controls'));
+      if (panel) panel.hidden = !on;
+    });
+  });
+  tab.addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    var tabs = Array.prototype.slice.call(tab.parentElement.querySelectorAll('[role="tab"]'));
+    var i = tabs.indexOf(tab) + (e.key === 'ArrowRight' ? 1 : -1);
+    var next = tabs[(i + tabs.length) % tabs.length];
+    next.focus(); next.click();
+  });
+});
+
+/* Copy buttons */
+document.querySelectorAll('.copy').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var text = btn.getAttribute('data-copy') || (btn.closest('.code').querySelector('pre') || {}).innerText || '';
+    var done = function () {
+      var old = btn.textContent;
+      btn.textContent = 'Copied'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = old; btn.classList.remove('done'); }, 1600);
+    };
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done, function () {}); }
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+  });
+});
+
+/* On a narrow window the chapter list is a disclosure, not a column. */
+(function () {
+  var toc = document.querySelector('.toc');
+  if (!toc || !window.matchMedia) return;
+  var narrow = window.matchMedia('(max-width: 1000px)');
+  if (narrow.matches) toc.open = false;
+  toc.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('a') && narrow.matches) toc.open = false;
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="CADSwarm for developers: architecture, repository map, CLI, MCP tools, team invariants, database views, publishing the SpacetimeDB module, tests and releases.">
+<meta property="og:title" content="CADSwarm for developers">
+<meta property="og:description" content="How the pieces fit, how to run a team from a terminal, and how to publish a module without losing data.">
+<meta name="theme-color" content="#0a0a0a">
+<title>Developers · CADSwarm</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="docs.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="index.html" aria-label="CADSwarm home">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-width="1.6">
+        <path d="M12 2.8 20 7.4v9.2L12 21.2 4 16.6V7.4Z" stroke="#f4f3f1"/>
+        <path d="M12 12 20 7.4M12 12 4 7.4M12 12v9.2" stroke="#f4f3f1" opacity=".45"/>
+        <circle cx="12" cy="12" r="2.2" fill="#4c9be0" stroke="none"/>
+        <circle cx="17" cy="9.2" r="1.5" fill="#f0913a" stroke="none"/>
+        <circle cx="7" cy="9.2" r="1.5" fill="#4fb35a" stroke="none"/>
+      </svg>
+      CADSwarm <span class="tag">docs</span>
+    </a>
+    <nav class="links" aria-label="Sections">
+      <a href="quickstart.html">Quickstart</a>
+      <a href="docs.html">Guide</a>
+      <a href="developer.html" aria-current="page">Developers</a>
+      <a href="index.html#install">Install</a>
+    </nav>
+    <a class="btn nav-cta" href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="doc-head">
+    <span class="eyebrow">For developers</span>
+    <h1>Run it, script it, change it.</h1>
+    <p class="lede">CADSwarm is a Python workbench, a Rust team server, a SpacetimeDB module and a small web app. This page
+      is the map: what each piece does, how to run a team from a terminal, the invariants that keep a shared model sane,
+      and how to publish a database module without losing anyone's work.</p>
+    <p class="meta">
+      <span>MIT-licensed</span>
+      <span>Python 3.11+ · Rust · TypeScript</span>
+      <span><a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">github.com/SachchitBalamurugan/cadswarm</a></span>
+    </p>
+  </div>
+
+  <div class="docshell">
+    <nav class="side" aria-label="Chapters">
+      <details class="toc" open>
+      <summary>Chapters</summary>
+      <div class="side-in" id="chapters">
+        <h4>Orientation</h4>
+        <a href="#architecture"><span class="n">01</span>Architecture</a>
+        <a href="#repo"><span class="n">02</span>Repository map</a>
+        <a href="#checkout"><span class="n">03</span>From a checkout</a>
+        <h4>Reference</h4>
+        <a href="#cli"><span class="n">04</span>CLI</a>
+        <a href="#invariants"><span class="n">05</span>Team invariants</a>
+        <a href="#schema"><span class="n">06</span>Database views</a>
+        <h4>Operations</h4>
+        <a href="#publish"><span class="n">07</span>Publishing the module</a>
+        <a href="#web"><span class="n">08</span>The web app</a>
+        <a href="#tests"><span class="n">09</span>Tests and releases</a>
+        <p style="margin:16px 0 0;display:grid;gap:6px;font:400 13px/1.5 var(--font-body);color:var(--muted)">
+          <a class="aside-link" href="docs.html" style="padding:0;border:0">The user guide →</a>
+          <a class="aside-link" href="quickstart.html" style="padding:0;border:0">Quickstart →</a>
+        </p>
+      </div>
+      </details>
+    </nav>
+
+    <article class="prose">
+
+      <section id="architecture">
+        <span class="section-kicker">Chapter 01</span>
+        <h2>Architecture</h2>
+        <p>One database holds the team's state. One computer holds the model. Everything else is a client of those two.</p>
+        <div class="code">
+          <div class="code-bar"><span>Processes and connections</span></div>
+          <pre> alice: Claude Code ─┐  MCP (stdio)          ┌──── SpacetimeDB: the team's database ────┐
+ bob:   Codex  ──────┼──► cadswarm MCP ──────► members · fences · locks · revisions ·    │
+ dana:  OpenCode ────┘   + MCP tools         │ tasks · messages · briefs · stale sweep   │
+                                             └───▲──────────────────▲──────────────▲────┘
+ carol: FreeCAD GUI ─── CADSwarm workbench ──────┘                  │              │
+        (mirror + team panel)                                       │   phone / browser
+                                                                     │   (pair by QR, pointers,
+                                         cadswarm-host (Rust) ───────┘    briefs, 3D view)
+                                         on the host's computer:
+                                         runs ops one at a time, orchestrates briefs,
+                                         spawns planners, workers and the reviewer
+                                           │ JSON lines                  │ JSON lines
+                                           ▼                             ▼
+                          FreeCAD worker (FreeCAD's python):    helper (cadswarm/helper.py):
+                          THE live .FCStd, transactions,        project files, storage limits,
+                          lock-checked rollback                 board knowledge, design memory</pre>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Piece</th><th>What it is</th><th>Responsibilities</th></tr></thead>
+            <tbody>
+              <tr><td><code>cadswarm/</code></td><td>Python package, loaded by FreeCAD as the workbench</td><td>Panel,
+                wizard, live-model mirror, part editor, FEA and lattice dialogs, plus the helper process and MCP server
+                that agent CLIs talk to.</td></tr>
+              <tr><td><code>module/</code></td><td>SpacetimeDB module compiled to wasm</td><td>Every rule that must not
+                depend on a client: locks, revisions, fences, invites, task and message delivery, brief state, setting and
+                style suggestions, reviewer write-refusal.</td></tr>
+              <tr><td><code>host/</code></td><td>Rust binary, <code>cadswarm-host</code></td><td>The only writer of
+                <code>model.FCStd</code>: executes ops through a FreeCAD worker, serves files, runs brief orchestration and
+                the reviewer.</td></tr>
+              <tr><td><code>cadswarm/worker/</code></td><td>FreeCAD's Python, one process</td><td>Applies an op inside a
+                transaction, checks locks, rolls back on refusal, exports shapes and previews.</td></tr>
+              <tr><td><code>web/</code></td><td>TypeScript + Vite app</td><td>The phone/browser view: model, chat, tasks,
+                files, library, sizes, settings.</td></tr>
+              <tr><td><code>rules/</code></td><td>Rust crate</td><td>Shared rules used by the module and the host
+                (validated by its own test suite).</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>The coordination design is adapted from Amoeba's multi-agent runtime — fenced leases, heartbeat-held locks,
+          takeover by compare-and-set, delivered/consumed receipts, and human steering ahead of peer requests — applied to
+          CAD objects instead of files.</p>
+      </section>
+
+      <section id="repo">
+        <span class="section-kicker">Chapter 02</span>
+        <h2>Repository map</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Path</th><th>Contents</th></tr></thead>
+            <tbody>
+              <tr><td><code>cadswarm/gui/</code></td><td>Workbench entry points, the panel (<code>panel.py</code>, ~4k
+                lines), wizard, overlays/pointers, part editor, FEA and lattice UIs.</td></tr>
+              <tr><td><code>cadswarm/space.py</code>, <code>space_hub.py</code></td><td>The SpacetimeDB client and the
+                higher-level hub used by the panel and helpers.</td></tr>
+              <tr><td><code>cadswarm/hosting.py</code></td><td>Finds FreeCAD, downloads and updates the host and
+                SpacetimeDB, starts and stops team servers, invites, Maincloud sign-in.</td></tr>
+              <tr><td><code>cadswarm/agent_setup.py</code></td><td>Writes each CLI's config (MCP server, hooks, project
+                doc) and starts helper processes.</td></tr>
+              <tr><td><code>cadswarm/helper.py</code>, <code>mcp_server.py</code></td><td>The helper process and the MCP
+                tool surface the agents call.</td></tr>
+              <tr><td><code>cadswarm/worker/</code></td><td>The FreeCAD-side op executor and the script sandbox
+                (<code>sandbox.py</code>).</td></tr>
+              <tr><td><code>cadswarm/fea/</code>, <code>lattice/</code>, <code>style_memory.py</code></td><td>Simulation,
+                lightening, and learned design rules.</td></tr>
+              <tr><td><code>host/src/</code></td><td><code>main.rs</code> (init/invite/run), <code>executor.rs</code> (ops),
+                <code>briefs.rs</code> (plan, spawn, review, bounded retries), file service.</td></tr>
+              <tr><td><code>module/src/</code></td><td>Tables, reducers and views; the wasm build target.</td></tr>
+              <tr><td><code>tests/</code></td><td>Pytest suite, including integration tests that drive real FreeCAD, plus
+                <code>freecad_panel_live.py</code>, a manual end-to-end check.</td></tr>
+              <tr><td><code>install/</code></td><td>Per-OS installers and the quick-install one-liners.</td></tr>
+              <tr><td><code>scripts/</code></td><td><code>with-env.ps1</code>, <code>package-release.ps1</code>, demo
+                up/down.</td></tr>
+              <tr><td><code>website/</code></td><td>This site, deployed as static files.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="checkout">
+        <span class="section-kicker">Chapter 03</span>
+        <h2>From a checkout</h2>
+        <p>Prerequisites: FreeCAD 1.x (found automatically, or point <code>CADSWARM_FREECAD_PYTHON</code> at its
+          <code>bin/python.exe</code>), Python 3.11+, Rust with the <code>wasm32-unknown-unknown</code> target for the
+          module.</p>
+
+        <div class="code">
+          <div class="code-bar"><span>Python package</span>
+            <button class="copy" type="button" data-copy="cd cadswarm
+python -m venv .venv
+.venv\Scripts\pip install -e &quot;.[test]&quot;">Copy</button></div>
+          <pre>cd cadswarm
+python -m venv .venv
+.venv\Scripts\pip install -e ".[test]"</pre>
+        </div>
+
+        <div class="code">
+          <div class="code-bar"><span>Build the host and the module</span>
+            <button class="copy" type="button" data-copy="cargo build --release --manifest-path host\Cargo.toml
+cargo build --release --target wasm32-unknown-unknown --manifest-path module\Cargo.toml">Copy</button></div>
+          <pre>cargo build --release --manifest-path host\Cargo.toml
+cargo build --release --target wasm32-unknown-unknown --manifest-path module\Cargo.toml</pre>
+        </div>
+
+        <p>Optional services read keys from the environment, never from the repo. Copy <code>.env.example</code> to
+          <code>cadswarm.env</code> next to the checkout (shared by every worktree) or to a git-ignored <code>.env</code>,
+          and run commands through the loader so the variables apply to that process only:</p>
+        <div class="code">
+          <div class="code-bar"><span>With environment</span>
+            <button class="copy" type="button" data-copy="powershell -File scripts\with-env.ps1 python -m pytest -q
+powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --data .\team run">Copy</button></div>
+          <pre>powershell -File scripts\with-env.ps1 python -m pytest -q
+powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --data .\team run</pre>
+        </div>
+        <p><code>-EnvFile &lt;path&gt;</code> or <code>CADSWARM_ENV_FILE</code> picks a specific file. SpacetimeDB publishing
+          uses the CLI's stored login (<code>spacetime login</code>), not an environment variable.</p>
+
+        <div class="code">
+          <div class="code-bar"><span>Run a whole team from a terminal</span>
+            <button class="copy" type="button" data-copy="# 1. Host: publish the module, write team settings, then run.
+host\target\release\cadswarm-host --data .\team-model init --mode maincloud --db cadswarm-my-team-1a2b --python &quot;path\to\FreeCAD\bin\python.exe&quot;
+host\target\release\cadswarm-host --data .\team-model run
+
+# 2. Host: mint a single-use invite (also prints a phone link and QR code).
+host\target\release\cadswarm-host --data .\team-model invite --kind human --role lead
+
+# 3. Each person: join and wire their own helper in their own folder.
+.venv\Scripts\cadswarm setup --client claude --invite &quot;cadswarm-2:...&quot; --name alice --dir ..\alice
+.venv\Scripts\cadswarm setup --client codex  --invite &quot;cadswarm-2:...&quot; --name bob   --dir ..\bob
+
+# 4. Install this checkout into FreeCAD as the CADSwarm add-on.
+.venv\Scripts\cadswarm install-workbench">Copy</button></div>
+          <pre># 1. Host: publish the module, write team settings, then run.
+host\target\release\cadswarm-host --data .\team-model init --mode maincloud --db cadswarm-my-team-1a2b --python "path\to\FreeCAD\bin\python.exe"
+host\target\release\cadswarm-host --data .\team-model run
+
+# 2. Host: mint a single-use invite (also prints a phone link and QR code).
+host\target\release\cadswarm-host --data .\team-model invite --kind human --role lead
+
+# 3. Each person: join and wire their own helper in their own folder.
+.venv\Scripts\cadswarm setup --client claude --invite "cadswarm-2:..." --name alice --dir ..\alice
+.venv\Scripts\cadswarm setup --client codex  --invite "cadswarm-2:..." --name bob   --dir ..\bob
+
+# 4. Install this checkout into FreeCAD as the CADSwarm add-on.
+.venv\Scripts\cadswarm install-workbench</pre>
+        </div>
+        <p>For a local team, use <code>--mode local</code> and let the host start SpacetimeDB itself, or point
+          <code>init</code> at a database you started.</p>
+      </section>
+
+      <section id="cli">
+        <span class="section-kicker">Chapter 04</span>
+        <h2>CLI</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+            <tbody>
+              <tr><td><code>cadswarm setup --client claude --invite &lt;code&gt; --name &lt;n&gt; --dir &lt;folder&gt;</code></td>
+                <td>Redeems an invite, writes the team config and that CLI's MCP/hook files in the folder, and joins the
+                team as a member.</td></tr>
+              <tr><td><code>cadswarm brief "…" --dir &lt;folder&gt;</code></td><td>Submits a whole-team request from a
+                terminal, the same thing <code>@team</code> does.</td></tr>
+              <tr><td><code>cadswarm install-workbench</code></td><td>Installs this checkout into FreeCAD as the CADSwarm
+                add-on.</td></tr>
+              <tr><td><code>cadswarm-host --data &lt;folder&gt; init --mode local|maincloud --db &lt;name&gt; --python &lt;freecad python&gt; [--agent claude|codex|opencode] [--web-url &lt;url&gt;]</code></td>
+                <td>Writes <code>host.json</code>: how to reach the database, which FreeCAD to drive, which CLI runs briefs.</td></tr>
+              <tr><td><code>cadswarm-host --data &lt;folder&gt; run</code></td><td>Runs the executor and brief
+                orchestration until stopped.</td></tr>
+              <tr><td><code>cadswarm-host --data &lt;folder&gt; invite --kind human|agent --role lead|member</code></td>
+                <td>Mints a single-use invite and prints its ticket, phone link and QR code.</td></tr>
+              <tr><td><code>python -m cadswarm.style_memory show --project &lt;folder&gt;</code></td><td>Prints the learned
+                design rules and their evidence.</td></tr>
+              <tr><td><code>python -m cadswarm.ingest boards/sources.json --project &lt;folder&gt;</code></td><td>Adds
+                datasheet text to the project's local board knowledge.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>What <code>setup</code> writes</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Client</th><th>Files</th></tr></thead>
+            <tbody>
+              <tr><td>Claude Code</td><td><code>.mcp.json</code>, <code>.claude/settings.json</code> (prompt hook,
+                <code>enabledMcpjsonServers</code>, allowed <code>mcp__cadswarm</code>), a <code>CLAUDE.md</code> section</td></tr>
+              <tr><td>Codex</td><td><code>.codex/config.toml</code> (<code>[mcp_servers.cadswarm]</code> and a
+                <code>[hooks]</code> prompt hook, in a managed block), an <code>AGENTS.md</code> section. Codex only runs
+                hooks you've reviewed: type <code>/hooks</code> and trust it, again after an update.</td></tr>
+              <tr><td>OpenCode</td><td><code>opencode.json</code> (MCP server) and an <code>AGENTS.md</code> section</td></tr>
+              <tr><td>All</td><td><code>.cadswarm/config.json</code> (uri, db, name, client, role), and after first run
+                <code>.cadswarm/identity.json</code> (token, git-ignored)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="invariants">
+        <span class="section-kicker">Chapter 05</span>
+        <h2>Team invariants</h2>
+        <p>These are enforced by the module, not by client goodwill. Any change to the tools or the host has to keep them
+          true.</p>
+        <ol>
+          <li>An op may only change objects you hold. Pre-reserve a name with <code>lock_objects</code> before creating
+            it.</li>
+          <li>Ops can carry <code>expected_rev</code>. If someone changed the object since you read it, you get a 409.</li>
+          <li>A <code>Params</code> change that recomputes someone else's part bumps its revision and messages its
+            owner.</li>
+          <li>No heartbeat for 30 s means <b>stale</b>: locks are kept, tasks become <code>awaiting_takeover</code>, and
+            everyone gets a handoff notice. <code>take_over</code> moves locks and tasks by compare-and-set, so it only
+            works on stale participants (a person may force it). After 10 minutes stale, locks are freed and tasks
+            reopen.</li>
+          <li>Re-joining with a stored identity resumes at a new <b>fence</b>, so an older process using that identity
+            can't act. A participant whose work was taken over has to join fresh.</li>
+          <li>Names are unique among live participants. A fresh join under a stale participant's name inherits that
+            participant's work.</li>
+          <li>Tasks and messages may address someone who hasn't joined yet; they're delivered when that name appears.</li>
+          <li>A person's instruction is a <code>steer</code> message (shown as COMMAND), always first in the inbox, with
+            sent → seen → done receipts. Chat is last and never an order. Peer messages are requests, never
+            permissions.</li>
+        </ol>
+        <div class="callout warn">
+          <span class="ct">Reviewer by construction</span>
+          <p>The module refuses every write op from a <code>reviewer</code> member. That's the guarantee that the review
+            step can't mutate geometry — keep it that way when adding reducers.</p>
+        </div>
+      </section>
+
+      <section id="schema">
+        <span class="section-kicker">Chapter 06</span>
+        <h2>Database views</h2>
+        <p>Clients read through views; every mutation is a reducer. The web app's generated bindings
+          (<code>web/src/module_bindings/</code>) are the current shape:</p>
+        <div class="code">
+          <div class="code-bar"><span>Read views</span></div>
+          <pre>v_me          v_member      v_workspace   v_param       v_object      v_lock
+v_op          v_task        v_message     v_receipt     v_brief       v_review
+v_activity    v_event       v_pointer     v_handoff     v_setting     v_suggestion
+v_component   v_preview     v_artifact    v_artifact_blob              v_component_preview</pre>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Area</th><th>Reducers (excerpt)</th></tr></thead>
+            <tbody>
+              <tr><td>Membership</td><td><code>redeem_invite</code>, <code>rejoin</code>, <code>heartbeat</code>,
+                <code>leave</code>, <code>rename_me</code>, <code>create_invite</code>, <code>revoke_member</code></td></tr>
+              <tr><td>Objects and ops</td><td><code>lock_objects</code>, <code>release_objects</code>,
+                <code>start_op</code>, <code>submit_op</code>, <code>complete_op</code>, <code>sync_objects</code>,
+                <code>take_over</code></td></tr>
+              <tr><td>Work</td><td><code>create_task</code>, <code>claim_task</code>, <code>pick_up_task</code>,
+                <code>report_task</code>, <code>submit_brief</code>, <code>set_brief</code>,
+                <code>report_review</code>, <code>request_handoff</code>, <code>accept_handoff</code></td></tr>
+              <tr><td>Talk</td><td><code>send_message</code>, <code>mark_delivered</code>, <code>ack_messages</code></td></tr>
+              <tr><td>Team settings</td><td><code>set_setting</code>, <code>reset_setting</code>,
+                <code>suggest_setting</code>, <code>resolve_suggestion</code>, <code>set_bed</code></td></tr>
+              <tr><td>Library and previews</td><td><code>put_component_preview</code>, <code>put_preview</code>,
+                <code>put_artifact</code>, <code>set_brief_stl</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Schema changes live in <code>module/src/</code> and require republishing the module (see the next chapter).
+          The web app's bindings are regenerated with the SpacetimeDB CLI.</p>
+      </section>
+
+      <section id="publish">
+        <span class="section-kicker">Chapter 07</span>
+        <h2>Publishing the module</h2>
+        <p>After any change to <code>module/</code> or <code>rules/</code> — a new op kind, a new field, a new rule — the
+          module must be republished <b>keeping the data</b>, and the host restarted. Publish with
+          <code>--delete-data=never</code>:</p>
+        <div class="code">
+          <div class="code-bar"><span>Maincloud</span>
+            <button class="copy" type="button" data-copy="spacetime publish --server maincloud --yes=all --delete-data=never --bin-path module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm cadswarm-my-team-1a2b">Copy</button></div>
+          <pre>spacetime publish --server maincloud --yes=all --delete-data=never ^
+  --bin-path module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm ^
+  cadswarm-my-team-1a2b</pre>
+        </div>
+        <p>For a local database, publish against its server instead of <code>--server maincloud</code>. The full
+          step-by-step — owner sign-in, bindings, a local rehearsal and troubleshooting — is in
+          <a href="https://github.com/SachchitBalamurugan/cadswarm/blob/main/docs/publishing-spacetimedb.md" target="_blank" rel="noopener">docs/publishing-spacetimedb.md</a>.</p>
+        <div class="callout danger">
+          <span class="ct">Never publish with <code>--delete-data</code></span>
+          <p>It drops the team's members, locks, tasks and history. If a schema change needs a fresh table, add it; don't
+            rebuild the database under a working team.</p>
+        </div>
+        <p>During development, rehearse against a throwaway local database first, with a host you started yourself, and
+          check that an op still round-trips (create, lock, change, export). The shipped workbench uses the module file
+          beside it, so updating the workbench never leaves an old module behind.</p>
+      </section>
+
+      <section id="web">
+        <span class="section-kicker">Chapter 08</span>
+        <h2>The web app</h2>
+        <p><code>web/</code> is a Vite + TypeScript app. It joins with an invite or a <code>#t=</code> phone link, then
+          shows Chat, Model, Sizes, Library, Tasks, Files and Team. It reads the same views as the FreeCAD panel.</p>
+        <div class="code">
+          <div class="code-bar"><span>Build and ship it with the site</span>
+            <button class="copy" type="button" data-copy="npm --prefix web ci
+npm --prefix web run build
+Remove-Item -Recurse -Force website\app
+Copy-Item -Recurse web\dist website\app">Copy</button></div>
+          <pre>npm --prefix web ci
+npm --prefix web run build
+Remove-Item -Recurse -Force website\app
+Copy-Item -Recurse web\dist website\app</pre>
+        </div>
+        <p><code>web/vite.config.ts</code> sets <code>base: './'</code>, so the built assets keep working under
+          <code>/app/</code>. The site is static files: Vercel serves <code>website/</code>, and <code>cleanUrls</code>
+          makes <code>/docs</code> resolve to <code>docs.html</code>.</p>
+      </section>
+
+      <section id="tests">
+        <span class="section-kicker">Chapter 09</span>
+        <h2>Tests and releases</h2>
+        <div class="code">
+          <div class="code-bar"><span>Everything</span>
+            <button class="copy" type="button" data-copy=".venv\Scripts\python -m pytest
+cargo test --release --manifest-path host\Cargo.toml
+cargo test --release --manifest-path rules\Cargo.toml
+npm --prefix web test">Copy</button></div>
+          <pre>.venv\Scripts\python -m pytest
+cargo test --release --manifest-path host\Cargo.toml
+cargo test --release --manifest-path rules\Cargo.toml
+npm --prefix web test</pre>
+        </div>
+        <p>Current counts on a Windows checkout: <b>Python 689 passed</b> (15 skipped where FreeCAD or the platform
+          sandbox is unavailable), <b>host 47</b>, <b>rules 26</b>, <b>web 107</b>. The integration tests drive a real
+          FreeCAD; the sandbox tests exercise the AppContainer path when the platform has one.</p>
+        <p><code>tests/freecad_panel_live.py</code> is a manual end-to-end check, not part of pytest: it opens a real
+          FreeCAD window, joins a running team as a person, sends <code>@team …</code> through the panel, waits for the
+          host to plan, build and review it, and exercises the CLI picker. Give it an output folder, the joined project
+          folder and the host data folder; it writes a report and screenshots.</p>
+
+        <h3>Packaging a release</h3>
+        <p>The guide's first-use download needs three assets per platform.
+          <code>scripts/package-release.ps1</code> builds and checksums them into <code>dist\</code>:</p>
+        <div class="code">
+          <div class="code-bar"><span>PowerShell</span>
+            <button class="copy" type="button" data-copy="pwsh scripts\package-release.ps1
+pwsh scripts\package-release.ps1 -Target aarch64-apple-darwin
+pwsh scripts\package-release.ps1 -ModuleOnly">Copy</button></div>
+          <pre>pwsh scripts\package-release.ps1                            # this computer
+pwsh scripts\package-release.ps1 -Target aarch64-apple-darwin
+pwsh scripts\package-release.ps1 -ModuleOnly                # cadswarm_module.wasm only</pre>
+        </div>
+        <p>Push a <code>v*</code> tag and the release workflow builds all five host platforms plus the module on GitHub,
+          writes <code>SHA256SUMS.txt</code>, and publishes the release that the guide resolves as
+          <code>releases/latest/download</code>. To test the download path without a release, point
+          <code>CADSWARM_RELEASE_BASE</code> at a local folder holding the same files.</p>
+
+        <h3>Working on more than one branch at once</h3>
+        <p>This repository is often worked on by several sessions at the same time, including inside worktrees. They share
+          a message bus for status and direct messages; the conventions are in <code>AGENTS.md</code> and
+          <a href="https://github.com/SachchitBalamurugan/cadswarm/blob/main/docs/session-bus.md" target="_blank" rel="noopener">docs/session-bus.md</a>.
+          Announce contract, schema, binding and generated-file changes there before or right after making them.</p>
+      </section>
+
+      <div class="pager">
+        <a href="docs.html">
+          <span class="k">Previous</span>
+          <span class="t">The user guide</span>
+        </a>
+        <a class="next" href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">
+          <span class="k">Next</span>
+          <span class="t">The repository on GitHub</span>
+        </a>
+      </div>
+
+    </article>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <a class="brand" href="index.html" style="margin-bottom:12px">CADSwarm</a>
+        <p>The shared FreeCAD workspace where your team and its AI agents build one model together.</p>
+      </div>
+      <div><h4>Docs</h4><ul>
+        <li><a href="quickstart.html">Quickstart</a></li>
+        <li><a href="docs.html">Full guide</a></li>
+        <li><a href="docs.html#troubleshooting">Troubleshooting</a></li>
+        <li><a href="developer.html">Developers</a></li>
+      </ul></div>
+      <div><h4>Works with</h4><ul>
+        <li>FreeCAD 1.0+</li><li>Claude Code</li><li>Codex</li><li>OpenCode</li>
+      </ul></div>
+      <div><h4>Open source</h4><ul>
+        <li><a href="index.html#install">Install</a></li>
+        <li><a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a></li>
+        <li><a href="index.html#waitlist">Waitlist</a></li>
+      </ul></div>
+    </div>
+    <div class="copyline"><span>© 2026 CADSwarm</span><span>Free and open source. Your models stay on your machines.</span></div>
+  </div>
+</footer>
+
+<script>
+document.querySelectorAll('.copy').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var text = btn.getAttribute('data-copy') || (btn.closest('.code').querySelector('pre') || {}).innerText || '';
+    var done = function () {
+      var old = btn.textContent;
+      btn.textContent = 'Copied'; btn.classList.add('done');
+      setTimeout(function () { btn.textContent = old; btn.classList.remove('done'); }, 1600);
+    };
+    if (navigator.clipboard) { navigator.clipboard.writeText(text).then(done, function () {}); }
+    else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+  });
+});
+
+/* Chapter list: mark the chapter at the top of the window as you read. */
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#chapters a[href^="#"]'));
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute('href').slice(1)] = a; });
+  var sections = Array.prototype.slice.call(document.querySelectorAll('.prose section[id]'));
+  if (!sections.length) return;
+  var current = null;
+  var mark = function (id) {
+    if (id === current) return;
+    if (current && byId[current]) byId[current].classList.remove('active');
+    current = id;
+    if (byId[id]) byId[id].classList.add('active');
+  };
+  var update = function () {
+    var line = 110;                       // just under the sticky bar
+    var pick = sections[0].id;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].getBoundingClientRect().top <= line) pick = sections[i].id;
+      else break;
+    }
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) {
+      pick = sections[sections.length - 1].id;   // the last chapter wins at the bottom
+    }
+    mark(pick);
+  };
+  window.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update);
+  window.addEventListener('hashchange', function () {
+    var id = location.hash.slice(1);
+    if (byId[id]) mark(id);
+  });
+  var start = location.hash.slice(1);
+  if (byId[start]) mark(start);
+  update();
+  /* A deep link: land on the chapter after the layout settles, not before. */
+  window.addEventListener('load', function () {
+    var id = location.hash.slice(1);
+    var target = id && document.getElementById(id);
+    if (target) target.scrollIntoView({ block: 'start' });
+    update();
+  });
+})();
+
+/* Chapter links: glide to the section and keep the address shareable. */
+document.querySelectorAll('a[href^="#"]').forEach(function (a) {
+  a.addEventListener('click', function (e) {
+    var id = a.getAttribute('href').slice(1);
+    var target = id && document.getElementById(id);
+    if (!target) return;
+    e.preventDefault();
+    if (history.replaceState) history.replaceState(null, '', '#' + id);
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  });
+});
+
+/* On a narrow window the chapter list is a disclosure, not a column. */
+(function () {
+  var toc = document.querySelector('.toc');
+  if (!toc || !window.matchMedia) return;
+  var narrow = window.matchMedia('(max-width: 1000px)');
+  if (narrow.matches) toc.open = false;
+  toc.addEventListener('click', function (e) {
+    if (e.target.closest && e.target.closest('a') && narrow.matches) toc.open = false;
+  });
+})();
+</script>
+</body>
+</html>

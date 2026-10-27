@@ -84,7 +84,7 @@ p { margin: 0; }
 .btn-lg { font-size: 17px; padding: 17px 28px; border-radius: 12px; }
 .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
 .btn-ghost:hover { background: var(--surface-2); }
-@media (max-width: 760px) {
+@media (max-width: 940px) {
   .links { display: none; }
   .nav-inner { grid-template-columns: 1fr auto; }
 }
@@ -303,7 +303,8 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
       <a href="#panel">In FreeCAD</a>
       <a href="#safety">Safety</a>
       <a href="#install">Install</a>
-      <a href="#waitlist">Waitlist</a>
+      <a href="quickstart.html">Quickstart</a>
+      <a href="docs.html">Docs</a>
     </nav>
     <a class="btn nav-cta" href="#waitlist">Join the waitlist</a>
   </div>
@@ -319,7 +320,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
         <div class="hero-actions fade-in d4">
           <a class="btn btn-lg" href="#waitlist">Join the waitlist <span aria-hidden="true">→</span></a>
           <a class="btn btn-lg btn-ghost" href="./app/">Open CADSwarm on the web <span aria-hidden="true">→</span></a>
-          <span class="fine">FreeCAD 1.0+ · Claude Code and Codex · Free and open source</span>
+          <span class="fine">FreeCAD 1.0+ · Claude Code and Codex · Free and open source · <a href="quickstart.html" style="text-decoration:underline;text-decoration-color:rgba(244,243,241,.3);text-underline-offset:3px;color:var(--body)">Quickstart</a></span>
         </div>
       </div>
     </div>
@@ -485,6 +486,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
       <div class="head">
         <h2>Install in about five minutes.</h2>
         <p class="sub2">Paste one line. It fetches CADSwarm, finds FreeCAD and opens it with the setup guide.</p>
+        <p style="color:var(--muted);font-size:15px">New here? The <a href="quickstart.html" style="color:var(--text);text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px">quickstart</a> walks one team build end to end. Every button and every failure is in the <a href="docs.html" style="color:var(--text);text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px">guide</a>.</p>
       </div>
       <div class="inst">
         <div>
@@ -632,7 +634,7 @@ footer { margin-top: clamp(72px, 9vw, 120px); border-top: 1px solid var(--line);
           <a class="brand" href="#top" style="margin-bottom:12px">CADSwarm</a>
           <p>The shared FreeCAD workspace where your team and its AI agents build one model together.</p>
         </div>
-        <div><h4>Product</h4><ul><li><a href="#how">How it works</a></li><li><a href="#panel">In FreeCAD</a></li><li><a href="#safety">Safety</a></li></ul></div>
+        <div><h4>Product</h4><ul><li><a href="#how">How it works</a></li><li><a href="#panel">In FreeCAD</a></li><li><a href="#safety">Safety</a></li><li><a href="quickstart.html">Quickstart</a></li><li><a href="docs.html">Full guide</a></li><li><a href="developer.html">Developers</a></li></ul></div>
         <div><h4>Works with</h4><ul><li>FreeCAD 1.0+</li><li>Claude Code</li><li>Codex</li></ul></div>
         <div><h4>Open source</h4><ul><li>Free to use</li><li><a href="#install">Install</a></li><li><a href="https://github.com/SachchitBalamurugan/cadswarm" target="_blank" rel="noopener">GitHub</a></li></ul></div>
       </div>

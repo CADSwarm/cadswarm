@@ -21,3 +21,27 @@ Copy-Item -Recurse ..\web\dist .\app
 ```
 
 `web/vite.config.ts` sets `base: './'`, so the assets keep working under `/app/`.
+
+## Docs pages
+
+Three plain HTML pages share `docs.css` (the marketing tokens, plus a reading layout):
+
+| File | URL | What it is |
+|---|---|---|
+| `quickstart.html` | `/quickstart` | The ten-minute path: install, start a team, connect a helper, first build. |
+| `docs.html` | `/docs` | The full guide, 18 chapters with a sticky chapter list and deep links. |
+| `developer.html` | `/developer` | Architecture, repository map, CLI, MCP tools, invariants, publishing, tests. |
+
+`cleanUrls` in `vercel.json` serves them without the `.html`. Links between pages use the
+`.html` names so the pages also work from a plain folder (`python -m http.server`).
+
+Check them before committing — local links, anchors, tag balance and CSS classes:
+
+```powershell
+python ..\scripts\check_docs.py
+```
+
+Content rules: plain words, no invented settings, and every number (file limits, lock times,
+helper run limits) copied from the code or the README. Update this guide in the same change as
+the behaviour it describes.
+
