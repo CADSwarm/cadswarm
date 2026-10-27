@@ -2606,6 +2606,21 @@ def away_tip(p, local, db=""):
     if state == "stopped" and (local or {}).get("off"):
         return (f"<b>{n}</b> is set to run in a terminal. Open it there, or use the Tools tab ▸ Restart my AI "
                 "helpers to run it in the background again.")
+    if state == "stopped":
+        # The runner process is gone (an upgrade, a crash, or FreeCAD was closed): it will not come back on
+        # its own, so this must not say "starting" and leave the person waiting.
+        return (f"<b>{n}</b> isn't running: nothing on this computer is watching for your messages. The Tools "
+                "tab ▸ Restart my AI helpers starts it again.")
+    if state == "offline":
+        return (f"<b>{n}</b> is running here but can't reach the team right now; it keeps retrying. Check this "
+                "computer's connection to the team.")
+    if state == "error":
+        return (f"<b>{n}</b> is here, but {html.escape((local or {}).get('detail') or 'its last run failed')}. "
+                "If its AI isn't signed in yet, open it once in a terminal; the Tools tab ▸ Show my AI "
+                "helpers' logs has the rest.")
+    if state not in ("starting", "listening", None, ""):
+        return (f"<b>{n}</b> is reported as {html.escape(str(state))} on this computer. The Tools tab ▸ Restart "
+                "my AI helpers starts it again.")
     return f"<b>{n}</b> is starting on this computer. It answers in the Chat in a moment."
 
 

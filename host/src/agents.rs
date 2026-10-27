@@ -102,7 +102,10 @@ pub fn agent_command(client: &str, override_cmd: &[String], dir: &Path, prompt: 
         // Headless runs don't prompt to trust the folder's .mcp.json, so name it explicitly.
         "claude" => ("claude".into(), vec!["-p".into(), p, "--max-turns".into(), "80".into(), "--allowedTools".into(),
                      "mcp__cadswarm".into(), "--mcp-config".into(), dir.join(".mcp.json").display().to_string()]),
-        "codex" => ("codex".into(), vec!["exec".into(), "--full-auto".into(), "--skip-git-repo-check".into(), p]),
+        // Codex dropped --full-auto (it exits 2 with "unexpected argument"); -s workspace-write is the
+        // sandbox that alias meant, and every version from 0.20 on takes it.
+        "codex" => ("codex".into(), vec!["exec".into(), "--sandbox".into(), "workspace-write".into(),
+                                          "--skip-git-repo-check".into(), p]),
         // --standalone: a private server per run, not whatever the person's desktop app is running.
         // The prompt goes in on stdin (see spawn): an npm .cmd shim would split a multi-line argument.
         "opencode" => ("opencode".into(), vec!["run".into(), "--standalone".into(), "--auto".into()]),
@@ -314,6 +317,9 @@ mod tests {
         assert!(a.contains(&"build it".to_string()) && a.contains(&"--mcp-config".to_string()));
         let (p, a) = agent_command("codex", &[], dir, "build it").unwrap();
         assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("codex", "exec", "build it"));
+        // --full-auto was removed from the CLI: a fresh Codex answers it with exit 2, "unexpected argument".
+        assert!(!a.contains(&"--full-auto".to_string()), "the removed flag would kill every agent: {a:?}");
+        assert_eq!(&a[1..3], ["--sandbox", "workspace-write"], "{a:?}");
         let (p, a) = agent_command("opencode", &[], dir, "build it").unwrap();
         assert_eq!((p.as_str(), a[0].as_str(), a[1].as_str()), ("opencode", "run", "--standalone"));
         assert!(!a.contains(&"build it".to_string()), "the prompt goes in on stdin: {a:?}");

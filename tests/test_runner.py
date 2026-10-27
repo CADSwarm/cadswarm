@@ -221,6 +221,53 @@ def test_each_helper_cli_gets_a_headless_command_with_the_prompt_on_stdin_where_
     assert stdin == "do it\nnow" and not any("do it" in a for a in argv)
 
 
+def test_codex_gets_the_sandbox_flag_its_own_cli_documents():
+    # Codex removed --full-auto: passing it exits 2 with "unexpected argument", so every helper wake died.
+    # `-s workspace-write` is the sandbox --full-auto meant; older builds that predate it still need it.
+    assert runner.codex_exec_flags("Usage: codex exec [OPTIONS] [PROMPT]\n  -s, --sandbox <MODE>") == \
+        ["--sandbox", "workspace-write"]
+    assert runner.codex_exec_flags("Usage: codex exec [OPTIONS]\n  --full-auto") == ["--full-auto"]
+    assert runner.codex_exec_flags("") == ["--sandbox", "workspace-write"]  # can't ask: current spelling
+
+
+def test_the_codex_command_asks_the_cli_once_for_its_flags(monkeypatch):
+    calls = []
+
+    def fake_help(exe):
+        calls.append(exe)
+        return "Usage: codex exec [OPTIONS]\n  -s, --sandbox <MODE>"
+
+    monkeypatch.setattr(runner, "codex_help", fake_help)
+    monkeypatch.setattr(runner, "_CODEX_FLAGS", {})
+    argv, _stdin = runner.agent_command("codex", "codex", "/h", "x", resume=False)
+    assert "--full-auto" not in argv and argv[argv.index("--sandbox") + 1] == "workspace-write"
+    runner.agent_command("codex", "codex", "/h", "x", resume=False)
+    assert calls == ["codex"]  # one probe per binary, not per wake
+
+
+def test_a_failed_run_says_what_the_cli_printed(tmp_path):
+    r, _clock, _spawned = make_runner(tmp_path, client="codex")
+    log = os.path.join(r.folder, ".cadswarm", "helper.log")
+    with open(log, "w", encoding="utf-8") as f:
+        f.write("2026-10-27 10:54:55 waking the helper for 3 new thing(s)\n")
+
+    class Failed:
+        returncode = 2
+
+        def poll(self):
+            return 2
+
+    r.child_log_at = os.path.getsize(log)
+    with open(log, "a", encoding="utf-8") as f:  # a banner, then codex's reason, then tips and usage
+        f.write("> build · gpt-5\n"
+                "\x1b[31merror: unexpected argument '--full-auto' found\x1b[0m\n\ntip: ...\nUsage: codex exec\n")
+    r.child = Failed()
+    assert r.child_running() is False
+    assert "exit 2" in r.last_error
+    assert "unexpected argument '--full-auto' found" in r.last_error
+    assert "> build" not in r.last_error and "\x1b" not in r.last_error
+
+
 def test_a_helpers_picked_model_beats_the_environment(monkeypatch):
     monkeypatch.setenv("CADSWARM_HELPER_MODEL", "env/model")
     argv, _ = runner.agent_command("opencode", "opencode", "/h", "x", resume=False, model="anthropic/claude-sonnet-5-5")
@@ -322,7 +369,21 @@ def test_a_failed_run_is_reported_until_one_succeeds(tmp_path, monkeypatch):
     clock[0] += 60
     r.step()
     st = json.load(open(os.path.join(r.folder, ".cadswarm", "runner.json")))
-    assert st["state"] == "error" and "sign in" in st["detail"]
+    assert st["state"] == "error" and "exit 1" in st["detail"], st
+
+    class Fine:
+        returncode = 0
+
+        def poll(self):
+            return 0
+    r.seen.clear()  # the fake hub still holds those messages: wake once more, and this run works
+    clock[0] += 60
+    r.spawn = lambda argv, stdin: spawned.append(argv) or Fine()
+    r.step()
+    clock[0] += 60
+    r.step()
+    st = json.load(open(os.path.join(r.folder, ".cadswarm", "runner.json")))
+    assert st["state"] == "listening" and st["detail"] == "", st
 
 
 def test_background_starts_can_be_switched_off_for_a_terminal_session(tmp_path):

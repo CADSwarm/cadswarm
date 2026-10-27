@@ -22,6 +22,7 @@ Stdlib only: it runs with FreeCAD's Python.
 """
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -50,6 +51,10 @@ LOG_LIMIT = 2_000_000
 IDLE_DOING = "listening for instructions"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 GONE = ("not_member", "left", "taken_over", "removed", "bad_token")
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+RUNNER_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ")
+RUN_FAILED = re.compile(r"\b(error|failed|failure|invalid|denied|forbidden|unauthorized|unexpected argument)\b"
+                        r"|not\s+(been\s+)?trusted|api key", re.IGNORECASE)
 # A warm OpenCode server: start it once, then every message connects to it instead of paying the CLI's
 # startup, config load and MCP boot again (~3-9 s). Measured: a trivial wake went from 3.3 s to 0.9 s, and
 # the team's MCP server starts once for many runs rather than once per run.
@@ -245,6 +250,46 @@ When everything above is handled, stop. Don't call wait_for_changes: you're woke
 """
 
 
+def codex_exec_flags(help_text):
+    """The flags that put `codex exec` in the workspace-write sandbox it used to call --full-auto.
+    Codex removed --full-auto (the CLI now exits 2 with "unexpected argument"), so ask the installed
+    build's own help what it takes: `-s workspace-write` on current ones (the same sandbox), --full-auto
+    on older ones, and the current spelling when the help can't be read at all."""
+    if not help_text or "--sandbox" in help_text:
+        return ["--sandbox", "workspace-write"]
+    if "--full-auto" in help_text:
+        return ["--full-auto"]
+    return []
+
+
+def codex_help(exe):
+    """`codex exec --help` text, or "" when the CLI cannot be asked."""
+    try:
+        out = subprocess.run([exe, "exec", "--help"], capture_output=True, encoding="utf-8",
+                             errors="replace", timeout=15, creationflags=NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return (out.stdout or "") + (out.stderr or "")
+
+
+_CODEX_FLAGS = {}  # exe -> ((mtime, size), flags): one probe per binary, not one per wake
+
+
+def codex_flags(exe):
+    """Cached `codex_exec_flags` for this binary, so an upgrade is noticed but a wake costs no process."""
+    try:
+        st = os.stat(exe)
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    hit = _CODEX_FLAGS.get(exe)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    flags = codex_exec_flags(codex_help(exe))
+    _CODEX_FLAGS[exe] = (stamp, flags)
+    return flags
+
+
 def agent_command(client, exe, folder, prompt, resume, model=None, server=None):
     """(argv, stdin text). The prompt goes in on stdin where the CLI accepts that: a .cmd launcher would
     mangle a multi-line argument. `model` is the folder's pinned model (agent_setup.save_helper_model).
@@ -257,7 +302,7 @@ def agent_command(client, exe, folder, prompt, resume, model=None, server=None):
             "--model", os.environ.get("CADSWARM_HELPER_MODEL") or "sonnet"]
         return argv, prompt
     if client == "codex":
-        return [exe, "exec", "--full-auto", "--skip-git-repo-check", "-"], prompt
+        return [exe, "exec", *codex_flags(exe), "--skip-git-repo-check", "-"], prompt
     if client == "opencode":
         # --standalone: a private server per run, not whatever the person's desktop app is running.
         # The prompt goes in on stdin, like claude and codex: an npm .cmd shim would split a
@@ -285,6 +330,7 @@ class Runner:
         self.spawn = spawn or self._spawn
         self.child = None
         self.child_started = 0.0
+        self.child_log_at = 0  # where the current run's own output starts in helper.log (see child_said)
         self.state = load_json(os.path.join(state_dir(self.folder), "runner-state.json")) or {}
         self.seen = set(self.state.get("seen") or [])
         self.runs = [t for t in self.state.get("runs") or [] if clock() - t < 3600]
@@ -531,7 +577,12 @@ class Runner:
         return True, ""
 
     def _spawn(self, argv, stdin_text):
-        log = open(os.path.join(state_dir(self.folder), "helper.log"), "a", encoding="utf-8")
+        path = os.path.join(state_dir(self.folder), "helper.log")
+        try:
+            self.child_log_at = os.path.getsize(path)  # this run's output starts here
+        except OSError:
+            self.child_log_at = 0
+        log = open(path, "a", encoding="utf-8")
         kwargs = {"cwd": self.folder, "env": self.env(), "stdout": log, "stderr": subprocess.STDOUT,
                   "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL}
         if os.name == "nt":
@@ -591,6 +642,24 @@ class Runner:
             return
         self.present, self.last_beat = True, self.clock()
 
+    def child_said(self):
+        """": <first line the run printed>", e.g. "error: unexpected argument '--full-auto' found", or "".
+        A CLI that dies at startup writes its reason first and tips/usage after it, so the first line names
+        the cause; the whole log is one click away in the Tools tab."""
+        path = os.path.join(state_dir(self.folder), "helper.log")
+        try:
+            with open(path, "rb") as f:
+                f.seek(self.child_log_at)
+                text = f.read(65536).decode("utf-8", "replace")
+        except OSError:
+            return ""
+        lines = [ANSI.sub("", line).strip() for line in text.splitlines() if line.strip()]
+        # The runner's own bookkeeping lines are timestamped; the CLI's reason is the first other line.
+        lines = [line for line in lines if not RUNNER_LINE.match(line)]
+        # A CLI may print a banner first ("> build · model"), so prefer a line that names a failure.
+        said = next((line for line in lines if RUN_FAILED.search(line)), lines[0] if lines else "")
+        return f": {said[:200]}" if said else ""
+
     def child_running(self):
         if self.child is None:
             return False
@@ -598,8 +667,7 @@ class Runner:
             code = self.child.returncode
             self.log(f"the helper finished (exit {code})")
             self.last_error = "" if code == 0 else (
-                f"its last run stopped with an error (exit {code}). If it isn't signed in yet, open it once in a "
-                "terminal and sign in. Details: the Tools tab ▸ Show my AI helper's log")
+                f"its last run failed (exit {code})" + self.child_said())
             self.child = None
             self.last_run_end = self.clock()
             self.save_state()
