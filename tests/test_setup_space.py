@@ -149,6 +149,7 @@ def test_an_unpinned_opencode_helper_uses_the_model_the_person_configured(tmp_pa
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.delenv("APPDATA", raising=False)
     monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)  # a Linux runner sets it outside the test's HOME
     monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1, "fence": 1,
                                                                  "name": n, "role": "member", "kind": "agent"})
     t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
