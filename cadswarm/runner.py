@@ -22,14 +22,18 @@ Stdlib only: it runs with FreeCAD's Python.
 """
 import json
 import os
+import secrets
+import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 if __package__ in (None, ""):  # run as a script: make `cadswarm` importable
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cadswarm.agent_setup import find_agent_cli  # noqa: E402
+from cadswarm.agent_setup import default_model, find_agent_cli  # noqa: E402
 from cadswarm.client import HubRequestError, load_json, save_json, state_dir  # noqa: E402
 from cadswarm.space_hub import POLL_VIEWS, SpaceHub  # noqa: E402
 
@@ -46,11 +50,47 @@ LOG_LIMIT = 2_000_000
 IDLE_DOING = "listening for instructions"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 GONE = ("not_member", "left", "taken_over", "removed", "bad_token")
+# A warm OpenCode server: start it once, then every message connects to it instead of paying the CLI's
+# startup, config load and MCP boot again (~3-9 s). Measured: a trivial wake went from 3.3 s to 0.9 s, and
+# the team's MCP server starts once for many runs rather than once per run.
+WARM_READY_SECONDS = 12     # how long `serve` may take to answer before that wake falls back
+WARM_POLL_SECONDS = 0.1
+WARM_RETRY_SECONDS = 60     # after a failed start, keep working (slowly) and try the server again later
+
 
 
 
 def status_path(folder):
     return os.path.join(state_dir(folder), "runner.json")
+
+
+def server_path(folder):
+    """Where the runner remembers the warm OpenCode server it left running (a FreeCAD restart reuses it)."""
+    return os.path.join(state_dir(folder), "opencode-server.json")
+
+
+def seat_path(folder):
+    """Written by the MCP server when it joins: it holds the helper's seat while a warm server outlives
+    the run, so the runner must not rejoin (that would supersede its fence)."""
+    return os.path.join(state_dir(folder), "mcp-seat.json")
+
+
+def free_port():
+    """A localhost port nobody is using, for one helper's private server."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def server_ready(url, password, timeout=1.5):
+    """True when the OpenCode server at `url` answers its health check."""
+    req = urllib.request.Request(url.rstrip("/") + "/global/health",
+                                 headers={"Authorization": f"Bearer {password}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 300
+    except (OSError, urllib.error.URLError, ValueError):
+        return False
 
 
 def runner_alive(folder, now=None):
@@ -205,9 +245,10 @@ When everything above is handled, stop. Don't call wait_for_changes: you're woke
 """
 
 
-def agent_command(client, exe, folder, prompt, resume, model=None):
+def agent_command(client, exe, folder, prompt, resume, model=None, server=None):
     """(argv, stdin text). The prompt goes in on stdin where the CLI accepts that: a .cmd launcher would
-    mangle a multi-line argument. `model` is the folder's pinned model (agent_setup.save_helper_model)."""
+    mangle a multi-line argument. `model` is the folder's pinned model (agent_setup.save_helper_model).
+    `server` is a warm OpenCode server URL: then the run connects to it instead of starting its own."""
     if client == "claude":
         argv = [exe] + (["--continue"] if resume else []) + [
             "-p", "--max-turns", "80", "--allowedTools", "mcp__cadswarm",
@@ -221,7 +262,7 @@ def agent_command(client, exe, folder, prompt, resume, model=None):
         # --standalone: a private server per run, not whatever the person's desktop app is running.
         # The prompt goes in on stdin, like claude and codex: an npm .cmd shim would split a
         # multi-line argument.
-        argv = [exe, "run", "--standalone", "--auto"]
+        argv = [exe, "run"] + (["--server", server] if server else ["--standalone"]) + ["--auto"]
         if resume:
             argv.append("--continue")
         model = model or os.environ.get("CADSWARM_HELPER_MODEL")
@@ -258,6 +299,19 @@ class Runner:
         self.last_full = 0.0  # when pending_work last looked properly
         self.status = ("starting", "")
         self.last_error = ""  # why the last run failed, shown in FreeCAD until a run succeeds
+        # A warm OpenCode server (opencode: one per helper; off with "warm": false). Its MCP server holds
+        # the helper's seat between runs, so the runner must not rejoin and bump the fence itself.
+        self.warm = bool(self.cfg.get("warm", self.cfg.get("client") == "opencode"))
+        self.server = None
+        self.server_url = ""
+        self.server_password = ""
+        self.server_port = 0
+        self.warm_error = ""  # set when the warm start failed: runs then start fresh, one per wake
+        self.warm_retry_at = 0.0
+        self.greeted = False
+        self.ready = server_ready  # tests replace this instead of opening a socket
+        self.sleep = time.sleep
+        self.child_env = {}  # extra environment for the next spawn (the warm server's password)
 
     # ------------------------------------------------------------------ bookkeeping
 
@@ -287,11 +341,167 @@ class Runner:
         return st.get("pid") not in (None, os.getpid()) and runner_alive(self.folder, self.clock()) \
             and st.get("state") != "starting"
 
+    # ------------------------------------------------------------------ warm server
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
+        env["CADSWARM_BACKGROUND"] = "1"
+        env.update(self.child_env)
+        return env
+
+    def server_up(self):
+        """True while this helper's warm server is (as far as we know) alive. A server adopted from a
+        previous runner has no handle here: its health is checked before the next wake."""
+        if not self.server_url:
+            return False
+        if self.server is not None and self.server.poll() is not None:
+            self.log("the warm AI server exited")
+            self.server, self.server_url = None, ""
+            return False
+        return True
+
+    def mcp_seat(self):
+        """True when the MCP server in the warm OpenCode server has joined and holds the seat. Its fence
+        is the newest one, so the runner only heartbeats (see mark_idle) and never rejoins."""
+        if not self.server_url:
+            return False
+        st = load_json(seat_path(self.folder)) or {}
+        ident = load_json(self.ident_path, {}) or {}
+        return bool(st.get("fence")) and st.get("fence") == ident.get("fence")
+
+    def save_server(self):
+        save_json(server_path(self.folder), {"pid": getattr(self.server, "pid", 0) or 0,
+                                             "url": self.server_url, "password": self.server_password,
+                                             "port": self.server_port, "beat": self.clock()})
+
+    def adopt_server(self):
+        """Reuse the warm server an earlier runner left running, so restarting FreeCAD does not cost the
+        helper its first-second start again."""
+        st = load_json(server_path(self.folder)) or {}
+        url, password = st.get("url") or "", st.get("password") or ""
+        if not url or not password or not self.ready(url, password):
+            return ""
+        self.server_url, self.server_password = url, password
+        self.server_port = int(st.get("port") or 0)
+        return url
+
+    def ensure_server(self, check=False):
+        """The helper's private OpenCode server URL, starting it if needed. "" means run this wake fresh
+        (`--standalone`): the warm path is an optimisation, never a reason a helper can't work."""
+        if not self.warm:
+            return ""
+        if self.server_up() and (not check or self.ready(self.server_url, self.server_password)):
+            return self.server_url
+        if self.server_url:  # up on paper but not answering (or its process died)
+            self.log("the warm AI server stopped answering")
+            self.stop_server()
+        if not self.server_url:
+            url = self.adopt_server()
+            if url:
+                self.log(f"reusing the warm AI server at {url}")
+                return url
+        now = self.clock()
+        if self.warm_retry_at and now < self.warm_retry_at:
+            return ""
+        try:
+            os.remove(seat_path(self.folder))  # a seat left by a server that is gone
+        except OSError:
+            pass
+        exe = find_agent_cli(self.cfg.get("client") or "claude")
+        if not exe:
+            return ""
+        if not self.state.get("started") and not self.greeted:
+            # Say hello before the server's MCP server takes the seat (after that our fence is stale).
+            try:
+                self.be_present()
+                self.greet()
+            except HubRequestError:
+                pass
+            self.greeted = True
+        port, password = free_port(), secrets.token_urlsafe(24)
+        self.server_port, self.server_password = port, password
+        self.server_url = f"http://127.0.0.1:{port}"
+        self.child_env = {"OPENCODE_PASSWORD": password}
+        try:
+            self.server = self.spawn(
+                [exe, "serve", "--hostname", "127.0.0.1", "--port", str(port)], None)
+        except OSError as e:
+            self.server = None
+            self.server_url = ""
+            self.warm_error = (f"the warm AI server didn't start ({e}); each message starts the AI fresh, "
+                               "a few seconds slower")
+            self.log(self.warm_error)
+            self.warm_retry_at = now + WARM_RETRY_SECONDS
+            return ""
+        finally:
+            self.child_env = {}
+        self.save_server()
+        self.log(f"starting the warm AI server at {self.server_url}")
+        deadline = now + WARM_READY_SECONDS
+        while self.clock() < deadline:
+            if self.ready(self.server_url, self.server_password):
+                self.log("the warm AI server is ready")
+                return self.server_url
+            if self.server.poll() is not None:
+                break
+            self.sleep(WARM_POLL_SECONDS)
+        self.warm_error = (f"the warm AI server didn't answer within {WARM_READY_SECONDS:.0f}s; each message "
+                           "starts the AI fresh, a few seconds slower")
+        self.log(self.warm_error)
+        self.stop_server()
+        self.warm_retry_at = now + WARM_RETRY_SECONDS
+        return ""
+
+    def stop_server(self):
+        server = self.server
+        pid = getattr(server, "pid", 0) or (load_json(server_path(self.folder)) or {}).get("pid") or 0
+        self.server = None
+        self.server_url = self.server_password = ""
+        self.server_port = 0
+        try:
+            os.remove(server_path(self.folder))
+        except OSError:
+            pass
+        try:
+            os.remove(seat_path(self.folder))
+        except OSError:
+            pass
+        if not pid:
+            return
+        if server is not None and not isinstance(server, subprocess.Popen):
+            try:
+                server.kill()  # a test double
+            except OSError:
+                pass
+            return
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=NO_WINDOW)
+            else:
+                os.kill(pid, 15)
+        except (OSError, ProcessLookupError):
+            pass
+
+    def stop_all(self):
+        """End the current run and the warm server (the MCP server goes with it)."""
+        if self.child is not None:
+            try:
+                self.child.kill()
+            except OSError:
+                pass
+            self.child = None
+        self.stop_server()
+
     # -------------------------------------------------------------------- presence
 
     def be_present(self):
         """Hold the helper's seat while no agent runs: rejoin (a new fence, so a finished agent's leftover
-        MCP server can't act) and heartbeat, so the team sees it as ready."""
+        MCP server can't act) and heartbeat, so the team sees it as ready. A warm server's MCP server owns
+        the seat once it has joined: rejoining here would make its fence stale and break every tool call."""
+        if self.server_up() and self.mcp_seat():
+            return
         now = self.clock()
         if not self.present:
             self.hub.join(client=self.cfg.get("client"))
@@ -322,9 +532,7 @@ class Runner:
 
     def _spawn(self, argv, stdin_text):
         log = open(os.path.join(state_dir(self.folder), "helper.log"), "a", encoding="utf-8")
-        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONHOME", "PYTHONPATH")}
-        env["CADSWARM_BACKGROUND"] = "1"
-        kwargs = {"cwd": self.folder, "env": env, "stdout": log, "stderr": subprocess.STDOUT,
+        kwargs = {"cwd": self.folder, "env": self.env(), "stdout": log, "stderr": subprocess.STDOUT,
                   "stdin": subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL}
         if os.name == "nt":
             kwargs["creationflags"] = NO_WINDOW
@@ -345,12 +553,19 @@ class Runner:
             return False
         prompt = wake_prompt(self.cfg.get("name") or "an AI helper", self.project or "your team's project",
                              [line for _, line in work], first)
+        model = self.cfg.get("model") or (default_model(client) if client == "opencode" else "")
+        server = self.ensure_server(check=True) if self.warm else ""
         argv, stdin_text = agent_command(client, exe, self.folder, prompt, resume=bool(self.state.get("started")),
-                                         model=self.cfg.get("model"))
-        self.log(f"waking the helper for {len(work)} new thing(s): {', '.join(k for k, _ in work) or 'first start'}")
-        if first:
+                                         model=model or None, server=server or None)
+        self.log(f"waking the helper for {len(work)} new thing(s): {', '.join(k for k, _ in work) or 'first start'}"
+                 + (" (warm server)" if server else ""))
+        if first and not self.greeted:
             self.greet()  # the runner introduces the helper, not the model
-        self.child = self.spawn(argv, stdin_text)
+        self.child_env = {"OPENCODE_PASSWORD": self.server_password} if server else {}
+        try:
+            self.child = self.spawn(argv, stdin_text)
+        finally:
+            self.child_env = {}
         self.child_started = self.clock()
         self.present = False  # the agent's MCP server takes the seat (a newer fence)
         self.runs.append(self.clock())
@@ -359,6 +574,22 @@ class Runner:
         self.save_state()
         self.write_status("working", work[0][1][2:120] if work else "introducing itself")
         return True
+
+    def mark_idle(self):
+        """A warm server's MCP server outlives the run and would keep saying "working on X" for minutes. The
+        runner shares the folder's identity, so heartbeat "listening" with the fence the MCP just stored
+        (a heartbeat, not a rejoin: rejoining would supersede the server's fence)."""
+        if not (self.server_up() and self.mcp_seat()):
+            return
+        ident = load_json(self.ident_path, {}) or {}
+        if not ident.get("fence"):
+            return
+        self.hub.identity.update(ident)
+        try:
+            self.hub._f("heartbeat", IDLE_DOING)
+        except HubRequestError:
+            return
+        self.present, self.last_beat = True, self.clock()
 
     def child_running(self):
         if self.child is None:
@@ -372,6 +603,7 @@ class Runner:
             self.child = None
             self.last_run_end = self.clock()
             self.save_state()
+            self.mark_idle()
             return False
         if self.clock() - self.child_started > RUN_TIMEOUT:
             self.log("the helper ran too long and was stopped")
@@ -379,6 +611,7 @@ class Runner:
             self.child = None
             self.last_run_end = self.clock()
             self.save_state()
+            self.mark_idle()
             return False
         return True
 
@@ -422,14 +655,15 @@ class Runner:
         """One poll. Returns False when the runner should exit."""
         if os.path.exists(os.path.join(state_dir(self.folder), "runner.stop")):
             os.remove(os.path.join(state_dir(self.folder), "runner.stop"))
-            if self.child is not None:
-                self.child.kill()
+            self.stop_all()
             self.log("stopped from FreeCAD")
             return False
         if self.child_running():
             self.write_status()
             return True
         try:
+            if self.warm and not self.server_up():
+                self.ensure_server()  # the server holds the seat: start it before joining ourselves
             self.be_present()
             if "primed" not in self.state:
                 self.seen |= finished_keys(self.hub)
@@ -482,6 +716,7 @@ class Runner:
         self.log(f"runner started for {self.cfg.get('name')} ({self.cfg.get('client')})")
         while self.step():
             time.sleep(POLL_SECONDS)
+        self.stop_all()
         if os.path.exists(status_path(self.folder)):
             save_json(status_path(self.folder), {"pid": os.getpid(), "beat": 0, "state": "stopped", "detail": ""})
 

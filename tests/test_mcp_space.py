@@ -1,4 +1,5 @@
 """The MCP tools log activity (which moves the agent's pointer) and stop acting once superseded."""
+import json
 import types
 
 import pytest
@@ -60,3 +61,26 @@ def test_a_superseded_session_refuses_every_tool(session):
     r = mcp_server.lock_objects(["Lid"])
     assert r["code"] == "fence_stale"
     assert mcp_server.create_primitive("box", "Box")["code"] == "inactive"
+
+
+def test_a_warm_server_shows_idle_once_its_runner_waits(tmp_path):
+    """The MCP server outlives the run: without this, the team list says "working on Lid" for minutes."""
+    import time
+
+    (tmp_path / ".cadswarm").mkdir()
+    runner = tmp_path / ".cadswarm" / "runner.json"
+    s = types.SimpleNamespace(doing='working on "Lid"', project=str(tmp_path))
+    runner.write_text(json.dumps({"state": "listening", "beat": time.time()}))
+    assert mcp_server.Session.doing_now(s) == "listening for instructions"
+    runner.write_text(json.dumps({"state": "working", "beat": time.time()}))
+    assert mcp_server.Session.doing_now(s) == 'working on "Lid"'
+    # A stale beat means no runner is looking after the folder: keep what the run was doing.
+    runner.write_text(json.dumps({"state": "listening", "beat": 0}))
+    assert mcp_server.Session.doing_now(s) == 'working on "Lid"'
+    # A run that never claimed a task leaves "starting"; the waiting runner wins over it too.
+    s.doing = "starting"
+    runner.write_text(json.dumps({"state": "listening", "beat": time.time()}))
+    assert mcp_server.Session.doing_now(s) == "listening for instructions"
+    # A host-spawned agent has no runner at all: it just says what it is doing.
+    (tmp_path / ".cadswarm" / "runner.json").unlink()
+    assert mcp_server.Session.doing_now(s) == "starting"
