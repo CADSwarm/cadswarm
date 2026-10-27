@@ -381,6 +381,17 @@ People can also hand work to an agent mid-design: while holding a part, "Hand of
 spawns one agent per open handoff. It calls `accept_handoff` first (which transfers the person's locks
 and tasks), reads their note and recent ops, and continues instead of starting over.
 
+## One job, then off the team
+
+Planners, workers, the reviewer and handoff agents are one-job identities: the host starts one, it does
+its job and exits. The host takes it off the team the moment its CLI exits, so a finished worker never
+sits in the Team tab with "no task", and when a brief reaches `ready`, `failed` or `cancelled` the host
+also deletes the folder every start left behind under `team-model\agents\`. A worker that exits while its
+task is still open hands the task back to the team, and the next tick starts a fresh worker for it. The
+same happens when a worker's MCP server goes quiet (the sweep marks it stale): the host takes it off the
+team and its task goes back on the board, so a task no longer waits as "needs someone" until a person
+notices. A host restarted mid-brief does this too, for the agents the previous host left behind.
+
 ## Run the demo
 
 On Windows, one command brings up the whole stack on this machine: it builds the host and the web app,
@@ -581,8 +592,8 @@ cargo test --release --manifest-path rules\Cargo.toml
 cd web; npm test
 ```
 
-Current counts on a Windows checkout: Python 707 passed (16 skipped where FreeCAD or the platform
-sandbox is unavailable), host 47, rules 26, web 107.
+Current counts on a Windows checkout: Python 710 passed (16 skipped where FreeCAD or the platform
+sandbox is unavailable), host 53, rules 26, web 107.
 
 `tests\freecad_panel_live.py` is a manual live check, not part of pytest: it opens a real FreeCAD
 window, joins a running team as a person, sends `@team ...` through the panel, waits for the host to

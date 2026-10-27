@@ -93,6 +93,9 @@ def make_runner(tmp_path, client="claude", t=None):
         def poll(self):
             return 0
 
+        def kill(self):
+            pass
+
     r = runner.Runner(str(folder), "Phone stand", clock=lambda: clock[0],
                       spawn=lambda argv, stdin: spawned.append((argv, stdin)) or Child())
     r.hub = hub(t)
@@ -284,6 +287,28 @@ def test_the_runner_wakes_opencode_with_the_folders_model(tmp_path, monkeypatch)
     assert r.wake([("m:x", "- hi")], first=True)
     argv = spawned[-1][0]
     assert argv[argv.index("--model") + 1] == "openai/gpt-5.1"
+
+
+def test_a_newer_runner_takes_the_folder_so_the_old_one_stops(tmp_path, monkeypatch):
+    """Restart clicked twice (or two starts racing) used to leave two or three runners on one helper,
+    each polling the team with its own warm server. The later process takes the folder now."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, clock, spawned = make_runner(tmp_path)
+    assert r.step() is True
+    before = len(spawned)
+    runner.save_json(runner.claim_path(r.folder), {"pid": 999999, "started": clock[0] + 5})
+    assert r.step() is False
+    assert len(spawned) == before  # it stopped instead of waking the helper again
+
+
+def test_an_older_claim_never_takes_the_folder_from_the_runner_that_has_it(tmp_path):
+    """A same-instant tie (or a stale claim from an older process) is broken by pid, the same way every
+    time, so two runners can never both decide they own the folder."""
+    r, clock, _spawned = make_runner(tmp_path)
+    assert r.step() is True
+    runner.save_json(runner.claim_path(r.folder), {"pid": max(1, os.getpid() - 1), "started": clock[0]})
+    assert r.step() is True
+    assert json.load(open(runner.claim_path(r.folder)))["pid"] == os.getpid()
 
 
 def test_runner_alive_follows_its_heartbeat_file(tmp_path):

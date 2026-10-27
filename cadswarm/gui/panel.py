@@ -2680,7 +2680,11 @@ def start_local_helpers(session, restart=False):
         try:
             if restart and runner_alive(folder):
                 stop_runner(folder)
-                time.sleep(3.5)  # it checks for the stop file between polls
+                # Wait until it has really stopped (it checks for the stop file between polls): starting
+                # the new one while the old still looks alive used to leave two runners on one helper.
+                deadline = time.time() + 10
+                while runner_alive(folder) and time.time() < deadline:
+                    time.sleep(0.25)
             if start_runner(folder, freecad_python(), LAUNCHER, prefs().GetString("ProjectName")):
                 started.append(name)
         except Exception as e:

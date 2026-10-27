@@ -69,6 +69,12 @@ def status_path(folder):
     return os.path.join(state_dir(folder), "runner.json")
 
 
+def claim_path(folder):
+    """Which runner looks after `folder`. Written once when a runner starts, so the newest one owns the
+    helper and any older copy stops itself (see Runner.other_runner)."""
+    return os.path.join(state_dir(folder), "runner.claim.json")
+
+
 def server_path(folder):
     """Where the runner remembers the warm OpenCode server it left running (a FreeCAD restart reuses it)."""
     return os.path.join(state_dir(folder), "opencode-server.json")
@@ -126,7 +132,9 @@ def start_runner(folder, python, launcher, project=""):
         kwargs["start_new_session"] = True  # keeps running after FreeCAD closes
     pid = subprocess.Popen([python, launcher, "runner", folder, project], **kwargs).pid
     # Claim the folder right away so a second click (or the next panel refresh) doesn't start another.
-    save_json(status_path(folder), {"pid": pid, "beat": time.time(), "state": "starting", "detail": ""})
+    # `started` lets the winner be decided when two did start: the newer process keeps the folder.
+    save_json(status_path(folder), {"pid": pid, "beat": time.time(), "state": "starting", "detail": "",
+                                    "started": time.time()})
     return pid
 
 
@@ -328,6 +336,7 @@ class Runner:
         self.hub = SpaceHub(self.cfg, load_json(self.ident_path, {}), timeout=30)
         self.clock = clock
         self.spawn = spawn or self._spawn
+        self.started = self.clock()  # this process's claim on the folder (see other_runner)
         self.child = None
         self.child_started = 0.0
         self.child_log_at = 0  # where the current run's own output starts in helper.log (see child_said)
@@ -380,12 +389,24 @@ class Runner:
         if state is not None:
             self.status = (state, detail or "")
         save_json(status_path(self.folder), {"pid": os.getpid(), "beat": self.clock(),
-                                             "state": self.status[0], "detail": self.status[1]})
+                                             "state": self.status[0], "detail": self.status[1],
+                                             "started": self.started})
 
-    def other_runner(self):
-        st = load_json(status_path(self.folder)) or {}
-        return st.get("pid") not in (None, os.getpid()) and runner_alive(self.folder, self.clock()) \
-            and st.get("state") != "starting"
+    def other_runner(self, claim=True):
+        """True when a newer runner owns this folder. Clicking Restart twice used to leave two or three
+        runners on one helper, each polling the team with its own warm server: the later process takes the
+        folder and the older ones stop themselves. `pid` breaks a same-instant tie.
+
+        With `claim` this also (re)takes the folder when it is ours or older: the newest runner always ends
+        up owning the claim file, whatever order two racing starts wrote it in."""
+        st = load_json(claim_path(self.folder)) or {}
+        mine = (self.started, os.getpid())
+        theirs = (float(st.get("started") or 0), int(st.get("pid") or 0))
+        if theirs > mine:
+            return True
+        if claim and (st.get("pid") != os.getpid() or st.get("started") != self.started):
+            save_json(claim_path(self.folder), {"pid": os.getpid(), "started": self.started})
+        return False
 
     # ------------------------------------------------------------------ warm server
 
@@ -726,6 +747,12 @@ class Runner:
             self.stop_all()
             self.log("stopped from FreeCAD")
             return False
+        if self.other_runner():
+            # A newer runner claimed the folder (Restart clicked twice, or two starts raced): this one
+            # must not keep polling the team beside it, with its own warm server.
+            self.stop_all()
+            self.log("a newer runner took this folder; stopping")
+            return False
         if self.child_running():
             self.write_status()
             return True
@@ -779,13 +806,15 @@ class Runner:
 
     def run(self):
         if self.other_runner():
+            self.log("a newer runner already looks after this folder; stopping")
             return
         self.write_status("starting")
         self.log(f"runner started for {self.cfg.get('name')} ({self.cfg.get('client')})")
         while self.step():
             time.sleep(POLL_SECONDS)
         self.stop_all()
-        if os.path.exists(status_path(self.folder)):
+        # A runner that stepped aside must not mark the folder stopped: the newer one is working in it.
+        if not self.other_runner(claim=False) and os.path.exists(status_path(self.folder)):
             save_json(status_path(self.folder), {"pid": os.getpid(), "beat": 0, "state": "stopped", "detail": ""})
 
 

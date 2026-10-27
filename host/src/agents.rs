@@ -139,6 +139,42 @@ pub fn log_tail(cfg: &HostConfig, name: &str, lines: usize) -> String {
     }
 }
 
+/// Where one start of an agent keeps its identity, config and log.
+pub fn run_dir(cfg: &HostConfig, name: &str) -> PathBuf {
+    cfg.data_dir.join("agents").join(name)
+}
+
+/// The agent folders on disk, so a host restart can find the leftovers of a brief it no longer holds in
+/// memory (its runtimes are gone, the folders and member rows are not).
+pub fn run_dirs(cfg: &HostConfig) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(cfg.data_dir.join("agents")) else { return Vec::new() };
+    rd.flatten().filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect()
+}
+
+/// Delete one finished agent's folder (its log, its sign-in). The host writes it again on the next start.
+pub fn remove_run_dir(cfg: &HostConfig, name: &str) {
+    let dir = run_dir(cfg, name);
+    if let Err(e) = std::fs::remove_dir_all(&dir) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("[host] could not remove {}: {e}", dir.display());
+        }
+    }
+}
+
+/// Make the next start of this agent a fresh member. Its old identity was taken off the team, and
+/// `rejoin` refuses a removed identity; the invite the next start gets is single-use, so setup must
+/// actually redeem it. The log and config stay, for the failure message and the pinned model.
+pub fn forget_identity(cfg: &HostConfig, name: &str) {
+    let path = run_dir(cfg, name).join(".cadswarm").join("identity.json");
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("[host] could not clear {}: {e}", path.display());
+        }
+    }
+}
+
 impl Agent {
     /// `ticket` is an agent invite minted by the host.
     pub fn spawn(cfg: &HostConfig, name: &str, ticket: &str, prompt: &str) -> Result<Agent> {
@@ -201,7 +237,16 @@ impl Agent {
         matches!(self.child.try_wait(), Ok(None))
     }
 
+    /// Stop it and everything it started. On Windows the MCP server is a grandchild process: killing
+    /// only the CLI would leave it holding the helper's seat in the team.
     pub fn kill(&mut self) {
+        if cfg!(windows) {
+            let _ = Command::new("taskkill")
+                .args(["/PID", &self.child.id().to_string(), "/T", "/F"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -353,6 +398,40 @@ mod tests {
         std::fs::write(agent.join("agent.log"), "first\n\nstarting\nworkspace has not been trusted\n").unwrap();
         let tail = log_tail(&cfg("claude", Vec::new(), dir.clone()), "planner-1", 2);
         assert!(tail.contains("trusted") && !tail.contains("first"), "{tail}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_finished_agents_folder_is_deleted_and_the_others_stay() {
+        // Every start of a one-job agent left a folder behind; a finished brief must not keep them.
+        let dir = std::env::temp_dir().join(format!("cadswarm-runs-{}", std::process::id()));
+        let c = cfg("opencode", Vec::new(), dir.clone());
+        for name in ["worker1-f413f129", "worker2-f413f129"] {
+            std::fs::create_dir_all(run_dir(&c, name)).unwrap();
+            std::fs::write(run_dir(&c, name).join("agent.log"), "built the lid").unwrap();
+        }
+        assert_eq!(run_dirs(&c).len(), 2);
+        remove_run_dir(&c, "worker1-f413f129");
+        // Only that start is gone: the other keeps its log, and removing twice is not an error.
+        assert_eq!(run_dirs(&c), vec!["worker2-f413f129".to_string()]);
+        remove_run_dir(&c, "worker1-f413f129");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_retired_agent_forgets_its_sign_in_but_keeps_its_log() {
+        // The next start must redeem its fresh invite: `rejoin` refuses an identity that was taken off
+        // the team, and the invite is single-use. The log stays for the brief's failure message.
+        let dir = std::env::temp_dir().join(format!("cadswarm-forget-{}", std::process::id()));
+        let c = cfg("opencode", Vec::new(), dir.clone());
+        let state = run_dir(&c, "planner-abc").join(".cadswarm");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("identity.json"), "{\"token\": \"t\"}").unwrap();
+        std::fs::write(run_dir(&c, "planner-abc").join("agent.log"), "workspace has not been trusted").unwrap();
+        forget_identity(&c, "planner-abc");
+        assert!(!state.join("identity.json").exists());
+        assert!(run_dir(&c, "planner-abc").join("agent.log").exists());
+        forget_identity(&c, "planner-abc");  // already gone: not an error
         std::fs::remove_dir_all(&dir).ok();
     }
 
