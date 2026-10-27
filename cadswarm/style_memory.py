@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS style_rules (
   source TEXT NOT NULL, resolved_n REAL DEFAULT 0, resolved_by TEXT, created_at REAL, updated_at REAL,
   seen_at REAL, mirrored INTEGER DEFAULT 0);
 """
-STATUSES = ("candidate", "active", "confirmed", "dismissed")
+STATUSES = ("candidate", "active", "confirmed", "dismissed", "expired")
 # Ops that change the model; queries never teach anything about style.
 MUTATING = {"create_primitive", "create_extrusion", "boolean", "set_property", "set_props", "set_expression",
             "set_placement", "delete", "set_param", "run_part_script", "insert_component",
@@ -60,6 +60,14 @@ ACTIVE_CONFIDENCE = 0.7
 MIN_OBSERVATIONS = 5
 HALF_LIFE_DAYS = 30.0
 WINDOW_EVENTS = 5000       # distil looks at this many most recent events
+CANDIDATE_TTL_DAYS = 14.0  # a candidate nobody answers and nothing supports again leaves the inbox
+# The triage inbox shows one decision per subject, under the kind of thing learned.
+SECTION_LABELS = {"param_convention": "Shared sizes", "correction_pattern": "Corrections",
+                  "preferred_component": "Preferred parts", "modelling_practice": "Habits",
+                  "recurring_problem": "Review problems", "proposed": "Helper proposals",
+                  "taught": "Your rules"}
+SECTION_ORDER = tuple(SECTION_LABELS)
+RECOMMEND_ORDER = {"confirm": 0, "look": 1, "dismiss": 2}
 
 
 class StyleError(Exception):
@@ -121,6 +129,119 @@ def confidence(n, consistency, people, occasions, age_days):
 def gate(conf, n, people, occasions):
     ok = conf >= ACTIVE_CONFIDENCE and n >= MIN_OBSERVATIONS and (people >= 2 or occasions >= 2)
     return "active" if ok else "candidate"
+
+
+def recommend(kind, evidence, confidence, source=""):
+    """What a person will probably decide: `confirm`, `dismiss` or `look`.
+
+    A suggestion, never an auto-apply. It is a pure function of the evidence and the kind of rule,
+    so a model-based classifier can replace it later without touching the inbox or its API."""
+    if source == "proposed" or kind in ("proposed", "taught"):
+        return "look"  # a person's wording or a helper's proposal always needs a person
+    evidence = evidence or {}
+    n = float(evidence.get("n") or 0)
+    if kind == "correction_pattern":
+        return "confirm" if n >= 4 else "look"  # corrections count double: two is a pattern
+    if kind == "recurring_problem":
+        if n >= 4:
+            return "confirm"  # seen in two designs, not a one-off
+        return "dismiss" if n <= 2 else "look"
+    if kind == "param_convention":
+        if confidence >= 0.45 and n >= 5:
+            return "confirm"
+        return "dismiss" if n <= 1 and confidence < 0.25 else "look"
+    if kind == "preferred_component":
+        share = evidence.get("consistency")
+        if n >= 5 and (share is None or share >= 0.6):
+            return "confirm"
+        return "dismiss" if n <= 1 else "look"
+    if kind == "modelling_practice":
+        if confidence >= 0.5 and n >= 5:
+            return "confirm"
+        return "dismiss" if n <= 1 else "look"
+    return "look"
+
+
+def subject_of(rule):
+    """The one thing a rule is about; rules with the same subject are one decision.
+
+    A size convention and the correction pattern for the same Param are two views of one fact,
+    so they share `param:<alias>` and a person answers them together."""
+    kind = rule["type"]
+    key = rule.get("key") or ""
+    if rule.get("source") == "proposed":
+        return f"proposal:{rule['id']}"
+    if rule.get("source") == "taught":
+        return f"taught:{rule['id']}"
+    if kind == "param_convention":
+        return f"param:{key}"
+    if kind == "correction_pattern":
+        head, _, tail = key.partition(":")
+        return f"param:{tail}" if head == "param" else f"edit:{tail or key}"
+    if kind == "preferred_component":
+        return f"part:{key}"
+    if kind == "modelling_practice":
+        return f"habit:{key}"
+    if kind == "recurring_problem":
+        return f"problem:{rule.get('scope') or 'team'}:{key}"
+    return f"{kind}:{rule['id']}"
+
+
+def section_of(subject):
+    """Which kind section a subject belongs to: a shared size even when its correction is stronger."""
+    for prefix, kind in (("param:", "param_convention"), ("edit:", "correction_pattern"),
+                         ("part:", "preferred_component"), ("habit:", "modelling_practice"),
+                         ("problem:", "recurring_problem"), ("proposal:", "proposed"), ("taught:", "taught")):
+        if subject.startswith(prefix):
+            return kind
+    return "taught"
+
+
+def evidence_detail(rule):
+    """One line of evidence under a decision, in the same words the dialog already uses."""
+    ev = rule.get("evidence") or {}
+    if rule.get("source") in ("taught", "proposed"):
+        who = ev.get("taught_by") or "someone"
+        return f"taught by {who}" if rule["source"] == "taught" else f"proposed by {who}"
+    bits = []
+    if isinstance(ev.get("n"), (int, float)):
+        bits.append(f"seen {ev['n']:g}×")
+    if ev.get("people"):
+        bits.append(f"{ev['people']} {'person' if ev['people'] == 1 else 'people'}")
+    bits.append(f"confidence {rule.get('confidence', 0):.0%}")
+    return ", ".join(bits)
+
+
+def _group_status(rules):
+    statuses = {r["status"] for r in rules}
+    for status in ("confirmed", "active", "expired", "dismissed"):
+        if status in statuses:
+            return status
+    return "candidate"
+
+
+def _group(rules):
+    """Collapse rules into decisions: strongest statement first, the rest as `also`."""
+    by_subject = {}
+    for r in rules:
+        by_subject.setdefault(subject_of(r), []).append(r)
+    out = []
+    for subject, rs in by_subject.items():
+        rs.sort(key=lambda r: (r["confidence"], r["updated_at"] or 0), reverse=True)
+        top = rs[0]
+        kind = section_of(subject)
+        # Each rule is judged by its own kind (a correction and a convention need different
+        # evidence); the group takes the strongest recommendation.
+        choices = [recommend(r["type"], r["evidence"], r["confidence"], r["source"]) for r in rs]
+        recommendation = "confirm" if "confirm" in choices else (
+            "dismiss" if all(c == "dismiss" for c in choices) else "look")
+        out.append({"subject": subject, "kind": kind, "title": top["statement"],
+                    "detail": evidence_detail(top), "also": [r["statement"] for r in rs[1:]],
+                    "ids": [r["id"] for r in rs], "confidence": top["confidence"],
+                    "recommendation": recommendation, "source": top["source"],
+                    "status": _group_status(rs),
+                    "seen_at": max((r["seen_at"] or 0) for r in rs)})
+    return out
 
 
 def _numbers_in(text):
@@ -373,8 +494,9 @@ class StyleMemory:
                 if row is not None:
                     if row["status"] == "confirmed":
                         status = "confirmed"
-                    elif row["status"] == "dismissed" and r["evidence"]["n"] < 2 * (row["resolved_n"] or 0):
-                        status = "dismissed"
+                    elif row["status"] in ("dismissed", "expired") and \
+                            r["evidence"]["n"] < 2 * (row["resolved_n"] or 0):
+                        status = row["status"]  # a person's no, or a quiet expiry, holds until evidence doubles
                 statement = r["template"]
                 if row is not None and row["template"] == r["template"] and row["statement"]:
                     statement = row["statement"]  # keep an analyst's wording while the facts are the same
@@ -403,9 +525,25 @@ class StyleMemory:
                 else:
                     self.db.execute("DELETE FROM style_rules WHERE id=?", (row["id"],))
                 changed.append(row["id"])
+            changed.extend(self._expire(now))
             self._since_distil = 0
             counts = dict(self.db.execute("SELECT status, COUNT(*) FROM style_rules GROUP BY status").fetchall())
             return {"changed": changed, "rules": {s: counts.get(s, 0) for s in STATUSES}}
+
+    def _expire(self, now):
+        """Candidates nothing has supported for two weeks leave the inbox, recoverably.
+
+        `seen_at` is the last evidence, not the last recompute, so a rule that keeps gathering
+        evidence (and may still become active) is never expired. The evidence count is recorded
+        so the existing `evidence doubles` rule can bring it back."""
+        cutoff = now - CANDIDATE_TTL_DAYS * 86400
+        rows = self.db.execute("SELECT id, evidence FROM style_rules WHERE status='candidate' AND seen_at < ?",
+                               (cutoff,)).fetchall()
+        for row in rows:
+            n = json.loads(row["evidence"] or "{}").get("n", 0)
+            self.db.execute("UPDATE style_rules SET status='expired', resolved_n=?, updated_at=?, mirrored=0 "
+                            "WHERE id=?", (n, now, row["id"]))
+        return [row["id"] for row in rows]
 
     # ----------------------------------------------------------------- people
 
@@ -447,6 +585,27 @@ class StyleMemory:
                                             self.clock(), rid))
         return self.rule(rid)
 
+    def resolve_many(self, ids, decision, by):
+        """One answer for a whole decision: every rule describing the same thing is resolved."""
+        if decision not in ("confirm", "dismiss"):
+            raise StyleError("bad_args", "decision must be confirm or dismiss")
+        ids = list(dict.fromkeys(str(i) for i in (ids or [])))
+        if not ids:
+            raise StyleError("bad_args", "rule_ids is required")
+        rows = {row["id"]: row for row in self.db.execute(
+            f"SELECT * FROM style_rules WHERE id IN ({','.join('?' * len(ids))})", ids).fetchall()}
+        missing = [i for i in ids if i not in rows]
+        if missing:
+            raise StyleError("not_found", f"No style rule {missing[0]}")
+        status = "confirmed" if decision == "confirm" else "dismissed"
+        now = self.clock()
+        with self.lock:
+            for rid in ids:
+                n = json.loads(rows[rid]["evidence"] or "{}").get("n", 0)
+                self.db.execute("UPDATE style_rules SET status=?, resolved_n=?, resolved_by=?, updated_at=?,"
+                                " mirrored=0 WHERE id=?", (status, n, by, now, rid))
+        return [self.rule(i) for i in ids]
+
     # ----------------------------------------------------------------- recall
 
     def rule(self, rid):
@@ -458,6 +617,33 @@ class StyleMemory:
         rows = self.db.execute(f"SELECT * FROM style_rules WHERE status IN ({marks}) "
                                "ORDER BY confidence DESC, updated_at DESC", tuple(statuses)).fetchall()
         return [_rule(r) for r in rows]
+
+    def inbox(self):
+        """What waits for a person, as decisions grouped by subject and kind.
+
+        Reading the inbox also expires quiet candidates, so opening the dialog always shows the
+        same backlog a later distil would."""
+        self._expire(self.clock())
+        rows = [_rule(r) for r in self.db.execute("SELECT * FROM style_rules").fetchall()]
+        groups = _group(rows)  # one group per subject, whatever the status of its rules
+        # A subject is only pending when every rule about it is still a candidate: once any rule is
+        # in use (or was answered), the same fact never asks again through a sibling rule.
+        pending = [g for g in groups if g["status"] == "candidate"]
+        sections = []
+        for kind in SECTION_ORDER:
+            found = sorted((g for g in pending if g["kind"] == kind),
+                           key=lambda g: (RECOMMEND_ORDER[g["recommendation"]], -g["confidence"]))
+            if found:
+                sections.append({"kind": kind, "label": SECTION_LABELS[kind], "count": len(found),
+                                 "decisions": found})
+        used = sorted((g for g in groups if g["status"] in ("confirmed", "active")),
+                      key=lambda g: (g["status"] != "confirmed", -g["confidence"]))
+        history = sorted((g for g in groups if g["status"] in ("expired", "dismissed")),
+                         key=lambda g: (-g["seen_at"], g["title"]))[:200]
+        return {"rules": sum(len(g["ids"]) for g in pending), "decisions": len(pending),
+                "ready": sum(1 for g in pending if g["recommendation"] == "confirm"),
+                "weak": sum(1 for g in pending if g["recommendation"] == "dismiss"),
+                "sections": sections, "used": used, "history": history}
 
     def context(self, query="", board="", limit=8):
         """The rules an agent should follow for this request, firmest and most relevant first."""

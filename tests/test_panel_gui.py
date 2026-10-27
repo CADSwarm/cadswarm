@@ -78,7 +78,23 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "a stand for a 7 mm phone" not in r["team_outbox"], r["team_outbox"]
     assert r["team_notice"] == ["Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."]
     assert "Handed to the team: it plans the work" in r["team_chat"]
-    # Suggestions sit on the Team tab with Accept/Dismiss; answering one sends it and takes it off the card.
+    # Suggestions sit on the Team tab; answering a setting sends it and takes it off the card. The learned
+    # style backlog is one summary row whose button opens the triage dialog (it does not answer rules itself).
     assert r["suggestions_shown"] and r["suggestions_cleared"]
-    assert r["answered"] == [["/settings/suggestions/7", {"accept": True}],
-                             ["/style/resolve", {"rule_id": 3, "decision": "dismiss"}]]
+    assert r["style_opened"] is True, r["style_opened"]
+    assert r["answered"] == [["/settings/suggestions/7", {"accept": True}]], r["answered"]
+    # The dialog: one decision per subject, grouped in sections, with a bulk action that lists every rule
+    # it would make, the weak set, the rules in use, and a recoverable expired history.
+    inbox = r["style_inbox"]
+    assert inbox["summary"] == ("4 things learned · 3 decisions · 1 ready to use, 1 weak. "
+                                "Mostly 2 shared sizes, 1 review problems."), inbox["summary"]
+    assert inbox["sections"] == ["Shared sizes · 2", "Review problems · 1"], inbox["sections"]
+    assert inbox["ready"] == {"shown": True, "toggle": "Review the ready rules · 1",
+                              "apply": "Make these rules · 1", "ids": ["r_wall1", "r_wall2"]}, inbox["ready"]
+    assert inbox["weak"] == {"shown": True, "toggle": "Review the weak ones · 1",
+                             "apply": "Dismiss these · 1"}, inbox["weak"]
+    assert inbox["history"] == {"toggle": "Expired or dismissed · 1", "rows": 1, "shown": True}, inbox["history"]
+    assert inbox["used"] == {"shown": True, "rows": 1}, inbox["used"]
+    # Applying the ready block answers every rule behind the decision in one request.
+    assert inbox["posted"] == [["/style/resolve", {"rule_ids": ["r_wall1", "r_wall2"],
+                                                  "decision": "confirm"}]], inbox["posted"]

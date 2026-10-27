@@ -294,6 +294,26 @@ def test_people_teach_style_and_agents_only_propose_it(tmp_path):
     assert "[confirmed] Use M3 everywhere" in ctx["text"]
 
 
+def test_style_inbox_is_one_decision_and_resolves_the_whole_group(tmp_path):
+    p = project(tmp_path)
+    for i in range(2):
+        for actor, value in ((AGENT, "1.6"), (HUMAN, "2.4")):
+            helper.handle(p, {"id": 10 + i * 2 + (actor is HUMAN), "op": "observe_op", "args": {
+                "kind": "set_param", "args": {"alias": "wall", "value": value}, "ok": True, "actor": actor}})
+    helper.handle(p, {"id": 20, "op": "learn_style", "args": {}})
+    box = helper.handle(p, {"id": 21, "op": "style_inbox", "args": {}})["result"]
+    assert box["decisions"] == 1 and box["rules"] == 2
+    [decision] = box["sections"][0]["decisions"]
+    assert decision["subject"] == "param:wall" and len(decision["ids"]) == 2
+    refused = helper.handle(p, {"id": 22, "op": "resolve_style", "args": {
+        "rule_ids": decision["ids"], "decision": "confirm", "_actor": AGENT}})
+    assert refused["code"] == "humans_only"
+    r = helper.handle(p, {"id": 23, "op": "resolve_style", "args": {
+        "rule_ids": decision["ids"], "decision": "confirm", "_actor": HUMAN}})
+    assert r["ok"] and {x["status"] for x in r["result"]["rules"]} == {"confirmed"}
+    assert helper.handle(p, {"id": 24, "op": "style_inbox", "args": {}})["result"]["decisions"] == 0
+
+
 def test_a_finished_brief_relearns_locally(tmp_path):
     p = project(tmp_path)
     r = helper.handle(p, {"id": 1, "op": "observe_brief", "args": {
