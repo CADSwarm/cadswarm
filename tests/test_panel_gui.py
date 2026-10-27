@@ -28,6 +28,12 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
                               "back_down": True}, r["chat_jump"]
     assert r["toast"] == "✓  Created task “Lid”"  # confirmations reach people who never open the console
     assert "teammate's computer" in r["away_tip"]
+    # Opening the workbench keeps FreeCAD answering: the rejoin happens in the background, the panel
+    # says "Joining…", and the team comes up (with its parts) once the slow team has answered.
+    assert r["startup"] == {"returned_fast": True, "seconds_blocked": r["startup"]["seconds_blocked"],
+                            "state_while_joining": "connecting", "connected": True, "parts": 1,
+                            "workers_started": True, "joining_flag_cleared": True}, r["startup"]
+    assert r["startup"]["seconds_blocked"] < 0.3, r["startup"]
     # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
     assert [t.split(" ")[0] for t in r["tabs"]] == ["Team", "Tasks", "Activity", "Sizes", "Files", "Library",
                                                      "Remote", "Tools"], r["tabs"]

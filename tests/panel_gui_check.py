@@ -403,8 +403,94 @@ s.act = real_act
 dlg_style.close()
 style_inbox = {"summary": style_summary, "sections": style_sections, "ready": style_ready, "weak": style_weak,
                "history": style_history, "used": style_used, "posted": style_posts}
+
+# Opening the workbench must not freeze FreeCAD. A busy team takes tens of seconds to answer (the live
+# model alone can be 10 MB), so the rejoin runs on a background thread and the window keeps painting;
+# doing it in Activated() made Windows draw FreeCAD as "not responding" until the team was read.
+class SlowTeam:
+    """A team whose join and first read are slow, like a hosted one under load."""
+    cfg = {"db": "team-db"}
+    hub = "http://127.0.0.1:1"
+
+    def mirror_changes(self, applied):
+        time.sleep(0.4)
+        return {}, [], {}
+
+    def panel_snapshot(self):
+        time.sleep(0.4)
+        return snap
+
+    def post(self, path, body=None):
+        return {}
+
+    def get(self, path, **params):
+        return {"events": [], "seq": 0}
+
+
+class FakeDoc:
+    """Stands in for the live-model document: this check has no real one to draw into."""
+    Objects = []
+    Label = ""
+
+    def recompute(self):
+        return None
+
+    def getObject(self, name):
+        return None
+
+
+class FakePrefs:
+    def __init__(self, **values):
+        self.values = values
+
+    def GetString(self, key):
+        return self.values.get(key, "")
+
+    def SetString(self, key, value):
+        self.values[key] = value
+
+
+def startup_check():
+    real = (panel.prefs, panel.load_identity, panel.save_identity, panel.remember_team, panel.host_dir_for,
+            panel.Session._join, panel.Session._start_workers)
+    started = []
+    panel.prefs = lambda: FakePrefs(Uri="http://127.0.0.1:1", Db="team-db", HostDataDir="", Name="carol",
+                                    ProjectName="Demo")
+    panel.load_identity = lambda db: {"name": "carol", "token": "t" * 32, "seq": 0}
+    panel.save_identity = lambda db, ident: None
+    panel.remember_team = lambda *a: None
+    panel.host_dir_for = lambda db: ""
+    panel.Session._join = lambda self, cfg, identity, name, timeout, host_dir="": (SlowTeam(), dict(identity))
+    panel.Session._start_workers = lambda self: started.append(self.state)
+    try:
+        s = panel.Session()
+        s.mirror = lambda: FakeDoc()  # no real document in this check
+        began = time.time()
+        s.try_auto_rejoin()
+        blocked = time.time() - began
+        during = s.state
+        for _ in range(400):  # what FreeCAD's event loop does while the person waits
+            QtGui.QApplication.processEvents()
+            s.drain()
+            if s.state == "connected":
+                break
+            time.sleep(0.01)
+        found = {"returned_fast": blocked < 0.3, "seconds_blocked": round(blocked, 3),
+                 "state_while_joining": during, "connected": s.state == "connected",
+                 "parts": len(s.model.get("objects", [])), "workers_started": started == ["connected"],
+                 "joining_flag_cleared": s._joining is False}
+        if s.timer:
+            s.timer.stop()  # this check's session is not the panel's
+        return found
+    finally:
+        (panel.prefs, panel.load_identity, panel.save_identity, panel.remember_team, panel.host_dir_for,
+         panel.Session._join, panel.Session._start_workers) = real
+
+
+startup = startup_check()
 result = {
     "layout": checks,
+    "startup": startup,
     "remote": remote,
     "invite_button": invite_button,
     "run_simulation": run_simulation,

@@ -178,8 +178,9 @@ class Session:
         self.project = ""      # the project name this session belongs to (names the live-model tab)
         self._moved_hint = 0
         self._framed = False   # the live model was fitted in view once (a refresh must not re-fit it)
-        # What the panel's banner tells the user: disconnected | connected | offline | ended
+        # What the panel's banner tells the user: connecting | disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
+        self._joining = False    # a background rejoin is in flight (try_auto_rejoin)
         self._working = 0        # requests this session started and hasn't finished (holds buttons down)
         self._idle_waiters = []  # callbacks to run when the last one finishes
 
@@ -202,11 +203,15 @@ class Session:
 
     def try_auto_rejoin(self):
         """Opening the workbench should just work: first time -> the setup guide; a host whose team
-        server stopped (e.g. after a reboot) -> the guide restarts it; otherwise quietly rejoin."""
+        server stopped (e.g. after a reboot) -> the guide restarts it; otherwise quietly rejoin.
+
+        The rejoin runs on a background thread: joining and reading a busy team (the live model alone
+        can be 10 MB, and every view is a database round trip) takes tens of seconds, and doing that
+        here froze FreeCAD's window for as long as it took — Windows drew it as "not responding"."""
         p = prefs()
         uri, db = p.GetString("Uri"), p.GetString("Db")
         ident = load_identity(db) if db else {}
-        if self.connected:
+        if self.connected or self._joining:
             return
         from .wizard import run_wizard
         if not (uri and db and ident.get("token")):
@@ -217,27 +222,95 @@ class Session:
             if not hosting.team_ready(p.GetString("HostDataDir")):
                 QtCore.QTimer.singleShot(300, lambda: run_wizard(start="reconnect"))
                 return
+        self._rejoin({"uri": uri, "db": db}, ident, p.GetString("Name"), p.GetString("ProjectName"))
+
+    def _rejoin(self, cfg, identity, name, project):
+        """Join and read the team off the GUI thread; drain() adopts the result (see _adopted).
+
+        Everything here is network + files: no widget and no document is touched, so the window keeps
+        answering. The panel says "Joining…" until it is done."""
+        self._joining = True
+        self.set_state("connecting")
+        if self.timer is None:  # nothing else starts it before a session exists: the result arrives here
+            self.timer = QtCore.QTimer()
+            self.timer.timeout.connect(self.drain)
+        self.timer.start(250)
+        events, host_dir = self.events, host_dir_for(cfg["db"])
+
+        def go():
+            try:
+                client, ident = self._join(cfg, identity, name, timeout=3, host_dir=host_dir)
+                breps, _gone, mirrored = client.mirror_changes({})
+                snap = client.panel_snapshot()
+            except Exception as e:  # a stopped server, a stale sign-in, a team that is too busy
+                events.put(("rejoin", (cfg, None, None, project, None, None, None,
+                                       friendly_error(e, cfg.get("uri")))))
+                return
+            events.put(("rejoin", (cfg, client, ident, project, breps, mirrored, snap, None)))
+
+        threading.Thread(target=go, daemon=True, name="cadswarm-rejoin").start()
+
+    def _adopted(self, cfg, client, ident, project, breps, mirrored, snap, error):
+        """The background rejoin came back: finish it here, where widgets and the document live."""
+        self._joining = False
+        if error:
+            if self.timer:
+                self.timer.stop()  # nothing to drain: no session was started
+            self.set_state("disconnected", error)  # the banner says why, with Get started beside it
+            return
+        self._end_session()  # a previous session's threads must never act on this one
+        self._adopt(cfg, client, ident, project)
         try:
-            self.connect({"uri": uri, "db": db}, ident, p.GetString("Name"), timeout=3)
-        except HubRequestError as e:
-            self.set_state("disconnected", friendly_error(e, uri))
+            self.apply_breps(breps or {})
+            self.mirrored = mirrored or {}  # what the model shows now: the mirror loop only fetches changes
+            self.remove_objects([o.Name for o in self.mirror().Objects if o.Name not in self.mirrored])
+            if snap:
+                self.apply_snapshot(snap)
+            self.frame_model()
+        except Exception as e:
+            warn(f"couldn't show the team's model: {e}")
+            self.disconnect()
+            return
+        self._start_workers()
+
+    def _join(self, cfg, identity, name, timeout, host_dir=""):
+        """The network half of joining: build the client and redeem this person's identity. It touches
+        no Qt and no document, so it may run on a background thread."""
+        client = SpaceHub({"uri": cfg["uri"], "db": cfg["db"], "name": name, "host_dir": host_dir},
+                          dict(identity or {}), timeout=timeout)
+        ident = client.join(client="freecad")  # a new fence: an older window can no longer act
+        client.timeout = client.space.timeout = 30  # the quick rejoin timeout is only for the first call
+        client.identity = ident
+        return client, ident
 
     def connect(self, cfg, identity=None, name=None, timeout=30, project=None):
         """Join (or rejoin) the team in `cfg` {"uri", "db"} with this person's SpacetimeDB `identity`.
 
-        The identity is saved under the app folder per team, so opening FreeCAD again just rejoins."""
+        The identity is saved under the app folder per team, so opening FreeCAD again just rejoins.
+        This waits while it reads the team, so only call it where the person is already waiting on it
+        (the setup guide); opening the workbench goes through try_auto_rejoin, which does it in the
+        background so FreeCAD's window never stops answering."""
         p = prefs()
         name = name or (identity or {}).get("name") or p.GetString("Name")
         self._end_session()  # a previous session's threads must never act on this one
-        client = SpaceHub({"uri": cfg["uri"], "db": cfg["db"], "name": name,
-                           "host_dir": host_dir_for(cfg["db"])}, dict(identity or {}), timeout=timeout)
-        self.ident = client.join(client="freecad")  # a new fence: an older window can no longer act
-        client.timeout = client.space.timeout = 30  # the quick rejoin timeout is only for the first call
-        client.identity = self.ident
+        client, ident = self._join(cfg, identity, name, timeout, host_dir_for(cfg["db"]))
+        self._adopt(cfg, client, ident, project)
+        try:
+            self.full_refresh()
+        except Exception:
+            self.disconnect()  # don't stay "connected" to a session that failed to load
+            raise
+        self._start_workers()
+
+    def _adopt(self, cfg, client, ident, project=None):
+        """The GUI half of joining: keep the sign-in and name the live-model tab. Only the person's own
+        window may see this (it writes preferences and touches the document's tab)."""
+        p = prefs()
+        self.ident = ident
         self.client = client
         p.SetString("Uri", cfg["uri"])
         p.SetString("Db", cfg["db"])
-        p.SetString("Name", self.ident.get("name") or name)
+        p.SetString("Name", self.ident.get("name") or p.GetString("Name"))
         save_identity(cfg["db"], self.ident)
         # Note the team so it can be reopened later (this computer hosts it only if host_dir_for says so).
         hosted = host_dir_for(cfg["db"])
@@ -252,24 +325,24 @@ class Session:
         if self.timer is None:
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self.drain)
-        try:
-            self.set_state("connected")
-            self.full_refresh()
-        except Exception:
-            self.disconnect()  # don't stay "connected" to a session that failed to load
-            raise
-        self.wake, mirror_wake = threading.Event(), threading.Event()
+        self.set_state("connected")
+
+    def _start_workers(self):
+        """Start the background loops once the team is on screen. They never touch Qt or the document;
+        they only queue work for drain() (called by this session's timer on the GUI thread)."""
+        wake, mirror_wake = threading.Event(), threading.Event()
+        self.wake = wake
         threading.Thread(target=self._poll_loop, args=(self.stop, self.events, self._bg_client(), self.seq, mirror_wake),
                          daemon=True).start()
         threading.Thread(target=self._heartbeat_loop, args=(self.stop, self.events, self._bg_client(), self.seq),
                          daemon=True).start()
-        threading.Thread(target=self._refresh_loop, args=(self.stop, self.events, self._bg_client(), self.wake),
+        threading.Thread(target=self._refresh_loop, args=(self.stop, self.events, self._bg_client(), wake),
                          daemon=True).start()
         threading.Thread(target=self._mirror_loop,
                          args=(self.stop, self.events, self._bg_client(), mirror_wake, dict(self.mirrored)),
                          daemon=True).start()
         self.timer.start(250)
-        say(f"Joined the team in {cfg['db']} as {self.ident.get('name')}")
+        say(f"Joined the team in {self.client.cfg['db']} as {self.ident.get('name')}")
 
     def participant(self, name):
         return next((p for p in self.model.get("participants", []) if p["name"] == name), None)
@@ -421,6 +494,9 @@ class Session:
             elif kind == "fatal":
                 warn(data)
                 self.disconnect(reason=data)
+            elif kind == "rejoin":
+                # Adopt after this pass: _adopt swaps this queue and this dispatch's timer.
+                QtCore.QTimer.singleShot(0, lambda d=data: self._adopted(*d))
         if refresh:
             self.request_refresh()
         self.guard_local_moves()
@@ -1283,6 +1359,7 @@ class TeamPanel(QtGui.QDockWidget):
 
     BANNERS = {
         # state: (status colour, status word, headline, button)
+        "connecting": ("#d29922", "Joining…", "Rejoining your team…", ""),
         "disconnected": ("#d29922", "Not joined", "You haven't joined a team session yet.", "Get started…"),
         "offline": ("#f85149", "Reconnecting", "Lost contact with your team. Retrying automatically…",
                     "Retry now"),
@@ -1316,10 +1393,14 @@ class TeamPanel(QtGui.QDockWidget):
                       + (f"<br><i>{s.state_detail}</i>".replace("\n", " ") if s.state_detail else ""))
         elif s.state in ("offline", "ended"):
             detail = s.state_detail.replace("\n", "<br>")
+        elif s.state == "connecting":
+            detail = ("Reading the team's model and tasks. FreeCAD stays usable while this finishes."
+                      + (f"<br><i>{s.state_detail}</i>" if s.state_detail else ""))
         self.banner_text.setText(f"<b>{headline}</b>" + (f"<br><span style='color:#8b949e'>{detail}</span>"
                                                           if detail else "")
                                  if s.state != "connected" else f"<span style='color:#8b949e'>{headline}</span>")
         self.banner_button.setText(button)
+        self.banner_button.setVisible(s.state != "connecting")  # nothing to press while it joins by itself
         # Not in a team: joining is the one thing to do, so its button stands out.
         primary = "" if s.state == "connected" else "primary"
         if self.banner_button.objectName() != primary:
@@ -1335,6 +1416,8 @@ class TeamPanel(QtGui.QDockWidget):
 
     def banner_action(self):
         s = self.session
+        if s.state == "connecting":
+            return  # it is joining by itself; a second join would fight the first
         if s.state == "connected":
             if confirm("Leave the team session? Your locks will be released so others can edit those parts."):
                 s.disconnect()
