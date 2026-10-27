@@ -1,7 +1,7 @@
 """Agent pointers drawn *inside* FreeCAD's 3D view.
 
-The team panel already mirrors the shared model in the read-only "CADSwarm Live"
-document.  This module adds one marker per teammate whose pointer is not idle: a
+The team panel already mirrors the shared model in the read-only document named
+after the project.  This module adds one marker per teammate whose pointer is not idle: a
 soft, rounded cursor arrow in that member's colour, sitting exactly on the spot
 they mean.  It carries no text, no outline and no leader line, so the model
 underneath stays readable; who is pointing at what, and in which colour, is the
@@ -24,7 +24,8 @@ import queue
 import threading
 import time
 
-MIRROR_DOC = "CadSwarmLive"     # keep in step with panel.MIRROR_DOC
+from ..naming import MIRROR_DOC, is_mirror_doc
+
 POLL_SECONDS = 0.8              # how often the pointer views are re-read
 FRAME_MS = 40                   # 25 fps glide; cheap enough to leave running
 FADE_SECONDS = 0.9
@@ -529,7 +530,7 @@ def _reduce_motion():
 
 
 class Overlay:
-    """Draws the live pointers over the CADSwarm Live view, or over the active document when it
+    """Draws the live pointers over the shared-model view, or over the active document when it
     holds the parts being pointed at.  Create on the GUI thread."""
 
     def __init__(self, source, on_error=None, document=MIRROR_DOC):
@@ -630,21 +631,22 @@ class Overlay:
 
     def _pick_document(self):
         """The document whose view gets the arrows: the active one when it holds a part someone is
-        pointing at (your own working copy of the model), otherwise the CADSwarm Live mirror."""
+        pointing at (your own working copy of the model), otherwise the shared-model mirror."""
         import FreeCAD as App
         import FreeCADGui as Gui
         active = Gui.ActiveDocument
-        if active is not None and active.Document.Name != self.document:
+        if active is not None and not is_mirror_doc(active.Document.Name):
             if any(active.Document.getObject(t["object"]) for t in self._targets.values() if t["object"]):
                 return active
-        if self.document in App.listDocuments():
-            return Gui.getDocument(self.document)
-        return None
+        doc = App.listDocuments().get(self.document)
+        if doc is None:  # a mirror FreeCAD had to suffix (CadSwarmLive1) is still the shared model
+            doc = next((d for n, d in App.listDocuments().items() if is_mirror_doc(n)), None)
+        return Gui.getDocument(doc.Name) if doc is not None else None
 
     def _shows(self, target):
         """In a document other than the mirror, only arrows on parts that document has."""
         doc = getattr(self._gui_doc, "Document", None)
-        if doc is None or doc.Name == self.document or not target["object"]:
+        if doc is None or is_mirror_doc(doc.Name) or not target["object"]:
             return True
         return doc.getObject(target["object"]) is not None
 

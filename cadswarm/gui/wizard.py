@@ -956,7 +956,8 @@ class SetupWizard(QtGui.QDialog):
             self.helper_status.setObjectName("ok")
             self.helper_status.setStyleSheet("color: #4fb35a; font-weight: 600;")
             self.helper_status.setText(f"✓ Your AI helper “{self.agent_name}” is on the team. Tell it what to "
-                                       "build in the panel's Chat and watch the parts appear in CADSwarm Live.")
+                                       "build in the panel's Chat and watch the parts appear in "
+                                       f"“{self.project or 'the live model'}”.")
             self.primary.setText("Done, show me the model")
 
     # ------------------------------------------------------------- reconnect
@@ -1013,8 +1014,11 @@ class SetupWizard(QtGui.QDialog):
         if not (db and ident.get("token")):
             raise RuntimeError("Your sign-in for this team isn't on this computer any more. Join again with a "
                                "new invite code from a teammate (CADSwarm ▸ Get started ▸ Join).")
-        panel.SESSION.connect({"uri": self.p.GetString("Uri"), "db": db}, ident, self.p.GetString("Name"),
-                              timeout=10)
+        try:
+            panel.SESSION.connect({"uri": self.p.GetString("Uri"), "db": db}, ident, self.p.GetString("Name"),
+                                  timeout=10)
+        except HubRequestError as e:
+            raise RuntimeError(panel.friendly_error(e, self.p.GetString("Uri"))) from e
 
     # ---------------------------------------------------------------- finish
 
@@ -1023,6 +1027,7 @@ class SetupWizard(QtGui.QDialog):
         self.accept()
         panel.show_panel()
         if panel.SESSION.connected:
+            panel.SESSION.show_model()  # what "Done, show me the model" promises
             panel.SESSION.request_refresh()
 
 

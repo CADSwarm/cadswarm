@@ -1,7 +1,7 @@
 """CADSwarm workbench: a human's seat at the table.
 
-* A live, read-only MIRROR document ("CADSwarm Live") shows the hub's shared
-  model, each part colored by whoever holds its lock, updated as agents work.
+* A live, read-only MIRROR document (named after the project) shows the hub's
+  shared model, each part colored by whoever holds its lock, updated as agents work.
 * A TEAM PANEL shows presence, locks, tasks and the session chat, and lets the
   human steer: message agents (human messages outrank peer requests in every
   agent's inbox), lock/release parts, force a takeover, create tasks, set
@@ -29,13 +29,13 @@ from .. import hosting, qr, ticket
 from ..client import HubRequestError, load_json, save_json
 from ..invite import InviteError, read_invite
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
+from ..naming import MIRROR_DOC, is_mirror_doc, mirror_label
 from ..paths import app_dir
 from ..space_hub import SpaceHub
 from ..teams import recent_teams, remember_team
 from . import fea_ui, library_ui, lighten_ui, overlay, panes, style_ui, theme
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
-MIRROR_DOC = "CadSwarmLive"
 HEARTBEAT_SECONDS = 10
 REFRESH_SECONDS = 3         # the panel re-reads the team this often (in the background) even with no events
 HELPER_CHECK_SECONDS = 20   # how often to make sure this computer's AI helpers are running
@@ -125,6 +125,14 @@ def friendly_error(e, hub=""):
         return (f"Couldn't reach your team's server at {hub or 'that address'}.\n"
                 "Check your internet connection, and that whoever is hosting the team has it running "
                 "(CADSwarm ▸ Get started ▸ Reconnect).")
+    if code in (404, 503) or getattr(e, "status", None) in (404, 503):
+        if 503 in (code, getattr(e, "status", None)):
+            return ("That project's database is paused on SpacetimeDB, so it can't answer yet.\n"
+                    "On spacetimedb.com, open the database and click Start Database, then reconnect. "
+                    "(Or start a new team on this computer: CADSwarm ▸ Get started.)")
+        return ("That project's database isn't on this computer's team server any more — it was rebuilt "
+                "from empty.\nYour files are still in the project folder, so start the team again "
+                "(CADSwarm ▸ Get started) or open the project's model.FCStd.")
     return {
         "bad_invite": "That invite code has already been used or has expired. Ask your teammate for a new one.",
         "not_member": "Your saved sign-in isn't part of this team any more. Join again with a new invite code.",
@@ -167,7 +175,9 @@ class Session:
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
         self.mirrored = {}     # part name -> version the live model showed at join (the mirror loop takes it on)
+        self.project = ""      # the project name this session belongs to (names the live-model tab)
         self._moved_hint = 0
+        self._framed = False   # the live model was fitted in view once (a refresh must not re-fit it)
         # What the panel's banner tells the user: disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
         self._working = 0        # requests this session started and hasn't finished (holds buttons down)
@@ -231,8 +241,10 @@ class Session:
         save_identity(cfg["db"], self.ident)
         # Note the team so it can be reopened later (this computer hosts it only if host_dir_for says so).
         hosted = host_dir_for(cfg["db"])
-        remember_team(project or p.GetString("ProjectName"), cfg["uri"], cfg["db"],
+        self.project = project or p.GetString("ProjectName")
+        remember_team(self.project, cfg["uri"], cfg["db"],
                       hosted, p.GetString("HostMode") if hosted else "")
+        self.label_mirror()  # a live model left open from another team takes the new project's name
         # Fresh stop flag and queue per connection: a worker still blocked in an old long-poll can
         # only ever signal its own (already stopped) session. Workers never touch Qt; they only queue.
         self.stop, self.events = threading.Event(), queue.Queue()
@@ -416,7 +428,7 @@ class Session:
     def guard_local_moves(self):
         """The live model shows the team's parts. A part moved by hand without Edit would silently differ
         from what everyone else sees, so put it back and say how to change it properly."""
-        doc = App.listDocuments().get(MIRROR_DOC)
+        doc = mirror_document()
         if doc is None or Gui.Control.activeDialog():
             return  # a Placement/Transform dialog is open: judge the move once it's closed
         moved = []
@@ -435,11 +447,23 @@ class Session:
                  "(or start the edit first, then move it). Your change is sent to everyone when you click Save.")
 
     def mirror(self):
-        doc = App.listDocuments().get(MIRROR_DOC)
+        doc = mirror_document()
         if doc is None:
             doc = App.newDocument(MIRROR_DOC)
-            doc.Label = "CADSwarm Live (read-only mirror)"
+            self._framed = False
+        set_if_changed(doc, "Label", mirror_label(self.project))
         return doc
+
+    def label_mirror(self):
+        """Tab name of the shared model: the project's name, not a generic product name."""
+        label = mirror_label(self.project)
+        for name, doc in App.listDocuments().items():
+            if is_mirror_doc(name):
+                set_if_changed(doc, "Label", label)
+
+    def show_model(self):
+        """Bring the team's live model to the front — what "Done, show me the model" promises."""
+        self.frame_model(show=True)
 
     def apply_breps(self, objects):
         doc = self.mirror()
@@ -467,17 +491,24 @@ class Session:
         if added:
             self.frame_model()
 
-    def frame_model(self):
-        """Show the live model and fit it in view, so new parts are never off-screen or hidden
-        behind another tab (beginners don't know to press 'Fit all')."""
+    def frame_model(self, show=False):
+        """Frame the live model in view. Only bring its tab to the front when asked (`show`): a refresh,
+        a part an agent just added or a reconnect must not pull the person away from their own work."""
+        doc = mirror_document()
+        if doc is None:
+            return
         try:
-            gdoc = Gui.getDocument(MIRROR_DOC)
-            if Gui.ActiveDocument is None or Gui.ActiveDocument.Document.Name != MIRROR_DOC:
-                Gui.setActiveDocument(MIRROR_DOC)  # bring the live model's tab to the front
-            if not getattr(self, "_iso_done", False):
-                gdoc.ActiveView.viewIsometric()
-                self._iso_done = True
-            gdoc.ActiveView.fitAll()
+            gdoc = Gui.getDocument(doc.Name)
+            if gdoc is None or getattr(gdoc, "ActiveView", None) is None:
+                return
+            active = Gui.ActiveDocument is not None and Gui.ActiveDocument.Document.Name == doc.Name
+            if show and not active:
+                App.setActiveDocument(doc.Name)  # bring the live model's tab to the front
+                active = True
+            if active and not getattr(self, "_framed", False):
+                gdoc.ActiveView.viewIsometric()  # beginners shouldn't land on an edge-on model
+                gdoc.ActiveView.fitAll()
+                self._framed = True
         except Exception as e:
             warn(f"couldn't frame the model: {e}")
 
@@ -620,9 +651,20 @@ class Session:
     def selected_names(self):
         names = []
         for sel in Gui.Selection.getSelection():
-            if sel.Document.Name == MIRROR_DOC:
+            if is_mirror_doc(sel.Document.Name):
                 names.append(sel.Name)
         return names
+
+
+def mirror_document():
+    """The team's live model if it is already open — even when FreeCAD gave it a suffixed name
+    (CadSwarmLive1) after an earlier mirror was closed or reloaded. Reusing it is what keeps a second,
+    identical "read-only mirror" tab from opening."""
+    docs = App.listDocuments()
+    exact = docs.get(MIRROR_DOC)
+    if exact is not None:
+        return exact
+    return max((d for name, d in docs.items() if is_mirror_doc(name)), key=lambda d: len(d.Objects), default=None)
 
 
 def set_if_changed(obj, prop, value):
@@ -1250,7 +1292,7 @@ class TeamPanel(QtGui.QDockWidget):
 
     def show_state(self, s):
         colour, word, headline, button = self.BANNERS[s.state]
-        project = prefs().GetString("ProjectName")
+        project = s.project or prefs().GetString("ProjectName")
         self.title.setText("Team" + (f" · {html.escape(project)}" if project else ""))
         self.status.setText(f"<span style='color:{colour}'>●&nbsp;{word}</span>")
         if s.state == "connected":
@@ -1822,7 +1864,9 @@ class TeamPanel(QtGui.QDockWidget):
             return []
         names_ = self.session.selected_names()
         if not names_:
-            hint("Select one or more parts in the 3D view first (in the “CADSwarm Live” document), "
+            where = (f"in the “{self.session.project}” document" if self.session.project
+                     else "in the shared model")
+            hint(f"Select one or more parts in the 3D view first ({where}), "
                  f"then click this again to {verb} them.")
         return names_
 
@@ -1929,10 +1973,11 @@ class TeamPanel(QtGui.QDockWidget):
         if t and self.session.act("POST", f"/tasks/{t['id']}/claim", {}, f"You took “{t['title']}”",
                                   purpose="take a task") is not None:
             if t.get("objects"):
+                doc = mirror_document()
                 Gui.Selection.clearSelection()
                 for n in t["objects"]:
-                    if App.getDocument(MIRROR_DOC).getObject(n):
-                        Gui.Selection.addSelection(MIRROR_DOC, n)
+                    if doc is not None and doc.getObject(n):
+                        Gui.Selection.addSelection(doc.Name, n)
             hint(f"“{t['title']}” is yours. Select a part and use the Tools tab ▸ Edit a part yourself to change "
                  "it; click Mark done when you're finished.")
 
@@ -2495,11 +2540,42 @@ def helper_row(p, local, tasks):
     return state, task or "", status
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def host_agent_run(name):
+    """The run folder this computer's host started for `name`, or "" when it did not start it here. The host
+    keeps one folder per start in <its data dir>/agents/, beside the people's helpers."""
+    folder = host_dir_for(prefs().GetString("Db"))
+    run = os.path.join(folder, "agents", name) if folder else ""
+    return run if run and os.path.isfile(os.path.join(run, ".cadswarm", "config.json")) else ""
+
+
+def last_log_line(run):
+    """The last meaningful line of a run's agent.log, without colour codes, or ""."""
+    try:
+        with open(os.path.join(run, "agent.log"), encoding="utf-8", errors="replace") as f:
+            lines = [ANSI.sub("", line).strip() for line in f if line.strip()]
+    except OSError:
+        return ""
+    return lines[-1][:160] if lines else ""
+
+
 def away_tip(p, local):
     """Why an AI helper is away, and what (if anything) to do about it."""
     n = html.escape(p["name"])
     state = (local or {}).get("state")
     if local is None:
+        run = host_agent_run(p["name"])
+        if run:
+            # The host starts a planner/worker/reviewer on this computer; it is not one of the people's
+            # helpers, so it has no runner of its own and stops between jobs. Never call it a teammate's.
+            tip = (f"<b>{n}</b> runs on this computer: your team's host starts it for each brief. "
+                   "It is not running now; the next task starts it again.")
+            last = last_log_line(run)
+            if last.lower().startswith("error"):
+                tip += f" Its last start failed: {html.escape(last)}"
+            return tip
         return (f"<b>{n}</b> runs on a teammate's computer. It answers once that computer has FreeCAD and "
                 "CADSwarm open; your messages wait for it.")
     if state == "missing":
@@ -2904,7 +2980,7 @@ class EditPartDialog(QtGui.QDialog):
                              App.Rotation(self.rot["yaw"].value(), self.rot["pitch"].value(), self.rot["roll"].value()))
 
     def mirror_obj(self):
-        doc = App.listDocuments().get(MIRROR_DOC)
+        doc = mirror_document()
         return doc.getObject(self.name) if doc else None
 
     def typed(self, *_):
@@ -3241,11 +3317,12 @@ def run_interference():
         QtGui.QMessageBox.information(Gui.getMainWindow(), "CADSwarm", "No interference found.")
         return
     lines = []
+    doc = mirror_document()
     for c in r["clashes"]:
         lines.append(f"{c['a']} ∩ {c['b']}: {c['volume']} mm³")
         for n in (c["a"], c["b"]):
-            if App.getDocument(MIRROR_DOC).getObject(n):
-                Gui.Selection.addSelection(MIRROR_DOC, n)
+            if doc is not None and doc.getObject(n):
+                Gui.Selection.addSelection(doc.Name, n)
     QtGui.QMessageBox.warning(Gui.getMainWindow(), "CADSwarm: interference", "\n".join(lines))
 
 

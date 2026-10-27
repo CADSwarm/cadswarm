@@ -131,10 +131,11 @@ class LightenDialog(QtGui.QDialog):
         super().__init__(Gui.getMainWindow())
         theme.apply(self)
         self.setWindowTitle("CadSwarm: Lighten part")
-        from .panel import fit_to_screen, MIRROR_DOC, SESSION
+        from .panel import fit_to_screen, SESSION
+        from ..naming import is_mirror_doc
         fit_to_screen(self, 720, 760)
         self.obj_name, self.doc_name = obj.Name, obj.Document.Name
-        self.team = obj.Document.Name == MIRROR_DOC and SESSION.connected
+        self.team = is_mirror_doc(self.doc_name) and SESSION.connected
         self.client = SESSION.client if self.team else None
         self.shape = obj.Shape.copy()
         self.job = None          # team: job id; local: LocalJob

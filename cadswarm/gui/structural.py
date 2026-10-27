@@ -41,8 +41,9 @@ class OptimizeDialog(QtGui.QDialog):
         self.result = None
         self.cancelling = False
         self.client = None
-        from .panel import SESSION, MIRROR_DOC
-        if obj.Document.Name == MIRROR_DOC:
+        from .panel import SESSION
+        from ..naming import is_mirror_doc
+        if is_mirror_doc(obj.Document.Name):
             if not SESSION.connected:
                 raise ValueError("Join the team before optimizing a shared part")
             self.client = SESSION._bg_client()
