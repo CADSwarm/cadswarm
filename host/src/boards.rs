@@ -26,7 +26,7 @@ pub struct Board {
     /// A person checked these numbers against the datasheet.
     #[serde(default)]
     pub verified: bool,
-    /// URLs backing `pcb`, `holes` and `ports` (a spec looked up in Elastic, plan 05).
+    /// URLs backing `pcb`, `holes` and `ports`, when the board was looked up from a datasheet.
     #[serde(default)]
     pub sources: serde_json::Value,
 }
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_looked_up_spec_deserializes_into_a_board() {
-        // The shape `Elastic.board_spec` returns through the helper (plan 05).
+        // The shape `Knowledge.board_spec` returns through the helper.
         let spec = serde_json::json!({
             "label": "Seeed XIAO ESP32C3", "pcb": [21.0, 17.5, 1.0],
             "holes": [], "hole_d": 0.0, "clear_top": 10.0, "clear_bottom": 3.0, "ports": [],

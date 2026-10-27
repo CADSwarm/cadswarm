@@ -43,7 +43,7 @@ enum Cmd {
         /// Python with the cadswarm package installed.
         #[arg(long, default_value = "python")]
         python: PathBuf,
-        /// The agent CLI that builds briefs: claude, codex, droid, opencode or creao.
+        /// The agent CLI that builds briefs: claude, codex or opencode.
         #[arg(long, default_value = "claude")]
         agent: String,
     },
@@ -59,8 +59,6 @@ enum Cmd {
         #[arg(long)]
         text: String,
     },
-    /// Create the Droid reviewer member (once) and its folder, so briefs get reviewed.
-    InitReviewer,
     /// Run the executor and brief orchestration until stopped.
     Run,
 }
@@ -101,15 +99,6 @@ fn main() -> Result<()> {
             println!("{}", qr.render::<qrcode::render::unicode::Dense1x2>().quiet_zone(true).build());
         }
         Cmd::Qr { text } => println!("{}", qr_rows(&text)?),
-        Cmd::InitReviewer => {
-            let cfg = HostConfig::load(&cli.data)?;
-            if reviewer_set_up(&cfg) {
-                println!("reviewer already set up in {} (delete that folder to set it up again)",
-                         reviewer_dir(&cfg).display());
-                return Ok(());
-            }
-            init_reviewer(&cfg, &space::Space::attach(&cfg)?)?;
-        }
         Cmd::Run => run(&HostConfig::load(&cli.data)?)?,
     }
     Ok(())
@@ -127,47 +116,6 @@ pub fn mint_invite(space: &space::Space, cfg: &HostConfig, kind: &str, role: &st
         role: role.into(),
         host_addr: String::new(),
     }))
-}
-
-fn reviewer_dir(cfg: &HostConfig) -> PathBuf {
-    cfg.data_dir.join("agents").join("reviewer")
-}
-
-/// Setup only redeems an invite when the folder has no identity yet, so a fresh one would sit unused.
-fn reviewer_set_up(cfg: &HostConfig) -> bool {
-    reviewer_dir(cfg).join(".cadswarm").join("identity.json").exists()
-}
-
-/// Create the Droid reviewer member and its folder.
-fn init_reviewer(cfg: &HostConfig, space: &space::Space) -> Result<()> {
-    let dir = reviewer_dir(cfg);
-    let ticket = mint_invite(space, cfg, "reviewer", "member")?;
-    std::fs::create_dir_all(&dir)?;
-    let ok = std::process::Command::new(&cfg.cadswarm_python)
-        .args(["-m", "cadswarm.cli", "setup", "--client", "droid", "--invite", &ticket, "--name", "reviewer", "--dir"])
-        .arg(&dir)
-        .status()?;
-    anyhow::ensure!(ok.success(), "cadswarm setup for the reviewer failed");
-    println!("reviewer ready in {}", dir.display());
-    Ok(())
-}
-
-/// Set the reviewer up on start when this computer can run it (Droid plus a FACTORY_API_KEY, see
-/// cadswarm.config.reviewer_can_start), so briefs get reviewed without anyone running init-reviewer.
-/// Best effort: on any failure briefs still export unreviewed, as before.
-fn auto_reviewer(cfg: &HostConfig, space: &space::Space) {
-    if reviewer_set_up(cfg) {
-        return;
-    }
-    match config::python_says(&cfg.cadswarm_python, "c.reviewer_can_start()") {
-        Ok(yes) if yes.as_os_str() == "True" => {
-            if let Err(e) = init_reviewer(cfg, space) {
-                eprintln!("[host] couldn't set up the reviewer: {e:#}");
-            }
-        }
-        Ok(_) => println!("[host] no reviewer: needs Droid and a FACTORY_API_KEY (or run init-reviewer)"),
-        Err(e) => eprintln!("[host] couldn't check for the reviewer: {}", e.to_string().trim().lines().last().unwrap_or("")),
-    }
 }
 
 fn run(cfg: &HostConfig) -> Result<()> {
@@ -195,7 +143,6 @@ fn run(cfg: &HostConfig) -> Result<()> {
     };
     executor::refresh(&space, &mut worker, &[])?;
     executor::write_status(cfg, &mut worker)?;
-    auto_reviewer(cfg, &space);  // before the orchestrator, which reads whether a reviewer exists
     let mut orchestrator = briefs::Orchestrator::new(cfg.clone());
     println!("cadswarm-host running on {} / {} (fence {})", cfg.uri, cfg.db, space.fence());
     // Ops this process already tried: never run one twice, even if it still reads `queued`

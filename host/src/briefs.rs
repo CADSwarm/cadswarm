@@ -5,17 +5,21 @@ use crate::boards::{load_boards, seed_params, Board};
 use crate::config::HostConfig;
 use crate::space::Space;
 use crate::worker::WorkerDriver;
-use anyhow::Context;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// A handoff whose agent failed to start waits this long before the next try (each try mints an invite).
 const HANDOFF_RETRY: Duration = Duration::from_secs(30);
 /// The reviewer's verdict reaches the host through the subscription, a moment after the reviewer exits.
 const VERDICT_GRACE: Duration = Duration::from_secs(10);
+/// How many starts of one brief may fail in a row before the brief fails with its agent's log. A failed
+/// start mints an identity and leaves a join/leave pair in the team, so it must not repeat every tick.
+pub const MAX_SPAWN_FAILURES: u32 = 3;
+/// Waits after the first, second and third failed start. A slow failure (a CLI that dies at once) then
+/// costs a bounded number of agents instead of one per 100 ms tick.
+const SPAWN_BACKOFF: [Duration; 3] = [Duration::from_secs(2), Duration::from_secs(10), Duration::from_secs(30)];
 
 pub const MAX_WORKERS: usize = 3;
 pub const MAX_REVIEW_ROUNDS: u32 = 3;
@@ -39,7 +43,6 @@ pub struct BriefState {
     /// the cache is not merely waiting for the first subscription update.
     pub planned: bool,
     pub exporting: bool,
-    pub reviewer_enabled: bool,
     pub reviewer_alive: bool,
     /// The newest verdict from the subscription, with its round and whether it passed.
     pub review: Option<(u32, bool)>,
@@ -74,11 +77,7 @@ pub fn next_action(s: &BriefState) -> Action {
                 // Finished parts are delivered even when another task is blocked: the export skips
                 // parts no done task promised, and the blocked task keeps its question on the board.
                 // Failing here would throw those parts away for a decision that is still open.
-                if s.reviewer_enabled {
-                    Action::Review
-                } else {
-                    Action::Export
-                }
+                Action::Review
             } else if s.cancelled > 0 && s.blocked == 0 {
                 Action::Fail("every task was stopped; a person needs to steer".into())
             } else if s.planned && s.blocked == 0 {
@@ -109,8 +108,7 @@ pub fn next_action(s: &BriefState) -> Action {
             // them back as open once their member goes stale, so wait for that instead of reviewing
             // a model that has not changed yet.
             Some((_, false)) if s.active > 0 => Action::Wait,
-            _ if s.reviewer_enabled => Action::Review,
-            _ => Action::Export,
+            _ => Action::Review,
         },
         "reviewing" => match s.review {
             Some((_, true)) => Action::Export,
@@ -170,6 +168,37 @@ struct Runtime {
     reviewed_round: u32,
     reviewer_exited: Option<Instant>,
     spawned: usize,
+    /// Finished tasks when the current generation (planner, workers, reviewer) started, so a run that
+    /// died before touching anything is told apart from one that did its work and stopped.
+    done_at_spawn: usize,
+    /// Starts in a row that failed for this brief. At MAX_SPAWN_FAILURES the brief fails with the log.
+    failures: u32,
+    /// The brief's own work as last seen: plan written, tasks done, task rows, review round. Any
+    /// change means the last generation did something, so it clears `failures` (a brief that is
+    /// making progress must not inherit the count from an earlier run of bad luck).
+    progress: Progress,
+    /// No new agent for this brief before then (the join/leave storm fix).
+    retry_at: Option<Instant>,
+    /// The folder of the last agent that failed to start, for its log.
+    last_failed: Option<String>,
+}
+
+/// What the brief has done so far, compared tick to tick to spot a generation worth respecting.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Progress {
+    planned: bool,
+    done: usize,
+    tasks: usize,
+    review_round: u32,
+}
+
+/// Remember `now`, saying whether the brief moved on since the last tick.
+fn note_progress(seen: &mut Progress, now: Progress) -> bool {
+    if *seen == now {
+        return false;
+    }
+    *seen = now;
+    true
 }
 
 pub struct Orchestrator {
@@ -178,7 +207,18 @@ pub struct Orchestrator {
     runs: HashMap<String, Runtime>,
     handoffs: HashMap<String, Agent>,
     handoff_failed: HashMap<String, Instant>,
-    reviewer_enabled: bool,
+    /// When host.json was last re-read, so a person's new AI-helper choice takes effect without a restart.
+    agent_checked: Instant,
+}
+
+/// How long to wait before starting another agent for a brief after `failures` failed starts.
+fn retry_delay(failures: u32) -> Duration {
+    SPAWN_BACKOFF[(failures.saturating_sub(1) as usize).min(SPAWN_BACKOFF.len() - 1)]
+}
+
+/// True when a generation ended with work still waiting and nothing finished: it never got going.
+fn unproductive(done_now: usize, done_at_spawn: usize, open: usize, active: usize) -> bool {
+    done_now <= done_at_spawn && open + active > 0
 }
 
 fn op_id() -> String {
@@ -200,7 +240,7 @@ fn with_sources(plan_json: &str, sources: &Value) -> Option<String> {
     Some(plan.to_string())
 }
 
-/// Ask the helper's Elastic expert for a board the local library does not vouch for (plan 05).
+/// Ask the helper for a board the local library does not have (plan 05).
 fn looked_up_board(
     boards: &mut BTreeMap<String, Board>,
     b: &crate::space::BriefRow,
@@ -241,7 +281,7 @@ fn keep_sources(boards: &BTreeMap<String, Board>, space: &Space, b: &crate::spac
 }
 
 /// Index a finished brief so planners can recall it and the scheduled Workflow can learn lessons.
-/// Best effort: a missing Elastic project must not fail the build.
+/// Best effort: an unreadable knowledge store must not fail the build.
 fn index_design(space: &Space, helper: &mut WorkerDriver, b: &crate::space::BriefRow) {
     let plan = serde_json::from_str::<Value>(&space.brief_plan(&b.id)).unwrap_or_default();
     let args = json!({
@@ -250,7 +290,7 @@ fn index_design(space: &Space, helper: &mut WorkerDriver, b: &crate::space::Brie
         "reviews": space.reviews_json(&b.id),
         "params": space.params_map(),
     });
-    // The style memory learns from every finished brief, Elastic or not.
+    // The style memory learns from every finished brief.
     crate::executor::observe(space, helper, "observe_brief", &args);
     if let Err(e) = helper.call("index_design", &args, None) {
         eprintln!("[host] index_design for brief {}: {e}", b.id);
@@ -291,13 +331,67 @@ impl Orchestrator {
                 eprintln!("[host] no board library found; briefs start without measured params");
                 BTreeMap::new()
             });
-        // The reviewer only runs once someone has created its member folder (`init-reviewer`).
-        let reviewer_enabled =
-            cfg.data_dir.join("agents").join("reviewer").join(".cadswarm").join("config.json").exists();
-        Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), handoff_failed: HashMap::new(), reviewer_enabled }
+        // The reviewer is an ordinary agent started with the host's own CLI, so every brief is reviewed.
+        Orchestrator { cfg, boards, runs: HashMap::new(), handoffs: HashMap::new(), handoff_failed: HashMap::new(),
+                       agent_checked: Instant::now() }
+    }
+
+    /// A person can pick their AI helper in the guide after the host started: re-read host.json every
+    /// couple of seconds so the next agent uses that CLI, instead of requiring a host restart.
+    fn refresh_agent(&mut self) {
+        if self.agent_checked.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.agent_checked = Instant::now();
+        if let Ok(cfg) = HostConfig::load(&self.cfg.data_dir) {
+            if cfg.agent_client != self.cfg.agent_client || cfg.agent_command != self.cfg.agent_command {
+                eprintln!("[host] agents now run {} (from host.json)", cfg.agent_client);
+            }
+            self.cfg.agent_client = cfg.agent_client;
+            self.cfg.agent_command = cfg.agent_command;
+        }
+    }
+
+    /// Mint an identity and start one agent, refusing to spend an invite when its CLI cannot start.
+    fn start(cfg: &HostConfig, space: &Space, kind: &str, role: &str, name: &str, prompt: &str) -> anyhow::Result<Agent> {
+        crate::agents::preflight(cfg)?;
+        let ticket = crate::mint_invite(space, cfg, kind, role)?;
+        Agent::spawn(cfg, name, &ticket, prompt)
+    }
+
+    /// Count a failed start and hold the next try back (no invite is minted while we wait).
+    fn record_failure(rt: &mut Runtime, name: &str, why: &str) {
+        rt.failures += 1;
+        rt.last_failed = Some(name.to_string());
+        if rt.failures >= MAX_SPAWN_FAILURES {
+            rt.retry_at = None;  // the next tick fails the brief with this agent's log
+            eprintln!("[host] {} could not start (try {} of {}): {} (giving up on this brief)",
+                      name, rt.failures, MAX_SPAWN_FAILURES, why);
+            return;
+        }
+        rt.retry_at = Some(Instant::now() + retry_delay(rt.failures));
+        eprintln!("[host] {} could not start (try {} of {}): {} (next try in {}s)",
+                  name, rt.failures, MAX_SPAWN_FAILURES, why, retry_delay(rt.failures).as_secs());
+    }
+
+    /// The brief cannot get an agent at all: say so once, with the agent's own log, instead of retrying.
+    fn fail_unstartable(cfg: &HostConfig, space: &Space, b: &crate::space::BriefRow,
+                        rt: &mut Runtime) -> anyhow::Result<()> {
+        let name = rt.last_failed.clone().unwrap_or_default();
+        let why = format!(
+            "could not start an AI helper for this brief {MAX_SPAWN_FAILURES} times in a row \
+             (last: {name}); check that {} works on this computer{}",
+            if cfg.agent_command.is_empty() { cfg.agent_client.clone() } else { cfg.agent_command.join(" ") },
+            crate::agents::log_tail(cfg, &name, 12)
+        );
+        eprintln!("[host] brief {} failed: {why}", b.id);
+        space.set_brief(&b.id, "failed", &json!({"error": why}).to_string())?;
+        rt.retry_at = None;
+        Ok(())
     }
 
     pub fn tick(&mut self, space: &Space, mut helper: Option<&mut WorkerDriver>) {
+        self.refresh_agent();
         // A person handed work to an agent: one agent per open handoff, until it accepts and finishes.
         // An agent that dies before accepting leaves the handoff open; dropping it here makes the
         // next tick spawn a fresh one.
@@ -309,11 +403,8 @@ impl Orchestrator {
             }
             let name = format!("handoff-{}", h.id.trim_start_matches("h_"));
             let style = style_block(helper.as_deref_mut(), &h.context_json, "");
-            let started = crate::mint_invite(space, &self.cfg, "agent", "member").and_then(|ticket| {
-                let prompt = format!("{}{style}", crate::agents::handoff_prompt(&h.id, &h.context_json));
-                Agent::spawn(&self.cfg, &name, &ticket, &prompt)
-            });
-            match started {
+            let prompt = format!("{}{style}", crate::agents::handoff_prompt(&h.id, &h.context_json));
+            match Self::start(&self.cfg, space, "agent", "member", &name, &prompt) {
                 Ok(agent) => {
                     eprintln!("[host] handoff {}: started {name}", h.id);
                     self.handoff_failed.remove(&h.id);
@@ -363,10 +454,14 @@ impl Orchestrator {
                             index_design(space, h, b);
                         }
                         rt.export_op = None;
+                        // `set_brief_stl` just marked the brief ready, but `b` is the row this tick
+                        // read. Acting on it would submit a second export for a finished brief.
+                        return Ok(());
                     }
                     "failed" | "rejected" => {
                         space.set_brief(&b.id, "failed", "")?;
                         rt.export_op = None;
+                        return Ok(());
                     }
                     _ => {}
                 }
@@ -385,12 +480,49 @@ impl Orchestrator {
             blocked: tasks.iter().filter(|t| t.status == "blocked").count(),
             planned: !space.brief_plan(&b.id).is_empty(),
             exporting: rt.export_op.is_some(),
-            reviewer_enabled: self.reviewer_enabled,
             reviewer_alive: rt.reviewer.as_mut().map(|a| a.alive()).unwrap_or(false),
             review,
             reviewed_round: rt.reviewed_round,
             review_orphaned: rt.review_round == 0 && rt.reviewer.is_none(),
         };
+
+        // A generation that moved the brief forward (wrote the plan, opened or finished a task, took
+        // the review to a new round) proves agents can start on this computer, so the failed-start
+        // count is about *consecutive* dead starts, not the brief's whole life. Without this, a
+        // planner that needed three tries leaves the count at the cap and the next worker generation
+        // that exits without finishing a task would fail a brief that is working.
+        let progress = Progress { planned: state.planned, done: state.done,
+                                  tasks: state.open + state.active + state.done, review_round: rt.review_round };
+        if note_progress(&mut rt.progress, progress) {
+            if rt.failures > 0 {
+                eprintln!("[host] brief {}: made progress (plan: {}, tasks done: {}, tasks: {}, round: {}), \
+                           clearing {} failed start(s)", b.id, progress.planned, progress.done, progress.tasks,
+                          progress.review_round, rt.failures);
+            }
+            rt.failures = 0;
+            rt.retry_at = None;
+        }
+
+        // A generation that ended without finishing anything never got going (the CLI died at once, the
+        // folder is untrusted, a session limit). Count it and hold the next start back instead of
+        // spawning an agent every tick; three in a row means no agent can start here at all.
+        if rt.planner.is_some() && !state.planner_alive {
+            rt.planner = None;
+            if state.status == "planning" && state.open + state.active + state.done == 0 {
+                let name = format!("planner-{}", &b.id[2..]);
+                Self::record_failure(rt, &name, "it exited without planning anything");
+            }
+        }
+        if !rt.workers.is_empty() && state.workers_alive == 0 {
+            rt.workers.clear();
+            if unproductive(state.done, rt.done_at_spawn, state.open, state.active) && !state.exporting {
+                let name = format!("worker{}-{}", rt.spawned, &b.id[2..]);
+                Self::record_failure(rt, &name, "it exited before finishing a task");
+            } else {
+                rt.failures = 0;  // that generation built something (or had nothing left to build)
+                rt.retry_at = None;
+            }
+        }
 
         // A reviewer that exits without a verdict would leave the brief in `reviewing` forever.
         let no_verdict = review.map(|(r, _)| r < rt.review_round).unwrap_or(true);
@@ -402,7 +534,17 @@ impl Orchestrator {
             return Ok(());
         }
 
-        let action = next_action(&state);
+        let wanted = next_action(&state);
+        // Three starts in a row that got nowhere: waiting out the last backoff will not help, so fail
+        // now, with the agent's own log, instead of leaving the brief `planning` for another 30 s.
+        if matches!(wanted, Action::Plan | Action::Build(_) | Action::Review) && rt.failures >= MAX_SPAWN_FAILURES {
+            return Self::fail_unstartable(&self.cfg, space, b, rt);
+        }
+        let now = Instant::now();
+        let action = match wanted {
+            Action::Plan | Action::Build(_) | Action::Review if rt.retry_at.is_some_and(|t| now < t) => Action::Wait,
+            a => a,
+        };
         match action {
             Action::Wait => {}
             Action::Seed => {
@@ -451,20 +593,34 @@ impl Orchestrator {
                     crate::agents::planner_prompt(&b.id, &b.text, &label, &params),
                     if style.is_empty() { "" } else { "\nWrite these style rules into each task's detail where they apply." }
                 );
-                let ticket = crate::mint_invite(space, &self.cfg, "agent", "lead")?;
                 let name = format!("planner-{}", &b.id[2..]);
                 eprintln!("[host] brief {}: starting {name}", b.id);
-                rt.planner = Some(Agent::spawn(&self.cfg, &name, &ticket, &prompt)?);
+                match Self::start(&self.cfg, space, "agent", "lead", &name, &prompt) {
+                    Ok(agent) => {
+                        rt.planner = Some(agent);
+                        rt.done_at_spawn = state.done;
+                        rt.retry_at = None;
+                    }
+                    Err(e) => Self::record_failure(rt, &name, &format!("{e:#}")),
+                }
             }
             Action::Build(n) => {
                 keep_sources(&self.boards, space, b)?;
                 let style = style_block(helper.as_deref_mut(), &b.text, &b.board);
+                rt.done_at_spawn = state.done;
+                rt.retry_at = None;
                 for _ in 0..n {
                     rt.spawned += 1;
-                    let ticket = crate::mint_invite(space, &self.cfg, "agent", "member")?;
                     let name = format!("worker{}-{}", rt.spawned, &b.id[2..]);
                     eprintln!("[host] brief {}: starting {name}", b.id);
-                    rt.workers.push(Agent::spawn(&self.cfg, &name, &ticket, &format!("{}{style}", crate::agents::worker_prompt(&b.id, rt.spawned)))?);
+                    let prompt = format!("{}{style}", crate::agents::worker_prompt(&b.id, rt.spawned));
+                    match Self::start(&self.cfg, space, "agent", "member", &name, &prompt) {
+                        Ok(agent) => rt.workers.push(agent),
+                        Err(e) => {
+                            Self::record_failure(rt, &name, &format!("{e:#}"));
+                            break;
+                        }
+                    }
                 }
                 if let Some((round, false)) = state.review {
                     rt.reviewed_round = round;
@@ -473,21 +629,24 @@ impl Orchestrator {
             }
             Action::Review => {
                 let round = review.map(|(r, _)| r.saturating_add(1)).unwrap_or(1);
-                let dir = self.cfg.data_dir.join("agents").join("reviewer");
-                std::fs::create_dir_all(&dir)?;
-                let log = std::fs::File::create(dir.join(format!("review-{}-{round}.log", b.id.trim_start_matches("b_"))))?;
-                eprintln!("[host] brief {}: starting reviewer round {round}", b.id);
-                let child = Command::new(&self.cfg.cadswarm_python)
-                    .args(["-m", "cadswarm.reviewer", "--brief", &b.id, "--round", &round.to_string(), "--dir"])
-                    .arg(&dir)
-                    .stdout(log.try_clone()?)
-                    .stderr(log)
-                    .spawn()
-                    .context("starting cadswarm.reviewer")?;
-                rt.reviewer = Some(Agent::from_child("reviewer", child));
-                rt.review_round = round;
-                rt.reviewer_exited = None;
-                space.set_brief(&b.id, "reviewing", "")?;
+                let label = self.boards.get(&b.board).map(|x| x.label.clone()).unwrap_or_else(|| {
+                    if b.board.is_empty() { "none given".into() } else { b.board.clone() }
+                });
+                let style = style_block(helper.as_deref_mut(), &b.text, &b.board);
+                let prompt = crate::agents::review_prompt(&b.id, &b.text, &label, space.bed(), round, &style);
+                let name = format!("reviewer-{}", &b.id[2..]);
+                eprintln!("[host] brief {}: starting {name} (round {round})", b.id);
+                match Self::start(&self.cfg, space, "reviewer", "member", &name, &prompt) {
+                    Ok(agent) => {
+                        rt.reviewer = Some(agent);
+                        rt.review_round = round;
+                        rt.reviewer_exited = None;
+                        rt.done_at_spawn = state.done;
+                        rt.retry_at = None;
+                        space.set_brief(&b.id, "reviewing", "")?;
+                    }
+                    Err(e) => Self::record_failure(rt, &name, &format!("{e:#}")),
+                }
             }
             Action::Export => {
                 keep_sources(&self.boards, space, b)?;
@@ -538,11 +697,10 @@ mod tests {
     }
 
     #[test]
-    fn building_restarts_workers_if_they_all_died_and_exports_when_done() {
+    fn building_restarts_workers_if_they_all_died_and_reviews_when_done() {
         assert_eq!(next_action(&BriefState { open: 2, ..st("building") }), Action::Build(2));
         assert_eq!(next_action(&BriefState { open: 2, workers_alive: 1, ..st("building") }), Action::Wait);
-        assert_eq!(next_action(&BriefState { done: 3, ..st("building") }), Action::Export);
-        assert_eq!(next_action(&BriefState { done: 3, reviewer_enabled: true, ..st("building") }), Action::Review);
+        assert_eq!(next_action(&BriefState { done: 3, ..st("building") }), Action::Review);
         assert_eq!(next_action(&BriefState { done: 3, exporting: true, ..st("building") }), Action::Wait);
     }
 
@@ -560,9 +718,9 @@ mod tests {
         // A brief whose task rows have not arrived from the subscription yet must not be failed.
         assert_eq!(next_action(&st("building")), Action::Wait);
         // A cancelled task does not hide finished work: the build still reviews and exports.
-        assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Export);
+        assert_eq!(next_action(&BriefState { done: 1, cancelled: 1, ..st("building") }), Action::Review);
         // Nor does a blocked one: its part is skipped on purpose and its question stays on the board.
-        assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Export);
+        assert_eq!(next_action(&BriefState { done: 1, blocked: 1, ..st("building") }), Action::Review);
     }
 
     #[test]
@@ -576,29 +734,65 @@ mod tests {
     #[test]
     fn a_review_without_a_run_of_ours_is_asked_again_instead_of_building() {
         // The host restarted mid-review: no run of ours, no verdict yet.
-        assert_eq!(next_action(&BriefState { review_orphaned: true, reviewer_enabled: true, ..st("reviewing") }),
-                   Action::Review);
+        assert_eq!(next_action(&BriefState { review_orphaned: true, ..st("reviewing") }), Action::Review);
         // A failed round from a previous host with no fix tasks asks for the next round.
-        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true,
             ..st("reviewing") }), Action::Review);
         // The reviewer files its fixes before its verdict: after a restart those tasks are built,
         // not skipped for another review of the unchanged model.
-        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true,
             open: 2, ..st("reviewing") }), Action::Build(2));
         // ...and while the sweep has not yet reopened them (their dead workers still hold the
         // claims) waiting is right: a review now would spend a round on the unchanged model.
-        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true, reviewer_enabled: true,
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), review_orphaned: true,
             active: 2, ..st("reviewing") }), Action::Wait);
         // A passed round from a previous host still goes straight to export.
-        assert_eq!(next_action(&BriefState { review: Some((2, true)), review_orphaned: true, reviewer_enabled: true,
+        assert_eq!(next_action(&BriefState { review: Some((2, true)), review_orphaned: true,
             ..st("reviewing") }), Action::Export);
         // A restart does not hand back a review budget that was already spent.
         assert!(matches!(next_action(&BriefState { review: Some((3, false)), review_orphaned: true,
-            reviewer_enabled: true, ..st("reviewing") }), Action::Fail(_)));
-        // No reviewer set up: export rather than wait forever.
-        assert_eq!(next_action(&BriefState { review_orphaned: true, ..st("reviewing") }), Action::Export);
+            ..st("reviewing") }), Action::Fail(_)));
         // A run this host started is not orphaned, so a failed round still goes back to building.
         assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 1, ..st("reviewing") }), Action::Build(1));
+    }
+
+    #[test]
+    fn a_brief_that_got_something_done_is_told_apart_from_a_quiet_tick() {
+        let mut seen = Progress::default();
+        // A brief that has done nothing yet is not progress, or every tick would clear the count.
+        assert!(!note_progress(&mut seen, Progress::default()));
+        // The planner got through on its third try: the plan and its task rows count.
+        assert!(note_progress(&mut seen, Progress { planned: true, tasks: 2, ..Progress::default() }));
+        // A worker generation that finished a task counts; a later quiet tick does not.
+        let one_done = Progress { planned: true, done: 1, tasks: 2, ..Progress::default() };
+        assert!(note_progress(&mut seen, one_done));
+        assert!(!note_progress(&mut seen, one_done));
+        // A task moving from claimed to done changes `done` while the row count stays put.
+        assert!(note_progress(&mut seen, Progress { done: 2, ..one_done }));
+        // A new review round is progress even when no task moved.
+        assert!(note_progress(&mut seen, Progress { review_round: 1, ..one_done }));
+    }
+
+    #[test]
+    fn a_failed_start_backs_off_further_each_time_until_the_brief_gives_up() {
+        // No agent every tick: 2 s, then 10 s, then 30 s (the cap holds for any further try).
+        assert_eq!(retry_delay(1), Duration::from_secs(2));
+        assert_eq!(retry_delay(2), Duration::from_secs(10));
+        assert_eq!(retry_delay(3), Duration::from_secs(30));
+        assert_eq!(retry_delay(9), Duration::from_secs(30));
+        assert!(MAX_SPAWN_FAILURES >= 3, "a transient failure gets a retry before the brief fails");
+    }
+
+    #[test]
+    fn a_generation_that_left_work_untouched_counts_as_a_failed_start() {
+        // Three workers exited and nothing was built: the next try waits instead of spawning at once.
+        assert!(unproductive(0, 0, 2, 0));
+        // They were still holding a claimed task: the sweep must hand it back first, so it is a failure.
+        assert!(unproductive(0, 0, 0, 2));
+        // One task finished: that generation did its job; new work may start at once.
+        assert!(!unproductive(1, 0, 2, 0));
+        // Nothing was left to build (the brief is moving to review): not a failure.
+        assert!(!unproductive(0, 0, 0, 0));
     }
 
     fn task(id: &str, status: &str, objects: &[&str]) -> crate::space::TaskRow {

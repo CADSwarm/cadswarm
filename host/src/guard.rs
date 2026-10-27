@@ -36,7 +36,7 @@ impl InstanceGuard {
                 anyhow::bail!(
                     "another cadswarm-host is already running on {} ({holder}). Stop it first: two \
                      hosts on one database share an identity, supersede each other's fence, and the \
-                     one that loses the export leaves its design out of Elastic. Lock file: {}",
+                     one that loses the export leaves its design out of the project's design memory. Lock file: {}",
                     data_dir.display(),
                     path.display()
                 );
