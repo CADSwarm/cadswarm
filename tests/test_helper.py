@@ -372,7 +372,9 @@ def test_a_lighten_job_runs_publishes_its_files_and_announces_itself(tmp_path, m
     r = helper.handle(p, {"id": 1, "op": "lattice_start", "args": {
         "target": "Bracket", "cell": "octet", "stiffness_target_pct": 90, "fixed": ["xmin"],
         "loads": [{"type": "force", "faces": ["xmax"], "newtons": 100}], "material": "pla", "_actor": AGENT}})
-    assert r["ok"] and r["result"]["status"] in ("queued", "preparing") and r["result"]["recipe"]["stiffness_target"] == 0.9
+    # A fast (fake) job can already be generating or packaging by the time start returns.
+    assert r["ok"] and r["result"]["status"] in ("queued", "preparing", "generating", "packaging")
+    assert r["result"]["recipe"]["stiffness_target"] == 0.9
     assert r["result"]["_events"][0]["kind"] == "lattice_started"
     EVENTS.extend(e["kind"] for e in r["result"]["_events"])  # a fast job may already have progressed
     done = _wait(p, r["result"]["job_id"])
