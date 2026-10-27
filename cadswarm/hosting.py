@@ -573,11 +573,11 @@ def set_agent_client(data_dir, agent):
     The running host re-reads host.json every couple of seconds (host/src/briefs.rs), so a choice made
     after the team was created takes effect without a restart. Best effort: a folder that has never
     hosted has no host.json yet, and `start_team`'s `init` writes the choice then."""
-    if not agent:
+    if not agent or not data_dir:
         return False
     path = os.path.join(data_dir, "host.json")
     data = host_config(data_dir)
-    if not data:
+    if not data.get("db"):
         return False
     if data.get("agent_client") == agent:
         return True

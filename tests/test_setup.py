@@ -109,3 +109,18 @@ def test_the_gui_helper_python_lookup_is_exported():
     # which only shows up inside FreeCAD because the tests never import the GUI.
     from cadswarm.paths import freecad_python
     assert callable(freecad_python)
+
+
+def test_the_guides_cli_choice_is_written_to_the_hosts_settings(tmp_path):
+    """The host re-reads host.json, so picking a CLI after the team started must change it in place."""
+    from cadswarm import hosting
+    assert hosting.set_agent_client(str(tmp_path), "codex") is False  # never hosted here: nothing to edit
+    (tmp_path / "host.json").write_text(json.dumps({"mode": "local", "db": "team", "agent_client": "claude"}),
+                                        encoding="utf-8")
+    assert hosting.set_agent_client(str(tmp_path), "codex") is True
+    data = json.loads((tmp_path / "host.json").read_text(encoding="utf-8"))
+    assert data["agent_client"] == "codex" and data["db"] == "team"  # the rest of the settings are kept
+    assert hosting.set_agent_client(str(tmp_path), "codex") is True  # already chosen: no error
+    assert hosting.set_agent_client(str(tmp_path), "") is False      # "just watch" clears the choice in the GUI only
+    assert hosting.set_agent_client("", "codex") is False            # no folder yet: never write ./host.json
+
