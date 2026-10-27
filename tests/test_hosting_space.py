@@ -439,8 +439,71 @@ def test_start_team_local_starts_spacetime_only_when_nothing_listens(tmp_path, m
 
     spawns.clear()
     monkeypatch.setattr(hosting, "port_open", lambda port, host="127.0.0.1", timeout=0.5: True)
+    monkeypatch.setattr(hosting, "pid_on_port", lambda port: None)  # no server to inspect on this machine
     info = hosting.start_team("python.exe", str(data), "local", "cadswarm-x-0001")
     assert [a[3] for a in spawns] == ["run"] and info["spacetime_pid"] is None
+
+
+def test_local_reachable_probes_the_address_the_invite_carries(monkeypatch):
+    seen = []
+    monkeypatch.setattr(hosting, "lan_ip", lambda: "192.168.1.42")
+    monkeypatch.setattr(hosting, "port_open",
+                        lambda port, host="127.0.0.1", timeout=0.5: (seen.append(host), host == "192.168.1.42")[1])
+    assert hosting.local_reachable(3000) is True
+    assert seen == ["192.168.1.42"]
+
+
+def test_loopback_only_pid_reads_the_command_line(monkeypatch):
+    monkeypatch.setattr(hosting, "pid_on_port", lambda port: 4242)
+    monkeypatch.setattr(hosting, "_command_line", lambda pid: "... --listen-addr 127.0.0.1:3000\n")
+    assert hosting._loopback_only_db_pid() == 4242
+    monkeypatch.setattr(hosting, "_command_line", lambda pid: "... --listen-addr 0.0.0.0:3000\n")
+    assert hosting._loopback_only_db_pid() is None  # bound everywhere already
+    monkeypatch.setattr(hosting, "pid_on_port", lambda port: None)
+    assert hosting._loopback_only_db_pid() is None  # not a SpacetimeDB we can place
+
+
+def test_ensure_local_reachable_keeps_a_network_database(monkeypatch):
+    # Already reachable (or not a local team): nothing is stopped.
+    monkeypatch.setattr(hosting, "port_open", lambda port, host="127.0.0.1", timeout=0.5: True)
+    monkeypatch.setattr(hosting, "pid_on_port", lambda port: None)
+    monkeypatch.setattr(hosting, "_kill", lambda pid: pytest.fail("must not stop a reachable database"))
+    assert hosting.ensure_local_reachable("local") is False
+    assert hosting.ensure_local_reachable("maincloud") is False
+
+
+def test_start_team_replaces_a_loopback_only_local_database(tmp_path, monkeypatch):
+    """A database bound to 127.0.0.1 reaches nobody else, so the invite's network address would point at
+    nothing. The old server is restarted on every interface before the team uses the port."""
+    data = tmp_path / "proj"
+    spawns, killed = [], []
+    listening = {"up": True}
+
+    def port_open(port, host="127.0.0.1", timeout=0.5):
+        return listening["up"]
+
+    def kill(pid):
+        killed.append(pid)
+        listening["up"] = False  # the port frees up for the new server
+
+    monkeypatch.setattr(hosting, "find_tool", lambda name, env: name)
+    monkeypatch.setattr(hosting, "module_wasm", lambda: "module")
+    monkeypatch.setattr(hosting, "publish", lambda db, mode, data_dir=None: None)
+    monkeypatch.setattr(hosting, "port_open", port_open)
+    monkeypatch.setattr(hosting, "pid_on_port", lambda port: 4242)
+    monkeypatch.setattr(hosting, "_command_line", lambda pid: "... --listen-addr 127.0.0.1:3000\n")
+    monkeypatch.setattr(hosting, "is_our_process", lambda pid, names=(): pid == 4242)
+    monkeypatch.setattr(hosting, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(hosting, "_kill", kill)
+    monkeypatch.setattr(hosting, "_wait_port", lambda *a, **k: True)
+    monkeypatch.setattr(hosting.subprocess, "run", lambda argv, **kw: ok(argv))
+    monkeypatch.setattr(hosting, "_spawn",
+                        lambda argv, lay, log_name, env=None: (spawns.append(argv) or (7 if argv[0] == "spacetime" else 8)))
+
+    info = hosting.start_team("python.exe", str(data), "local", "cadswarm-x-0001")
+    assert killed == [4242]  # the loopback-only server was stopped
+    assert spawns[0][:4] == ["spacetime", "start", "--listen-addr", "0.0.0.0:3000"]
+    assert info["spacetime_pid"] == 7 and info["host_pid"] == 8
 
 
 def test_team_ready_needs_a_ready_status_and_a_live_pid(tmp_path, monkeypatch):

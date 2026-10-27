@@ -479,7 +479,9 @@ files.
   bound to the network so teammates on the same network can reach it): no account needed, works offline,
   but everyone must share a network and the host must stay on. The other choice is **Maincloud**: nothing
   to run, teammates join from anywhere, and SpacetimeDB handles TLS and sign-in (the guide signs you in
-  once through your browser).
+  once through your browser). A database left over from an older CADSwarm (or a manual `spacetime start`)
+  that is bound to `127.0.0.1` only — so no teammate can reach it — is restarted on the network the next
+  time you host or reconnect a local team.
 - **The live model stays on the host's computer.** `cadswarm-host` executes ops against it and serves
   files, exports, snapshots and storage, so the host must stay on while the team works.
 - **Invite codes are `cadswarm-2:` codes.** Each one works once and expires after a day. Make a new one
