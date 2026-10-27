@@ -378,7 +378,9 @@ class SetupWizard(QtGui.QDialog):
             lay.addWidget(label("Open a project you've worked on before", "hint"))
             for t in teams[:5]:
                 open_btn = QtGui.QCommandLinkButton(f"Open “{t['project']}”",
-                                                    "Reopen this team's project where you left off.")
+                                                    panel.project_cards.subtitle(t))
+                open_btn.setIcon(panel.projects_ui.icon_for(t, 34))
+                open_btn.setIconSize(QtCore.QSize(34, 34))
                 open_btn.clicked.connect(lambda _c=False, t=t: self.open_team(t))
                 lay.addWidget(open_btn)
             lay.addSpacing(10)

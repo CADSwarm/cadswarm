@@ -25,7 +25,7 @@ import FreeCADGui as Gui
 import Part
 from PySide import QtCore, QtGui
 
-from .. import hosting, qr, ticket
+from .. import hosting, project_cards, qr, ticket
 from ..client import HubRequestError, load_json, save_json
 from ..invite import InviteError, read_invite
 from ..mentions import mention_prefix, parse_mentions, strip_mentions
@@ -33,13 +33,16 @@ from ..naming import MIRROR_DOC, is_mirror_doc, mirror_label
 from ..paths import app_dir
 from ..space_hub import SpaceHub
 from ..teams import recent_teams, remember_team
-from . import fea_ui, library_ui, lighten_ui, overlay, panes, style_ui, theme
+from . import fea_ui, library_ui, lighten_ui, overlay, panes, projects_ui, style_ui, theme
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 HEARTBEAT_SECONDS = 10
 REFRESH_SECONDS = 3         # the panel re-reads the team this often (in the background) even with no events
 HELPER_CHECK_SECONDS = 20   # how often to make sure this computer's AI helpers are running
 TOAST_SECONDS = 6           # how long a confirmation ("✓ Created task …") stays in the panel
+PREVIEW_SECONDS = 60        # how often a project's card picture ("Open a previous project") is refreshed
+JOIN_TRIES = 3              # a server this computer just started can take a moment to answer
+JOIN_RETRY_SECONDS = 2.0
 FATAL = ("taken_over", "fence_stale", "left", "removed", "bad_token", "not_member")
 
 
@@ -150,6 +153,14 @@ def friendly_error(e, hub=""):
     }.get(code, str(e))
 
 
+def _not_there_yet(e):
+    """A failure worth waiting a moment for: the server is starting, or paused, or the network blipped.
+    A stale sign-in or a deleted team is not — retrying it would just fail again."""
+    code = getattr(e, "code", None)
+    status = getattr(e, "status", None)
+    return code in ("unreachable", "host_timeout", 503) or status in (0, 503)
+
+
 class Session:
     def __init__(self):
         self.client = None
@@ -181,6 +192,8 @@ class Session:
         # What the panel's banner tells the user: connecting | disconnected | connected | offline | ended
         self.state, self.state_detail = "disconnected", ""
         self._joining = False    # a background rejoin is in flight (try_auto_rejoin)
+        self.rejoin_error = ""   # why the last automatic rejoin failed ("Try again" in the banner)
+        self._preview_at = 0.0   # when this project's card picture was last refreshed
         self._working = 0        # requests this session started and hasn't finished (holds buttons down)
         self._idle_waiters = []  # callbacks to run when the last one finishes
 
@@ -202,12 +215,14 @@ class Session:
         return connect_dialog(reason=f"To {purpose}, first join your team's session.")
 
     def try_auto_rejoin(self):
-        """Opening the workbench should just work: first time -> the setup guide; a host whose team
-        server stopped (e.g. after a reboot) -> the guide restarts it; otherwise quietly rejoin.
+        """Opening the workbench should just work: first time -> the setup guide; a team this computer
+        hosts -> its server is started again if it isn't running (after a reboot, say); otherwise
+        quietly rejoin.
 
-        The rejoin runs on a background thread: joining and reading a busy team (the live model alone
-        can be 10 MB, and every view is a database round trip) takes tens of seconds, and doing that
-        here froze FreeCAD's window for as long as it took — Windows drew it as "not responding"."""
+        Everything slow happens on a background thread — starting the server, joining, and reading a
+        busy team (the live model alone can be 10 MB, and every view is a database round trip) — so
+        FreeCAD's window keeps answering and the panel says what it is doing. Joining here used to
+        freeze the window for tens of seconds, which Windows drew as "FreeCAD is not responding"."""
         p = prefs()
         uri, db = p.GetString("Uri"), p.GetString("Db")
         ident = load_identity(db) if db else {}
@@ -217,29 +232,34 @@ class Session:
         if not (uri and db and ident.get("token")):
             QtCore.QTimer.singleShot(300, run_wizard)
             return
-        if p.GetString("HostDataDir"):
-            from .. import hosting
-            if not hosting.team_ready(p.GetString("HostDataDir")):
-                QtCore.QTimer.singleShot(300, lambda: run_wizard(start="reconnect"))
-                return
         self._rejoin({"uri": uri, "db": db}, ident, p.GetString("Name"), p.GetString("ProjectName"))
 
     def _rejoin(self, cfg, identity, name, project):
         """Join and read the team off the GUI thread; drain() adopts the result (see _adopted).
 
-        Everything here is network + files: no widget and no document is touched, so the window keeps
-        answering. The panel says "Joining…" until it is done."""
+        Everything here is network, files and processes: no widget and no document is touched, so the
+        window keeps answering. The banner follows along ("Starting your team's server…", "Joining…")."""
         self._joining = True
+        self.rejoin_error = ""
         self.set_state("connecting")
         if self.timer is None:  # nothing else starts it before a session exists: the result arrives here
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self.drain)
         self.timer.start(250)
         events, host_dir = self.events, host_dir_for(cfg["db"])
+        mode = prefs().GetString("HostMode") or "local"
 
         def go():
             try:
-                client, ident = self._join(cfg, identity, name, timeout=3, host_dir=host_dir)
+                if host_dir and not hosting.team_ready(host_dir):
+                    # This computer hosts the team: start its server instead of sending the person
+                    # through the setup guide (that used to be the only way to get back in).
+                    events.put(("progress", "Starting your team\u2019s server\u2026"))
+                    from ..paths import freecad_python
+                    hosting.start_team(freecad_python(), host_dir, mode, cfg["db"])
+                events.put(("progress", "Joining your team\u2026"))
+                client, ident = self._join_retrying(cfg, identity, name, host_dir, events)
+                events.put(("progress", "Loading the team\u2019s model\u2026"))
                 breps, _gone, mirrored = client.mirror_changes({})
                 snap = client.panel_snapshot()
             except Exception as e:  # a stopped server, a stale sign-in, a team that is too busy
@@ -250,14 +270,29 @@ class Session:
 
         threading.Thread(target=go, daemon=True, name="cadswarm-rejoin").start()
 
+    def _join_retrying(self, cfg, identity, name, host_dir, events):
+        """Join, waiting a moment for a server that is still coming up (one we just started, or one on
+        the way back). Anything else (a stale sign-in, a team that does not exist) is reported at once."""
+        for attempt in range(JOIN_TRIES):
+            try:
+                return self._join(cfg, identity, name, timeout=3, host_dir=host_dir)
+            except Exception as e:  # noqa: BLE001 - only a "not there yet" failure is worth waiting for
+                if attempt == JOIN_TRIES - 1 or not _not_there_yet(e):
+                    raise
+                events.put(("progress", "Waiting for your team\u2019s server\u2026 (try %d of %d)"
+                            % (attempt + 2, JOIN_TRIES)))
+                time.sleep(JOIN_RETRY_SECONDS)
+
     def _adopted(self, cfg, client, ident, project, breps, mirrored, snap, error):
         """The background rejoin came back: finish it here, where widgets and the document live."""
         self._joining = False
         if error:
             if self.timer:
                 self.timer.stop()  # nothing to drain: no session was started
-            self.set_state("disconnected", error)  # the banner says why, with Get started beside it
+            self.rejoin_error = error  # the banner offers Try again instead of the whole setup guide
+            self.set_state("disconnected", error)
             return
+        self.rejoin_error = ""
         self._end_session()  # a previous session's threads must never act on this one
         self._adopt(cfg, client, ident, project)
         try:
@@ -272,6 +307,8 @@ class Session:
             self.disconnect()
             return
         self._start_workers()
+        # The view only draws once the event loop runs again: give it a moment, then keep the picture.
+        QtCore.QTimer.singleShot(2500, lambda: self.save_project_preview(force=True))
 
     def _join(self, cfg, identity, name, timeout, host_dir=""):
         """The network half of joining: build the client and redeem this person's identity. It touches
@@ -497,9 +534,14 @@ class Session:
             elif kind == "rejoin":
                 # Adopt after this pass: _adopt swaps this queue and this dispatch's timer.
                 QtCore.QTimer.singleShot(0, lambda d=data: self._adopted(*d))
+            elif kind == "progress":
+                if self.state == "connecting":
+                    self.set_state("connecting", data)  # "Starting your team's server…", "Joining…"
         if refresh:
             self.request_refresh()
         self.guard_local_moves()
+        if self.connected:
+            self.save_project_preview()  # at most every PREVIEW_SECONDS; the project list shows it
 
     def guard_local_moves(self):
         """The live model shows the team's parts. A part moved by hand without Edit would silently differ
@@ -566,6 +608,30 @@ class Session:
         doc.recompute()
         if added:
             self.frame_model()
+
+    def save_project_preview(self, force=False):
+        """Keep a picture of the live model for this project's card in "Open a previous project", so the
+        next time it is picked the list shows what the project looks like (and how many parts it has).
+
+        The 3D view cannot give us one (FreeCAD's saveImage comes back empty unless the person is on
+        that tab, and the team server saves model.FCStd without a thumbnail), so we draw the outline:
+        the model's edges in a flat isometric projection. Cheap, and it always works."""
+        db = (self.client.cfg or {}).get("db") if self.client else ""
+        if not db:
+            return False
+        now = time.time()
+        if not force and now - self._preview_at < PREVIEW_SECONDS:
+            return False
+        doc = mirror_document()
+        if doc is None:
+            return False
+        segments, parts = iso_outline(doc)
+        if not segments:
+            return False
+        if projects_ui.save_preview(db, segments, parts, now):
+            self._preview_at = now
+            return True
+        return False
 
     def frame_model(self, show=False):
         """Frame the live model in view. Only bring its tab to the front when asked (`show`): a refresh,
@@ -741,6 +807,45 @@ def mirror_document():
     if exact is not None:
         return exact
     return max((d for name, d in docs.items() if is_mirror_doc(name)), key=lambda d: len(d.Objects), default=None)
+
+
+ISO_COS, ISO_SIN = 0.8660254037844386, 0.5   # 30 degrees: the usual isometric view
+MAX_OUTLINE_SEGMENTS = 12000                 # enough for a real model, still a frame or two at most
+
+
+def iso_outline(doc):
+    """(segments, parts): a flat isometric drawing of what `doc` shows, as 2D lines.
+
+    The project cards need a picture of the model, and neither the 3D view (FreeCAD's saveImage comes
+    back empty unless that tab is on screen) nor the saved model.FCStd (the team server writes it
+    without a thumbnail) can give one. The parts' own edges can: a few thousand short lines, drawn
+    with QPainter, read as the model at card size. `parts` counts every part that shows, even when the
+    outline stops at MAX_OUTLINE_SEGMENTS (a card does not need more lines than that)."""
+    objects = []
+    for obj in getattr(doc, "Objects", []):
+        shape = getattr(obj, "Shape", None)
+        if shape is None or shape.isNull():
+            continue
+        vo = getattr(obj, "ViewObject", None)
+        if vo is not None and not getattr(vo, "Visibility", True):
+            continue
+        objects.append(shape)
+    segments = []
+    for shape in objects:
+        for edge in shape.Edges:
+            try:
+                points = edge.discretize(5)
+            except Exception:  # noqa: BLE001 - a broken edge must not cost the whole picture
+                continue
+            for a, b in zip(points, points[1:]):
+                segments.append((_iso(a), _iso(b)))
+            if len(segments) >= MAX_OUTLINE_SEGMENTS:
+                return segments, len(objects)
+    return segments, len(objects)
+
+
+def _iso(p):
+    return ((p.x - p.y) * ISO_COS, (p.x + p.y) * ISO_SIN - p.z)
 
 
 def set_if_changed(obj, prop, value):
@@ -1394,12 +1499,14 @@ class TeamPanel(QtGui.QDockWidget):
         elif s.state in ("offline", "ended"):
             detail = s.state_detail.replace("\n", "<br>")
         elif s.state == "connecting":
-            detail = ("Reading the team's model and tasks. FreeCAD stays usable while this finishes."
-                      + (f"<br><i>{s.state_detail}</i>" if s.state_detail else ""))
+            detail = (s.state_detail or "Reading the team's model and tasks.") + \
+                     "<br>FreeCAD stays usable while this finishes."
+        if s.state == "disconnected" and s.rejoin_error:
+            headline = "Couldn't reach your team just now."
         self.banner_text.setText(f"<b>{headline}</b>" + (f"<br><span style='color:#8b949e'>{detail}</span>"
                                                           if detail else "")
                                  if s.state != "connected" else f"<span style='color:#8b949e'>{headline}</span>")
-        self.banner_button.setText(button)
+        self.banner_button.setText("Try again" if (s.state == "disconnected" and s.rejoin_error) else button)
         self.banner_button.setVisible(s.state != "connecting")  # nothing to press while it joins by itself
         # Not in a team: joining is the one thing to do, so its button stands out.
         primary = "" if s.state == "connected" else "primary"
@@ -1418,6 +1525,8 @@ class TeamPanel(QtGui.QDockWidget):
         s = self.session
         if s.state == "connecting":
             return  # it is joining by itself; a second join would fight the first
+        if s.state == "disconnected" and s.rejoin_error:
+            return s.try_auto_rejoin()  # one click, no sign-in questions: retry what failed
         if s.state == "connected":
             if confirm("Leave the team session? Your locks will be released so others can edit those parts."):
                 s.disconnect()
@@ -3652,22 +3761,18 @@ def select_team(team):
 
 
 def open_previous_team():
-    """Reopen a team this computer joined before, without a new invite code (a per-team sign-in is kept)."""
+    """Reopen a team this computer joined before, without a new invite code (a per-team sign-in is kept).
+
+    The list shows each project's last picture and how big it was, so "RacingDrone22 (cadswarm-…)" is
+    not the only thing to go on when picking one."""
     from .wizard import run_wizard
     teams = recent_teams()
     if not teams:
         hint("You haven't joined a team on this computer yet. Start or join one from CADSwarm ▸ Get started.")
         return
-    if len(teams) == 1:
-        chosen = teams[0]
-    else:
-        labels = [t["project"] if t["db"] == prefs().GetString("Db")
-                  else f"{t['project']}  ({t['db']})" for t in teams]
-        pick, ok = QtGui.QInputDialog.getItem(Gui.getMainWindow(), "Open a previous project",
-                                              "Choose a team to reopen:", labels, 0, False)
-        if not ok:
-            return
-        chosen = teams[labels.index(pick)]
+    chosen = projects_ui.pick_team(teams, Gui.getMainWindow())
+    if chosen is None:
+        return
     select_team(chosen)
     run_wizard(start="reconnect")
 
