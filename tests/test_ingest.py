@@ -8,30 +8,45 @@ def test_html_keeps_text_and_table_cells_and_drops_scripts():
     assert "XIAO" in t and "21 x 17.8 mm" in t and "var x" not in t and "p{}" not in t
 
 
-class FakeElastic:
+class FakeKnowledge:
+    """Stands in for the project's store: ingest only needs somewhere to put a board doc."""
+
     def __init__(self):
         self.docs = []
 
-    def es(self, method, path, body=None):
-        self.docs.append((path, body))
-        return {}
+    def index_board(self, doc):
+        self.docs.append(doc)
 
 
 def test_ingest_indexes_one_document_per_source_with_its_metadata():
     src = [{"board_id": "b1", "title": "T", "type": "product_page", "url": "https://x/a.html"}]
-    fake = FakeElastic()
+    fake = FakeKnowledge()
     n = ingest(fake, src, fetch=lambda url: (b"<p>Board is 50 mm long</p>", "text/html"))
     assert n == 1
-    path, doc = fake.docs[0]
-    assert path.startswith("/cadswarm-boards/_doc/")
+    doc, = fake.docs
     assert doc["board_id"] == "b1" and doc["source_url"] == "https://x/a.html"
-    assert "50 mm" in doc["content"] and doc["text"] == doc["content"]
+    assert doc["source_type"] == "product_page" and doc["doc_id"]
+    assert "50 mm" in doc["text"] and doc["text"] == doc["content"]
 
 
 def test_a_source_with_no_extractable_text_is_skipped_not_indexed_blank():
     # Scanned/vector-only PDFs (the Pi 4 mechanical drawing) extract to nothing; a blank document
-    # in the index would look like knowledge and answer nothing.
+    # would look like knowledge and answer nothing.
     src = [{"board_id": "b1", "title": "T", "url": "https://x/a.html"}]
-    fake = FakeElastic()
+    fake = FakeKnowledge()
     n = ingest(fake, src, fetch=lambda url: (b"<script>var x=1</script>", "text/html"))
     assert n == 0 and fake.docs == []
+
+
+def test_one_dead_link_does_not_stop_the_rest():
+    src = [{"board_id": "dead", "title": "Gone", "url": "https://x/gone.html"},
+           {"board_id": "b2", "title": "T", "url": "https://x/a.html"}]
+
+    def fetch(url):
+        if url.endswith("gone.html"):
+            raise OSError("404")
+        return b"<p>21 x 17.8 mm</p>", "text/html"
+
+    fake = FakeKnowledge()
+    assert ingest(fake, src, fetch=fetch) == 1
+    assert [d["board_id"] for d in fake.docs] == ["b2"]

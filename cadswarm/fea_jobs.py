@@ -221,12 +221,12 @@ class FeaJobs:
                                 (json.dumps({"ok": False, "code": "publish_failed", "error": str(e)}), r["id"]))
 
     def remember(self, report):
-        """Keep a published report in Elastic's design memory (cadswarm-fea), so later designs and other teams'
-        helpers can recall what failed and why. Best effort: without Elastic keys, or offline, it is skipped."""
+        """Keep a published report in the project's design memory, so later designs and helpers can
+        recall what failed and why. Best effort: a read-only folder simply skips it."""
         try:
             from .knowledge import fea_doc
             project = os.path.basename(os.path.dirname(os.path.normpath(self.p.files.full(""))))
-            self.p.elastic.index_fea(fea_doc(report, project))
+            self.p.knowledge.index_fea(fea_doc(report, project))
             return True
         except Exception:
             return False

@@ -1,13 +1,14 @@
-"""Fill the boards index from datasheets and product pages.
+"""Fill the local board knowledge from datasheets and product pages.
 
-    python -m cadswarm.ingest boards/sources.json
+    python -m cadswarm.ingest boards/sources.json [--project DIR]
 
-PDF text extraction uses pypdf (pip install pypdf); Elastic's semantic_text field chunks and
-embeds the text with the JINA endpoint on its own.
+PDF text extraction uses pypdf (pip install pypdf). The extracted text goes into the project's own
+`internal/knowledge.db`, where `lookup_board` searches it offline.
 """
 import hashlib
 import io
 import json
+import os
 import sys
 import urllib.request
 from html.parser import HTMLParser
@@ -57,7 +58,7 @@ def urlopen_bytes(url):
         return r.read(), r.headers.get("content-type", "")
 
 
-def ingest(elastic, sources, fetch=urlopen_bytes):
+def ingest(knowledge, sources, fetch=urlopen_bytes):
     n = 0
     for s in sources:
         try:
@@ -73,8 +74,8 @@ def ingest(elastic, sources, fetch=urlopen_bytes):
             print(f"skip {s['url']}: no text extracted (scanned or vector-only?)", file=sys.stderr)
             continue
         doc_id = hashlib.sha256(s["url"].encode()).hexdigest()[:20]
-        elastic.es("PUT", f"/cadswarm-boards/_doc/{doc_id}", {
-            "board_id": s["board_id"], "title": s["title"], "source_url": s["url"],
+        knowledge.index_board({
+            "doc_id": doc_id, "board_id": s["board_id"], "title": s["title"], "source_url": s["url"],
             "source_type": s.get("type", "datasheet"), "text": text, "content": text})
         print(f"indexed {s['board_id']}: {s['title']} ({len(text)} chars)")
         n += 1
@@ -82,10 +83,19 @@ def ingest(elastic, sources, fetch=urlopen_bytes):
 
 
 def main(argv=None):
-    from .knowledge import Elastic
-    path = (argv or sys.argv[1:] or ["boards/sources.json"])[0]
+    from .knowledge import Knowledge
+    from .paths import project_layout
+    argv = list(argv or sys.argv[1:])
+    project = os.environ.get("CADSWARM_PROJECT") or os.getcwd()
+    if "--project" in argv:
+        i = argv.index("--project")
+        project = argv[i + 1]
+        del argv[i:i + 2]
+    path = argv[0] if argv else os.path.join("boards", "sources.json")
     with open(path, encoding="utf-8") as f:
-        print(f"{ingest(Elastic.from_env(), json.load(f))} documents indexed")
+        sources = json.load(f)
+    knowledge = Knowledge.for_project(project_layout(project))
+    print(f"{ingest(knowledge, sources)} documents indexed into {knowledge.path}")
 
 
 if __name__ == "__main__":
