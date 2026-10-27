@@ -12,8 +12,6 @@ dependencies = ["mcp>=2.3"]
 [project.optional-dependencies]
 test = ["pytest>=8"]
 structural = ["numpy>=1.26", "scipy>=1.11"]
-# The Droid reviewer. Not droid-sdk[mcp]: that extra pins mcp<2, which conflicts with mcp>=2.3.
-reviewer = ["droid-sdk>=0.5"]
 
 [project.scripts]
 cadswarm = "cadswarm.cli:main"

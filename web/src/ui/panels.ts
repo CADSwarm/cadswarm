@@ -10,7 +10,6 @@ import { mountLibrary } from './library';
 import { mountSettings } from './settings';
 import { mountSizes } from './sizes';
 import { mountFiles } from './files';
-import { mountSponsors } from './sponsors';
 import { mountPrinter, mountReview } from './review';
 import { esc } from './esc';
 import { parseRefusal, isRefusal } from './refusal';
@@ -105,8 +104,8 @@ export function clock(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [], project = '',
-                             topbar: HTMLElement | null = null) {
+export function mountPanels(el: HTMLElement, store: Store, api: Api | null, picked: () => string[] = () => [],
+                             topbar: HTMLElement | null = null, project = '') {
   el.classList.remove('has-notice');
   el.innerHTML = `
     <div class="grabber" data-grabber aria-hidden="true"><span></span></div>
@@ -116,7 +115,6 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
         <b data-project>this build</b>
         <span class="sheet-last" data-sheet-last></span>
       </button>
-      <button type="button" class="debug-open" data-sponsors aria-haspopup="dialog" title="How CADSwarm uses its sponsors (Shift+D)">Sponsors</button>
       <span class="conn" data-conn></span>
       <button type="button" class="sheet-toggle" data-sheet-toggle aria-expanded="false" aria-label="Expand chat">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 14 6-6 6 6"/></svg>
@@ -193,9 +191,6 @@ export function mountPanels(el: HTMLElement, store: Store, api: Api | null, pick
   mountHandoff($('[data-handoff]'), store, api);
   mountLibrary($('[data-library]'), store, api);
   mountSettings($('[data-settings]'), store, api);
-  // A debug view of the outside services, for showing a judge how each one is wired in.
-  const sponsors = mountSponsors(document.body, store, project);
-  $('[data-sponsors]').addEventListener('click', sponsors.open);
 
   function select(tab: Tab) {
     el.querySelectorAll<HTMLElement>('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));

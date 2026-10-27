@@ -211,20 +211,14 @@ def test_the_stop_file_ends_the_runner(tmp_path):
     assert r.step() is False
 
 
-def test_each_cli_gets_a_headless_command_with_the_prompt_on_stdin_where_it_can():
+def test_each_helper_cli_gets_a_headless_command_with_the_prompt_on_stdin_where_it_can():
     argv, stdin = runner.agent_command("claude", "claude", "/h", "do it\nnow", resume=True)
     assert argv[:2] == ["claude", "--continue"] and "-p" in argv and "mcp__cadswarm" in argv and stdin == "do it\nnow"
     argv, stdin = runner.agent_command("codex", "codex", "/h", "do it", resume=False)
     assert argv[-1] == "-" and stdin == "do it"
-    argv, stdin = runner.agent_command("droid", "droid", "/h", "do it\nnow", resume=False)
-    assert argv[-1] == "do it now" and stdin is None
     argv, stdin = runner.agent_command("opencode", "opencode", "/h", "do it\nnow", resume=True)
     assert argv[:4] == ["opencode", "run", "--standalone", "--auto"] and "--continue" in argv
     assert stdin == "do it\nnow" and not any("do it" in a for a in argv)
-    # Creao has no CLI: the launcher runs its bridge, which takes the prompt on stdin.
-    argv, stdin = runner.agent_command("creao", "", "/h", "do it", resume=False)
-    assert argv[-3:] == ["creao", "--dir", "/h"] and argv[1].endswith("cadswarm_launch.py")
-    assert stdin == "do it"
 
 
 def test_a_helpers_picked_model_beats_the_environment(monkeypatch):

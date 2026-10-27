@@ -25,7 +25,7 @@ needs_windows = pytest.mark.skipif(not WIN, reason="AppContainer / low-integrity
 
 @pytest.fixture
 def worker(tmp_path, monkeypatch):
-    """Factory: a started worker with env overrides (read by the worker at start)."""
+    """A started worker with env overrides (read by the worker at start)."""
     made = []
 
     def make(**env):

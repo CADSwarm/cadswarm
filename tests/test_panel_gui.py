@@ -30,7 +30,7 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert "teammate's computer" in r["away_tip"]
     # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
     assert [t.split(" ")[0] for t in r["tabs"]] == ["Team", "Tasks", "Activity", "Sizes", "Files", "Library",
-                                                     "Remote", "Sponsors", "Tools"], r["tabs"]
+                                                     "Remote", "Tools"], r["tabs"]
     assert r["sizes"] == [["Pcb l", "65 mm"], ["Wall", "3 mm"]], r["sizes"]
     # Values edit in place, like the site's size fields; files show their size like the site's rows.
     assert r["sizes_editable"] is True, r["sizes_editable"]
@@ -44,11 +44,6 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
                                   "ann-claude"], r["refusal_parse"]
     assert "Round 2 asks for changes" in r["review"] and "Lid clip is 0.4 mm too short." in r["review"]
     assert "256 x 256 x 256" in r["review"]
-    # The Sponsors tab is a first-class tab, built only from the snapshot this refresh already read.
-    assert "Sponsors" in r["sponsors_tab"]
-    assert "SpacetimeDB" in r["sponsors"] and "Anthropic" in r["sponsors"] and "Creao AI" in r["sponsors"]
-    assert "Factory.ai" in r["sponsors"] and "Elastic" in r["sponsors"]
-    assert "team-db" in r["sponsors"] and "checked " in r["sponsors"]
     # The Remote tab hands a phone one code: its link opens the public site, and the QR is that link.
     assert r["remote"]["link"].startswith("https://cadswarm.design/app/#t="), r["remote"]
     assert r["remote"]["no_horizontal_overflow"], r["remote"]
@@ -61,22 +56,25 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert sim["material"] == "pla" and sim["modal_hides_load"], sim
     # A failed report: Ask a helper to fix this sends the helper a command that reads it with fea_report.
     assert r["fix_request"] == {"to": "ann-claude", "kind": "command", "reads_report": True}, r["fix_request"]
-    assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-droid"]  # people aren't in the helper list
+    assert r["helpers_listed"] == ["ann-claude", "bob-codex", "dee-opencode"]  # people aren't in the helper list
     assert "carol (you)" in r["people"]
     # Default names stay; the Task column says what each helper is on (or what's waiting for it).
     assert r["helper_header"] == ["Helper", "Task", "Status"]
     rows = {name.replace("🤖 ", ""): (task, status) for name, task, status in r["helper_rows"]}
     assert rows["ann-claude"] == ("Base with port cutouts", "Working")
     assert rows["bob-codex"] == ("next: Lid", "Ready")
-    assert rows["dee-droid"] == ("no task", "away")
+    assert rows["dee-opencode"] == ("no task", "away")
     # @ offers every helper plus @team and @all; @b narrows it; picking one fills in "@name ".
-    assert r["offered_all"][:3] == ["ann-claude", "bob-codex", "dee-droid"] and {"team", "all"} <= set(r["offered_all"])
+    assert r["offered_all"][:3] == ["ann-claude", "bob-codex", "dee-opencode"] and {"team", "all"} <= set(r["offered_all"])
     assert r["offered_b"] == ["bob-codex"] and r["filled"] == "@bob-codex "
     # "@bob-codex ..." is a task for bob-codex plus the message that wakes it; "@team ..." is a whole-team request.
     (task_path, task), (msg_path, msg), (brief_path, brief) = r["sent"]
     assert task_path == "/tasks" and task["assignee"] == "bob-codex" and task["title"] == "make the lid 20 mm tall"
     assert msg_path == "/messages" and msg["to"] == "bob-codex" and msg["kind"] == "command" and msg["task_id"] == "t_new"
     assert brief_path == "/briefs" and brief["text"] == "a stand for a 7 mm phone"
+    # ...and it adds no chat row: a brief is not echoed back, so an optimistic "sending…" row would
+    # hang in the chat forever (and the next send would post the brief again).
+    assert "a stand for a 7 mm phone" not in r["team_outbox"], r["team_outbox"]
     # Suggestions sit on the Team tab with Accept/Dismiss; answering one sends it and takes it off the card.
     assert r["suggestions_shown"] and r["suggestions_cleared"]
     assert r["answered"] == [["/settings/suggestions/7", {"accept": True}],

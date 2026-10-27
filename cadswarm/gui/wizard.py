@@ -4,7 +4,7 @@
        │                                        server, join) ─► share invite code ─┐
        └──────► Join with an invite code ─► paste code + name ─────────────────────┤
                                                                                      ▼
-        Connect your AI helper (Claude Code / Codex / Droid / OpenCode / Creao AI / just watch) ─► (wire it up) ─►
+        Connect your AI helper (Claude Code / Codex / OpenCode / just watch) ─► (wire it up) ─►
         Open it, paste the first message ─► "✓ your helper joined" ─► Finish
 
 The team's database lives on SpacetimeDB: on this computer by default (no account; teammates on your
@@ -26,7 +26,7 @@ import FreeCADGui as Gui
 from PySide import QtCore, QtGui
 
 from .. import hosting
-from ..agent_setup import CLIENTS, agent_ready, find_agent_cli, identity_matches, open_agent_terminal, redeem, \
+from ..agent_setup import CLIENTS, find_agent_cli, identity_matches, open_agent_terminal, redeem, \
     trust_in_codex, write_agent_config, write_launcher
 from ..client import HubRequestError
 from ..invite import InviteError, read_invite
@@ -571,8 +571,9 @@ class SetupWizard(QtGui.QDialog):
         stored = hosting.host_config(data_dir)
         mode = stored.get("mode") or self.host_mode
         db = stored.get("db") or proposed_db(self.project)
+        agent = self.client or stored.get("agent_client") or "claude"
         log(f"Starting the team server (model saved in {data_dir})")
-        info = hosting.start_team(self.python, data_dir, mode, db, on_log=log)
+        info = hosting.start_team(self.python, data_dir, mode, db, agent=agent, on_log=log)
         self.remember_host(info, data_dir, mode)  # saved at once, so "Stop hosting" finds it whatever happens
         try:
             hosting.wait_ready(data_dir, timeout=120, pids=[info["host_pid"], info["spacetime_pid"]])
@@ -757,31 +758,18 @@ class SetupWizard(QtGui.QDialog):
             group.addButton(rb)
             row.addWidget(rb)
             path = find_agent_cli(key)
-            ready = bool(path) or (key == "creao" and agent_ready(key))
+            ready = bool(path)
             if info.get("description"):
                 row.addWidget(label(f"— {info['description']}", "hint"))
             if ready:
                 found_any = found_any or key
-                if key == "creao":
-                    row.addWidget(label("✓ Ready to use", "ok"), 1)
-                    change = QtGui.QPushButton("Change key…")
-                    change.clicked.connect(lambda _=False: self.ask_creao_key(force=True))
-                    row.addWidget(change)
-                else:
-                    row.addWidget(label("✓ Found on this computer", "ok"), 1)
-            elif key == "creao":
-                row.addWidget(label("Needs an API key", "hint"), 1)
-                how = QtGui.QPushButton("Add key…")
-                how.clicked.connect(lambda _=False: self.ask_creao_key())
-                row.addWidget(how)
+                row.addWidget(label("✓ Found on this computer", "ok"), 1)
             else:
                 row.addWidget(label("Not installed yet", "hint"), 1)
                 how = QtGui.QPushButton("How to install")
                 how.clicked.connect(lambda _=False, u=info["install_url"]: QtGui.QDesktopServices.openUrl(QtCore.QUrl(u)))
                 row.addWidget(how)
             rb.toggled.connect(lambda on, k=key: on and self.pick_client(k))
-            if key == "creao":  # clicking Creao itself offers the key box when it has none
-                rb.clicked.connect(lambda _=False: self.ask_creao_key())
             self.client_buttons[key] = (rb, ready)
             lay.addWidget(card)
         none_card = QtGui.QFrame()
@@ -828,6 +816,10 @@ class SetupWizard(QtGui.QDialog):
 
     def pick_client(self, key):
         self.client = key
+        if key:
+            # The host spawns the planners, workers and reviewer with this same CLI. It re-reads
+            # host.json every couple of seconds, so this reaches a host started before this page.
+            hosting.set_agent_client(self.p.GetString("HostDataDir") or getattr(self, "project_dir", ""), key)
         if not hasattr(self, "folder_row"):
             return
         installed = self.client_buttons.get(key, (None, True))[1]
@@ -838,12 +830,8 @@ class SetupWizard(QtGui.QDialog):
         if key:
             self.folder_label.setText(f"Your helper's workspace folder:<br><b>{getattr(self, 'folder', '')}</b>")
         if key and not installed:
-            if key == "creao":
-                self.missing_note.setText("Creao AI gives your helper various frontier models with one API key. "
-                                          "Click “Add key…” to paste it, then try again.")
-            else:
-                self.missing_note.setText(f"Install {CLIENTS[key]['label']} first (click “How to install”), "
-                                          "then click “check again”.")
+            self.missing_note.setText(f"Install {CLIENTS[key]['label']} first (click “How to install”), "
+                                      "then click “check again”.")
             self.buttons("Connect my AI helper ›", None)
             self.primary.setEnabled(False)
         elif key:
@@ -852,15 +840,6 @@ class SetupWizard(QtGui.QDialog):
         else:
             self.missing_note.setText("You can add an AI helper later from the CADSwarm toolbar (“Add AI helper”).")
             self.buttons("Finish", self.finish)
-
-    def ask_creao_key(self, force=False):
-        """Open the key box when Creao has none (or the person asked to change it), then re-check readiness."""
-        if not force and agent_ready("creao"):
-            return
-        if not panel.ask_creao_key(self):
-            return
-        self.show_page("agent", remember=False)
-        self.client_buttons["creao"][0].setChecked(True)
 
     def change_folder(self):
         d = QtGui.QFileDialog.getExistingDirectory(self, "Choose your helper's workspace folder",
@@ -925,17 +904,13 @@ class SetupWizard(QtGui.QDialog):
         if self.client == "codex":
             lay.addWidget(label("If Codex has never been signed in on this computer, open it once in a terminal "
                                 "(type <code>codex</code>) and sign in. After that it starts by itself.", "hint"))
-        if self.client == "creao":
-            lay.addWidget(label("Creao AI is called over the internet with the key in cadswarm.env: there's no "
-                                "terminal program to sign in to.", "hint"))
         lay.addSpacing(6)
         self.helper_status = label("⏳ Waiting for your AI helper to join the team…")
         lay.addWidget(self.helper_status)
-        if self.client != "creao":  # Creao has no terminal to open; it always runs through the runner
-            watch = QtGui.QPushButton("Open it in a terminal instead")
-            watch.setToolTip("Only if you'd like to watch it work or type to it directly")
-            watch.clicked.connect(self.open_helper)
-            lay.addWidget(watch, 0, QtCore.Qt.AlignLeft)
+        watch = QtGui.QPushButton("Open it in a terminal instead")
+        watch.setToolTip("Only if you'd like to watch it work or type to it directly")
+        watch.clicked.connect(self.open_helper)
+        lay.addWidget(watch, 0, QtCore.Qt.AlignLeft)
         lay.addStretch(1)
         return w
 
@@ -953,7 +928,7 @@ class SetupWizard(QtGui.QDialog):
             self.open_status.setText("Started in the background ✓")
         except Exception as e:
             self.open_status.setText(f"<span style='color:#e5484d'>Couldn't start it: {e}</span>"
-                                     + ("" if self.client == "creao" else " Try “Open it in a terminal instead”."))
+                                     " Try “Open it in a terminal instead”.")
 
     def open_helper(self):
         from ..runner import runner_alive, set_background, stop_runner
@@ -965,10 +940,8 @@ class SetupWizard(QtGui.QDialog):
             self.open_status.setText("Opened ✓. Look for a new window on your screen. Restart the background "
                                      "helper later with the Tools tab ▸ Restart my AI helpers.")
         except Exception as e:
-            hint = ("The CadSwarm bridge needs the key in cadswarm.env and this folder's Creao agent; "
-                    "re-run the setup guide if that changed." if self.client == "creao"
-                    else f"You can also open a terminal in <b>{self.folder}</b> and type "
-                         f"<code>{CLIENTS[self.client]['exe']}</code>.")
+            hint = (f"You can also open a terminal in <b>{self.folder}</b> and type "
+                    f"<code>{CLIENTS[self.client]['exe']}</code>.")
             self.open_status.setText(f"<span style='color:#e5484d'>{e}</span> {hint}")
 
     def check_helper_joined(self):

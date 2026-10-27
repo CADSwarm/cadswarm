@@ -46,7 +46,7 @@ function showBuild(api: Api, project: string) {
   }
   const panels = document.getElementById('panels')!;
   const topbar = document.getElementById('topbar');
-  mountPanels(panels, store, api, () => (picked ? [picked] : []), project, topbar);
+  mountPanels(panels, store, api, () => (picked ? [picked] : []), topbar, project);
   sheet?.setStop(sheet.stop()); // the sheet's height, expanded state and inset follow the new markup
 }
 

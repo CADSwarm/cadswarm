@@ -102,3 +102,10 @@ def test_local_ips_falls_back_when_lookup_fails(monkeypatch):
     monkeypatch.setattr(hosting, "lan_ip", lambda: "10.1.1.1")
     monkeypatch.setattr(hosting.socket, "getaddrinfo", boom)
     assert hosting.local_ips() == ["10.1.1.1"]
+
+
+def test_the_gui_helper_python_lookup_is_exported():
+    # Every GUI module imports this; appending code to paths.py once swallowed the `def` by accident,
+    # which only shows up inside FreeCAD because the tests never import the GUI.
+    from cadswarm.paths import freecad_python
+    assert callable(freecad_python)
