@@ -160,6 +160,9 @@ class Session:
         self.commands = []     # instructions I sent to helpers, with sent/seen/done
         self.briefs = []       # requests handed to the whole team (the host plans and builds them)
         self.reviews = []      # the reviewer's rounds, newest first, findings as sentences
+        # Local chat lines for things that are not messages (a brief handed to the team), so the person
+        # sees what happened without a "sending..." row waiting for an echo that never comes.
+        self.notices = []
         self.workspace = {"bed": [180.0, 180.0, 180.0], "bed_x_mm": 180.0, "bed_y_mm": 180.0, "bed_z_mm": 180.0}
         self.editing = {}      # part name -> its open EditPartDialog
         self.synced_pl = {}    # part name -> mirror Placement as the hub last sent it
@@ -310,6 +313,15 @@ class Session:
 
     def request_refresh(self):
         self.wake.set()
+
+    def notice(self, text):
+        """Show a local line in the chat about something that is not a message (a brief handed to the team).
+
+        It is never sent to the team: it only tells the person what this window just did."""
+        self.notices.append({"at": time.time(), "text": text})
+        del self.notices[:-NOTICES_KEPT]
+        if self.panel is not None:
+            self.panel.render_chat(self)
 
     def _mirror_loop(self, stop, events, c, wake, applied):
         """Keep the live model equal to the team's. Each pass fetches only the parts that differ from what this
@@ -1475,7 +1487,7 @@ class TeamPanel(QtGui.QDockWidget):
         sent = {m["body"] for m in shown if m["from"] == me}
         self.outbox = [o for o in self.outbox if o["body"] not in sent and time.time() - o["at"] < 60]
         key = (tuple((m["id"], states[m["id"]]["state"] if m["id"] in states else "") for m in shown),
-               tuple(o["body"] for o in self.outbox))
+               tuple(o["body"] for o in self.outbox), tuple(n["text"] for n in s.notices))
         if not self.changed("chat", key):
             return
         bar = self.chat.verticalScrollBar()
@@ -1507,6 +1519,10 @@ class TeamPanel(QtGui.QDockWidget):
         for o in self.outbox:
             lines.append(chat_line(o["at"], "You", "#8b949e", "", o["body"],
                                    " <span style='color:#8b949e'>sending…</span>"))
+        for n in s.notices:
+            stamp = time.strftime('%H:%M', time.localtime(n["at"]))
+            lines.append(f"<p style='margin:0 0 8px 0'><span style='color:#8b949e'>{stamp} "
+                         f"{html.escape(n['text'])}</span></p>")
         if not lines:
             lines.append("<p style='color:#8b949e'>No messages yet. Type <b>@</b> and pick a helper to give it "
                          "something to build. It answers here as it works.</p>")
@@ -1680,11 +1696,11 @@ class TeamPanel(QtGui.QDockWidget):
         self.msg.clear()
         what = strip_mentions(text) or text
         if "team" in special:
-            # A brief is not a chat message, so nothing will ever echo this row back: posting it in the
-            # outbox left a "sending…" bubble that never resolved (and re-sent the text as another brief).
+            # A brief is not a chat message, so nothing will ever echo this row back. Posting it in the
+            # outbox left a "sending..." bubble that never resolved (and re-sent the text as another brief);
+            # a local notice in the chat says where the request went instead.
             self.session.act_async("POST", "/briefs", {"text": what}, purpose="hand the request to the team",
-                                   done=lambda r: (self.show_tasks(), say(
-                                       "Handed the request to the team: it plans it into tasks and starts AI helpers")))
+                                   done=lambda r: self.handed_to_team())
         elif helpers:
             for h in helpers:
                 self.give_task(h, text, what)
@@ -1693,6 +1709,12 @@ class TeamPanel(QtGui.QDockWidget):
         else:
             self.post(text, "chat", "all")
         self.render_chat(self.session)
+
+    def handed_to_team(self):
+        """The brief was accepted: say so in the chat (it is not a message) and open the tracker it lives in."""
+        self.session.notice(TEAM_HANDED)
+        self.show_tasks()
+        say(TEAM_HANDED)
 
     def post(self, text, kind, to):
         self.outbox.append({"body": text, "at": time.time()})
@@ -2054,6 +2076,8 @@ PANEL_SHARE = 0.3   # of the FreeCAD window's width, until someone drags the pan
 PANEL_STYLE = theme.PANEL
 SUGGEST_SECONDS = 20     # how often the panel re-reads what AI helpers suggested
 SUGGESTIONS_SHOWN = 4    # cards on the Team tab; any more wait in Tools
+NOTICES_KEPT = 20        # local chat lines kept (a brief handed to the team, and the like)
+TEAM_HANDED = "Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."
 
 
 def page_layout(page):
@@ -2404,7 +2428,7 @@ class NewTaskDialog(QtGui.QDialog):
         kind, name = self.who.currentData() or ("me", None)
         if kind == "team":
             self.session.act_async("POST", "/briefs", {"text": text}, purpose="hand the request to the team",
-                                   done="Handed the request to the team: it plans it into tasks and starts AI helpers")
+                                   done=lambda r: (self.session.notice(TEAM_HANDED), say(TEAM_HANDED)))
             self.accept()
             return
         title = text.splitlines()[0][:90]

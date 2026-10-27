@@ -91,7 +91,8 @@ pump(0.6)
 outbox = [o["body"] for o in p.outbox]
 chat_now = p.chat.toPlainText()
 report["team_send"] = {"outbox": outbox, "chat_mentions_sending": "sending" in chat_now.lower(),
-                       "chat_tail": chat_now[-300:]}
+                       "chat_mentions_handed": "Handed to the team" in chat_now,
+                       "notice": [n["text"] for n in s.notices], "chat_tail": chat_now[-300:]}
 pump(3)
 report["team_send"]["outbox_after_3s"] = [o["body"] for o in p.outbox]
 report["team_send"]["chat_tail_after_3s"] = p.chat.toPlainText()[-300:]

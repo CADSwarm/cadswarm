@@ -73,8 +73,11 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert msg_path == "/messages" and msg["to"] == "bob-codex" and msg["kind"] == "command" and msg["task_id"] == "t_new"
     assert brief_path == "/briefs" and brief["text"] == "a stand for a 7 mm phone"
     # ...and it adds no chat row: a brief is not echoed back, so an optimistic "sending…" row would
-    # hang in the chat forever (and the next send would post the brief again).
+    # hang in the chat forever (and the next send would post the brief again). A local notice says where
+    # the request went and that it is not a message.
     assert "a stand for a 7 mm phone" not in r["team_outbox"], r["team_outbox"]
+    assert r["team_notice"] == ["Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."]
+    assert "Handed to the team: it plans the work" in r["team_chat"]
     # Suggestions sit on the Team tab with Accept/Dismiss; answering one sends it and takes it off the card.
     assert r["suggestions_shown"] and r["suggestions_cleared"]
     assert r["answered"] == [["/settings/suggestions/7", {"accept": True}],
