@@ -59,6 +59,12 @@ page. Your sign-in for each team is kept, so you don't need a new invite code.
 - Your AI helper must be signed in once on this computer (open `claude`, `codex` or `opencode`
   in a terminal and follow its sign-in). After that CADSwarm starts it by itself whenever FreeCAD is open, and wakes it
   when someone messages it or hands it a task. Its log is under **the Tools tab ▸ Show my AI helper's log**.
+  An OpenCode helper keeps one private AI server running between messages, so a message reaches the model in
+  about a second instead of paying the CLI's several-second start every time.
+- An OpenCode helper (and every OpenCode agent the host starts) runs on the model configured in the person's
+  own `opencode.json`; if that file names no model, the first model of the first configured provider is pinned.
+  Without that pin OpenCode picks a built-in provider that was never signed in to, and every run dies at once
+  with an "Incorrect API key" error.
 - AI helpers always join as ordinary members. The people on the team lead it, and only a person's computer
   hosts it.
 - **Whoever starts a team** makes one extra download, about 50 MB: CADSwarm's team server plus the
@@ -498,7 +504,7 @@ files.
 |---|---|
 | Claude Code | `.mcp.json` (cadswarm server), `.claude/settings.json` (UserPromptSubmit hook, `enabledMcpjsonServers`, `mcp__cadswarm` allowed), `CLAUDE.md` section |
 | Codex | `.codex/config.toml` (`[mcp_servers.cadswarm]` + `[hooks] UserPromptSubmit`, in a managed block), `AGENTS.md` section. Codex skips hooks you haven't reviewed: in Codex, type `/hooks` and trust the CADSwarm hook (again after updating CADSwarm, because Codex re-checks it when it changes). Until then your helper gets no team block before prompts and falls back to calling `model_status`/`get_inbox` itself |
-| OpenCode | `opencode.json` (cadswarm MCP server), `AGENTS.md` section |
+| OpenCode | `opencode.json` (cadswarm MCP server and the pinned `model`), `AGENTS.md` section |
 | all | `.cadswarm/config.json` (uri, db, name, client, role), and after first run `.cadswarm/identity.json` (SpacetimeDB token, git-ignored) |
 
 The prompt hook (Claude Code and Codex) injects a team block before every prompt: who holds which

@@ -306,11 +306,47 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False, 
             raise ValueError("This helper folder isn't signed in to this team yet; it needs a fresh invite code.")
         save_json(ident_path, redeem(invite, name, client))
     kept = helper_model(project)
+    if model is None:
+        model = kept
+    if client == "opencode" and not model:
+        # "Default" used to mean the CLI's own pick, which can be a provider this computer never signed
+        # in to. Follow the person's configured provider/model instead: it is the one that works.
+        model = default_model(client)
     save_json(os.path.join(state_dir(project), "config.json"), {
         "uri": invite["uri"].rstrip("/"), "db": invite["db"], "name": name, "client": client,
         "role": invite.get("role") or "member", **({"ephemeral": True} if ephemeral else {})})
-    save_helper_model(project, kept if model is None else model)
+    save_helper_model(project, model)
     return written
+
+
+def opencode_config_paths():
+    """Where OpenCode keeps the person's own config, most specific first. Its CLI merges these, so the
+    first provider/model found is one the person actually set up and signed in to."""
+    paths = []
+    if os.environ.get("OPENCODE_CONFIG"):
+        paths.append(os.environ["OPENCODE_CONFIG"])
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    paths.append(os.path.join(xdg, "opencode", "opencode.json"))
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        paths.append(os.path.join(appdata, "opencode", "opencode.json"))
+    return paths
+
+
+def default_model(client):
+    """The model an unpinned helper should run on: the person's own first configured OpenCode model, or ""
+    when there is none. OpenCode's built-in default can be a provider that was never signed in to (every
+    run then died in ~3 s with "Incorrect API key"), so the runner and setup pin this instead."""
+    if client != "opencode":
+        return ""
+    for path in opencode_config_paths():
+        cfg = load_json(path) or {}
+        if cfg.get("model"):
+            return cfg["model"]
+        for provider_id, provider in (cfg.get("provider") or {}).items():
+            for model_id in (provider.get("models") or {}):
+                return f"{provider_id}/{model_id}"
+    return ""
 
 
 def helper_model(project):

@@ -128,6 +128,11 @@ class Session:
     def connect(self):
         ident = self.client.join(None, self.cfg["name"], "agent", self.cfg.get("client"), self.cfg.get("role", "member"))
         save_json(self.ident_path, {**load_json(self.ident_path, {}), **ident})
+        # A warm OpenCode server outlives the run that started this MCP server. Leave a note of the fence
+        # that now holds the helper's seat, so its runner heartbeats instead of rejoining (which would
+        # supersede us and break every tool call).
+        save_json(os.path.join(state_dir(self.project), "mcp-seat.json"),
+                  {"pid": os.getpid(), "fence": ident.get("fence", 0), "at": time.time()})
         return ident
 
     def greet(self, ident):
@@ -142,12 +147,26 @@ class Session:
             return  # a greeting is a courtesy; try again on the next start
         save_json(self.ident_path, {**load_json(self.ident_path, {}), "greeted": True})
 
+    def doing_now(self):
+        """What to tell the team this helper is doing. A background run sets `doing` from its tool calls and
+        then exits, but a warm server's MCP server stays alive: once the runner says it is listening, show
+        idle instead of the last thing it built, or the team list says "working on X" (or "starting") for
+        minutes. A run that never claimed a task leaves `doing` at "starting", so idle wins over any value."""
+        st = {}
+        try:
+            st = load_json(os.path.join(state_dir(self.project), "runner.json")) or {}
+        except (OSError, ValueError):
+            pass
+        if st.get("state") == "listening" and time.time() - float(st.get("beat") or 0) < 30:
+            return "listening for instructions"
+        return self.doing or "listening for instructions"
+
     def heartbeat_loop(self):
         backoff = HEARTBEAT_SECONDS
         while not self.dead:
             time.sleep(backoff)
             try:
-                self.client.post("/heartbeat", {"doing": self.doing})
+                self.client.post("/heartbeat", {"doing": self.doing_now()})
                 backoff = HEARTBEAT_SECONDS
                 self.poll_fea()
             except HubRequestError as e:

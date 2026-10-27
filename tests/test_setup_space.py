@@ -137,6 +137,29 @@ def test_a_picked_model_sticks_to_the_helper_folder(tmp_path, monkeypatch):
     assert json.load(open(tmp_path / ".cadswarm" / "config.json"))["db"] == "d"
 
 
+def test_an_unpinned_opencode_helper_uses_the_model_the_person_configured(tmp_path, monkeypatch):
+    """OpenCode's own default can be a provider the person never signed in to (it failed every run with
+    "Incorrect API key"). A helper with no pick follows the person's own OpenCode config instead."""
+    home = tmp_path / "home"
+    (home / ".config" / "opencode").mkdir(parents=True)
+    (home / ".config" / "opencode" / "opencode.json").write_text(json.dumps({
+        "provider": {"bitdeer": {"models": {"deepseek-ai/DeepSeek-V4.1-Flash-1017": {"name": "DeepSeek"}}}},
+    }))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    monkeypatch.setattr(agent_setup, "redeem", lambda t, n, c: {"token": "t", "participant_id": 1, "fence": 1,
+                                                                 "name": n, "role": "member", "kind": "agent"})
+    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
+    assert agent_setup.default_model("opencode") == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    agent_setup.write_agent_config(str(tmp_path), "opencode", t, "dana-opencode", python="python")
+    assert agent_setup.helper_model(str(tmp_path)) == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    assert json.load(open(tmp_path / "opencode.json"))["model"] == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    # Other CLIs have their own default and are left alone.
+    assert agent_setup.default_model("claude") == ""
+
+
 def test_opencode_models_are_read_from_its_cli(monkeypatch):
     out = "anthropic/claude-sonnet-5-5\nopenai/gpt-5.1\n\nsome log line\nanthropic/claude-sonnet-5-5\n"
     monkeypatch.setattr(agent_setup, "find_agent_cli", lambda c: "/bin/opencode")

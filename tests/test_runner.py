@@ -332,3 +332,144 @@ def test_background_starts_can_be_switched_off_for_a_terminal_session(tmp_path):
     assert not runner.background_on(str(tmp_path))
     runner.set_background(str(tmp_path), True)
     assert runner.background_on(str(tmp_path))
+
+
+def make_warm_runner(tmp_path, t=None, ready=True, client="opencode"):
+    folder = tmp_path / "helper"
+    (folder / ".cadswarm").mkdir(parents=True)
+    (folder / ".cadswarm" / "config.json").write_text(json.dumps(
+        {"uri": "http://x", "db": "d", "name": "ann-opencode", "client": client}))
+    (folder / ".cadswarm" / "identity.json").write_text(json.dumps({"participant_id": 1, "fence": 2, "token": "t"}))
+    clock = [1000.0]
+    spawned, killed = [], []
+    envs = []
+    health = [ready]
+
+    class Server:
+        pid = 4242
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append(self)
+
+    class Run:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            killed.append(self)
+
+    def spawn(argv, stdin):
+        spawned.append((argv, stdin))
+        envs.append(dict(r.child_env))
+        if len(argv) > 1 and argv[1] == "run":
+            # The run's MCP server joins at a new fence and takes the seat (as the real one does).
+            (folder / ".cadswarm" / "mcp-seat.json").write_text(json.dumps({"pid": 999, "fence": 2, "at": 1}))
+            return Run()
+        return Server() if len(argv) > 1 and argv[1] == "serve" else Run()
+
+    r = runner.Runner(str(folder), "Phone stand", clock=lambda: clock[0], spawn=spawn)
+    r.hub = hub(t)
+    r.spawn_envs = envs
+    r.state["started"] = True  # a helper that already introduced itself
+    r.ready = lambda url, password: health[0]
+    r.sleep = lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    return r, clock, spawned, killed, health
+
+
+def test_a_warm_opencode_server_starts_once_and_wakes_use_it(tmp_path, monkeypatch):
+    """One private `opencode serve` per helper: the CLI, its provider connection and the team's MCP server
+    start once, so each later message skips ~5 s of startup (a wake went from ~3 s to ~0.9 s measured)."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, clock, spawned, _killed, _health = make_warm_runner(tmp_path)
+    assert r.step()  # the server comes up and the waiting message is handled
+    serves = [a for a, _ in spawned if a[1] == "serve"]
+    assert len(serves) == 1 and serves[0][2:] == ["--hostname", "127.0.0.1", "--port", str(r.server_port)]
+    assert r.server_url.startswith("http://127.0.0.1:")
+    argv = spawned[-1][0]
+    assert argv[:2] == ["/bin/opencode", "run"]
+    assert argv[argv.index("--server") + 1] == r.server_url and "--standalone" not in argv
+    assert r.spawn_envs[-1]["OPENCODE_PASSWORD"] == r.server_password
+
+    # The run ended: its MCP server holds the seat, so the runner heartbeats as it and never rejoins again
+    # (a rejoin would supersede the server's fence and break its tool calls).
+    clock[0] += 1
+    r.step()
+    calls = [c[0] for c in r.hub.space.calls]
+    assert calls.count("rejoin") == 1 and calls[-1] == "heartbeat"
+
+    r.hub.space.tables["v_message"].append(msg("m_warm", 3, "member:1", "steer", "now the base"))
+    clock[0] += 1
+    r.step()
+    argv = spawned[-1][0]
+    assert argv[:2] == ["/bin/opencode", "run"]
+    assert argv[argv.index("--server") + 1] == r.server_url and "--standalone" not in argv
+    assert len([a for a, _ in spawned if a[1] == "serve"]) == 1  # still just the one server
+    assert [c[0] for c in r.hub.space.calls].count("rejoin") == 1
+
+    # The next run ended; the next wake is another run against the same server.
+    clock[0] += 60
+    r.step()
+    r.hub.space.tables["v_message"].append(msg("m_more", 3, "member:1", "steer", "and the lid"))
+    clock[0] += 1
+    r.step()
+    assert len([a for a, _ in spawned if a[1] == "serve"]) == 1
+    assert "--server" in spawned[-1][0]
+
+
+def test_each_wake_falls_back_to_standalone_when_the_warm_server_will_not_start(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.setattr(runner, "WARM_READY_SECONDS", 0)
+    r, _clock, spawned, killed, _health = make_warm_runner(tmp_path, ready=False)
+    assert r.step()
+    argv = spawned[-1][0]
+    assert argv[:4] == ["/bin/opencode", "run", "--standalone", "--auto"]
+    assert killed, "the server that never became ready is stopped"
+    assert "warm" in r.warm_error.lower() or "server" in r.warm_error.lower()
+
+
+def test_stopping_ends_the_warm_server_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, _clock, _spawned, killed, _health = make_warm_runner(tmp_path)
+    r.step()
+    r.stop_all()
+    assert killed and r.server_url == ""
+    assert not os.path.exists(runner.server_path(r.folder))
+
+
+def test_an_unpinned_helper_uses_the_configured_model_at_wake_time(tmp_path, monkeypatch):
+    """A helper folder from before the picker has no model; the run must not fall back to a model the
+    person never signed in to."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.setattr(runner, "default_model", lambda client: "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    r, _clock, spawned, _killed, _health = make_warm_runner(tmp_path)
+    assert r.wake([("m:x", "- hi")], first=True)
+    argv = spawned[-1][0]
+    assert argv[argv.index("--model") + 1] == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+
+
+def test_a_finished_warm_run_reports_idle_with_the_servers_fence(tmp_path, monkeypatch):
+    """The warm server keeps heartbeating: without this it would say "working on Lid" until the next run."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, clock, spawned, _killed, _health = make_warm_runner(tmp_path)
+    r.state["started"] = True
+    r.step()  # server + a run for the message in the fixture
+    assert "serve" in spawned[0][0] and "--server" in spawned[-1][0]
+    clock[0] += 1
+    r.step()  # the run has exited: say listening again, through the fence the MCP server stored
+    calls = [c for c in r.hub.space.calls]
+    assert calls[-1][0] == "heartbeat" and calls[-1][1][1] == runner.IDLE_DOING
+    assert r.hub.fence == 2
+
+
+def test_opencode_can_be_woken_against_a_server_instead_of_its_own(tmp_path):
+    argv, stdin = runner.agent_command("opencode", "opencode", "/h", "do it", resume=False,
+                                       server="http://127.0.0.1:5000")
+    assert argv[:2] == ["opencode", "run"] and "--standalone" not in argv
+    assert argv[argv.index("--server") + 1] == "http://127.0.0.1:5000" and stdin == "do it"
