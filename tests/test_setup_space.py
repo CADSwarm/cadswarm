@@ -121,7 +121,7 @@ def test_opencode_gets_its_mcp_config_and_agents_md(tmp_path, monkeypatch):
     assert server["type"] == "local"
     assert server["command"] == ["python", agent_setup.LAUNCHER, "mcp"]
     assert server["environment"]["CADSWARM_PROJECT"] == str(tmp_path)
-    assert server["timeout"] == 120000
+    assert server["timeout"] == 300000  # a heavy part script can run for minutes inside FreeCAD
     assert cfg["$schema"] == agent_setup.OPENCODE_SCHEMA
     assert "cadswarm:begin" in open(tmp_path / "AGENTS.md").read()
     assert str(tmp_path / "opencode.json") in written

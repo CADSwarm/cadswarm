@@ -221,7 +221,7 @@ def setup_codex(project, python):
         f"command = {toml_string(python)}",
         f"args = [{toml_string(LAUNCHER)}, 'mcp']",
         f"env = {{ CADSWARM_PROJECT = {toml_string(project)} }}",
-        "tool_timeout_sec = 120  # FEA tool calls wait up to ~75 s for the solver",
+        "tool_timeout_sec = 300  # FEA waits ~75 s and a heavy part script can take minutes; 120 s cut them off",
         "",
         "# UserPromptSubmit injects team context (who holds which parts, what changed) before each prompt.",
         "[hooks]",
@@ -283,8 +283,10 @@ def setup_opencode(project, python):
         "command": [python, LAUNCHER, "mcp"],
         "environment": {"CADSWARM_PROJECT": project},
         "enabled": True,
-        # FEA and lattice tool calls block while the solver runs (~75 s); the default 30 s is too short.
-        "timeout": 120000,
+        # FEA and lattice calls block while the solver runs (~75 s), and a heavy part script (a lofted
+        # 3-blade propeller) can take minutes of FreeCAD time: 120 s cut those off mid-build, so the helper
+        # saw a timeout, retried, and gave up. 5 minutes leaves room without hiding a real hang.
+        "timeout": 300000,
     }
     cfg.setdefault("$schema", OPENCODE_SCHEMA)
     with open(path, "w", encoding="utf-8") as f:

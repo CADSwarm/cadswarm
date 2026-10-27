@@ -268,6 +268,52 @@ def test_panel_snapshot_reads_each_view_once():
     assert len(seen) > len(set(seen))  # outside a snapshot, reads are fresh again
 
 
+def test_a_run_that_ends_with_its_own_task_claimed_gets_another_go(tmp_path, monkeypatch):
+    """A timeout or a swallowed turn used to leave the task "claimed" until a person noticed: the runner
+    now wakes the helper for its own held task, with a doubling backoff."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    t = tables()
+    t["v_message"], t["v_receipt"] = [], []
+    t["v_task"] = [task("t_gave", "standoffs", created_by=1, owner=2, status="done",
+                        result_json='{"summary": "4 posts"}'),
+                   task("t_held", "prop blades", owner=1, status="claimed")]
+    r, clock, spawned = make_runner(tmp_path, t=t)
+    r.state["started"] = True
+    r.save_state()
+
+    clock[0] += 1
+    r.step()  # nothing new and the backoff hasn't passed: no task read, no wake
+    assert spawned == []
+
+    clock[0] += runner.RESUME_AFTER
+    r.step()
+    (argv, prompt), = spawned
+    assert "t_held" in prompt and "Finish it now" in prompt
+
+    # The run ends and the task is still claimed: the next nudge waits longer (90 s -> 180 s), so it
+    # doesn't spin, and a reported task stops the nudging altogether.
+    r.step()
+    clock[0] += runner.RESUME_AFTER
+    r.step()
+    assert len(spawned) == 1
+    t["v_task"][1].update(status="done", result_json='{"summary": "blades done"}')
+    clock[0] += 10 * runner.RESUME_AFTER
+    r.step()
+    assert len(spawned) == 1 and r.resumes == {}
+
+
+def test_a_handoff_does_not_wake_a_helper_that_still_holds_its_own_task():
+    """Dead workers' work is broadcast to everyone; a helper that already holds a claimed task keeps it
+    instead of spending a turn on every handoff."""
+    t = tables()
+    t["v_message"] = [msg("m_hand", 0, "all", "handoff", "bob-codex went quiet holding [] and tasks [x]")]
+    t["v_task"] = [task("t_held", "prop blades", owner=1, status="claimed")]
+    assert runner.pending_work(hub(t), set()) == []
+    t["v_task"] = []  # free again: now it is work this helper can take
+    assert "m:m_hand" in dict(runner.pending_work(hub(t), set()))
+
+
+
 def test_a_failed_run_is_reported_until_one_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
     r, clock, spawned = make_runner(tmp_path)

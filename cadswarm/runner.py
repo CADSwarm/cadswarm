@@ -41,6 +41,8 @@ ALIVE_SECONDS = 30          # runner.json older than this means no runner is loo
 RUN_TIMEOUT = 20 * 60       # one wake-up may take this long before it is stopped
 MAX_RUNS_PER_HOUR = 30
 MIN_GAP_SECONDS = 5
+RESUME_AFTER = 90           # a run can end with the helper's own task still claimed: nudge it again this soon
+RESUME_MAX = 5              # ...at most this many times per task, doubling the wait each time
 LOG_LIMIT = 2_000_000
 IDLE_DOING = "listening for instructions"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -122,10 +124,15 @@ def pending_work(hub, seen):
     me, my_name = hub.me_id, (hub.identity.get("name") or "").lower()
     names = hub._names()
     kinds = {m["id"]: m["kind"] for m in hub._rows("v_member")}
+    tasks = hub._rows("v_task")
+    free = not any((t["status"] == "claimed" and t["owner"] == me)
+                   or (t["status"] == "open" and (t.get("assignee") or "").lower() == my_name) for t in tasks)
     out = []
     for m in hub._unconsumed():
         if m["kind"] == "chat" and m["to"] == "all":
             continue  # people talking among themselves
+        if m["kind"] == "handoff" and not free:
+            continue  # a helper that still holds its own task keeps it: dead workers' work is for whoever is free
         key = f"m:{m['id']}"
         if key in seen:
             continue
@@ -139,7 +146,6 @@ def pending_work(hub, seen):
         else:
             what = f"{who} (another AI helper) asks you"
         out.append((key, f"- {what}: \"{m['body'][:600]}\" (message {m['id']})"))
-    tasks = hub._rows("v_task")
     for t in tasks:
         if t["status"] == "open" and (t.get("assignee") or "").lower() == my_name:
             key = f"t:{t['id']}"
@@ -152,8 +158,6 @@ def pending_work(hub, seen):
                 word = "finished" if t["status"] == "done" else "got stuck on"
                 out.append((key, f"- {names.get(t['owner'], 'A teammate')} {word} the task you handed out, "
                                  f"\"{t['title']}\" ({t['id']}). {summary[:300]}".rstrip()))
-    free = not any((t["status"] == "claimed" and t["owner"] == me)
-                   or (t["status"] == "open" and (t.get("assignee") or "").lower() == my_name) for t in tasks)
     if free:  # rebalancing: a busy helper's queue is work this idle one can take
         for t in hub.spare_tasks():
             key = f"s:{t['id']}"
@@ -174,6 +178,12 @@ def wake_prompt(name, project, lines, first):
     # The greeting is posted by the runner itself (Runner.greet), so the model spends no turn on it.
     start = ("Look at list_tasks first: if a task is open, unassigned and fits you, claim it and build it.\n"
              if first else "")
+    mine = ('0. FIRST look at list_tasks for a task you already hold: status "claimed", owner is you, no result\n'
+            '   yet. If there is one, finish it in this run before anything else: build it, check_interference, then\n'
+            '   report_result (done, or blocked with the reason). Never leave your own task claimed and silent, and\n'
+            '   never re-claim or re-announce it. Do not introduce yourself: the runner already did. If a CAD tool\n'
+            '   times out, retry with a smaller script (one part or one blade per call) instead of stopping or\n'
+            '   diagnosing this computer.\n')
     return f"""You are {name}, an AI helper on the team building "{project}" in one shared FreeCAD model.
 You run in the background: nobody is watching a terminal, so never ask questions here and never wait for
 input. Talk to people only with send_message; they read it as a chat in FreeCAD.
@@ -182,7 +192,7 @@ What's new for you:
 {news}
 
 What to do:
-{start}1. Call get_inbox. Answer each person's message like a teammate in a chat: first a short reply saying
+{mine}{start}1. Call get_inbox. Answer each person's message like a teammate in a chat: first a short reply saying
    what you'll do (send_message to them), then do it, then a short reply with what you did, in plain words
    with sizes in mm. Then ack_messages. If you need something from them (a size, a material), ask in one
    message and stop; their answer wakes you again.
@@ -244,6 +254,11 @@ class Runner:
         self.state = load_json(os.path.join(state_dir(self.folder), "runner-state.json")) or {}
         self.seen = set(self.state.get("seen") or [])
         self.runs = [t for t in self.state.get("runs") or [] if clock() - t < 3600]
+        self.resumes = dict(self.state.get("resumes") or {})
+        # A task still claimed after a run is resumed by the runner: the helper cannot be left waiting for a
+        # person to notice. `last_run_end` starts at this runner's start, so a restart also resumes it.
+        self.last_run_end = float(self.state.get("last_run_end") or 0) or clock()
+        self.resume_check_at = self.last_run_end + RESUME_AFTER  # no task read on every idle poll
         self.present = False
         self.last_beat = 0.0
         self.seq = None  # event cursor: one cheap read tells us whether anything at all happened since
@@ -264,7 +279,8 @@ class Runner:
             pass
 
     def save_state(self):
-        self.state.update({"seen": sorted(self.seen)[-2000:], "runs": self.runs})
+        self.state.update({"seen": sorted(self.seen)[-2000:], "runs": self.runs,
+                           "resumes": self.resumes, "last_run_end": self.last_run_end})
         save_json(os.path.join(state_dir(self.folder), "runner-state.json"), self.state)
 
     def write_status(self, state=None, detail=None):
@@ -364,13 +380,51 @@ class Runner:
                 f"its last run stopped with an error (exit {code}). If it isn't signed in yet, open it once in a "
                 "terminal and sign in. Details: the Tools tab ▸ Show my AI helper's log")
             self.child = None
+            self.last_run_end = self.clock()
+            self.save_state()
             return False
         if self.clock() - self.child_started > RUN_TIMEOUT:
             self.log("the helper ran too long and was stopped")
             self.child.kill()
             self.child = None
+            self.last_run_end = self.clock()
+            self.save_state()
             return False
         return True
+
+    def owned_claimed(self):
+        """Tasks this helper holds and hasn't reported: {id: title}. A run can end (a timeout, a swallowed
+        turn) with these still claimed; nobody is watching, so the runner has to pick them back up."""
+        try:
+            rows = self.hub._rows("v_task")
+        except HubRequestError:
+            return {}
+        me = self.hub.me_id
+        held = {}
+        for t in rows:
+            if t.get("status") == "claimed" and t.get("owner") == me and not (t.get("result_json") or "").strip():
+                held[t["id"]] = t.get("title") or t["id"]
+        for tid in list(self.resumes):
+            if tid not in held:  # reported, or taken over by someone else: stop nudging it
+                del self.resumes[tid]
+        return held
+
+    def resume_work(self, now):
+        """One nudge line per held task whose backoff has passed, else []. Reset when the task is reported."""
+        out = []
+        for tid, title in self.owned_claimed().items():
+            st = self.resumes.get(tid) or {"n": 0, "at": self.last_run_end or now}
+            wait = RESUME_AFTER * (2 ** st["n"])
+            if now - st["at"] < wait or st["n"] >= RESUME_MAX:
+                continue
+            st["n"] += 1
+            st["at"] = now
+            self.resumes[tid] = st
+            out.append((f"r:{tid}:{st['n']}",
+                        f"- You still hold task {tid} \"{title}\" (claimed by you, no result yet). Finish it now: "
+                        "build it, check_interference, report_result. A CAD tool that timed out: retry it with a "
+                        "smaller script (one part or one blade per call) instead of stopping."))
+        return out
 
     # ------------------------------------------------------------------------ loop
 
@@ -415,6 +469,11 @@ class Runner:
             self.write_status("offline", "can't reach the team right now; retrying")
             return True
         first = not self.state.get("started")
+        if not work and not first and self.clock() >= self.resume_check_at and self.allowed()[0]:
+            # Nobody is watching: a run that ended with the helper's own task still claimed gets another go,
+            # with a backoff, instead of the task sitting "claimed" until a person notices.
+            work = self.resume_work(self.clock())
+            self.resume_check_at = self.clock() + RESUME_AFTER
         if work or first:
             ok, why = self.allowed()
             if ok:
