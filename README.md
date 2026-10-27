@@ -49,7 +49,8 @@ own after a reboot until you do).
 
 Worked on more than one team? CADSwarm remembers the ones this computer has joined. Pick another from
 **CADSwarm ▸ Get started ▸ Open a previous project…**, or from the list at the top of the guide's first
-page. Your sign-in for each team is kept, so you don't need a new invite code.
+page: each project shows its last picture and how many parts it had, so you can tell them apart before
+opening one. Your sign-in for each team is kept, so you don't need a new invite code.
 
 **Good to know**
 - You need an AI helper installed: [Claude Code](https://code.claude.com/docs/en/setup),
@@ -592,7 +593,7 @@ cargo test --release --manifest-path rules\Cargo.toml
 cd web; npm test
 ```
 
-Current counts on a Windows checkout: Python 710 passed (16 skipped where FreeCAD or the platform
+Current counts on a Windows checkout: Python 717 passed (16 skipped where FreeCAD or the platform
 sandbox is unavailable), host 53, rules 26, web 107.
 
 `tests\freecad_panel_live.py` is a manual live check, not part of pytest: it opens a real FreeCAD
