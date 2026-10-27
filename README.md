@@ -291,12 +291,28 @@ brief. From that it works out rules:
 
 A rule backed by enough consistent, recent evidence from more than one person or day is **active**. Planners,
 workers, handed-off helpers and the reviewer get it in their prompts, and every helper turn shows it as
-"Team design style". Weaker rules, and rules a helper proposes (`teach_style`), wait at the top of the panel's
-Team tab (and under **Tools ▸ Learned design style…**) for a person to **Make it a rule** or **Dismiss**.
+"Team design style". Weaker rules, and rules a helper proposes (`teach_style`), wait for a person to decide.
+
+The Team tab shows one summary line — how many things were learned, how many decisions that is, and how many
+are ready to use. **Review** opens **Tools ▸ Learned design style…**, the triage inbox:
+
+- **Rules that describe the same thing are one decision.** A shared size and the corrections people keep making
+  to it are answered together; deciding one resolves all of them.
+- **Decisions are grouped by kind** — shared sizes, corrections, preferred parts, habits, review problems and
+  helper proposals — and each carries a **Ready**, **Look** or **Weak** badge worked out from its evidence. The
+  badge is a suggestion from the evidence, never applied for you.
+- **Make the ready rules** and **Dismiss the weak ones** answer a whole set in one visible action. Each opens the
+  exact statements first, all selected, and any can be unticked. Every section also has **Use all** /
+  **Dismiss all**.
+
+The rest of the dialog is the undo history:
 
 - **Confirmed rules** are always followed and never fade.
 - **Dismissed rules** stay away until their evidence doubles.
-- **Unused learned rules** fade after about a month.
+- **Undecided weak rules** leave the inbox after two weeks without new evidence. They stay under **Expired or
+  dismissed**, where **Make it a rule** brings one back; new evidence can also revive one on its own once it
+  doubles.
+- **Unused learned rules** stop guiding helpers when their evidence goes stale, then expire from the inbox.
 
 You can also type a rule yourself. It is confirmed at once. The reviewer flags parts that break a rule as
 `style:` findings, and those findings feed the next round of learning.
@@ -524,7 +540,7 @@ through the MCP tools instead.
 - **Components library:** `search_components`, `recommend_components`, `get_component`, `insert_component`,
   `add_standard_part`, `hole_size`, `import_component_from_url`, `add_component_from_file`
 - **Team settings:** `get_settings`, `suggest_setting` (people accept suggestions; helpers never change settings)
-- **Team design style:** `team_style`, `style_rules`, `teach_style` (a helper's rule waits for a person)
+- **Team design style:** `team_style`, `style_inbox`, `style_rules`, `teach_style` (a helper's rule waits for a person)
 - **Project files:** `list_files`, `read_file`, `save_file`, `make_folder`, `move_file`,
   `delete_file`, `file_history`, `restore_file`
 - **Teamwork:** `list_tasks`, `create_task`, `claim_task`, `report_result`, `send_message`,

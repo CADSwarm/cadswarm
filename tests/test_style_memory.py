@@ -181,7 +181,7 @@ def test_teaching_the_same_rule_twice_keeps_one(env):
     assert style.context()["text"].count("Lids are held") == 1
 
 
-def test_stale_learned_rules_decay_back_to_candidates(env):
+def test_stale_learned_rules_expire_instead_of_asking_forever(env):
     style, clock = env
     for _ in range(6):
         set_param(style, ALICE, "wall", "2.4")
@@ -191,7 +191,8 @@ def test_stale_learned_rules_decay_back_to_candidates(env):
     assert rule["status"] == "active"
     clock.t += 90 * DAY
     style.distil()
-    assert style.rule(rule["id"])["status"] == "candidate"
+    assert style.rule(rule["id"])["status"] == "expired"
+    assert style.context()["text"] == ""
 
 
 def test_a_candidate_nothing_supports_any_more_goes_away(env):

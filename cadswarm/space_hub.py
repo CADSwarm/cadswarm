@@ -160,6 +160,7 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/knowledge/board", self.lookup_board), ("POST", r"/knowledge/designs", self.recall_designs),
             # The team's learned design style (cadswarm/style_memory.py), kept by the host helper.
             ("GET", r"/style", self.style_get), ("POST", r"/style/rules", self.style_rules),
+            ("POST", r"/style/inbox", self.style_inbox),
             ("POST", r"/style/teach", self.style_teach), ("POST", r"/style/resolve", self.style_resolve),
             ("POST", r"/style/learn", self.style_learn),
             # Components library and team precision settings (space_library.py).
@@ -1062,11 +1063,19 @@ class SpaceHub(LibraryRoutes):
     def style_rules(self, body):
         return self.run_op("list_style", {"statuses": body.get("statuses")} if body.get("statuses") else {})
 
+    def style_inbox(self, body):
+        return self.run_op("style_inbox", {})
+
     def style_teach(self, body):
         return self.run_op("teach_style", {"statement": body.get("statement") or "", "scope": body.get("scope") or "team"})
 
     def style_resolve(self, body):
-        return self.run_op("resolve_style", {"rule_id": body.get("rule_id") or "", "decision": body.get("decision") or ""})
+        args = {"decision": body.get("decision") or ""}
+        if body.get("rule_ids"):
+            args["rule_ids"] = body["rule_ids"]
+        else:
+            args["rule_id"] = body.get("rule_id") or ""
+        return self.run_op("resolve_style", args)
 
     def style_learn(self, body):
         return self.run_op("learn_style", {})

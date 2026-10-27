@@ -838,17 +838,28 @@ AI helpers (Claude, Codex, …)  ─┘     tasks · chat · briefs · stale swe
         <p>A rule with enough consistent, recent evidence from more than one person or day becomes <b>active</b>: planners,
           workers, handed-off helpers and the reviewer get it in their prompts, and every helper turn shows it as “Team
           design style”.</p>
+        <p>Weaker rules, and rules a helper proposes, wait for a person. The Team tab shows one summary line and a
+          <b>Review</b> button; it opens the triage inbox under <b>Tools ▸ Team rules ▸ Learned design style…</b>.
+          Rules that describe the same thing are one decision — a shared size and the corrections people keep making to
+          it are answered together — grouped by kind, each with a <b>Ready</b>, <b>Look</b> or <b>Weak</b> badge worked
+          out from its evidence. <b>Make the ready rules</b> and <b>Dismiss the weak ones</b> answer a whole set in one
+          visible action; each lists the exact statements first, all selected, and any can be unticked. Every section
+          also has <b>Use all</b> / <b>Dismiss all</b>.</p>
         <div class="table-wrap">
           <table>
             <thead><tr><th>Kind of rule</th><th>What happens</th></tr></thead>
             <tbody>
-              <tr><td>Suggested (weak, or proposed by a helper)</td><td>Waits at the top of the Team tab and under
-                <b>Tools ▸ Team rules ▸ Learned design style…</b> for a person to <b>Make it a rule</b> or
-                <b>Dismiss</b>.</td></tr>
+              <tr><td>Suggested (weak, or proposed by a helper)</td><td>One decision per thing learned, with a
+                Ready / Look / Weak badge. Answer it with <b>Make it a rule</b> or <b>Dismiss</b>, or use a section's
+                or the ready set's bulk action.</td></tr>
               <tr><td>Confirmed</td><td>Always followed, never fades. You can also type one yourself; it's confirmed at
                 once.</td></tr>
               <tr><td>Dismissed</td><td>Stays away until its evidence doubles.</td></tr>
-              <tr><td>Unused and learned</td><td>Fades after about a month.</td></tr>
+              <tr><td>Undecided and weak</td><td>Leaves the inbox after two weeks without new evidence. It waits under
+                <b>Expired or dismissed</b>, where <b>Make it a rule</b> brings it back; doubling evidence revives it on
+                its own too.</td></tr>
+              <tr><td>Unused and learned</td><td>Stops guiding helpers when its evidence goes stale, then expires from
+                the inbox.</td></tr>
             </tbody>
           </table>
         </div>

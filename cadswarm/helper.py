@@ -292,8 +292,17 @@ def teach_style(p, a):
 
 def resolve_style(p, a):
     _people_only(a, "confirm or dismiss a design-style rule", "the CADSwarm panel > Learned style")
-    rule = p.style.resolve(_need(a, "rule_id"), _need(a, "decision"), _author(a))
-    return {"rule": rule, "profile": p.style.context("", "", 6)["text"]}
+    decision = _need(a, "decision")
+    if a.get("rule_ids"):
+        rules = p.style.resolve_many(a["rule_ids"], decision, _author(a))
+        return {"rules": rules, "profile": p.style.context("", "", 6)["text"]}
+    rule = p.style.resolve(_need(a, "rule_id"), decision, _author(a))
+    return {"rule": rule, "rules": [rule], "profile": p.style.context("", "", 6)["text"]}
+
+
+def style_inbox(p, a):
+    """What waits for a person, grouped into one decision per subject (people answer it in the panel)."""
+    return p.style.inbox()
 
 
 def list_style(p, a):
@@ -323,6 +332,7 @@ HANDLERS = {
     "observe_brief": observe_brief,
     "learn_style": lambda p, a: _learn(p),
     "style_context": style_context,
+    "style_inbox": style_inbox,
     "list_style": list_style,
     "teach_style": teach_style,
     "resolve_style": resolve_style,

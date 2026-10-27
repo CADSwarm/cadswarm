@@ -18,10 +18,35 @@ for _name in [n for n in sys.modules if n == "cadswarm" or n.startswith("cadswar
     del sys.modules[_name]
 from PySide import QtCore, QtGui  # noqa: E402
 
-from cadswarm.gui import panel  # noqa: E402
+from cadswarm.gui import panel, style_ui  # noqa: E402
 
 out = Path(sys.argv[1])
 now = time.time()
+
+STYLE_INBOX = {
+    "rules": 4, "decisions": 3, "ready": 1, "weak": 1,
+    "sections": [
+        {"kind": "param_convention", "label": "Shared sizes", "count": 2, "decisions": [
+            {"subject": "param:wall", "kind": "param_convention", "title": "Params.wall is 2.4 mm",
+             "detail": "seen 6×, 2 people, confidence 62%", "also": ["People change Params.wall from 1.6 to 2.4"],
+             "ids": ["r_wall1", "r_wall2"], "confidence": 0.62, "recommendation": "confirm",
+             "source": "learned", "status": "candidate", "seen_at": now},
+            {"subject": "param:lid_gap", "kind": "param_convention", "title": "Params.lid_gap is 0.3 mm",
+             "detail": "seen 2×, confidence 26%", "also": [], "ids": ["r_gap"], "confidence": 0.26,
+             "recommendation": "look", "source": "learned", "status": "candidate", "seen_at": now}]},
+        {"kind": "recurring_problem", "label": "Review problems", "count": 1, "decisions": [
+            {"subject": "problem:team:lid clips the usb plug", "kind": "recurring_problem",
+             "title": "Reviews keep finding: Lid clips the USB plug (in 1 design)",
+             "detail": "seen 2×, confidence 21%", "also": [], "ids": ["r_usb"], "confidence": 0.21,
+             "recommendation": "dismiss", "source": "learned", "status": "candidate", "seen_at": now}]}],
+    "used": [{"subject": "habit:expressions", "kind": "modelling_practice",
+              "title": "Bind dimensions to Params with expressions", "detail": "confidence 100%",
+              "also": [], "ids": ["r_habit"], "confidence": 1.0, "recommendation": "confirm",
+              "source": "learned", "status": "confirmed", "seen_at": now}],
+    "history": [{"subject": "param:old", "kind": "param_convention", "title": "Params.old is 9 mm",
+                 "detail": "seen 1×, confidence 15%", "also": [], "ids": ["r_old"], "confidence": 0.15,
+                 "recommendation": "dismiss", "source": "learned", "status": "expired", "seen_at": now}],
+}
 
 
 def member(i, name, kind="agent", client="claude", status="active", doing="", task=None, locks=()):
@@ -84,6 +109,10 @@ class FakeClient:
                                                       "author": "ann-claude", "updated_at": now - 600},
                     "older_versions": [{"version": 1, "size": 1500, "author": "bob-codex",
                                         "saved_at": now - 9000, "reason": "replaced"}]}
+        if path == "/style/inbox":
+            return STYLE_INBOX
+        if path == "/style/resolve":
+            return {"rules": []}
         raise panel.HubRequestError(404, {"code": "not_found", "error": path})
     def create_invite(self, kind, role, ttl, project, uri=None):
         from cadswarm import invite, ticket
@@ -100,16 +129,15 @@ p = panel.TeamPanel(s)
 s.panel = p
 s.apply_snapshot(snap)
 s.apply_snapshot(snap)  # an unchanged refresh must not rebuild anything
-# What AI helpers suggested waits on the Team tab, in plain words, with the yes/no right there.
+# What AI helpers suggested waits on the Team tab, in plain words, with the yes/no right there. The
+# learned style backlog is one summary card (the dialog is where the decisions are grouped and made).
 p.fetching = True  # FakeClient can't be read; the suggestions arrive as if read from the team
 p.show_suggestions({
     "setting": [panel.setting_suggestion({"id": 7, "setting": "tol_clearance", "label": "Clearance fit", "value": 0.3,
                                           "current": 0.2, "reason": "PLA prints tight on this printer",
                                           "by": "ann-claude", "component": None},
                                          {"kind": "number", "unit": "mm"})],
-    "style": [panel.style_suggestion({"id": 3, "statement": "Lids are held by four M3 heat-set inserts",
-                                      "status": "candidate", "type": "modelling_practice", "source": "learned",
-                                      "evidence": {"n": 4, "people": 2}, "confidence": 0.62})]})
+    "style": [panel.style_summary(STYLE_INBOX)]})
 
 checks = {}
 for w, h in ((340, 640), (520, 900)):
@@ -249,8 +277,20 @@ team_chat = p.chat.toPlainText()
 # stay on the Team tab, so go back to read them.
 p.show_tab(p.team_page)
 suggestions_shown = p.suggest_box.isVisibleTo(p) and p.suggest_lay.count() == 3  # heading + two cards
+# The style card is one summary row, not a yes/no per rule: its button opens the triage dialog. Patch the
+# dialog so this check stays headless, and stop the panel's own re-read racing the fake client from a thread.
+opened = []
+real_show_style, real_fetch = style_ui.show_style, p.fetch_suggestions
+style_ui.show_style = lambda: opened.append(True)
+p.fetch_suggestions = lambda: None
+review = next(b for b in p.suggest_box.findChildren(QtGui.QPushButton)
+              if b.text() == "Review 3 decisions")
+review.click()
 p.answer(p.suggestions["setting"][0], True)
-p.answer(p.suggestions["style"][0], False)
+style_ui.show_style, p.fetch_suggestions = real_show_style, real_fetch
+p.show_suggestions({"setting": [], "style": []})
+suggestions_cleared = not p.suggest_box.isVisibleTo(p)
+style_opened = opened == [True]
 
 # The chat shows the instruction with its status and the helper's replies.
 chat = p.chat.toPlainText()
@@ -341,6 +381,28 @@ QtGui.QInputDialog.getItem, s.act_async = pick, act
 dlg.close()
 fix_request = {"to": sent_fix[0][1]["to"], "kind": sent_fix[0][1]["kind"],
                "reads_report": "fea_report('fea_1a2b3c4d')" in sent_fix[0][1]["body"]} if sent_fix else None
+# The Learned design style dialog is the triage inbox: one decision per subject, grouped in sections,
+# a bulk "ready" block that lists every rule it would make, and an expired history you can restore.
+style_posts = []
+real_act = s.act
+s.act = lambda method, path, body=None, done=None, purpose="do that": (style_posts.append((path, body)), {})[1]
+dlg_style = style_ui.StyleDialog()
+style_summary = dlg_style.summary.text()
+style_sections = [dlg_style.pending_lay.itemAt(i).widget().title()
+                  for i in range(dlg_style.pending_lay.count())
+                  if isinstance(dlg_style.pending_lay.itemAt(i).widget(), QtGui.QGroupBox)]
+style_ready = {"shown": not dlg_style.ready.isHidden(), "toggle": dlg_style.ready.toggle.text(),
+               "apply": dlg_style.ready.apply_button.text(), "ids": dlg_style.ready.ids()}
+style_weak = {"shown": not dlg_style.weak.isHidden(), "toggle": dlg_style.weak.toggle.text(),
+              "apply": dlg_style.weak.apply_button.text()}
+style_history = {"toggle": dlg_style.history_toggle.text(), "rows": dlg_style.history_lay.count(),
+                 "shown": not dlg_style.history_toggle.isHidden()}
+style_used = {"shown": not dlg_style.used.isHidden(), "rows": dlg_style.used_lay.count() - 1}
+dlg_style.ready.apply_button.click()
+s.act = real_act
+dlg_style.close()
+style_inbox = {"summary": style_summary, "sections": style_sections, "ready": style_ready, "weak": style_weak,
+               "history": style_history, "used": style_used, "posted": style_posts}
 result = {
     "layout": checks,
     "remote": remote,
@@ -358,7 +420,9 @@ result = {
     "team_chat": team_chat,
     "answered": sent[3:],
     "suggestions_shown": suggestions_shown,
-    "suggestions_cleared": not p.suggest_box.isVisibleTo(p),
+    "suggestions_cleared": suggestions_cleared,
+    "style_opened": style_opened,
+    "style_inbox": style_inbox,
     "helpers_listed": [p.team.topLevelItem(i).data(0, QtCore.Qt.UserRole) for i in range(p.team.topLevelItemCount())],
     "helper_rows": [[p.team.topLevelItem(i).text(c).lstrip("◐◓◑◒ ") for c in range(3)]
                     for i in range(p.team.topLevelItemCount())],

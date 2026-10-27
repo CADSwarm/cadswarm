@@ -1646,7 +1646,8 @@ class TeamPanel(QtGui.QDockWidget):
         for source, rows in found.items():
             if rows is not None:  # a source that couldn't be read keeps what it showed
                 self.suggestions[source] = rows
-        rows = [r for r in self.suggestions["setting"] + self.suggestions["style"] if r["key"] not in self.answered]
+        # The style inbox is one summary card and goes first: it is the bigger backlog.
+        rows = [r for r in self.suggestions["style"] + self.suggestions["setting"] if r["key"] not in self.answered]
         if not self.changed("suggestions", tuple((r["key"], r["text"]) for r in rows)):
             return
         while self.suggest_lay.count():
@@ -1660,8 +1661,8 @@ class TeamPanel(QtGui.QDockWidget):
         for r in rows[:SUGGESTIONS_SHOWN]:
             self.suggest_lay.addWidget(self.suggestion_row(r))
         if len(rows) > SUGGESTIONS_SHOWN:
-            more = QtGui.QLabel(f"<small style='color:#8b949e'>{len(rows) - SUGGESTIONS_SHOWN} more in Tools ▸ "
-                                "Precision settings and Learned design style</small>")
+            more = QtGui.QLabel(f"<small style='color:#8b949e'>{len(rows) - SUGGESTIONS_SHOWN} more in "
+                                "Tools ▸ Precision settings</small>")
             more.setWordWrap(True)
             self.suggest_lay.addWidget(more)
 
@@ -1676,22 +1677,29 @@ class TeamPanel(QtGui.QDockWidget):
         text.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         rl.addWidget(text)
         buttons = QtGui.QHBoxLayout()
-        no = action_button("Dismiss", "Say no; the helper is told", lambda: self.answer(r, False))
-        yes = action_button(r["yes"], "Say yes; it applies to the whole team", lambda: self.answer(r, True))
-        yes.setObjectName("primary")
-        buttons.addWidget(no)
-        buttons.addWidget(yes)
+        if r["kind"] == "style_inbox":
+            review = action_button(r["yes"], "Open the design rules and decide", self.open_style)
+            review.setObjectName("primary")
+            buttons.addWidget(review)
+        else:
+            no = action_button("Dismiss", "Say no; the helper is told", lambda: self.answer(r, False))
+            yes = action_button(r["yes"], "Say yes; it applies to the whole team", lambda: self.answer(r, True))
+            yes.setObjectName("primary")
+            buttons.addWidget(no)
+            buttons.addWidget(yes)
         rl.addLayout(buttons)
         return row
 
+    def open_style(self):
+        """The Team tab only says how much waits; the dialog is where the decisions are made."""
+        style_ui.show_style()
+        self.fetch_suggestions()
+
     def answer(self, r, accept):
-        """Accept or dismiss a suggestion; it leaves the card at once and the team's list catches up."""
+        """Accept or dismiss a setting suggestion; it leaves the card at once and the team's list catches up."""
         self.answered.add(r["key"])
         self.show_suggestions({})
-        if r["kind"] == "setting":
-            path, body = f"/settings/suggestions/{r['id']}", {"accept": accept}
-        else:
-            path, body = "/style/resolve", {"rule_id": r["id"], "decision": "confirm" if accept else "dismiss"}
+        path, body = f"/settings/suggestions/{r['id']}", {"accept": accept}
         self.session.act_async("POST", path, body, purpose="answer a suggestion",
                                done=lambda _r: (say(("Accepted: " if accept else "Dismissed: ") + r["plain"]),
                                                 self.fetch_suggestions()),
@@ -2302,7 +2310,7 @@ class PillDelegate(QtGui.QStyledItemDelegate):
 
 
 def read_suggestions(client):
-    """What AI helpers suggested that waits for a person: team-setting changes and learned style rules.
+    """What AI helpers suggested that waits for a person: team-setting changes and the style inbox.
     Runs off the GUI thread; a source that can't be read comes back None, so the panel keeps what it showed."""
     found = {"setting": None, "style": None}
     try:
@@ -2312,8 +2320,8 @@ def read_suggestions(client):
     except Exception:  # an older team server, or offline for a moment
         pass
     try:
-        rules = client.post("/style/rules", {}).get("rules") or []
-        found["style"] = [style_suggestion(r) for r in rules if r.get("status") == "candidate"]
+        box = client.post("/style/inbox", {})
+        found["style"] = [style_summary(box)] if box.get("decisions") else []
     except Exception:
         pass
     return found
@@ -2335,12 +2343,15 @@ def setting_suggestion(g, spec):
                     + (f"<br><small style='color:#8b949e'>{why}</small>" if why else "")}
 
 
-def style_suggestion(r):
-    """A design rule CADSwarm learned (or a helper proposed) that waits for a person to confirm."""
-    return {"key": f"style:{r['id']}", "id": r["id"], "kind": "style", "yes": "Make it a rule",
-            "plain": r["statement"],
-            "text": f"Make this a rule every helper follows?<br><b>{html.escape(r['statement'])}</b>"
-                    f"<br><small style='color:#8b949e'>{html.escape(style_ui.evidence_text(r))}</small>"}
+def style_summary(box):
+    """The one line on the Team tab; the dialog is where the decisions are grouped and made."""
+    kinds = ", ".join(f"{s['count']} {html.escape(s['label'].lower())}" for s in (box.get("sections") or [])[:3])
+    ready = (f" · <b>{box['ready']} ready</b>" if box.get("ready") else "")
+    text = (f"<b>{box['rules']} design rules</b> are waiting: {box['decisions']} decisions{ready}."
+            + (f"<br><small style='color:#8b949e'>Mostly {kinds}</small>" if kinds else ""))
+    return {"key": "style:inbox", "id": None, "kind": "style_inbox",
+            "yes": f"Review {box['decisions']} decisions",
+            "plain": f"{box['decisions']} design rules", "text": text}
 
 
 def takes_instructions(p):

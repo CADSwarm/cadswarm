@@ -396,8 +396,13 @@ def test_style_routes_become_helper_ops(world):
     hub.post("/style/teach", {"statement": "Walls are 2.4 mm"})
     assert fake.calls[-1][1][2] == "teach_style"
     assert json.loads(fake.calls[-1][1][3]) == {"statement": "Walls are 2.4 mm", "scope": "team"}
+    hub.post("/style/inbox", {})
+    assert fake.calls[-1][1][2] == "style_inbox"
     hub.post("/style/resolve", {"rule_id": "r_1", "decision": "confirm"})
     assert fake.calls[-1][1][2] == "resolve_style"
+    hub.post("/style/resolve", {"rule_ids": ["r_1", "r_2"], "decision": "confirm"})
+    assert fake.calls[-1][1][2] == "resolve_style"
+    assert json.loads(fake.calls[-1][1][3]) == {"rule_ids": ["r_1", "r_2"], "decision": "confirm"}
 
 
 def test_the_context_carries_the_published_style_profile(world):
