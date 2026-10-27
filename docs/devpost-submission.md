@@ -1,5 +1,10 @@
 # CADSwarm — Devpost submission packet
 
+> **Historical record.** This packet describes the Cal Hacks 13.0 submission as it was written, when
+> Elastic supplied board knowledge and design memory and Factory Droid was the reviewer. Since then
+> those partners were removed: knowledge is local to the project and the reviewer is an ordinary
+> spawned helper. See [README.md](../README.md) for the current product.
+
 Draft for Cal Hacks 13.0. Replace every `[TBD]` before submitting. Keep the description within
 Devpost's field limits (the sections below are sized for the "built with a story" form).
 

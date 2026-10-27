@@ -7,7 +7,7 @@
 # Where the file comes from, in order:
 #   1. -EnvFile <path>
 #   2. $env:CADSWARM_ENV_FILE
-#   3. %APPDATA%\CadSwarm\cadswarm.env (written by the setup guide's Creao AI key box)
+#   3. %APPDATA%\CadSwarm\cadswarm.env
 #   4. .env in this checkout (git-ignored)
 #   5. cadswarm.env next to the checkout (outside every repo), so all worktrees share one file
 # Never commit it. Values are set for this process only and are not echoed.

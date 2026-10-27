@@ -1,6 +1,6 @@
 # Lighten without losing stiffness — agent guide
 
-For AI helpers (Claude Code, Codex, Droid) working through CADSwarm's MCP tools.
+For AI helpers (Claude Code, Codex, OpenCode) working through CADSwarm's MCP tools.
 
 ## When to suggest it
 
