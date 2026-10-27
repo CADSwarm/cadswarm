@@ -1409,7 +1409,7 @@ class TeamPanel(QtGui.QDockWidget):
             held = tuple(lock for lock in p["locks"] if lock != "Params")
             rows.append((p["name"], p["id"], p.get("client"), state, task, status, held, p["name"] in local))
             if state == "away":
-                tips.append(away_tip(p, local.get(p["name"])))
+                tips.append(away_tip(p, local.get(p["name"]), team_db(s)))
         people = [p for p in s.model["participants"] if p.get("kind") == "human"]
         self.people.setText("<br>".join(
             f"<span style='color:{dot_colour(p['id'])}; font-size:13pt'>●</span>&nbsp;{html.escape(p['name'])}"
@@ -2455,7 +2455,8 @@ class NewTaskDialog(QtGui.QDialog):
         p = self.session.participant(name) if name else None
         local = local_helper_status(self.session)
         if kind == "helper" and p and helper_state(p, local.get(name))[0] == "away":
-            self.note.setText(f"<small style='color:#e3b341'>{away_tip(p, local.get(name))}</small>")
+            self.note.setText(f"<small style='color:#e3b341'>"
+                              f"{away_tip(p, local.get(name), team_db(self.session))}</small>")
         elif kind == "team":
             self.note.setText("<small>The team server plans it into parts, starts AI helpers and builds it. "
                               "Progress shows in Tasks.</small>")
@@ -2541,12 +2542,15 @@ def helper_row(p, local, tasks):
 
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
+FAILED = re.compile(r"\b(error|failed|failure|incorrect|invalid|denied|forbidden|unauthorized)\b"
+                    r"|not\s+(been\s+)?trusted|session limit|api key", re.IGNORECASE)
 
 
-def host_agent_run(name):
+def host_agent_run(name, db=""):
     """The run folder this computer's host started for `name`, or "" when it did not start it here. The host
-    keeps one folder per start in <its data dir>/agents/, beside the people's helpers."""
-    folder = host_dir_for(prefs().GetString("Db"))
+    keeps one folder per start in <its data dir>/agents/, beside the people's helpers. `db` is the team the
+    panel is showing: prefs can still name a team opened earlier (or a dead one)."""
+    folder = host_dir_for(db or prefs().GetString("Db"))
     run = os.path.join(folder, "agents", name) if folder else ""
     return run if run and os.path.isfile(os.path.join(run, ".cadswarm", "config.json")) else ""
 
@@ -2561,20 +2565,24 @@ def last_log_line(run):
     return lines[-1][:160] if lines else ""
 
 
-def away_tip(p, local):
-    """Why an AI helper is away, and what (if anything) to do about it."""
+def away_tip(p, local, db=""):
+    """Why an AI helper is away, and what (if anything) to do about it. `db` is the live team, so the tip
+    finds a host agent even when prefs still name the team this computer opened before."""
     n = html.escape(p["name"])
     state = (local or {}).get("state")
     if local is None:
-        run = host_agent_run(p["name"])
+        run = host_agent_run(p["name"], db)
         if run:
             # The host starts a planner/worker/reviewer on this computer; it is not one of the people's
             # helpers, so it has no runner of its own and stops between jobs. Never call it a teammate's.
             tip = (f"<b>{n}</b> runs on this computer: your team's host starts it for each brief. "
                    "It is not running now; the next task starts it again.")
+            # Show the last line whatever it says: a CLI that dies before it can say "Error:" still names
+            # its reason there ("Incorrect API key provided", "workspace has not been trusted").
             last = last_log_line(run)
-            if last.lower().startswith("error"):
-                tip += f" Its last start failed: {html.escape(last)}"
+            if last:
+                word = "Its last start failed" if FAILED.search(last) else "Its log ends with"
+                tip += f" {word}: {html.escape(last)}"
             return tip
         return (f"<b>{n}</b> runs on a teammate's computer. It answers once that computer has FreeCAD and "
                 "CADSwarm open; your messages wait for it.")
@@ -2606,10 +2614,16 @@ def remember_helper_folder(folder):
     prefs().SetString("AgentFolder", folder)
 
 
+def team_db(session):
+    """The team the panel is showing: its live client's database, else the team this computer opened last."""
+    client = getattr(session, "client", None)
+    return (client.cfg.get("db") if client else None) or prefs().GetString("Db")
+
+
 def local_helpers(session):
     """{name: (folder, config)} for this computer's AI helpers on the team `session` is in."""
     out = {}
-    db = (session.client.cfg.get("db") if session.client else None) or prefs().GetString("Db")
+    db = team_db(session)
     for folder in local_helper_folders():
         cfg = load_json(os.path.join(folder, ".cadswarm", "config.json")) or {}
         if cfg.get("db") == db and cfg.get("name"):
