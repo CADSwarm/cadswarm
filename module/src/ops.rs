@@ -15,8 +15,8 @@ fn parse_obj(s: &str) -> Result<Value, String> {
 pub fn submit_op(ctx: &ReducerContext, fence: u32, op_id: String, kind: String, args_json: String, expected_revs_json: String) -> Result<(), String> {
     let m = me(ctx, fence)?;
     let mutating = rules::is_mutating(&kind);
-    if m.kind == "reviewer" && rules::is_write(&kind) {
-        return Err("not_allowed: the reviewer can only inspect".into());
+    if m.kind == "reviewer" && rules::is_write(&kind) && !rules::reviewer_may_write(&kind) {
+        return Err("not_allowed: the reviewer can only inspect (and save a reference photo)".into());
     }
     if op_id.is_empty() || ctx.db.op().id().find(&op_id).is_some() {
         return Err("bad_args: op_id must be new and non-empty".into());

@@ -91,6 +91,9 @@ pub fn is_query(kind: &str) -> bool { QUERIES.contains(&kind) }
 pub fn is_file_write(kind: &str) -> bool { FILE_WRITES.contains(&kind) }
 /// Anything a reviewer may not do: change geometry or change project files.
 pub fn is_write(kind: &str) -> bool { is_mutating(kind) || is_file_write(kind) }
+/// A reviewer may save the reference photo it judges against: it changes no model and no existing file.
+pub const REFERENCE_WRITES: &[&str] = &["add_reference"];
+pub fn reviewer_may_write(kind: &str) -> bool { REFERENCE_WRITES.contains(&kind) }
 pub fn valid_kind(kind: &str) -> bool { matches!(kind, "human" | "agent" | "host" | "reviewer") }
 pub fn valid_role(role: &str) -> bool { matches!(role, "lead" | "member") }
 
@@ -922,6 +925,15 @@ mod tests {
         assert!(is_write("record_feedback") && is_write("add_reference"));
         assert!(is_query("feedback_recent") && is_query("list_references"));
         assert!(!is_write("feedback_recent") && !is_write("list_references"));
+    }
+
+    #[test]
+    fn a_reviewer_may_save_a_reference_photo_but_not_change_work() {
+        assert!(reviewer_may_write("add_reference"));
+        assert!(is_write("add_reference"), "it is still a file write for everyone else");
+        for k in ["save_file", "set_props", "record_feedback", "teach_style"] {
+            assert!(!reviewer_may_write(k), "{k}");
+        }
     }
 
     #[test]

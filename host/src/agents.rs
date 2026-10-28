@@ -318,10 +318,14 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
             Validity is separate and applies to EVERY part, boxy or not: a solid with open edges, an\n\
             unorientable/self-intersecting shell, or `valid: false` is a problem (\"part is not a closed\n\
             valid solid: <n> open edges\") even if the worker reported it done.\n\
-         6. Reference: if the brief names a real product (a specific car model, a phone, a connector), call\n\
-            list_references(subject) and check at least one reference exists, with its published dimensions.\n\
-            None is a problem: \"style: named product modelled with no saved reference\". Use those dimensions\n\
-            in the fit check, not invented proportions.\n\
+         6. Reference: a named, real product is googleable (a specific car model, phone, appliance, connector)\n\
+            and must be judged against the real thing. Call list_references(subject) first. If none exists,\n\
+            search the web yourself for a clear photo and save it with add_reference(subject=..., image_url=...\n\
+            , dimensions=...), then list_references and open the saved file. Compare EVERY part against that\n\
+            photo: silhouette, proportions, feature placement and the panel breaks. A clear mismatch is a\n\
+            problem (\"style: <part> does not match the <product> reference: <what differs>\"), naming the\n\
+            reference. If it is not a named real product (a custom bracket, a one-off housing, a generic\n\
+            part) do NOT search: there is nothing to compare it to.\n\
          {style_check}\
          For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
          precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
@@ -464,7 +468,9 @@ mod tests {
         let p = review_prompt("b_x", "model a car body", "", [200.0, 200.0, 200.0], 1, "- Car bodies are lofted.");
         assert!(p.contains("surface_quality"), "{p}");
         assert!(p.contains("organic") && p.contains("flat faces"), "{p}");
-        assert!(p.contains("list_references") && p.contains("named product"), "{p}");
+        assert!(p.contains("list_references") && p.contains("named, real product"), "{p}");
+        assert!(p.contains("googleable") && p.contains("search the web"), "{p}");
+        assert!(p.contains("EVERY part") && p.contains("do NOT search"), "{p}");
         assert!(p.contains("7. Team design style"), "the style step still follows: {p}");
     }
 
