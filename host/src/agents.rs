@@ -310,9 +310,11 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
          4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n\
          5. Shape: if the brief is for an object judged on how it looks (car, vehicle, body, helmet, fairing,\n\
             furniture or a product exterior), call surface_quality(topic=\"<the person's request>\") on the\n\
-            shell and the greenhouse. A `fails` verdict is a problem: write it as\n\
-            \"style: organic shape built from flat faces (<n> of <m> faces are flat)\". A separate box roof\n\
-            or box pillars on a body are problems too. Boxy parts (brackets, plates, enclosures) are fine.\n\
+            shell, the greenhouse and every other visible part, INCLUDING parts built before this brief: an\n\
+            old slab is still a defect. A `fails` verdict is a problem: write it as\n\
+            \"style: organic shape built from flat faces (<n> of <m> faces are flat)\" and file a fix task for\n\
+            it. A separate box roof or box pillars on a body are problems too. Boxy parts (brackets, plates,\n\
+            enclosures) are fine.\n\
          {style_check}\
          For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
          precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\

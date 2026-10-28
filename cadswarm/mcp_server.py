@@ -110,7 +110,9 @@ Work like a careful teammate:
     done, call surface_quality(topic="<what the person asked for>", names=[...]). `fails` means the part
     reads as a block model: build its main surfaces as lofts or sweeps in run_part_script (Part.makeLoft
     across 20+ stations), keep separate boxes out of the shell, and fix it before reporting done. A boxy
-    part needs none of this; call it anyway if you are unsure.
+    part needs none of this; call it anyway if you are unsure. The rule covers the whole model, not just
+    what you built: run surface_quality over existing parts too, and fix a failing one you are allowed to
+    touch (ask its owner or a person first).
     When your person says a model looks wrong, relay their words with record_feedback(by="person") and
     attach any photo with add_reference; before rebuilding, call model_feedback and look at the reference
     images.
