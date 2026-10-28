@@ -150,15 +150,15 @@ def test_ping_reports_the_isolation_level_and_limits(worker):
         assert info["level"] == "appcontainer", info  # verified on this machine; see README for fallbacks
 
 
-def test_run_folders_are_cleaned_up(worker):
-    import tempfile
-    tmp = Path(tempfile.gettempdir())
-    before = set(tmp.glob("cadswarm-run-*"))
-    c = worker()
+def test_run_folders_are_cleaned_up(worker, tmp_path):
+    """Its own temp root: another CADSwarm team (or a live worker) uses the system temp at the same
+    time, and those folders are not this test's business."""
+    root = tmp_path / "sandbox-tmp"
+    c = worker(CADSWARM_SANDBOX_TMP=root)
     run(c, "shape = Part.makeBox(1, 1, 1)", name="Tidy")
     with pytest.raises(WorkerError):
         run(c, "raise ValueError('x')")
-    assert set(tmp.glob("cadswarm-run-*")) == before
+    assert list(root.glob("cadswarm-run-*")) == []
 
 
 # --------------------------------------------------------------------------

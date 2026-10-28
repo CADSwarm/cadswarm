@@ -276,6 +276,16 @@ def _remove(path):
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _temp_root():
+    """Where run folders go: the system temp, or CADSWARM_SANDBOX_TMP when a test or a second team on
+    the machine wants its own (otherwise two CADSwarm processes share the same folder names)."""
+    root = os.environ.get("CADSWARM_SANDBOX_TMP")
+    if not root:
+        return None
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
 def run_script(python, save_copy, request):
     """Run `request["code"]` in a confined child against a snapshot of the document.
 
@@ -291,7 +301,7 @@ def run_script(python, save_copy, request):
                            "unconfined (debugging only).")
     problems = []
     for level in levels:
-        run_dir = tempfile.mkdtemp(prefix="cadswarm-run-")
+        run_dir = tempfile.mkdtemp(prefix="cadswarm-run-", dir=_temp_root())
         in_dir, scratch = os.path.join(run_dir, "in"), os.path.join(run_dir, "scratch")
         try:
             os.mkdir(in_dir)

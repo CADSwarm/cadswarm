@@ -127,6 +127,7 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
             ("POST", r"/tasks/(?P<tid>[^/]+)/cancel", self.cancel_task),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/reopen", self.reopen_task),
             ("POST", r"/tasks/(?P<tid>[^/]+)/delete", self.delete_task),
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
@@ -748,6 +749,11 @@ class SpaceHub(LibraryRoutes):
     def cancel_task(self, body, tid):
         """Stop a task. A person may stop any; a helper only one it asked for or claimed."""
         self._f("cancel_task", tid, body.get("reason") or "")
+        return self.task(tid)
+
+    def reopen_task(self, body, tid):
+        """A person reopens a blocked task after answering its blocker; it becomes open for any helper."""
+        self._f("reopen_task", tid, body.get("reason") or "")
         return self.task(tid)
 
     def delete_task(self, body, tid):

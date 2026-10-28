@@ -709,3 +709,13 @@ def test_feedback_and_reference_routes_become_helper_ops(world):
     hub.get("/references", subject="car")
     assert fake.calls[-1][1][2] == "list_references"
     assert json.loads(fake.calls[-1][1][3]) == {"subject": "car"}
+
+
+def test_reopening_a_blocked_task_is_its_own_route(world):
+    hub, fake = world
+    fake.tables["v_task"] = [{"id": "t_1", "ws": 1, "title": "Headlights", "status": "open", "owner": 0,
+                              "created_by": 2, "rev": 2, "detail": "", "objects": [],
+                              "assignee": "", "brief": "b_1", "result_json": "", "updated_ms": 0, "created_ms": 0}]
+    hub.post("/tasks/t_1/reopen", {"reason": "host is back"})
+    assert fake.calls[-1][0] == "reopen_task"
+    assert fake.calls[-1][1][1:] == ("t_1", "host is back")

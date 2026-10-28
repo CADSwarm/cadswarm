@@ -383,6 +383,18 @@ pub fn check_delete_task(task_id: &str, t: &Closing) -> Result<(), String> {
     check_cancel_task(task_id, t)
 }
 
+/// A blocked task is a helper waiting for a person's decision, so only a person reopens it, and only
+/// from `blocked`: a finished or cancelled task keeps its outcome.
+pub fn check_reopen_task(task_id: &str, status: &str, caller_kind: &str) -> Result<(), String> {
+    if caller_kind != "human" {
+        return Err(format!("not_allowed: Task {task_id} is {status}; only a person can reopen it"));
+    }
+    if status != "blocked" {
+        return Err(format!("not_reopenable: Task {task_id} is {status}; only a blocked task can be reopened"));
+    }
+    Ok(())
+}
+
 /// Statuses a brief never leaves: its result (or its failure) is kept.
 pub const CLOSED_BRIEFS: &[&str] = &["ready", "failed", "cancelled"];
 
@@ -910,6 +922,15 @@ mod tests {
         assert!(is_write("record_feedback") && is_write("add_reference"));
         assert!(is_query("feedback_recent") && is_query("list_references"));
         assert!(!is_write("feedback_recent") && !is_write("list_references"));
+    }
+
+    #[test]
+    fn only_a_person_reopens_a_blocked_task() {
+        assert!(check_reopen_task("t_1", "blocked", "human").is_ok());
+        assert!(check_reopen_task("t_1", "blocked", "agent").unwrap_err().starts_with("not_allowed:"));
+        assert!(check_reopen_task("t_1", "open", "human").unwrap_err().starts_with("not_reopenable:"));
+        assert!(check_reopen_task("t_1", "done", "human").unwrap_err().starts_with("not_reopenable:"));
+        assert!(check_reopen_task("t_1", "cancelled", "human").unwrap_err().starts_with("not_reopenable:"));
     }
 
     #[test]

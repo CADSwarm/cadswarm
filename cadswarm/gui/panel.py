@@ -2153,6 +2153,11 @@ class TeamPanel(QtGui.QDockWidget):
         t = self.selected_task()
         if not t:
             return
+        if t.get("status") == "blocked":
+            # A blocked task is waiting for a person's answer; reopen it first or no helper can claim it.
+            if self.session.act("POST", f"/tasks/{t['id']}/reopen", {}, f"Reopened “{t['title']}”",
+                                purpose="reopen a task") is None:
+                return
         helper = t.get("assignee") or t.get("owner_name")
         p = self.session.participant(helper) if helper else None
         if not p or p.get("kind") == "human":
