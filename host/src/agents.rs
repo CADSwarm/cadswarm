@@ -315,6 +315,9 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
             \"style: organic shape built from flat faces (<n> of <m> faces are flat)\" and file a fix task for\n\
             it. A separate box roof or box pillars on a body are problems too. Boxy parts (brackets, plates,\n\
             enclosures) are fine.\n\
+            Validity is separate and applies to EVERY part, boxy or not: a solid with open edges, an\n\
+            unorientable/self-intersecting shell, or `valid: false` is a problem (\"part is not a closed\n\
+            valid solid: <n> open edges\") even if the worker reported it done.\n\
          6. Reference: if the brief names a real product (a specific car model, a phone, a connector), call\n\
             list_references(subject) and check at least one reference exists, with its published dimensions.\n\
             None is a problem: \"style: named product modelled with no saved reference\". Use those dimensions\n\
