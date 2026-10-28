@@ -183,18 +183,21 @@ def build_episodes(raw, project):
                  "subject": _json(e.get("data"), {}).get("subject")}
                 for e in raw.get("style_events") or [] if e.get("kind") == "feedback"]
 
-    groups, order, last_free = {}, [], {}
+    groups, order, free_open, last_op = {}, [], {}, {}
     for op in ops:
         actor, at = op.get("by"), op.get("created_ms", 0)
         task_id = _match_task(op, tasks)
         if task_id:
             key = ("task", task_id)
             attribution = "task_linked" if (op.get("task") or _args(op).get("task")) else "object_window"
+            free_open[actor] = None      # a freestyle stretch ends when the actor returns to a task
         else:
-            previous = last_free.get(actor)
-            key = previous[1] if previous and at - previous[0] <= IDLE_GAP_MS else ("free", f"{actor}-{at}")
-            last_free[actor] = (at, key)
+            key = free_open.get(actor)
+            if key is None or at - last_op.get(actor, at) > IDLE_GAP_MS:
+                key = ("free", f"{actor}-{at}")
+                free_open[actor] = key
             attribution = "freestyle"
+        last_op[actor] = at
         if key not in groups:
             order.append(key)
             groups[key] = {"ops": [], "attribution": attribution}

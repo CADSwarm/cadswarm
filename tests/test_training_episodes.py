@@ -42,6 +42,27 @@ def test_an_idle_gap_starts_a_new_freestyle_episode():
     assert len(free) == 1 and [s["op_id"] for s in free[0]["steps"]] == ["op_3"]
 
 
+def test_a_task_op_ends_the_freestyle_stretch():
+    data = raw()
+    data["op"] += [op("op_5", 1, 30 * 60_000 + 30_000, created=["Body"], task="t1"),
+                   op("op_6", 1, 31 * 60_000, created=["Flap"]),
+                   op("op_7", 1, 31 * 60_000 + 30_000, created=["Rudder"])]
+    found = episodes.build_episodes(data, "P")
+    free = [e for e in found if e["attribution"] == "freestyle"]
+    assert sorted(len(e["steps"]) for e in free) == [1, 2]
+    t1 = [e for e in found if e["id"].endswith("/t1")][0]
+    assert [s["op_id"] for s in t1["steps"]] == ["op_1", "op_2", "op_4", "op_5"]
+
+
+def test_legacy_ops_without_a_task_column_are_attributed_by_objects():
+    data = raw()
+    for op_row in data["op"]:
+        op_row.pop("task", None)
+    got = {e["id"].split("/")[-1]: e for e in episodes.build_episodes(data, "P")}
+    assert got["t1"]["attribution"] == "object_window"
+    assert [s["op_id"] for s in got["t1"]["steps"]] == ["op_1", "op_2", "op_4"]
+
+
 def test_every_op_lands_in_exactly_one_episode():
     seen = [s["op_id"] for e in episodes.build_episodes(raw(), "P") for s in e["steps"]]
     assert sorted(seen) == sorted(o["id"] for o in raw()["op"])
