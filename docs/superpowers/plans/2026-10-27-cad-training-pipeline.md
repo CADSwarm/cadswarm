@@ -664,8 +664,9 @@ the type comparison where the replay has no type.
 from cadswarm.training import state
 
 
-def step(op, args, created=(), modified=(), deleted=(), recomputed=(), status="done", volume=None):
-    payload = {"volume": volume} if volume is not None else {}
+def step(op, args, created=(), modified=(), deleted=(), recomputed=(), status="done",
+         volume=None, name=None):
+    payload = {"volume": volume, "name": name} if volume is not None else {}
     return {"op": op, "args": args, "status": status,
             "result": {"result": payload, "created": list(created), "modified": list(modified),
                        "deleted": list(deleted), "recomputed": list(recomputed), "broken": []}}
@@ -725,11 +726,29 @@ def test_a_failed_op_changes_nothing():
     assert "B" not in s["objects"]
 
 
-def test_a_reported_volume_replaces_a_stale_one():
+def test_a_reported_volume_goes_only_to_the_object_it_names():
     s = state.empty()
     state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
-    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=12.5))
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "C"}, created=["C"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], recomputed=["C"],
+                        volume=12.5, name="A"))
     assert s["objects"]["A"]["volume"] == 12.5 and s["objects"]["A"]["known"] is True
+    assert s["objects"]["C"]["volume"] is None   # nothing was reported for C
+
+
+def test_a_new_volume_replaces_the_stale_one():
+    s = state.empty()
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=7.5, name="A"))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=12.5, name="A"))
+    assert s["objects"]["A"]["volume"] == 12.5
+
+
+def test_a_swept_result_marks_the_step_degraded():
+    swept = step("create_primitive", {"kind": "box", "name": "A"}, created=["A"])
+    swept["result"] = {"blob": "abc"}
+    _, _, degraded = state.replay([swept])
+    assert degraded == [0]
 
 
 def test_replay_returns_the_state_before_each_step_and_flags_unknown_objects():
@@ -767,7 +786,16 @@ def test_conformance_does_not_convict_a_type_the_replay_lacks():
     state.apply(s, step("teleport_part", {"name": "X"}, created=["X"]))
     report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
                                    {"name": "X", "type_id": "Part::Box", "volume": 0.0}], [])
-    assert report["type_mismatch"] == []
+    assert report["type_mismatch"] == [] and report["unknown_type"] == ["X"]
+
+
+def test_conformance_flags_a_volume_outside_one_percent():
+    s = state.empty()
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=100.0, name="A"))
+    report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
+                                   {"name": "A", "type_id": "Part::Feature", "volume": 120.0}], [])
+    assert report["volume_mismatch"] == ["A"]
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -852,22 +880,24 @@ def apply(state, step):
             unknown.append(name)
 
     for name in created:
-        created_type = type_of(step.get("op"), args)
+        created_type = PARAMS_TYPE if name == PARAMS else type_of(step.get("op"), args)
         state["objects"][name] = {
             "type": created_type, "rev": 0,
             # A script or a component's shape is only described by a snapshot the worker never took.
             "known": created_type is not None and step.get("op") != "run_part_script",
-            "volume": volume,
+            "volume": volume if name != PARAMS else None,
         }
 
     changed = list(dict.fromkeys((result.get("modified") or []) + (result.get("recomputed") or [])))
+    reported = payload.get("name")
     for name in changed:
         if name not in state["objects"]:
             unknown.append(name)
             continue
         obj = state["objects"][name]
         obj["rev"] = obj.get("rev", 0) + 1
-        if isinstance(payload.get("volume"), (int, float)):
+        # The payload describes one object. A recomputed dependent gets a new rev, not this volume.
+        if name == reported and isinstance(payload.get("volume"), (int, float)):
             obj["volume"] = payload["volume"]
             obj["known"] = True
 
@@ -881,7 +911,8 @@ def replay(steps):
     before, degraded = [], []
     for index, step in enumerate(steps):
         before.append(clone(state))
-        if apply(state, step):
+        # A swept result (`{"blob": hash}`) says a change happened but not what it was.
+        if apply(state, step) or (step.get("status") == "done" and "blob" in (step.get("result") or {})):
             degraded.append(index)
     return before, state, degraded
 
@@ -906,6 +937,7 @@ def conformance(state, cad_objects, params):
     type_bad = sorted(name for name, row in live.items()
                       if name in mine and mine[name]["type"] is not None
                       and row.get("type_id") != mine[name]["type"])
+    unknown_type = sorted(name for name, obj in mine.items() if obj.get("type") is None)
     volume_bad = []
     for name in sorted(live):
         row, got = live[name], mine.get(name) or {}
@@ -917,13 +949,14 @@ def conformance(state, cad_objects, params):
     total = len(live) + len(extra)
     matched = total - len(missing) - len(extra) - len(type_bad)
     return {"fraction": round(matched / total, 4) if total else 1.0, "missing": missing,
-            "extra": extra, "type_mismatch": type_bad, "volume_mismatch": volume_bad}
+            "extra": extra, "type_mismatch": type_bad, "volume_mismatch": volume_bad,
+            "unknown_type": unknown_type}
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_state.py -v`
-Expected: PASS (13 passed).
+Expected: PASS (16 passed).
 
 - [ ] **Step 5: Commit**
 
