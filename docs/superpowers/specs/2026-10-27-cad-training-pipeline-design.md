@@ -69,7 +69,7 @@ future ones. §13 sets the volume gates at which each model is worth training.
 | Train split | By **project**, never by step | One `model.FCStd` per project means step-level splits leak |
 | Dataset storage | `cadswarm-data/datasets/` (already git-ignored) | Never commit data; commit schema, fixtures, manifests |
 | Packaging | `cadswarm/training/` excluded from the FreeCAD addon | Training deps (torch) must never ship to users |
-| Trainer backend | LoRA SFT on an open tool-calling coder model, configurable | Fits one consumer GPU or a rented hour; backend is a config string, not a fork |
+| Trainer backend | QLoRA SFT on an open coder model, configurable base | The default must fit 16 GB VRAM; the base is a config string, not a fork |
 
 ## 5. Architecture
 
@@ -341,19 +341,43 @@ does not happen in this spec's implementation work.
 
 Two runs, one harness.
 
-**Builder.** SFT, LoRA, on an open tool-calling coder model (default
-`Qwen2.5-Coder-7B-Instruct`; `--base` overrides). Loss on the assistant message only. Defaults:
-rank 16, alpha 32, lr 1e-4 cosine, 3 epochs, effective batch 16, max seq 4096, bf16. Checkpoint
-and a `run.json` (dataset id, git commit, hyperparameters, seed, final loss) are written next to
-the adapter so every artifact is traceable.
+**Builder.** QLoRA SFT on an open coder model. Default base
+`Qwen2.5-Coder-14B-Instruct`; `--base` overrides it and any compatible causal LM works. 4-bit
+NF4 with double quantisation, bf16 compute, rank 16, alpha 32, lr 2e-4 cosine, 3 epochs,
+effective batch 16 (batch 1 × grad-accum 16), gradient checkpointing, paged 8-bit AdamW, max
+seq 3072 by default (4096 permitted; see the ladder below). Loss on the assistant message only.
+Checkpoint and a `run.json` (dataset id, git commit, base, hyperparameters, seed, peak VRAM,
+final loss) are written next to the adapter so every artifact is traceable.
 
-**Critic.** Same base with a scalar head, Bradley–Terry loss over `pairs.jsonl`, 2 epochs.
-Below 300 pairs the trainer refuses and the eval uses `critic.py`'s heuristic scorer
-(planar-share, printability, volume sanity, body-count) as the baseline to beat.
+**Critic.** The same base with a scalar head, Bradley–Terry loss over `pairs.jsonl`, 2 epochs,
+4-bit like the builder. Below 300 pairs the trainer refuses and the eval uses `critic.py`'s
+heuristic scorer (planar-share, printability, volume sanity, body-count) as the baseline to
+beat.
 
-**Hardware.** One 24 GB GPU or an equivalent rented hour. The trainer refuses to start without
-CUDA or MPS and prints the required `pip install -e ".[train]"`. Nothing here runs on FreeCAD's
-Python.
+**Memory ladder (16 GB target).** Estimates include LoRA adapters, activations with gradient
+checkpointing, and paged 8-bit optimiser state; they are the numbers `--check` computes, not
+guesses to rely on:
+
+| Config | Weights | Total | Verdict |
+|---|---|---|---|
+| 7B bf16 LoRA | ~14.2 GB | ~15–16 GB | only at seq ≤ 1024 |
+| 7B 4-bit QLoRA | ~4.5 GB | ~7–8 GB | seq 4096 |
+| **14B 4-bit QLoRA (default)** | **~8.5 GB** | **~11–13 GB** | **seq 2048–3072** |
+| 14B bf16 LoRA | ~28 GB | ~30 GB+ | needs 32 GB; not supported on 16 |
+
+`train.py --check` loads the config, reports the estimate for weights, adapters, activations at
+the requested sequence length and the optimiser, and exits non-zero above the detected VRAM
+budget with the two cheapest fixes (shorter `--seq` or smaller `--base`). Nothing is trained
+until it passes.
+
+**Environment.** Training runs under WSL2 (Linux), where bitsandbytes and FlashAttention are
+reliable; `eval_replay.py` stays on Windows next to FreeCAD. Datasets are plain files, so the
+split costs nothing — the trainer is given a dataset path, the eval is given a policy.
+
+**Context is the squeeze, not the weights.** The state summary (§6.6) is the largest part of
+the prompt. At 3072 tokens the default caps fit; a run at 4096 may need `--max-objects` reduced
+or a 7B base. Context length is a first-class flag because it, not parameter count, is what
+16 GB actually limits.
 
 **Volume gates** (why the first runs are honest experiments, not a product):
 
@@ -414,6 +438,7 @@ and `geometry` on the held-out project with the same seed set.
 | `test_training_labels.py` | correction → pair; failed op → bad; accepted brief → outcome |
 | `test_training_render.py` | row counts, prompt template single-source, project split has no leakage |
 | `test_training_eval.py` | metric math on canned worker replies (no FreeCAD) |
+| `test_training_headroom.py` | the `--check` estimator refuses an over-budget config and names the fix; ladder numbers stay ordered |
 | `test_training_redact.py` | paths/tokens/e-mails removed |
 | `test_training_package.py` | training imports no torch/FreeCAD at module import; addon packaging excludes the package |
 | `cargo test` (module) | new op columns default and round-trip; existing rows unaffected |
@@ -434,9 +459,10 @@ is a bug in `state.py` or a documented gap in the record, not a number to wave t
   to the `/XD` list in `install/install.ps1` (robocopy) and `--exclude=cadswarm/training` to
   the `tar` in `install/install.sh`, and assert the exclusion in `test_training_package.py`.
 - `pyproject.toml` gains `train = ["torch>=2.4", "transformers>=4.45", "peft>=0.13",
-  "datasets>=3", "trimesh"]`. The base install does not change.
-- Everything runs on the repo `.venv`; `eval_replay.py` is the only unit that may need FreeCAD
-  Python, and it takes the interpreter as a parameter.
+  "datasets>=3", "bitsandbytes>=0.44", "trimesh"]`. The base install does not change.
+- The offline pipeline and `eval_replay.py` run on the repo `.venv` (Windows, FreeCAD Python
+  where a worker is needed). `train.py` runs in a separate WSL2 virtualenv with the `train`
+  extra. The only contract between them is a dataset directory path.
 - No network access at training time: datasets are local files.
 
 ## 13. Delivery phases
@@ -465,6 +491,7 @@ isolated to a copied database until the rehearsal passes.
 | Per-step state unrecoverable for old data | degraded flag, excluded from SFT, kept for critic; replay augmentation available later |
 | `activity` is lossy (200/member) so non-mutating steps vanish | turns capture in P5; the builder conditions on state, not on its own past inspection calls |
 | Schema migration hurts the live team | additive defaults, copy-first rehearsal, live publish out of scope |
+| 14B QLoRA is tight at long context on 16 GB | `--check` preflight against the memory ladder; `--seq` and `--max-objects` are the knobs; 7B is the documented fallback |
 | Training code leaks into a user-facing build | explicit packaging exclusion + test |
 
 ## 15. Definition of done
