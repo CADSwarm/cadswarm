@@ -22,10 +22,8 @@ def outcome(brief, tasks):
 def quality(review, corrections):
     if corrections:
         return "human_corrected"
-    if review and review.get("passed"):
-        return "reviewed_pass"
-    if review is not None:
-        return "reviewed_fail"
+    if review is not None and "passed" in review:
+        return "reviewed_pass" if review["passed"] else "reviewed_fail"
     return "unreviewed"
 
 
@@ -40,18 +38,19 @@ def step_label(step, corrected_indexes, outcome_):
 def attach(episode):
     """Fill the per-step labels. The episode must already carry `labels.outcome`."""
     corrected = {c["after_index"] for c in episode.get("corrections") or [] if "after_index" in c}
-    outcome_ = episode["labels"]["outcome"]
+    outcome_ = (episode.get("labels") or {}).get("outcome", "abandoned")
+    episode.setdefault("labels", {})["outcome"] = outcome_
     episode["labels"]["step_labels"] = {
-        str(step["index"]): step_label(step, corrected, outcome_) for step in episode["steps"]}
+        str(step["index"]): step_label(step, corrected, outcome_) for step in episode.get("steps") or []}
 
 
 def pairs(episode):
     """(chosen, rejected) pairs this episode proves. Only a param correction has both sides."""
-    steps = {step["index"]: step for step in episode["steps"]}
+    steps = {step["index"]: step for step in episode.get("steps") or []}
     out = []
     for correction in episode.get("corrections") or []:
         alias, before, after = correction.get("alias"), correction.get("before"), correction.get("after")
-        if not alias or before is None or after is None:
+        if not alias or before is None or after is None or before == after:
             continue
         out.append({"signal": "correction", "episode": episode["id"],
                     "state": (steps.get(correction.get("after_index")) or {}).get("state_before"),

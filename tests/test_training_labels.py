@@ -24,6 +24,11 @@ def test_reviews_and_corrections_outrank_no_signal():
     assert labels.quality(None, []) == "unreviewed"
 
 
+def test_an_empty_or_partial_review_row_is_unreviewed():
+    assert labels.quality({}, []) == "unreviewed"
+    assert labels.quality({"findings_json": "[]"}, []) == "unreviewed"
+
+
 def test_step_labels_prefer_bad_then_corrected_then_outcome():
     assert labels.step_label(step(1, status="failed"), set(), "accepted") == "bad"
     assert labels.step_label(step(2, broken=["X"]), set(), "accepted") == "bad"
@@ -49,3 +54,9 @@ def test_only_a_param_correction_makes_a_pair():
     assert pair["signal"] == "correction"
     assert pair["chosen"] == {"op": "set_param", "args": {"alias": "wall", "value": 2.4}}
     assert pair["rejected"] == {"op": "set_param", "args": {"alias": "wall", "value": 3.0}}
+
+
+def test_a_correction_that_changed_nothing_is_not_a_pair():
+    episode = {"id": "e", "steps": [step(0)],
+               "corrections": [{"after_index": 0, "alias": "wall", "before": 2.4, "after": 2.4}]}
+    assert labels.pairs(episode) == []
