@@ -89,6 +89,31 @@ def test_a_swept_result_marks_the_step_degraded():
     assert degraded == [0]
 
 
+def test_a_swept_result_inside_the_step_shape_is_degraded_too():
+    """The dataset build wraps the worker payload under "result": the blob sits one level down."""
+    swept = step("run_part_script", {"name": "A"}, modified=["A"])
+    swept["result"] = {"result": {"blob": "abc"}, "created": [], "modified": ["A"],
+                       "deleted": [], "recomputed": [], "broken": []}
+    _, _, degraded = state.replay([swept])
+    assert degraded == [0]
+
+
+def test_insert_mesh_volume_mm3_is_kept():
+    mesh = step("insert_mesh", {"name": "M"}, created=["M"], volume=3.0, name="M")
+    mesh["result"]["result"] = {"name": "M", "volume_mm3": 30.0}
+    s = state.empty()
+    state.apply(s, mesh)
+    assert s["objects"]["M"]["volume"] == 30.0
+
+
+def test_a_script_volume_is_compared_even_though_its_shape_is_unknown():
+    s = state.empty()
+    state.apply(s, step("run_part_script", {"name": "A"}, created=["A"], volume=100.0, name="A"))
+    report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
+                                   {"name": "A", "type_id": "Part::Feature", "volume": 120.0}], [])
+    assert report["volume_mismatch"] == ["A"]
+
+
 def test_replay_returns_the_state_before_each_step_and_flags_unknown_objects():
     steps = [step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]),
              step("set_props", {"name": "Ghost"}, modified=["Ghost"])]

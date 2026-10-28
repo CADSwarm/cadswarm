@@ -63,7 +63,11 @@ def apply(state, step):
     args = step.get("args") or {}
     created = result.get("created") or []
     payload = result.get("result") or {}
-    volume = payload.get("volume") if len(created) == 1 else None
+    named = payload.get("name")
+    volume = None
+    if len(created) == 1 and named in (None, created[0]):
+        # insert_mesh reports volume_mm3; a payload naming another object describes that object.
+        volume = payload.get("volume", payload.get("volume_mm3"))
     unknown = []
 
     for name in result.get("deleted") or []:
@@ -97,13 +101,23 @@ def apply(state, step):
     return unknown
 
 
+def _swept(step):
+    """A done step whose result payload was spilled: the change happened, its detail is gone.
+
+    The dataset build stores the worker payload under `result.result`, so the blob is one level
+    down on the real path; a swept row can also appear with the blob at the top level.
+    """
+    result = step.get("result") or {}
+    inner = result.get("result") if isinstance(result.get("result"), dict) else {}
+    return step.get("status") == "done" and ("blob" in result or "blob" in inner)
+
+
 def replay(steps):
     state = empty()
     before, degraded = [], []
     for index, step in enumerate(steps):
         before.append(clone(state))
-        # A swept result (`{"blob": hash}`) says a change happened but not what it was.
-        if apply(state, step) or (step.get("status") == "done" and "blob" in (step.get("result") or {})):
+        if apply(state, step) or _swept(step):
             degraded.append(index)
     return before, state, degraded
 
@@ -128,12 +142,13 @@ def conformance(state, cad_objects, params):
     type_bad = sorted(name for name, row in live.items()
                       if name in mine and mine[name]["type"] is not None
                       and row.get("type_id") != mine[name]["type"])
-    unknown_type = sorted(name for name, obj in mine.items() if obj.get("type") is None)
+    unknown_type = sorted(name for name in mine if name in live and mine[name].get("type") is None)
     volume_bad = []
     for name in sorted(live):
         row, got = live[name], mine.get(name) or {}
         live_volume = row.get("volume") or 0
-        if not got.get("known") or not got.get("volume") or not live_volume:
+        # A script's shape is unknown; its reported volume is still a claim worth checking.
+        if not got.get("volume") or not live_volume:
             continue
         if abs(got["volume"] - live_volume) > 0.01 * live_volume:
             volume_bad.append(name)
