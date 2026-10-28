@@ -23,8 +23,10 @@ def test_the_stronger_vocabulary_wins_and_reports_what_matched():
 
 def test_the_ceiling_scales_with_the_face_count():
     assert required("mechanical", 200) is None
-    assert required("aesthetic", 0) == {"max_planar_share": 0.6, "min_curved_faces": 8}
-    assert required("aesthetic", 400)["min_curved_faces"] == 20
+    assert required("aesthetic", 0) == {"max_planar_share": 0.6, "min_curved_faces": 2}
+    assert required("aesthetic", 400)["min_curved_faces"] == 40
+    # A six-face glass panel with four curved faces is fine; the floor must not demand a car body.
+    assert required("aesthetic", 6)["min_curved_faces"] == 2
 
 
 def test_a_box_fails_an_aesthetic_bar_and_passes_a_mechanical_one():

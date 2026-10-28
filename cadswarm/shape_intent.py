@@ -30,10 +30,11 @@ apple audi bmw corvette ferrari ford honda iphone is350 lamborghini lexus mazda 
 mustang nissan porsche subaru tesla toyota
 """.split())
 
-# A shape judged on form may have at most this share of flat faces, and at least this many curved
-# ones (scaled up for big models so a 400-face body still needs real curvature).
+# A shape judged on form may have at most this share of flat faces, and at least this share of its
+# faces curved (with a floor of two so a small glass panel is not asked for a car body's curvature).
 MAX_PLANAR_SHARE = 0.6
-MIN_CURVED_FACES = 8
+MIN_CURVED_FACES = 2
+MIN_CURVED_SHARE = 0.10
 
 
 def _words(text):
@@ -49,7 +50,7 @@ def required(intent, faces=0):
     if intent != "aesthetic":
         return None
     return {"max_planar_share": MAX_PLANAR_SHARE,
-            "min_curved_faces": max(MIN_CURVED_FACES, round(0.05 * max(0, int(faces or 0))))}
+            "min_curved_faces": max(MIN_CURVED_FACES, round(MIN_CURVED_SHARE * max(0, int(faces or 0))))}
 
 
 def classify(text="", names=(), type_ids=()):

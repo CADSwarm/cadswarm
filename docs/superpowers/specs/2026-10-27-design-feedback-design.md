@@ -125,8 +125,10 @@ classify(text, names=(), type_ids=()) ->
   bracket wastes a build.
 - An object name that matches a known part role (e.g. `BodyShell`, `Roof`, `Pillar`, `Hood`,
   `Fender`, `Bumper`, `Grille`, `Fairing`, `Hull`) also counts.
-- `required` for aesthetic: `max_planar_share 0.6`, `min_curved_faces max(8, 5 % of faces)`. For
-  mechanical: no ceiling, but the tool still reports the mix so a person can see it.
+- `required` for aesthetic: `max_planar_share 0.6`, `min_curved_faces max(2, 10 % of faces)`. For
+  mechanical: no ceiling, but the tool still reports the mix so a person can see it. The floor is
+  proportional on purpose: a six-face curved glass panel must not be asked for a car body's
+  curvature, and a 400-face shell must not pass on four curved faces.
 - The classifier can be overruled: `surface_quality(..., intent="aesthetic" | "mechanical")`. Every
   override is stored (`intent_override` event with the brief text, names and the chosen intent), so
   the vocabulary can be improved from real disagreements. No automatic learning of the classifier.
@@ -150,8 +152,9 @@ caller's override), verdict locally. Advice is plain language and names the fix.
 viewer already uses, rasterised in pure Python (z-buffer, flat Lambert shading, opaque background,
 scale bar). Default views: `front`, `rear`, `left`, `right`, `top`, `three_quarter`; orthographic by
 default so a side view at a known scale can be laid over a reference photo. Output goes to
-`renders/<timestamp>/<view>.png` through `ProjectFiles`, and the tool returns the paths. The agent
-opens them; a person can too.
+`renders/<timestamp>/<view>.png` on the host, like `exports/`: regenerable, so it is not versioned or
+counted against the file quota. The tool returns the paths; the agent opens them, and a person on the
+host machine can too.
 
 ### 5. Where the bar reaches the agents
 
@@ -218,7 +221,7 @@ Everything follows an existing seam; no new service.
 | --- | --- | --- |
 | `record_feedback`, `add_reference`, `list_references` | op kinds in `rules/` (non-mutating, no locks), dispatched by the host executor to `helper.py` | `teach_style`, `lookup_board` |
 | `surface_quality`, `render_views` | host worker queries on the FreeCAD worker | `list_faces` (`POST /fea/faces`) |
-| `shape_intent` | pure Python in the helper (`cadswarm/shape_intent.py`), no worker | `style_context` |
+| `shape_intent` | pure Python in `cadswarm/shape_intent.py`; the MCP server imports it directly (same machine, no op) | `cadswarm/knowledge.py` helpers |
 | Tool wrappers | `mcp_server.py` tools + `space_hub.py` routes | `list_faces`, `team_style` |
 
 MCP tools: `record_feedback`, `model_feedback`, `add_reference`, `list_references`,
