@@ -1185,7 +1185,7 @@ git commit -m "feat(training): outcome, step and preference labels"
 ```python
 # tests/test_training_episodes.py
 """A task's ops become one episode; unrelated ops fall into a freestyle stretch."""
-from cadswarm.training import episodes, split
+from cadswarm.training import episodes, split, state
 
 T0 = 1_800_000_000_000
 
@@ -1218,7 +1218,7 @@ def raw():
 
 def test_ops_are_attributed_by_object_and_time_then_by_explicit_task():
     got = {e["id"].split("/")[-1]: e for e in episodes.build_episodes(raw(), "P")}
-    assert got["t1"]["attribution"] == "object_window"
+    assert got["t1"]["attribution"] == "task_linked"
     assert [s["op_id"] for s in got["t1"]["steps"]] == ["op_1", "op_2", "op_4"]
 
 
@@ -1264,7 +1264,7 @@ def test_steps_carry_the_state_before_them_and_a_label():
     episode = episodes.build_episodes(raw(), "P")[0]
     first = episode["steps"][0]
     assert episode["id"].endswith("/t1")
-    assert first["state_before"] == {"objects": {}, "params": {}}
+    assert first["state_before"] == state.empty()
     assert first["state_before"] == {"objects": {}, "params": {}}
     assert episode["labels"]["outcome"] == "accepted"
     assert episode["labels"]["step_labels"]["0"] == "good"
