@@ -2262,11 +2262,25 @@ class FakeWorker:
                                                        {"name": "Base", "bbox": [0, 0, 0, 1, 1, 1],
                                                         "volume": 1.0}], "params": {}}}
         if op == "printability":
-            return {"ok": True, "result": {"ok": True, "objects": []}}
+            return {"ok": True, "result": {"ok": True,
+                                           "objects": [{"name": "Base", "fits_bed": True}]}}
         raise AssertionError(op)
 
     def stop(self):
         pass
+
+
+class NoSolidsWorker(FakeWorker):
+    """A document whose only objects are not solids: the worker checked nothing."""
+
+    def call(self, op, args=None, allowed=None):
+        if op == "status":
+            return {"ok": True, "result": {"objects": [{"name": "Params", "bbox": None, "volume": None},
+                                                       {"name": "Sketch", "bbox": None,
+                                                        "volume": None}], "params": {}}}
+        if op == "printability":
+            return {"ok": True, "result": {"ok": True, "objects": []}}
+        return super().call(op, args, allowed)
 
 
 class EmptyWorker(FakeWorker):
@@ -2306,6 +2320,25 @@ def test_a_build_that_produced_nothing_is_not_printable():
     got = eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]), client=EmptyWorker())
     assert got["printable"] is False
     assert eval_replay.report([got], policy="random")["printable_rate"] == 0.0
+
+
+def test_a_document_with_no_solids_is_not_printable():
+    got = eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]), client=NoSolidsWorker())
+    assert got["printable"] is False
+
+
+def test_a_failed_worker_start_leaves_no_scratch_dir(monkeypatch, tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(eval_replay.tempfile, "mkdtemp", lambda **kwargs: str(scratch))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("no FreeCAD")
+
+    monkeypatch.setattr(eval_replay, "WorkerClient", boom)
+    with pytest.raises(RuntimeError):
+        eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]))
+    assert not scratch.exists()
 
 
 def test_the_random_baseline_is_deterministic_and_stops_at_the_cap():
@@ -2434,16 +2467,14 @@ def _document_name(case):
 def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, client=None):
     """Run `policy` on a scratch document and score it against the case's reference model."""
     created = None
-    if client is None:
-        created = workdir or tempfile.mkdtemp(prefix="cadswarm-eval-")
-        os.makedirs(created, exist_ok=True)
-        worker = WorkerClient(os.path.join(created, _document_name(case)),
-                              python=python, script=script)
-    else:
-        worker = client
-        created = workdir
-    seen = []
+    worker = client
     try:
+        if client is None:
+            created = workdir or tempfile.mkdtemp(prefix="cadswarm-eval-")
+            os.makedirs(created, exist_ok=True)
+            worker = WorkerClient(os.path.join(created, _document_name(case)),
+                                  python=python, script=script)
+        seen = []
         for _ in range(max_steps):
             op = policy.next_op(seen)
             if op is None:
@@ -2456,10 +2487,12 @@ def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, c
         final = worker.call("status").get("result") or {}
         objects = final.get("objects") or []
         candidates = [o for o in objects if o.get("name") != "Params"]
-        printable = bool(candidates) and bool(
-            (worker.call("printability", {}).get("result") or {}).get("ok"))
+        verdict = (worker.call("printability", {}).get("result") or {})
+        # The worker's check is `all([])`: an empty check list says nothing, so require one.
+        printable = bool(candidates) and bool(verdict.get("objects")) and bool(verdict.get("ok"))
     finally:
-        worker.stop()
+        if worker is not None:
+            worker.stop()
         if client is None and workdir is None and created:
             shutil.rmtree(created, ignore_errors=True)
 
@@ -2490,7 +2523,7 @@ def report(results, policy):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_replay.py -v`
-Expected: PASS (9 passed).
+Expected: PASS (11 passed).
 
 - [ ] **Step 5: Commit**
 
