@@ -1044,6 +1044,11 @@ def test_reviews_and_corrections_outrank_no_signal():
     assert labels.quality(None, []) == "unreviewed"
 
 
+def test_an_empty_or_partial_review_row_is_unreviewed():
+    assert labels.quality({}, []) == "unreviewed"
+    assert labels.quality({"findings_json": "[]"}, []) == "unreviewed"
+
+
 def test_step_labels_prefer_bad_then_corrected_then_outcome():
     assert labels.step_label(step(1, status="failed"), set(), "accepted") == "bad"
     assert labels.step_label(step(2, broken=["X"]), set(), "accepted") == "bad"
@@ -1069,6 +1074,12 @@ def test_only_a_param_correction_makes_a_pair():
     assert pair["signal"] == "correction"
     assert pair["chosen"] == {"op": "set_param", "args": {"alias": "wall", "value": 2.4}}
     assert pair["rejected"] == {"op": "set_param", "args": {"alias": "wall", "value": 3.0}}
+
+
+def test_a_correction_that_changed_nothing_is_not_a_pair():
+    episode = {"id": "e", "steps": [step(0)],
+               "corrections": [{"after_index": 0, "alias": "wall", "before": 2.4, "after": 2.4}]}
+    assert labels.pairs(episode) == []
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1104,10 +1115,8 @@ def outcome(brief, tasks):
 def quality(review, corrections):
     if corrections:
         return "human_corrected"
-    if review and review.get("passed"):
-        return "reviewed_pass"
-    if review is not None:
-        return "reviewed_fail"
+    if review is not None and "passed" in review:
+        return "reviewed_pass" if review["passed"] else "reviewed_fail"
     return "unreviewed"
 
 
@@ -1122,18 +1131,19 @@ def step_label(step, corrected_indexes, outcome_):
 def attach(episode):
     """Fill the per-step labels. The episode must already carry `labels.outcome`."""
     corrected = {c["after_index"] for c in episode.get("corrections") or [] if "after_index" in c}
-    outcome_ = episode["labels"]["outcome"]
+    outcome_ = (episode.get("labels") or {}).get("outcome", "abandoned")
+    episode.setdefault("labels", {})["outcome"] = outcome_
     episode["labels"]["step_labels"] = {
-        str(step["index"]): step_label(step, corrected, outcome_) for step in episode["steps"]}
+        str(step["index"]): step_label(step, corrected, outcome_) for step in episode.get("steps") or []}
 
 
 def pairs(episode):
     """(chosen, rejected) pairs this episode proves. Only a param correction has both sides."""
-    steps = {step["index"]: step for step in episode["steps"]}
+    steps = {step["index"]: step for step in episode.get("steps") or []}
     out = []
     for correction in episode.get("corrections") or []:
         alias, before, after = correction.get("alias"), correction.get("before"), correction.get("after")
-        if not alias or before is None or after is None:
+        if not alias or before is None or after is None or before == after:
             continue
         out.append({"signal": "correction", "episode": episode["id"],
                     "state": (steps.get(correction.get("after_index")) or {}).get("state_before"),
@@ -1145,7 +1155,7 @@ def pairs(episode):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_labels.py -v`
-Expected: PASS (6 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -2034,7 +2044,7 @@ def heuristic(final, printable=None):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_metrics.py -v`
-Expected: PASS (6 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 
