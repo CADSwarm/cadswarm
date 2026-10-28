@@ -71,22 +71,24 @@ def apply(state, step):
             unknown.append(name)
 
     for name in created:
-        created_type = type_of(step.get("op"), args)
+        created_type = PARAMS_TYPE if name == PARAMS else type_of(step.get("op"), args)
         state["objects"][name] = {
             "type": created_type, "rev": 0,
             # A script or a component's shape is only described by a snapshot the worker never took.
             "known": created_type is not None and step.get("op") != "run_part_script",
-            "volume": volume,
+            "volume": volume if name != PARAMS else None,
         }
 
     changed = list(dict.fromkeys((result.get("modified") or []) + (result.get("recomputed") or [])))
+    reported = payload.get("name")
     for name in changed:
         if name not in state["objects"]:
             unknown.append(name)
             continue
         obj = state["objects"][name]
         obj["rev"] = obj.get("rev", 0) + 1
-        if isinstance(payload.get("volume"), (int, float)):
+        # The payload describes one object. A recomputed dependent gets a new rev, not this volume.
+        if name == reported and isinstance(payload.get("volume"), (int, float)):
             obj["volume"] = payload["volume"]
             obj["known"] = True
 
@@ -100,7 +102,8 @@ def replay(steps):
     before, degraded = [], []
     for index, step in enumerate(steps):
         before.append(clone(state))
-        if apply(state, step):
+        # A swept result (`{"blob": hash}`) says a change happened but not what it was.
+        if apply(state, step) or (step.get("status") == "done" and "blob" in (step.get("result") or {})):
             degraded.append(index)
     return before, state, degraded
 
@@ -125,6 +128,7 @@ def conformance(state, cad_objects, params):
     type_bad = sorted(name for name, row in live.items()
                       if name in mine and mine[name]["type"] is not None
                       and row.get("type_id") != mine[name]["type"])
+    unknown_type = sorted(name for name, obj in mine.items() if obj.get("type") is None)
     volume_bad = []
     for name in sorted(live):
         row, got = live[name], mine.get(name) or {}
@@ -136,4 +140,5 @@ def conformance(state, cad_objects, params):
     total = len(live) + len(extra)
     matched = total - len(missing) - len(extra) - len(type_bad)
     return {"fraction": round(matched / total, 4) if total else 1.0, "missing": missing,
-            "extra": extra, "type_mismatch": type_bad, "volume_mismatch": volume_bad}
+            "extra": extra, "type_mismatch": type_bad, "volume_mismatch": volume_bad,
+            "unknown_type": unknown_type}

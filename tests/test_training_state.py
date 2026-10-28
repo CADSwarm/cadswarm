@@ -2,8 +2,9 @@
 from cadswarm.training import state
 
 
-def step(op, args, created=(), modified=(), deleted=(), recomputed=(), status="done", volume=None):
-    payload = {"volume": volume} if volume is not None else {}
+def step(op, args, created=(), modified=(), deleted=(), recomputed=(), status="done",
+         volume=None, name=None):
+    payload = {"volume": volume, "name": name} if volume is not None else {}
     return {"op": op, "args": args, "status": status,
             "result": {"result": payload, "created": list(created), "modified": list(modified),
                        "deleted": list(deleted), "recomputed": list(recomputed), "broken": []}}
@@ -63,11 +64,29 @@ def test_a_failed_op_changes_nothing():
     assert "B" not in s["objects"]
 
 
-def test_a_reported_volume_replaces_a_stale_one():
+def test_a_reported_volume_goes_only_to_the_object_it_names():
     s = state.empty()
     state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
-    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=12.5))
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "C"}, created=["C"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], recomputed=["C"],
+                        volume=12.5, name="A"))
     assert s["objects"]["A"]["volume"] == 12.5 and s["objects"]["A"]["known"] is True
+    assert s["objects"]["C"]["volume"] is None   # nothing was reported for C
+
+
+def test_a_new_volume_replaces_the_stale_one():
+    s = state.empty()
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=7.5, name="A"))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=12.5, name="A"))
+    assert s["objects"]["A"]["volume"] == 12.5
+
+
+def test_a_swept_result_marks_the_step_degraded():
+    swept = step("create_primitive", {"kind": "box", "name": "A"}, created=["A"])
+    swept["result"] = {"blob": "abc"}
+    _, _, degraded = state.replay([swept])
+    assert degraded == [0]
 
 
 def test_replay_returns_the_state_before_each_step_and_flags_unknown_objects():
@@ -105,4 +124,13 @@ def test_conformance_does_not_convict_a_type_the_replay_lacks():
     state.apply(s, step("teleport_part", {"name": "X"}, created=["X"]))
     report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
                                    {"name": "X", "type_id": "Part::Box", "volume": 0.0}], [])
-    assert report["type_mismatch"] == []
+    assert report["type_mismatch"] == [] and report["unknown_type"] == ["X"]
+
+
+def test_conformance_flags_a_volume_outside_one_percent():
+    s = state.empty()
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=100.0, name="A"))
+    report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
+                                   {"name": "A", "type_id": "Part::Feature", "volume": 120.0}], [])
+    assert report["volume_mismatch"] == ["A"]
