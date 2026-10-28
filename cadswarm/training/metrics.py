@@ -46,7 +46,7 @@ def geometry(reference, candidate):
                for n in shared]
     return {"names": jaccard(ref, got),
             "bbox": round(sum(boxes) / len(boxes), 4) if boxes else None,
-            "volume": round(sum(volumes) / len(volumes), 4) if volumes else 0.0}
+            "volume": round(sum(volumes) / len(volumes), 4) if volumes else None}
 
 
 def aggregate(rows):

@@ -26,6 +26,14 @@ def test_geometry_compares_names_boxes_and_volumes():
     assert got["names"] == 1.0 and got["bbox"] == 0.5 and got["volume"] < 1.0
 
 
+def test_geometry_reports_none_when_no_box_or_volume_was_recorded():
+    got = metrics.geometry({"objects": {"A": {"volume": 1.0}}},
+                           {"objects": {"A": {"volume": 1.0}}})
+    assert got["bbox"] is None and got["volume"] == 1.0
+    empty = metrics.geometry({"objects": {}}, {"objects": {}})
+    assert empty["bbox"] is None and empty["volume"] is None
+
+
 def test_aggregate_averages_and_ignores_missing_values():
     got = metrics.aggregate([{"completion": 1.0, "geometry": {"bbox": 1.0}},
                              {"completion": 0.0, "geometry": {"bbox": 0.0}}])
