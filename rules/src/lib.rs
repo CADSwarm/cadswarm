@@ -32,6 +32,8 @@ pub const QUERIES: &[&str] = &[
     "analyze_component", "suggest_settings",
     // The team's learned design style (the host's helper, cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style",
+    // A person's verdict on how the model looks, and the look it should match.
+    "feedback_recent", "list_references",
     // How flat vs curved each part is: an aesthetic shape may not be all planes.
     "surface_quality",
 ];
@@ -46,6 +48,8 @@ pub const FILE_WRITES: &[&str] = &[
     "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
     // Style rules live in the host's project database: teaching, confirming and re-learning change them.
     "teach_style", "resolve_style", "learn_style",
+    // What people said about how the model looks, and the reference images it should match.
+    "record_feedback", "add_reference",
 ];
 /// Team events a completed (non-mutating) op may carry in its result as `_events` for complete_op to emit:
 /// the host's helper can't call reducers, and an FEA report must pop up for every member.
@@ -897,6 +901,16 @@ mod tests {
         assert_eq!(result_events(&many).len(), MAX_RESULT_EVENTS);
     }
 
+
+    #[test]
+    fn feedback_and_references_are_known_ops() {
+        for k in ["record_feedback", "add_reference", "feedback_recent", "list_references"] {
+            assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
+        }
+        assert!(is_write("record_feedback") && is_write("add_reference"));
+        assert!(is_query("feedback_recent") && is_query("list_references"));
+        assert!(!is_write("feedback_recent") && !is_write("list_references"));
+    }
 
     #[test]
     fn surface_quality_is_a_read_only_query() {

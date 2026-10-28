@@ -18,6 +18,9 @@ pub const HELPER_KINDS: &[&str] = &[
     "board_spec", "index_design",
     // The team's learned design style (cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style", "teach_style", "resolve_style", "learn_style",
+    // A person's verdict on how the model looks, and the look it should match (cadswarm/style_memory.py,
+    // cadswarm/helper.py).
+    "record_feedback", "feedback_recent", "add_reference", "list_references",
     "fea_run", "fea_status", "fea_publish", "fea_reports",
     // Lighten without losing stiffness (cadswarm/lattice_jobs.py).
     "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status", "lattice_list",

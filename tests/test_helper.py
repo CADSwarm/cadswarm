@@ -459,3 +459,41 @@ def test_lattice_cells_and_estimates_need_no_job(tmp_path, monkeypatch):
     est = helper.handle(p, {"id": 2, "op": "lattice_estimate", "args": {
         "target": "B", "cell": "schwarzP", "voxel_mm": 0.4, "_bbox": [0, 0, 0, 40, 20, 10]}})["result"]
     assert est["build_voxels"] == 125000 and {w["code"] for w in est["warnings"]} >= {"closed_skin"}
+
+
+def test_record_feedback_and_read_it_back(tmp_path):
+    p = project(tmp_path)
+    r = helper.handle(p, {"id": 1, "op": "record_feedback", "args": {
+        "verdict": "bad", "subject": "car", "issues": ["roof is a box"], "by": "person",
+        "_actor": {"id": 1, "name": "sam", "kind": "human"}}})
+    assert r["ok"] and r["result"]["subject"] == "car"
+    back = helper.handle(p, {"id": 2, "op": "feedback_recent", "args": {"subject": "car"}})
+    assert back["result"]["verdicts"][0]["issues"] == ["roof is a box"]
+    assert helper.handle(p, {"id": 3, "op": "record_feedback", "args": {"verdict": "meh"}})["code"] == "bad_args"
+
+
+def test_a_reference_image_is_saved_as_a_project_file_with_its_metadata(tmp_path):
+    import base64
+    p = project(tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    r = helper.handle(p, {"id": 1, "op": "add_reference", "args": {
+        "subject": "car", "label": "front", "image_base64": base64.b64encode(png).decode(),
+        "filename": "is350.png", "notes": "2021 F Sport, side view", "dimensions": "4710 x 1840 x 1435",
+        "_actor": {"id": 1, "name": "sam", "kind": "human"}}})
+    assert r["ok"] and r["result"]["image"].startswith("reference/car/")
+    listed = helper.handle(p, {"id": 2, "op": "list_references", "args": {"subject": "car"}})
+    item = listed["result"]["references"][0]
+    assert item["notes"] == "2021 F Sport, side view" and item["image"].endswith(".png")
+    assert p.files.read(item["image"])["size"] == len(png)
+
+
+def test_a_reference_refuses_a_huge_or_unsupported_file(tmp_path):
+    import base64
+    p = project(tmp_path)
+    big = base64.b64encode(b"x" * (20 * 1024 * 1024 + 1)).decode()
+    bad = helper.handle(p, {"id": 1, "op": "add_reference", "args": {
+        "subject": "car", "image_base64": big, "filename": "x.png"}})
+    assert not bad["ok"] and bad["code"] == "bad_args"
+    gif = helper.handle(p, {"id": 2, "op": "add_reference", "args": {
+        "subject": "car", "filename": "x.gif", "image_base64": base64.b64encode(b"GIF89a").decode()}})
+    assert not gif["ok"] and gif["code"] == "bad_args"
