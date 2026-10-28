@@ -32,6 +32,8 @@ pub const QUERIES: &[&str] = &[
     "analyze_component", "suggest_settings",
     // The team's learned design style (the host's helper, cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style",
+    // How flat vs curved each part is: an aesthetic shape may not be all planes.
+    "surface_quality",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
 pub const FILE_WRITES: &[&str] = &[
@@ -895,6 +897,13 @@ mod tests {
         assert_eq!(result_events(&many).len(), MAX_RESULT_EVENTS);
     }
 
+
+    #[test]
+    fn surface_quality_is_a_read_only_query() {
+        assert!(is_query("surface_quality"));
+        assert!(!is_write("surface_quality"));
+        assert!(check_op("surface_quality", &json!({"names": ["Body"]}), &[], |_| None, |_| true, 1).is_ok());
+    }
 
     #[test]
     fn a_rename_needs_a_valid_name_nobody_else_holds() {

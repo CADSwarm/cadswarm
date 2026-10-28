@@ -5,7 +5,7 @@ import struct
 import pytest
 
 from cadswarm.config import find_freecad_python
-from cadswarm.worker_client import WorkerClient
+from cadswarm.worker_client import WorkerClient, WorkerError
 
 try:
     find_freecad_python()
@@ -62,3 +62,20 @@ def test_an_op_result_names_the_vertex_its_pointer_rests_on(worker):
     # Top face, the corner nearest the default isometric camera.
     assert r["pointer"] == {"object": "Corner", "point": [10.0, 6.0, 4.0]}
     assert worker.call("get_object", {"name": "Corner"})["result"]["anchor"] == [10.0, 6.0, 4.0]
+
+
+def test_surface_quality_counts_flat_against_curved_faces(worker):
+    r = worker.call("surface_quality", {"names": ["Small"]})["result"]["objects"][0]
+    assert r["name"] == "Small" and r["faces"] == 6 and r["planar"] == 6 and r["curved"] == 0
+    assert r["valid"] is True and r["bbox"][3] - r["bbox"][0] == 20
+
+
+def test_a_lofted_shell_has_curved_faces(worker):
+    worker.call("run_part_script", {"name": "Shell", "code": (
+        "sections = [Part.Wire(Part.makeCircle(20 + i, Vector(0, 0, i * 10))) for i in range(6)]\n"
+        "shape = Part.makeSolid(Part.makeLoft(sections, True))")})
+    r = worker.call("surface_quality", {"names": ["Shell"]})["result"]["objects"][0]
+    assert r["curved"] > 0 and r["planar"] < r["faces"]
+    with pytest.raises(WorkerError) as err:
+        worker.call("surface_quality", {"names": ["Nope"]})
+    assert err.value.code == "not_found"

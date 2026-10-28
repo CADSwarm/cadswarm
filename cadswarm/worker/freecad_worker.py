@@ -1047,10 +1047,48 @@ def q_printability(a):
     return {"ok": ok, "objects": objects}
 
 
+def q_surface_quality(a):
+    """How much of each part's surface is flat, and how much is real curvature.
+
+    The reviewer and the MCP tool use this to tell a boxy part (allowed) from a blocky attempt at
+    an organic one (not allowed). Numbers only: the judgement lives in cadswarm/shape_intent.py.
+    """
+    want = set(a.get("names") or [])
+    out = []
+    for o in doc.Objects:
+        sh = getattr(o, "Shape", None)
+        if sh is None or sh.isNull():
+            continue
+        if want and o.Name not in want and o.Label not in want:
+            continue
+        kinds = {}
+        for f in sh.Faces:
+            k = f.Surface.__class__.__name__
+            kinds[k] = kinds.get(k, 0) + 1
+        faces = len(sh.Faces)
+        planar = kinds.get("Plane", 0)
+        bb = sh.BoundBox
+        out.append({
+            "name": o.Name, "label": o.Label, "faces": faces, "planar": planar,
+            "curved": faces - planar, "bspline": kinds.get("BSplineSurface", 0),
+            "cylindrical": kinds.get("Cylinder", 0), "conical": kinds.get("Cone", 0),
+            "spherical": kinds.get("Sphere", 0), "toroidal": kinds.get("Toroid", 0),
+            "extruded": kinds.get("SurfaceOfExtrusion", 0),
+            "revolved": kinds.get("SurfaceOfRevolution", 0),
+            "edges": len(sh.Edges), "vertices": len(sh.Vertexes), "solids": len(sh.Solids),
+            "valid": bool(sh.isValid()), "volume_mm3": round(sh.Volume, 3),
+            "bbox": [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)],
+        })
+    if not out:
+        raise OpError("not_found", f"No solid geometry in {sorted(want) or 'the model'}")
+    return {"objects": out}
+
+
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
            "faces": q_faces,
+           "surface_quality": q_surface_quality,
            "mesh": q_mesh, "printability": q_printability,
            "analyze_component": q_analyze_component,
            "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],
