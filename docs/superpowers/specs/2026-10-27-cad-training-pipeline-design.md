@@ -104,7 +104,7 @@ others' internals:
 
 | Unit | In | Out | Depends on |
 |---|---|---|---|
-| `dbclient.py` | uri, db, token, SQL | rows as dicts, paginated | HTTP only |
+| `source.py` | `host.json` or a project folder | paged rows + a dataset path | `space.SpaceClient` (reused, not reimplemented) |
 | `export.py` | a project folder or DB | `raw/<stamp>/` + `source.json` | `dbclient`, sqlite, filesystem |
 | `state.py` | ordered ops | symbolic object table after each op | nothing |
 | `episodes.py` | raw export | `episode.json` per build | `state` |
@@ -237,21 +237,25 @@ Human steps matter: they are the corrections the critic learns from.
 ### 6.5 Artifacts
 
 ```
-cadswarm-data/datasets/<dataset-id>/
-  raw/<project>/*.jsonl            §6.1
-  episodes/<project>/<id>.json     §6.2
-  conformance.json
-  split.json                       {train:[…], val:[…], test:[…], mode}
-  sft.jsonl                        builder examples
-  pairs.jsonl                      critic pairs
-  eval/cases.jsonl                 held-out briefs
-  dataset-card.md                  generated: counts, provenance, biases
-  manifest.json                    {dataset_id, git_commit, source, versions, counts, hashes}
+cadswarm-data/
+  raw/<project>/<table>.jsonl      §6.1 export cache, reusable across builds
+  raw/<project>/source.json
+  datasets/<dataset-id>/
+    episodes/<id>.json             §6.2
+    conformance.json
+    split.json                     {train:[…], val:[…], test:[…], mode}
+    sft.jsonl                      builder examples
+    pairs.jsonl                    critic pairs
+    eval/cases.jsonl               held-out briefs
+    dataset-card.md                generated: counts, provenance, biases
+    manifest.json                  {dataset_id, git_commit, projects, counts, hashes, split}
 ```
 
-`dataset_id` is the first 12 hex of the sha256 over the sorted per-file hashes, so the same
-inputs always name the same dataset and every training run can record which one it used.
-Data never enters git; `tests/training/fixtures/` holds the only checked-in records.
+`raw/` sits beside the datasets rather than inside one, so a re-export is reused by every build
+and the manifest records the source and schema hashes it read. `dataset_id` is the first 12 hex of
+the sha256 over the sorted per-file hashes, so the same inputs always name the same dataset and
+every training run can record which one it used. Data never enters git; the tests build their
+records inline, so no fixture files are checked in.
 
 ### 6.6 Renderings
 
@@ -281,9 +285,12 @@ field, and is rendered by one function so training and inference agree.
  "state":{…},"episode":"…","signal":"correction"}
 ```
 
-Three pair sources: agent step vs the human correction that followed it; accepted-episode final
-state vs failed-episode final state (episode-level pairs, `signal: "outcome"`); and review
-findings vs the fix task that resolved them (`signal: "review"`).
+Two pair sources: a param correction (the agent's value vs the person's, `signal: "correction"`)
+and an accepted episode's final state vs a failed episode's (`signal: "outcome"`).
+
+Only a **param** correction records both sides (before and after value), so it is the only true
+step-level pair the back-catalogue proves. A property correction records what the person set but
+not what the agent had set; those become `corrected` labels and extra SFT positives, not pairs.
 
 **Eval cases (`cases.jsonl`).** One per held-out brief: `request`, initial `state` (empty for
 most), reference `final` summary, `stl_sha256` for the reference export, and the reference op
@@ -407,7 +414,7 @@ Metrics per case, aggregated per split:
 | `valid_op_rate` | ops accepted / ops attempted |
 | `rejection_rate` | `status=rejected` (lock/args violations) |
 | `completion` | reference object-name set reached (Jaccard on names, type match) |
-| `geometry` | bbox IoU, volume ratio, object type histogram distance; mesh Chamfer if `trimesh` is installed |
+| `geometry` | bbox IoU, volume ratio, object type histogram distance; mesh Chamfer if `trimesh` is installed. Box IoU is only averaged over names where both sides recorded a box — the symbolic replay has volumes but no bounds, so a missing box is `null`, not zero |
 | `printability` | the existing `check_printability` op result |
 | `critic_score` | model or heuristic score of the final state |
 | `steps`, `wall_ms` | efficiency |
@@ -432,15 +439,17 @@ and `geometry` on the held-out project with the same seed set.
 
 | Test | Asserts |
 |---|---|
-| `test_training_export.py` | pagination, column mapping, skipped source, idempotent bytes |
-| `test_training_state.py` | forward replay on a fixture; unknown object → degraded; no fabricated values |
-| `test_training_episodes.py` | golden episode from 5 synthetic ops; segmentation tie-breaks; freestyle gap split |
-| `test_training_labels.py` | correction → pair; failed op → bad; accepted brief → outcome |
-| `test_training_render.py` | row counts, prompt template single-source, project split has no leakage |
-| `test_training_eval.py` | metric math on canned worker replies (no FreeCAD) |
-| `test_training_headroom.py` | the `--check` estimator refuses an over-budget config and names the fix; ladder numbers stay ordered |
-| `test_training_redact.py` | paths/tokens/e-mails removed |
-| `test_training_package.py` | training imports no torch/FreeCAD at module import; addon packaging excludes the package |
+| `test_training_source.py` | paging by primary key, escaped quotes, a missing `host.json` |
+| `test_training_export.py` | one file per table, skipped source, the token never written, style events read |
+| `test_training_redact.py` | paths and e-mails removed |
+| `test_training_state.py` | forward replay; failed op is a no-op; unknown object → degraded; no fabricated values; conformance |
+| `test_training_labels.py` | outcome mapping, step labels, only a param correction pairs |
+| `test_training_episodes.py` | golden segmentation, explicit task beats objects, idle-gap freestyle, split modes |
+| `test_training_render.py` | row counts, single prompt contract, no split leakage, stable dataset id |
+| `test_training_metrics.py` | Jaccard, bbox IoU, volume ratio, aggregation, heuristic critic ordering |
+| `test_training_replay.py` | scripted policy reproduces the reference; refusals lower the valid rate; seed determinism |
+| `test_training_package.py` | training imports no torch/FreeCAD; both installers exclude the package |
+| `test_training_headroom.py` (Plan 3) | the `--check` estimator refuses an over-budget config |
 | `cargo test` (module) | new op columns default and round-trip; existing rows unaffected |
 
 Live check, not in CI:
@@ -480,6 +489,10 @@ is a bug in `state.py` or a documented gap in the record, not a number to wave t
 
 P0–P4 touch no app code and cannot break a running team. P5 is the only risky phase and it is
 isolated to a copied database until the rehearsal passes.
+
+**Plan 1** (`docs/superpowers/plans/2026-10-27-cad-training-pipeline.md`) implements P0–P4. P5
+and P6 get their own plans: P5 changes a live database contract and must be planned against the
+module, and P6's shape depends on the counts the first real dataset reports.
 
 ## 14. Risks
 
