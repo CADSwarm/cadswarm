@@ -36,6 +36,8 @@ pub const QUERIES: &[&str] = &[
     "feedback_recent", "list_references",
     // How flat vs curved each part is: an aesthetic shape may not be all planes.
     "surface_quality",
+    // Pictures of the model, so a text-only helper can see what it built.
+    "render_views",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
 pub const FILE_WRITES: &[&str] = &[

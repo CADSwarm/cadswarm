@@ -110,9 +110,10 @@ Work like a careful teammate:
     done, call surface_quality(topic="<what the person asked for>", names=[...]). `fails` means the part
     reads as a block model: build its main surfaces as lofts or sweeps in run_part_script (Part.makeLoft
     across 20+ stations), keep separate boxes out of the shell, and fix it before reporting done. A boxy
-    part needs none of this; call it anyway if you are unsure. The rule covers the whole model, not just
-    what you built: run surface_quality over existing parts too, and fix a failing one you are allowed to
-    touch (ask its owner or a person first).
+    part needs none of this; call it anyway if you are unsure. Before calling a shape done, and whenever
+    someone says it looks wrong, call render_views and open the PNGs: numbers cannot show a black hole or a
+    part in the wrong place. The rule covers the whole model, not just what you built: run surface_quality
+    over existing parts too, and fix a failing one you are allowed to touch (ask its owner or a person first).
     When your person says a model looks wrong, relay their words with record_feedback(by="person") and
     attach any photo with add_reference; before rebuilding, call model_feedback and look at the reference
     images.
@@ -513,6 +514,21 @@ def _save_images(paths, subject):
         if isinstance(saved, dict) and saved.get("image"):
             out.append(saved["image"])
     return out
+
+
+@mcp.tool()
+def render_views(names: list[str] | None = None, views: list[str] | None = None, size: int = 900,
+                 deviation: float = 1.5) -> dict:
+    """Pictures of the model (or `names`) as orthographic clay PNGs you can open and look at.
+
+    Use it before calling a shape done and whenever someone says it looks wrong: front, rear, left, right,
+    top and three_quarter by default. A 1 m bar is drawn at the bottom, so a side view can be compared with
+    a reference photo at a known scale. Returns the file paths (under renders/ in the project folder on the
+    host computer) and the triangle count; `deviation` is the tessellation tolerance in mm.
+    """
+    return call("POST", "/render", {"names": names or [], "views": views or None,
+                                    "size": int(size or 900), "deviation": float(deviation or 1.5)},
+                doing="rendering the model", targets=names)
 
 
 @mcp.tool()

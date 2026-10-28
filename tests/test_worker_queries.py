@@ -79,3 +79,11 @@ def test_a_lofted_shell_has_curved_faces(worker):
     with pytest.raises(WorkerError) as err:
         worker.call("surface_quality", {"names": ["Nope"]})
     assert err.value.code == "not_found"
+
+
+def test_render_views_writes_pngs_next_to_the_model(worker):
+    r = worker.call("render_views", {"names": ["Small"], "views": ["front"], "size": 240})["result"]
+    assert r["files"] and r["files"][0].endswith("front.png")
+    with open(r["files"][0], "rb") as f:
+        assert f.read(8) == b"\x89PNG\r\n\x1a\n"
+    assert r["triangles"] >= 12

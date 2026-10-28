@@ -321,7 +321,8 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
          6. Reference: a named, real product is googleable (a specific car model, phone, appliance, connector)\n\
             and must be judged against the real thing. Call list_references(subject) first. If none exists,\n\
             search the web yourself for a clear photo and save it with add_reference(subject=..., image_url=...\n\
-            , dimensions=...), then list_references and open the saved file. Compare EVERY part against that\n\
+            , dimensions=...), then list_references and open the saved file. Call render_views\n\
+            (front, left, three_quarter at least) and open the PNGs too. Compare EVERY part against that\n\
             photo: silhouette, proportions, feature placement and the panel breaks. A clear mismatch is a\n\
             problem (\"style: <part> does not match the <product> reference: <what differs>\"), naming the\n\
             reference. If it is not a named real product (a custom bracket, a one-off housing, a generic\n\
@@ -470,6 +471,7 @@ mod tests {
         assert!(p.contains("organic") && p.contains("flat faces"), "{p}");
         assert!(p.contains("list_references") && p.contains("named, real product"), "{p}");
         assert!(p.contains("googleable") && p.contains("search the web"), "{p}");
+        assert!(p.contains("render_views"), "{p}");
         assert!(p.contains("EVERY part") && p.contains("do NOT search"), "{p}");
         assert!(p.contains("7. Team design style"), "the style step still follows: {p}");
     }

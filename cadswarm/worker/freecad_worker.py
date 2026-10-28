@@ -32,6 +32,12 @@ import traceback
 
 import sandbox  # noqa: E402  (next to this file; the worker runs as a plain script)
 
+# The package root, so `cadswarm.render` (the clay renderer) is importable even when the worker is
+# started outside the host (tests, a direct run) and PYTHONPATH does not already include it.
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, PACKAGE_ROOT)
+
 FREECAD_BIN = os.environ.get("CADSWARM_FREECAD_BIN")
 
 # Where `import FreeCAD` can come from: next to FreeCAD's Python (Windows), its sibling lib folder
@@ -1084,11 +1090,69 @@ def q_surface_quality(a):
     return {"objects": out}
 
 
+def _render_module():
+    """The clay renderer, loaded by path: an editable install can otherwise shadow `cadswarm`."""
+    import importlib.util
+    path = os.path.join(PACKAGE_ROOT, "cadswarm", "render.py")
+    spec = importlib.util.spec_from_file_location("cadswarm_render", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _auto_deviation():
+    """A tessellation tolerance sized to the model, so the default render fits the triangle budget.
+
+    FreeCAD caches a shape's triangulation, so re-tessellating coarser in the same process does not
+    help: pick the tolerance before the first call instead.
+    """
+    box = None
+    for o in doc.Objects:
+        sh = getattr(o, "Shape", None)
+        if sh is not None and not sh.isNull() and sh.Faces:
+            box = sh.BoundBox if box is None else box.united(sh.BoundBox)
+    if box is None:
+        return 2.0
+    diagonal = math.sqrt(box.XLength ** 2 + box.YLength ** 2 + box.ZLength ** 2)
+    return max(1.0, min(50.0, diagonal / 700.0))
+
+
+def q_render_views(a):
+    """Orthographic clay renders (PNG) so a helper or person can see the model, not just its numbers."""
+    render_meshes = _render_module().render_meshes
+    want = set(a.get("names") or [])
+    deviation = float(a.get("deviation") or _auto_deviation())
+    meshes = []
+    for o in doc.Objects:
+        sh = getattr(o, "Shape", None)
+        if sh is None or sh.isNull() or not sh.Faces:
+            continue
+        if want and o.Name not in want and o.Label not in want:
+            continue
+        verts, facets = sh.tessellate(deviation)
+        meshes.append((o.Name, verts, facets))
+    total = sum(len(m[2]) for m in meshes)
+    if not meshes:
+        raise OpError("not_found", f"No solid geometry in {sorted(want) or 'the model'}")
+    if total > 950_000:
+        raise OpError("bad_args", f"{total} triangles at deviation {deviation:.1f} mm is too many for a "
+                                 f"render (950000 max); pass a coarser deviation, e.g. {deviation * 2:.1f}")
+    root = os.path.dirname(os.path.abspath(doc.FileName or "model.FCStd"))
+    out_dir = os.path.join(root, "renders", time.strftime("%Y-%m-%d %H%M%S"))
+    try:
+        files = render_meshes(meshes, a.get("views") or None, int(a.get("size") or 900), out_dir)
+    except ValueError as e:
+        raise OpError("bad_args", str(e))
+    return {"files": files, "dir": out_dir, "objects": [m[0] for m in meshes],
+            "triangles": total, "deviation": round(deviation, 2)}
+
+
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
            "faces": q_faces,
            "surface_quality": q_surface_quality,
+           "render_views": q_render_views,
            "mesh": q_mesh, "printability": q_printability,
            "analyze_component": q_analyze_component,
            "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],

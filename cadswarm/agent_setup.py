@@ -64,6 +64,8 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
 - For a real, named thing (a car model, a phone, a connector) find reference images and published
   dimensions first: `add_reference` (an `image_url` or a photo your person sent), then `list_references`
   and open them. Never invent proportions for a named product.
+- `render_views` gives you PNGs of the model (front, side, top, three-quarter). Open them before calling
+  a shape done: the numbers cannot show a hole, a floating part or a wrong silhouette.
 - Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
   from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
   you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you

@@ -167,6 +167,8 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/style/learn", self.style_learn),
             # How flat vs curved a part is: an aesthetic shape may not be a pile of planes.
             ("POST", r"/surface", self.surface_quality),
+            # Pictures of the model, so a text-only helper can see what it built.
+            ("POST", r"/render", self.render_views),
             # A person's verdict on how the model looks, and the look it should match.
             ("POST", r"/feedback", self.feedback_record), ("GET", r"/feedback", self.feedback_recent),
             ("POST", r"/references", self.add_reference), ("GET", r"/references", self.list_references),
@@ -1116,6 +1118,9 @@ class SpaceHub(LibraryRoutes):
 
     def surface_quality(self, body):
         return self.run_op("surface_quality", {"names": body.get("names") or []})
+
+    def render_views(self, body):
+        return self.run_op("render_views", {k: v for k, v in (body or {}).items() if v is not None})
 
     def feedback_record(self, body):
         return self.run_op("record_feedback", dict(body or {}))

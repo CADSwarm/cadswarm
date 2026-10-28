@@ -246,3 +246,12 @@ def test_add_reference_refuses_a_url_that_is_not_an_image(monkeypatch, session):
 def test_add_reference_reports_a_missing_file_instead_of_raising(session):
     got = mcp_server.add_reference("car", image_path="C:/nope/none.png")
     assert got["code"] == "bad_args" and "no file" in got["error"]
+
+def test_render_views_proxies_the_worker_query(session):
+    posts = []
+    session.client.post = lambda path, body=None: posts.append((path, body)) or {
+        "files": ["renders/2026-10-27 2300/front.png"]}
+    got = mcp_server.render_views(["BodyShell"], views=["front"], size=400)
+    assert got["files"]
+    assert posts[0][0] == "/render" and posts[0][1]["size"] == 400
+    assert posts[0][1]["views"] == ["front"] and posts[0][1]["names"] == ["BodyShell"]
