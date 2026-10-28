@@ -1,18 +1,24 @@
 """The object table after every step, reconstructed from the op log alone.
 
 A value the worker never reported stays `known: False` and `None`: the replay is useful precisely
-because it does not guess. A failed op is a no-op, because the worker rolls it back.
+because it does not guess. A failed op is a no-op, because the worker rolls it back. The shared
+`Params` sheet is seeded because the worker creates it before the first op is logged.
 """
 import re
 
+PARAMS = "Params"
+PARAMS_TYPE = "Spreadsheet::Sheet"
+MESH_TYPE = "Mesh::Feature"
 PRIMITIVE_TYPE = {"box": "Part::Box", "cylinder": "Part::Cylinder", "sphere": "Part::Sphere",
                   "cone": "Part::Cone", "torus": "Part::Torus"}
 BOOLEAN_TYPE = {"cut": "Part::Cut", "fuse": "Part::Fuse", "common": "Part::Common"}
+FEATURE_OPS = {"create_extrusion", "run_part_script", "insert_component", "insert_standard_part"}
 FIELDS = ("created", "modified", "deleted", "recomputed", "broken")
 
 
 def empty():
-    return {"objects": {}, "params": {}}
+    return {"objects": {PARAMS: {"type": PARAMS_TYPE, "rev": 1, "known": True, "volume": None}},
+            "params": {}}
 
 
 def clone(state):
@@ -31,11 +37,17 @@ def number(value):
 
 
 def type_of(op, args):
+    """The type this op creates, or None when the log does not say. Never a guess."""
+    kind = str(args.get("kind") or "").lower()
     if op == "create_primitive":
-        return PRIMITIVE_TYPE.get(args.get("kind"), "Part::Feature")
+        return PRIMITIVE_TYPE.get(kind)
     if op == "boolean":
-        return BOOLEAN_TYPE.get(args.get("kind"), "Part::Feature")
-    return "Part::Feature"
+        return BOOLEAN_TYPE.get(kind)
+    if op == "insert_mesh":
+        return MESH_TYPE
+    if op in FEATURE_OPS:
+        return "Part::Feature"
+    return None
 
 
 def touched(step):
@@ -50,23 +62,34 @@ def apply(state, step):
     result = step.get("result") or {}
     args = step.get("args") or {}
     created = result.get("created") or []
+    payload = result.get("result") or {}
+    volume = payload.get("volume") if len(created) == 1 else None
     unknown = []
+
     for name in result.get("deleted") or []:
         if state["objects"].pop(name, None) is None:
             unknown.append(name)
-    payload = result.get("result") or {}
+
     for name in created:
+        created_type = type_of(step.get("op"), args)
         state["objects"][name] = {
-            "type": type_of(step.get("op"), args), "rev": 0,
-            # A script's objects are only described by the snapshot the worker never took.
-            "known": step.get("op") != "run_part_script",
-            "volume": payload.get("volume") if len(created) == 1 else None,
+            "type": created_type, "rev": 0,
+            # A script or a component's shape is only described by a snapshot the worker never took.
+            "known": created_type is not None and step.get("op") != "run_part_script",
+            "volume": volume,
         }
-    for name in (result.get("modified") or []) + (result.get("recomputed") or []):
-        if name in state["objects"]:
-            state["objects"][name]["rev"] = state["objects"][name].get("rev", 0) + 1
-        else:
+
+    changed = list(dict.fromkeys((result.get("modified") or []) + (result.get("recomputed") or [])))
+    for name in changed:
+        if name not in state["objects"]:
             unknown.append(name)
+            continue
+        obj = state["objects"][name]
+        obj["rev"] = obj.get("rev", 0) + 1
+        if isinstance(payload.get("volume"), (int, float)):
+            obj["volume"] = payload["volume"]
+            obj["known"] = True
+
     if step.get("op") == "set_param" and args.get("alias"):
         state["params"][args["alias"]] = {"value": args.get("value"), "num": number(args.get("value"))}
     return unknown
@@ -99,11 +122,13 @@ def conformance(state, cad_objects, params):
     mine = state["objects"]
     missing = sorted(set(live) - set(mine))
     extra = sorted(set(mine) - set(live))
-    type_bad = sorted(n for n, row in live.items()
-                      if n in mine and row.get("type_id") != mine[n]["type"])
+    type_bad = sorted(name for name, row in live.items()
+                      if name in mine and mine[name]["type"] is not None
+                      and row.get("type_id") != mine[name]["type"])
     volume_bad = []
-    for name, row in live.items():
-        got, live_volume = mine.get(name) or {}, row.get("volume") or 0
+    for name in sorted(live):
+        row, got = live[name], mine.get(name) or {}
+        live_volume = row.get("volume") or 0
         if not got.get("known") or not got.get("volume") or not live_volume:
             continue
         if abs(got["volume"] - live_volume) > 0.01 * live_volume:
