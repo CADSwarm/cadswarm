@@ -80,7 +80,7 @@ if (SamePath $Here $Dest) {
     if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     robocopy $Here $Dest /E /NFL /NDL /NJH /NJS /NP `
-        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target `
+        /XD .git .venv __pycache__ .pytest_cache cadswarm-data "$Here\cadswarm\training" exports .cadswarm *.egg-info node_modules target `
         /XF *.pyc | Out-Null
     if ($LASTEXITCODE -ge 8) { Say "Copying CADSwarm into FreeCAD failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
     # The team server's database module: a local build if there is one, else the module the installer
