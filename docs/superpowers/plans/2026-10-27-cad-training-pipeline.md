@@ -2083,6 +2083,15 @@ def test_geometry_reports_none_when_no_box_or_volume_was_recorded():
     assert empty["bbox"] is None and empty["volume"] is None
 
 
+def test_a_name_with_no_recorded_volume_does_not_drag_the_average_down():
+    """Params always exists on both sides and never has a volume: it must not score 0."""
+    view = {"objects": {"Params": {"volume": None}, "A": {"volume": 10.0}}}
+    got = metrics.geometry(view, view)
+    assert got["volume"] == 1.0
+    assert metrics.geometry({"objects": {"Params": {"volume": None}}},
+                            {"objects": {"Params": {"volume": None}}})["volume"] is None
+
+
 def test_aggregate_averages_and_ignores_missing_values():
     got = metrics.aggregate([{"completion": 1.0, "geometry": {"bbox": 1.0}},
                              {"completion": 0.0, "geometry": {"bbox": 0.0}}])
@@ -2149,7 +2158,8 @@ def geometry(reference, candidate):
     boxes = [bbox_iou((ref[n] or {}).get("bbox"), (got[n] or {}).get("bbox")) for n in shared
              if (ref[n] or {}).get("bbox") and (got[n] or {}).get("bbox")]
     volumes = [volume_ratio((ref[n] or {}).get("volume"), (got[n] or {}).get("volume"))
-               for n in shared]
+               for n in shared
+               if (ref[n] or {}).get("volume") and (got[n] or {}).get("volume")]
     return {"names": jaccard(ref, got),
             "bbox": round(sum(boxes) / len(boxes), 4) if boxes else None,
             "volume": round(sum(volumes) / len(volumes), 4) if volumes else None}
@@ -2188,14 +2198,14 @@ def heuristic(final, printable=None):
     score = 0.4 * known / len(objects)
     score += 0.4 * (1.0 if printable else 0.0) if printable is not None else 0.2
     share = curved.get("curved_share") if isinstance(curved, dict) else None
-    score += 0.2 * (0.5 if share is None else min(float(share) / 0.2, 1.0))
-    return round(min(score, 1.0), 3)
+    score += 0.2 * (0.5 if share is None else min(max(float(share), 0.0) / 0.2, 1.0))
+    return round(max(0.0, min(score, 1.0)), 3)
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_metrics.py -v`
-Expected: PASS (7 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 
