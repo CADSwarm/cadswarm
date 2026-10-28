@@ -2195,7 +2195,7 @@ def heuristic(final, printable=None):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_metrics.py -v`
-Expected: PASS (8 passed).
+Expected: PASS (7 passed).
 
 - [ ] **Step 5: Commit**
 
