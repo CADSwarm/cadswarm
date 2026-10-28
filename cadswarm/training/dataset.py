@@ -1,34 +1,39 @@
 """Build one content-addressed dataset directory from an export directory.
 
 The id is a hash of the files, so the same inputs always produce the same directory name and a
-training run can name exactly what it saw. The card and the manifest are the last two files
-written; neither is part of the id.
+training run can name exactly what it saw. A raw project that cannot be read, is skipped, or is a
+leftover `*.new`/`*.old` directory from an interrupted export is recorded in `skipped`, never
+fatal.
 """
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 
-from ..client import save_json
 from . import SCHEMA_VERSION, render, split as split_mod
 from . import episodes as episodes_mod
 from . import state
 
 TABLES = ("member", "cad_object", "param", "op", "task", "brief", "review", "team_event",
           "style_events")
+SKIP_SUFFIXES = (".new", ".old")
 
 
-def _read_raw(raw_dir, project_dir):
-    out = {}
+def _read_source(raw_dir, directory):
+    with open(os.path.join(raw_dir, directory, "source.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _read_tables(raw_dir, directory, source):
+    out = {"source": source}
     for name in TABLES:
-        path = os.path.join(raw_dir, project_dir, name + ".jsonl")
+        path = os.path.join(raw_dir, directory, name + ".jsonl")
         if not os.path.exists(path):
             continue
         with open(path, encoding="utf-8") as f:
             out[name] = [json.loads(line) for line in f if line.strip()]
-    with open(os.path.join(raw_dir, project_dir, "source.json"), encoding="utf-8") as f:
-        out["source"] = json.load(f)
     return out
 
 
@@ -54,29 +59,44 @@ def _git_commit():
 
 def build(raw_dir, out_root):
     """Read every exported project, build episodes, render, and write the dataset."""
-    projects, all_episodes, conformance = {}, [], {}
+    os.makedirs(out_root, exist_ok=True)
+    projects, all_episodes, conformance, skipped, raw_info = {}, [], {}, [], {}
     names = sorted(d for d in os.listdir(raw_dir)
-                   if os.path.isdir(os.path.join(raw_dir, d)))
+                   if os.path.isdir(os.path.join(raw_dir, d)) and not d.startswith(".")
+                   and not d.endswith(SKIP_SUFFIXES))
     for directory in names:
-        raw = _read_raw(raw_dir, directory)
-        source = raw.get("source") or {}
-        if source.get("status") != "ok":
+        try:
+            source = _read_source(raw_dir, directory)
+        except (OSError, ValueError) as e:
+            skipped.append({"project": directory, "reason": f"no readable source.json: {e}"})
+            continue
+        if (source or {}).get("status") != "ok":
+            skipped.append({"project": source.get("project") or directory,
+                            "reason": str((source or {}).get("status") or "no status")})
+            continue
+        try:
+            raw = _read_tables(raw_dir, directory, source)
+        except (OSError, ValueError) as e:
+            skipped.append({"project": source.get("project") or directory,
+                            "reason": f"unreadable table: {e}"})
             continue
         project = source.get("project") or directory
         found = episodes_mod.build_episodes(raw, project)
         if not found:
+            skipped.append({"project": project, "reason": "no episodes"})
             continue
         all_episodes += found
         projects[project] = {"episodes": len(found),
-                             "steps": sum(len(e["steps"]) for e in found),
-                             "source": source}
+                             "steps": sum(len(e["steps"]) for e in found)}
+        raw_info[project] = {"schema_sha256": source.get("schema_sha256", ""),
+                             "tables": source.get("tables", {})}
         _, final, _ = episodes_mod.replay_project(raw)
         conformance[project] = state.conformance(final, raw.get("cad_object") or [],
                                                  raw.get("param") or [])
 
     assignment = split_mod.assign(all_episodes)
-    sft = render.sft_rows(all_episodes)
-    pairs = render.pair_rows(all_episodes)
+    sft = render.sft_rows(all_episodes, assignment["train"])
+    pairs = render.pair_rows(all_episodes, assignment["train"])
     cases = render.case_rows(all_episodes, assignment)
     biases = []
     if all_episodes:
@@ -88,44 +108,42 @@ def build(raw_dir, out_root):
     if assignment["mode"] == "temporal":
         biases.append("temporal split: steps from one project appear in train and test")
 
-    # The id covers the content, so it is computed from a staging copy before the manifest exists.
-    staging = os.path.join(out_root, ".staging")
-    os.makedirs(staging, exist_ok=True)
-    os.makedirs(os.path.join(staging, "episodes"), exist_ok=True)
-    os.makedirs(os.path.join(staging, "eval"), exist_ok=True)
-    for episode in all_episodes:
-        save_json(os.path.join(staging, "episodes", episode["id"].replace("/", "__") + ".json"),
-                  episode)
-    render.write_jsonl(os.path.join(staging, "sft.jsonl"), sft)
-    render.write_jsonl(os.path.join(staging, "pairs.jsonl"), pairs)
-    render.write_jsonl(os.path.join(staging, "eval", "cases.jsonl"), cases)
-    save_json(os.path.join(staging, "split.json"), assignment)
-    save_json(os.path.join(staging, "conformance.json"), conformance)
-    dataset_id = _hash_tree(staging)[:12]
+    staging = tempfile.mkdtemp(dir=out_root, prefix=".build-")
+    try:
+        os.makedirs(os.path.join(staging, "episodes"), exist_ok=True)
+        os.makedirs(os.path.join(staging, "eval"), exist_ok=True)
+        for episode in all_episodes:
+            render.write_json(os.path.join(staging, "episodes",
+                                           episode["id"].replace("/", "__") + ".json"), episode)
+        render.write_jsonl(os.path.join(staging, "sft.jsonl"), sft)
+        render.write_jsonl(os.path.join(staging, "pairs.jsonl"), pairs)
+        render.write_jsonl(os.path.join(staging, "eval", "cases.jsonl"), cases)
+        render.write_json(os.path.join(staging, "split.json"), assignment)
+        render.write_json(os.path.join(staging, "conformance.json"), conformance)
+        dataset_id = _hash_tree(staging)[:12]
 
-    final_dir = os.path.join(out_root, dataset_id)
-    os.makedirs(final_dir, exist_ok=True)
-    for name in ("episodes", "eval"):
-        os.makedirs(os.path.join(final_dir, name), exist_ok=True)
-    for entry in sorted(os.listdir(staging)):
-        src = os.path.join(staging, entry)
-        dst = os.path.join(final_dir, entry)
-        if os.path.isdir(src):
-            for inner in sorted(os.listdir(src)):
-                os.replace(os.path.join(src, inner), os.path.join(dst, inner))
-        else:
-            os.replace(src, dst)
-    shutil.rmtree(staging, ignore_errors=True)
+        final_dir = os.path.join(out_root, dataset_id)
+        os.makedirs(final_dir, exist_ok=True)
+        for entry in sorted(os.listdir(staging)):
+            src = os.path.join(staging, entry)
+            dst = os.path.join(final_dir, entry)
+            if os.path.isdir(src):
+                os.makedirs(dst, exist_ok=True)
+                for inner in sorted(os.listdir(src)):
+                    os.replace(os.path.join(src, inner), os.path.join(dst, inner))
+            else:
+                os.replace(src, dst)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
     manifest = {"dataset_id": dataset_id, "schema_version": SCHEMA_VERSION,
-                "git_commit": _git_commit(), "projects": {k: {"episodes": v["episodes"],
-                                                              "steps": v["steps"]}
-                                                          for k, v in projects.items()},
+                "git_commit": _git_commit(), "projects": projects, "raw": raw_info,
                 "counts": {"episodes": len(all_episodes), "sft_rows": len(sft),
                            "pairs": len(pairs), "eval_cases": len(cases)},
-                "split": assignment, "conformance": conformance, "biases": biases}
+                "split": assignment, "conformance": conformance, "biases": biases,
+                "skipped": skipped}
     with open(os.path.join(final_dir, "dataset-card.md"), "w", encoding="utf-8", newline="\n") as f:
         f.write(render.card(manifest))
-    save_json(os.path.join(final_dir, "manifest.json"), manifest)
+    render.write_json(os.path.join(final_dir, "manifest.json"), manifest)
     manifest["path"] = final_dir
     return manifest
