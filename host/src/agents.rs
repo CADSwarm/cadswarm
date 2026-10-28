@@ -294,7 +294,7 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
     let style_check = if style.trim().is_empty() {
         String::new()
     } else {
-        format!("\n6. Team design style: the rules below are how this team designs. Each part that breaks one is a \
+        format!("\n7. Team design style: the rules below are how this team designs. Each part that breaks one is a \
                  problem; write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n{style}\n")
     };
     format!(
@@ -315,6 +315,10 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
             \"style: organic shape built from flat faces (<n> of <m> faces are flat)\" and file a fix task for\n\
             it. A separate box roof or box pillars on a body are problems too. Boxy parts (brackets, plates,\n\
             enclosures) are fine.\n\
+         6. Reference: if the brief names a real product (a specific car model, a phone, a connector), call\n\
+            list_references(subject) and check at least one reference exists, with its published dimensions.\n\
+            None is a problem: \"style: named product modelled with no saved reference\". Use those dimensions\n\
+            in the fit check, not invented proportions.\n\
          {style_check}\
          For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
          precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
@@ -457,7 +461,8 @@ mod tests {
         let p = review_prompt("b_x", "model a car body", "", [200.0, 200.0, 200.0], 1, "- Car bodies are lofted.");
         assert!(p.contains("surface_quality"), "{p}");
         assert!(p.contains("organic") && p.contains("flat faces"), "{p}");
-        assert!(p.contains("6. Team design style"), "the style step still follows: {p}");
+        assert!(p.contains("list_references") && p.contains("named product"), "{p}");
+        assert!(p.contains("7. Team design style"), "the style step still follows: {p}");
     }
 
     #[test]

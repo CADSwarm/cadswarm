@@ -203,5 +203,46 @@ def test_add_reference_reads_a_local_image_and_posts_it(monkeypatch, session, tm
 
 
 def test_add_reference_refuses_a_missing_file(session):
-    with pytest.raises(ValueError):
-        mcp_server.add_reference("car", "C:/nope/none.png")
+    got = mcp_server.add_reference("car", "C:/nope/none.png")
+    assert got["code"] == "bad_args" and "no file" in got["error"]
+
+
+def test_add_reference_downloads_an_image_url_with_its_credit(monkeypatch, session):
+    import urllib.request
+    class Response:
+        headers = {"Content-Type": "image/png"}
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self, n):
+            return b"\x89PNG\r\n\x1a\n" + b"0" * 16
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: Response())
+    posts = []
+    session.client.post = lambda path, body=None: posts.append((path, body)) or {"image": "reference/car/x.png"}
+    got = mcp_server.add_reference("car", image_url="https://example.com/is350-front.png", label="front",
+                                   credit="press photo", license="CC BY 4.0")
+    assert got["image"].endswith(".png")
+    body = posts[0][1]
+    assert body["filename"] == "is350-front.png"
+    assert body["source_url"] == "https://example.com/is350-front.png"
+    assert body["credit"] == "press photo" and body["license"] == "CC BY 4.0"
+
+
+def test_add_reference_refuses_a_url_that_is_not_an_image(monkeypatch, session):
+    class Response:
+        headers = {"Content-Type": "text/html"}
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self, n):
+            return b"<html>"
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: Response())
+    got = mcp_server.add_reference("car", image_url="https://example.com/page")
+    assert got["code"] == "bad_args" and "PNG, JPEG or WebP" in got["error"]
+
+def test_add_reference_reports_a_missing_file_instead_of_raising(session):
+    got = mcp_server.add_reference("car", image_path="C:/nope/none.png")
+    assert got["code"] == "bad_args" and "no file" in got["error"]

@@ -116,6 +116,11 @@ Work like a careful teammate:
     When your person says a model looks wrong, relay their words with record_feedback(by="person") and
     attach any photo with add_reference; before rebuilding, call model_feedback and look at the reference
     images.
+16. Reference first. When the thing has a real, named counterpart (a car model, a phone, a connector, a
+    standard part), look up reference images and published dimensions before you model it: save them with
+    add_reference (image_url for one on the web, image_path for a photo your person sent), then open the
+    files with list_references. Never invent proportions for a named product. In a review, a named object
+    with no saved reference is a problem.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 # The team is joined in the background while the client already has our tools. A tool called before the join
@@ -458,6 +463,7 @@ def surface_quality(names: list[str] | None = None, topic: str = "", intent: str
 
 
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
 
 
 def _read_image(path):
@@ -473,6 +479,25 @@ def _read_image(path):
     if not data:
         raise ValueError(f"{path} is empty")
     return base64.b64encode(data).decode()
+
+
+def _download_image(url):
+    """A reference image straight from the web, as (filename, base64). Refuses anything but an image."""
+    import base64
+    import urllib.parse
+    import urllib.request
+    req = urllib.request.Request(str(url), headers={"User-Agent": "CADSwarm/0.1 reference image"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        kind = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if kind not in IMAGE_TYPES:
+            raise ValueError(f"{url} is {kind or 'not an image'}; use a PNG, JPEG or WebP image URL")
+        data = r.read(MAX_REFERENCE_BYTES + 1)
+    if len(data) > MAX_REFERENCE_BYTES:
+        raise ValueError("Reference images are limited to 20 MB")
+    name = os.path.basename(urllib.parse.urlparse(str(url)).path) or "reference"
+    if not os.path.splitext(name)[1]:
+        name += IMAGE_TYPES[kind]
+    return name, base64.b64encode(data).decode()
 
 
 def _save_images(paths, subject):
@@ -525,19 +550,33 @@ def model_feedback(subject: str = "", limit: int = 10) -> dict:
 
 
 @mcp.tool()
-def add_reference(subject: str, image_path: str = "", label: str = "", notes: str = "",
-                  dimensions: str = "", source_url: str = "") -> dict:
-    """Save the look a design should match: a photo, sketch or render, plus what it is.
+def add_reference(subject: str, image_path: str = "", image_url: str = "", label: str = "", notes: str = "",
+                  dimensions: str = "", source_url: str = "", credit: str = "", license: str = "") -> dict:
+    """Save the look a design should match: a photo, render or blueprint, plus what it is and where it came from.
 
-    `subject` is the kind of thing ("car", "helmet"); `dimensions` free text like "4710 x 1840 x 1435 mm";
-    `image_path` is a local file (PNG/JPEG/WebP, 20 MB) on your machine. The image goes into the project so
+    For a named, real object (a 2021 Lexus IS 350 F Sport, an iPhone, a NEMA 17 motor) look up reference
+    images and published dimensions before you model it, then save them here. `subject` is the kind of thing
+    ("car", "helmet"); `dimensions` free text like "4710 x 1840 x 1435 mm". Pass `image_path` for a local file
+    or a photo your person sent, or `image_url` for one on the web (the server downloads it; PNG/JPEG/WebP,
+    20 MB). `credit` and `license` keep an online image's attribution with it. It goes into the project so
     every teammate can open it, and list_references gives the path back."""
-    if not image_path:
-        return {"error": "image_path is required", "code": "bad_args"}
+    if not image_path and not image_url:
+        return {"error": "image_path or image_url is required", "code": "bad_args"}
+    if image_url:
+        try:
+            name, image_base64 = _download_image(image_url)
+        except (OSError, ValueError) as e:
+            return {"error": str(e), "code": "bad_args"}
+        source_url = source_url or image_url
+    else:
+        try:
+            name, image_base64 = os.path.basename(image_path), _read_image(image_path)
+        except (OSError, ValueError) as e:
+            return {"error": str(e), "code": "bad_args"}
     return call("POST", "/references", {"subject": subject, "label": label, "notes": notes,
                                         "dimensions": dimensions, "source_url": source_url,
-                                        "filename": os.path.basename(image_path),
-                                        "image_base64": _read_image(image_path)})
+                                        "credit": credit, "license": license,
+                                        "filename": name, "image_base64": image_base64})
 
 
 @mcp.tool()

@@ -497,3 +497,16 @@ def test_a_reference_refuses_a_huge_or_unsupported_file(tmp_path):
     gif = helper.handle(p, {"id": 2, "op": "add_reference", "args": {
         "subject": "car", "filename": "x.gif", "image_base64": base64.b64encode(b"GIF89a").decode()}})
     assert not gif["ok"] and gif["code"] == "bad_args"
+
+def test_a_reference_keeps_its_credit_and_licence(tmp_path):
+    import base64
+    p = project(tmp_path)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    helper.handle(p, {"id": 1, "op": "add_reference", "args": {
+        "subject": "car", "label": "front", "filename": "f.png",
+        "image_base64": base64.b64encode(png).decode(), "credit": "Lexus press",
+        "license": "press use", "source_url": "https://example.com/x"}})
+    listed = helper.handle(p, {"id": 2, "op": "list_references", "args": {"subject": "car"}})
+    item = listed["result"]["references"][0]
+    assert item["credit"] == "Lexus press" and item["license"] == "press use"
+    assert item["source_url"] == "https://example.com/x"

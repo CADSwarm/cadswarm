@@ -323,7 +323,8 @@ def add_reference(p, a):
              if a.get("image_base64") else None)
     meta = {"subject": _slug(subject), "label": str(a.get("label") or ""),
             "notes": str(a.get("notes") or ""), "dimensions": str(a.get("dimensions") or ""),
-            "source_url": str(a.get("source_url") or ""), "image": image,
+            "source_url": str(a.get("source_url") or ""), "credit": str(a.get("credit") or ""),
+            "license": str(a.get("license") or ""), "image": image,
             "added_by": _author(a), "at": p.clock()}
     path = p.files.save(
         f"reference/{_slug(subject)}/{_slug(meta['label'] or 'reference')}-{int(p.clock())}.json", _author(a),
