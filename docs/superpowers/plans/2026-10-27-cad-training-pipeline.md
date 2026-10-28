@@ -1555,12 +1555,22 @@ git commit -m "feat(training): episode segmentation and project split"
 - Test: `tests/test_training_render.py`
 
 **Interfaces:**
-- Consumes: `episodes.build_episodes`, `split.assign`, `state.replay`, `state.conformance`, `labels.pairs`.
+- Consumes: `episodes.build_episodes`, `episodes.replay_project`, `split.assign`, `state.conformance`, `labels.pairs`.
 - Produces: `prompts.SYSTEM: str`; `prompts.render_request(request, summary, previous) -> str`;
-  `prompts.render_assistant(op, args) -> str`;
-  `render.sft_rows(episodes) -> list[dict]`; `render.pair_rows(episodes) -> list[dict]`;
-  `render.case_rows(episodes, split) -> list[dict]`; `render.card(project) -> str`;
-  `dataset.build(raw_dir, out_root) -> dict` (the manifest).
+  `prompts.render_assistant(op, args) -> str`; `render.sft_rows(episodes, train_ids) -> list[dict]`;
+  `render.pair_rows(episodes, train_ids) -> list[dict]`;
+  `render.case_rows(episodes, split) -> list[dict]`; `render.card(manifest) -> str`;
+  `render.write_json(path, value)`; `dataset.build(raw_dir, out_root) -> dict` (the manifest).
+
+**Three rules this task exists to enforce.**
+
+1. **Only training-split episodes become training rows.** Rendering `sft.jsonl` from every episode
+   while also holding episodes out for evaluation measures memorisation, not learning.
+2. **`raw/` is untrusted.** A directory without a readable `source.json`, a skipped source, or a
+   `*.new`/`*.old` leftover from an interrupted export is ignored and recorded, never fatal.
+3. **The rendered prompt is bounded.** A large brief or a wide param sheet must not produce a
+   megabyte user message duplicated once per step; the op contract must also name every op that
+   appears in real logs.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1570,16 +1580,16 @@ git commit -m "feat(training): episode segmentation and project split"
 import json
 
 from cadswarm.training import dataset, prompts, render
-from cadswarm.training import episodes as episodes_mod
 
 
-def make_episode(ident, outcome, op_name="create_primitive"):
-    step = {"index": 0, "op_id": "op_1", "at_ms": 1, "actor": {"id": 1, "name": "a", "kind": "human"},
+def make_episode(ident, outcome, op_name="create_primitive", project="P", first_ms=1):
+    step = {"index": 0, "op_id": "op_1", "at_ms": first_ms,
+            "actor": {"id": 1, "name": "a", "kind": "human"},
             "op": op_name, "args": {"name": "Base", "kind": "box"}, "status": "done",
             "error_code": "", "result": {"result": {}, "created": ["Base"], "modified": [],
                                          "deleted": [], "recomputed": [], "broken": []},
             "state_before": {"objects": {}, "params": {}}, "state_confidence": "full"}
-    return {"id": ident, "project": "P", "attribution": "freestyle", "first_ms": 1,
+    return {"id": ident, "project": project, "attribution": "freestyle", "first_ms": first_ms,
             "request": {"text": "build it", "board": "", "plan_json": {}},
             "segments": [], "steps": [step], "corrections": [],
             "review": None, "feedback": [],
@@ -1588,12 +1598,19 @@ def make_episode(ident, outcome, op_name="create_primitive"):
             "warnings": []}
 
 
-def test_the_prompt_is_one_stable_contract():
-    assert "create_extrusion" in prompts.SYSTEM and '"op"' in prompts.SYSTEM
-    text = prompts.render_request({"text": "make a lid", "plan_json": {}},
-                                  {"objects": [], "objects_total": 0, "params": {}}, [])
-    assert "make a lid" in text and text == prompts.render_request(
-        {"text": "make a lid", "plan_json": {}}, {"objects": [], "objects_total": 0, "params": {}}, [])
+def test_the_prompt_names_every_op_that_real_logs_contain():
+    for op in ("create_extrusion", "boolean", "set_param", "run_part_script",
+               "insert_component", "insert_standard_part", "insert_mesh"):
+        assert op in prompts.SYSTEM
+
+
+def test_the_prompt_is_bounded_and_deterministic():
+    request = {"text": "x" * 9000, "plan_json": {"note": "y" * 9000}}
+    summary = {"objects": [], "objects_total": 0,
+               "params": {f"p{i:03d}": "1" for i in range(200)}}
+    text = prompts.render_request(request, summary, [])
+    assert len(text) < 9000 and "params_total" in text
+    assert text == prompts.render_request(request, summary, [])
 
 
 def test_sft_rows_skip_bad_and_degraded_steps():
@@ -1601,10 +1618,17 @@ def test_sft_rows_skip_bad_and_degraded_steps():
     bad["labels"]["step_labels"]["0"] = "bad"
     degraded = make_episode("p/3", "accepted")
     degraded["steps"][0]["state_confidence"] = "degraded"
-    rows = render.sft_rows([good, bad, degraded])
+    rows = render.sft_rows([good, bad, degraded], ["p/1", "p/2", "p/3"])
     assert len(rows) == 1 and rows[0]["meta"]["episode"] == "p/1"
     assert json.loads(rows[0]["messages"][2]["content"]) == {"op": "create_primitive",
                                                              "args": {"name": "Base", "kind": "box"}}
+
+
+def test_held_out_episodes_never_become_training_rows():
+    train, held_out = make_episode("p/1", "accepted"), make_episode("p/2", "accepted")
+    held_out["corrections"] = [{"after_index": 0, "alias": "wall", "before": 3.0, "after": 2.4}]
+    assert [r["meta"]["episode"] for r in render.sft_rows([train, held_out], ["p/1"])] == ["p/1"]
+    assert render.pair_rows([train, held_out], ["p/1"]) == []
 
 
 def test_cases_only_hold_out_the_test_split():
@@ -1613,17 +1637,22 @@ def test_cases_only_hold_out_the_test_split():
     assert [c["id"] for c in cases] == ["p/2"] and cases[0]["reference"][0]["op"] == "create_primitive"
 
 
+def write_project(raw, name, source, ops=()):
+    directory = raw / name
+    directory.mkdir(parents=True)
+    (directory / "source.json").write_text(json.dumps(source), encoding="utf-8")
+    (directory / "member.jsonl").write_text(
+        json.dumps({"id": 1, "name": "alice", "kind": "human"}) + "\n", encoding="utf-8")
+    rows = [{"id": "op_1", "by": 1, "kind": "create_primitive", "created_ms": 1, "status": "done",
+             "error_code": "", "args_json": json.dumps({"name": "Base", "kind": "box"}),
+             "result_json": json.dumps({"result": {}, "created": ["Base"], "modified": [],
+                                        "deleted": [], "recomputed": [], "broken": []})}]
+    (directory / "op.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in list(rows) + list(ops)), encoding="utf-8")
+
+
 def test_build_writes_the_dataset_and_the_same_inputs_give_the_same_id(tmp_path):
-    raw = tmp_path / "raw" / "p"
-    raw.mkdir(parents=True)
-    (raw / "member.jsonl").write_text(json.dumps({"id": 1, "name": "alice", "kind": "human"}) + "\n",
-                                      encoding="utf-8")
-    (raw / "op.jsonl").write_text(json.dumps({
-        "id": "op_1", "by": 1, "kind": "create_primitive", "created_ms": 1, "status": "done",
-        "error_code": "", "args_json": json.dumps({"name": "Base", "kind": "box"}),
-        "result_json": json.dumps({"result": {}, "created": ["Base"], "modified": [], "deleted": [],
-                                   "recomputed": [], "broken": []})}) + "\n", encoding="utf-8")
-    (raw / "source.json").write_text(json.dumps({"project": "P", "status": "ok"}), encoding="utf-8")
+    write_project(tmp_path / "raw", "p", {"project": "P", "status": "ok", "schema_sha256": "abc"})
     first = dataset.build(str(tmp_path / "raw"), str(tmp_path / "out"))
     second = dataset.build(str(tmp_path / "raw"), str(tmp_path / "out"))
     root = tmp_path / "out" / first["dataset_id"]
@@ -1631,6 +1660,25 @@ def test_build_writes_the_dataset_and_the_same_inputs_give_the_same_id(tmp_path)
     assert (root / "manifest.json").exists()
     assert first["dataset_id"] == second["dataset_id"]
     assert first["counts"]["sft_rows"] == second["counts"]["sft_rows"]
+
+
+def test_an_unreadable_or_skipped_raw_project_is_recorded_not_fatal(tmp_path):
+    raw = tmp_path / "raw"
+    write_project(raw, "ok", {"project": "P", "status": "ok", "schema_sha256": "abc"})
+    (raw / "junk").mkdir()
+    write_project(raw, "paused", {"project": "Q", "status": "skipped: 503"})
+    manifest = dataset.build(str(raw), str(tmp_path / "out"))
+    assert manifest["counts"]["episodes"] == 1
+    assert {item["project"] for item in manifest["skipped"]} == {"junk", "Q"}
+
+
+def test_leftover_export_directories_are_ignored(tmp_path):
+    raw = tmp_path / "raw"
+    write_project(raw, "ok", {"project": "P", "status": "ok", "schema_sha256": "abc"})
+    write_project(raw, "ok.old", {"project": "P", "status": "ok", "schema_sha256": "abc"})
+    write_project(raw, "ok.new", {"project": "P", "status": "ok", "schema_sha256": "abc"})
+    manifest = dataset.build(str(raw), str(tmp_path / "out"))
+    assert manifest["counts"]["episodes"] == 1 and manifest["projects"]["P"]["episodes"] == 1
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1646,46 +1694,70 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'cadswarm.training.prom
 
 Training and inference must show the model the same thing, so both render through here. The
 assistant side is plain JSON rather than a provider's tool-call object: the dataset stays
-portable and any backend can be trained on it.
+portable and any backend can be trained on it. Every part of the request is bounded, because a
+9,000-character brief would otherwise be duplicated once per training step.
 """
 import json
+
+MAX_TEXT = 2000
+MAX_PLAN = 4000
+MAX_PARAMS = 40
+MAX_OPS = 8
 
 SYSTEM = """You are the builder for a CAD team. You see one request, its plan, the current model
 state and the last few operations. Reply with exactly one op as JSON and nothing else:
 
-{"op": "<name>", "args": {...}}
+{"args": {...}, "op": "<name>"}
 
 Ops:
-  create_primitive  {"kind": "box|cylinder|sphere|cone|torus", "name": str, "props": {}, "placement": {}}
-  create_extrusion  {"name": str, "points": [[x, y], ...], "height": number, "holes": [{"x","y","r"}]}
-  boolean           {"kind": "cut|fuse|common", "name": str, "base": str, "tool": str}
-  set_props         {"name": str, "props": {"Height": number, ...}}
-  set_placement     {"name": str, "placement": {"base": [x, y, z], "rotation": [ax, ay, az]}}
-  set_param         {"alias": str, "value": str, "note": str}
-  delete            {"name": str}
-  run_part_script   {"code": str, "name": str}
+  create_primitive       {"kind": "box|cylinder|sphere|cone|torus", "name": str, "props": {}, "placement": {}}
+  create_extrusion       {"name": str, "points": [[x, y], ...], "height": number, "holes": [{"x","y","r"}]}
+  boolean                {"kind": "cut|fuse|common", "name": str, "base": str, "tool": str}
+  set_props              {"name": str, "props": {"Height": number, ...}}
+  set_placement          {"name": str, "placement": {"base": [x, y, z], "rotation": [ax, ay, az]}}
+  set_param              {"alias": str, "value": str, "note": str}
+  delete                 {"name": str}
+  run_part_script        {"code": str, "name": str}
+  insert_component       {"component": str, "name": str, "placement": {}}
+  insert_standard_part   {"family": str, "size": str, "name": str, "placement": {}}
+  insert_mesh            {"file": str, "name": str}
 
 Address objects by their exact name. Params are the team spreadsheet: prefer set_param over a
 number hard-coded in an op. Never name an object that is not in the model state.
 """
 
 
+def _clip(value, limit):
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
 def render_request(request, summary, previous=()):
-    """Deterministic: sorted keys, no clock, bounded lists."""
-    recent = [{"op": step.get("op"), "args": step.get("args")} for step in list(previous)[-8:]]
-    return ("Request: " + str(request.get("text") or "") + "\n"
-            + "Plan: " + json.dumps(request.get("plan_json") or {}, sort_keys=True, ensure_ascii=False) + "\n"
-            + "Model: " + json.dumps(summary, sort_keys=True, ensure_ascii=False) + "\n"
+    """Deterministic: sorted keys, no clock, every part bounded."""
+    view = dict(summary)
+    params = view.get("params") or {}
+    if len(params) > MAX_PARAMS:
+        view["params"] = {key: params[key] for key in sorted(params)[:MAX_PARAMS]}
+        view["params_total"] = len(params)
+    recent = [{"op": step.get("op"), "args": step.get("args")} for step in list(previous)[-MAX_OPS:]]
+    return ("Request: " + _clip(request.get("text"), MAX_TEXT) + "\n"
+            + "Plan: " + _clip(json.dumps(request.get("plan_json") or {}, sort_keys=True,
+                                          ensure_ascii=False), MAX_PLAN) + "\n"
+            + "Model: " + json.dumps(view, sort_keys=True, ensure_ascii=False) + "\n"
             + "Recent ops: " + json.dumps(recent, sort_keys=True, ensure_ascii=False))
 
 
 def render_assistant(op, args):
-    return json.dumps({"op": op, "args": args}, sort_keys=True, ensure_ascii=False)
+    return json.dumps({"args": args, "op": op}, sort_keys=True, ensure_ascii=False)
 ```
 
 ```python
 # cadswarm/training/render.py
-"""Episodes -> the files a trainer and an eval harness read."""
+"""Episodes -> the files a trainer and an eval harness read.
+
+Only episodes in the training split are rendered into training rows: rendering every episode
+while holding some out for evaluation measures memorisation.
+"""
 import json
 
 from . import labels, prompts
@@ -1696,10 +1768,13 @@ def _previous(steps, index):
     return [{"op": s["op"], "args": s["args"]} for s in steps[max(0, index - 8):index]]
 
 
-def sft_rows(episodes):
-    """One row per usable step. A degraded step or a bad label is never an answer to imitate."""
+def sft_rows(episodes, train_ids):
+    """One row per usable step in the training split."""
+    train = set(train_ids)
     rows = []
     for episode in episodes:
+        if episode["id"] not in train:
+            continue
         step_labels = episode["labels"]["step_labels"]
         for step in episode["steps"]:
             if step_labels.get(str(step["index"])) not in ("good", "neutral"):
@@ -1718,11 +1793,14 @@ def sft_rows(episodes):
     return rows
 
 
-def pair_rows(episodes):
-    """Step pairs from corrections, plus episode pairs from accepted vs failed builds."""
-    rows = [pair for episode in episodes for pair in labels.pairs(episode)]
-    accepted = [e for e in episodes if e["labels"]["outcome"] == "accepted"]
-    failed = [e for e in episodes if e["labels"]["outcome"] in ("failed", "blocked")]
+def pair_rows(episodes, train_ids):
+    """Correction pairs and accepted-vs-failed episode pairs, training split only."""
+    train = set(train_ids)
+    rows = [pair for episode in episodes if episode["id"] in train
+            for pair in labels.pairs(episode)]
+    accepted = [e for e in episodes if e["id"] in train and e["labels"]["outcome"] == "accepted"]
+    failed = [e for e in episodes if e["id"] in train
+              and e["labels"]["outcome"] in ("failed", "blocked")]
     for winner, loser in zip(accepted, failed):
         rows.append({"signal": "outcome", "episode": winner["id"],
                      "chosen": {"objects": winner["final"]["objects"]},
@@ -1753,6 +1831,9 @@ def card(manifest):
     lines += [f"- {name}: {value}" for name, value in manifest["counts"].items()]
     lines += ["", "## Biases", ""]
     lines += [f"- {item}" for item in manifest["biases"]]
+    if manifest["skipped"]:
+        lines += ["", "## Skipped", ""]
+        lines += [f"- {item['project']}: {item['reason']}" for item in manifest["skipped"]]
     lines += ["", "## Conformance", "", "How closely the replayed state matches the live model table.", ""]
     lines += [f"- {name}: {report['fraction']}" for name, report in manifest["conformance"].items()]
     return "\n".join(lines) + "\n"
@@ -1762,6 +1843,12 @@ def write_jsonl(path, rows):
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def write_json(path, value):
+    """Sorted keys, so a hashed file does not depend on dict construction order."""
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
 ```
 
 ```python
@@ -1769,34 +1856,39 @@ def write_jsonl(path, rows):
 """Build one content-addressed dataset directory from an export directory.
 
 The id is a hash of the files, so the same inputs always produce the same directory name and a
-training run can name exactly what it saw. The card and the manifest are the last two files
-written; neither is part of the id.
+training run can name exactly what it saw. A raw project that cannot be read, is skipped, or is a
+leftover `*.new`/`*.old` directory from an interrupted export is recorded in `skipped`, never
+fatal.
 """
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 
-from ..client import save_json
 from . import SCHEMA_VERSION, render, split as split_mod
 from . import episodes as episodes_mod
 from . import state
 
 TABLES = ("member", "cad_object", "param", "op", "task", "brief", "review", "team_event",
           "style_events")
+SKIP_SUFFIXES = (".new", ".old")
 
 
-def _read_raw(raw_dir, project_dir):
-    out = {}
+def _read_source(raw_dir, directory):
+    with open(os.path.join(raw_dir, directory, "source.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _read_tables(raw_dir, directory, source):
+    out = {"source": source}
     for name in TABLES:
-        path = os.path.join(raw_dir, project_dir, name + ".jsonl")
+        path = os.path.join(raw_dir, directory, name + ".jsonl")
         if not os.path.exists(path):
             continue
         with open(path, encoding="utf-8") as f:
             out[name] = [json.loads(line) for line in f if line.strip()]
-    with open(os.path.join(raw_dir, project_dir, "source.json"), encoding="utf-8") as f:
-        out["source"] = json.load(f)
     return out
 
 
@@ -1822,29 +1914,43 @@ def _git_commit():
 
 def build(raw_dir, out_root):
     """Read every exported project, build episodes, render, and write the dataset."""
-    projects, all_episodes, conformance = {}, [], {}
+    projects, all_episodes, conformance, skipped, raw_info = {}, [], {}, [], {}
     names = sorted(d for d in os.listdir(raw_dir)
-                   if os.path.isdir(os.path.join(raw_dir, d)))
+                   if os.path.isdir(os.path.join(raw_dir, d)) and not d.startswith(".")
+                   and not d.endswith(SKIP_SUFFIXES))
     for directory in names:
-        raw = _read_raw(raw_dir, directory)
-        source = raw.get("source") or {}
-        if source.get("status") != "ok":
+        try:
+            source = _read_source(raw_dir, directory)
+        except (OSError, ValueError) as e:
+            skipped.append({"project": directory, "reason": f"no readable source.json: {e}"})
+            continue
+        if (source or {}).get("status") != "ok":
+            skipped.append({"project": source.get("project") or directory,
+                            "reason": str((source or {}).get("status") or "no status")})
+            continue
+        try:
+            raw = _read_tables(raw_dir, directory, source)
+        except (OSError, ValueError) as e:
+            skipped.append({"project": source.get("project") or directory,
+                            "reason": f"unreadable table: {e}"})
             continue
         project = source.get("project") or directory
         found = episodes_mod.build_episodes(raw, project)
         if not found:
+            skipped.append({"project": project, "reason": "no episodes"})
             continue
         all_episodes += found
         projects[project] = {"episodes": len(found),
-                             "steps": sum(len(e["steps"]) for e in found),
-                             "source": source}
+                             "steps": sum(len(e["steps"]) for e in found)}
+        raw_info[project] = {"schema_sha256": source.get("schema_sha256", ""),
+                             "tables": source.get("tables", {})}
         _, final, _ = episodes_mod.replay_project(raw)
         conformance[project] = state.conformance(final, raw.get("cad_object") or [],
                                                  raw.get("param") or [])
 
     assignment = split_mod.assign(all_episodes)
-    sft = render.sft_rows(all_episodes)
-    pairs = render.pair_rows(all_episodes)
+    sft = render.sft_rows(all_episodes, assignment["train"])
+    pairs = render.pair_rows(all_episodes, assignment["train"])
     cases = render.case_rows(all_episodes, assignment)
     biases = []
     if all_episodes:
@@ -1856,45 +1962,42 @@ def build(raw_dir, out_root):
     if assignment["mode"] == "temporal":
         biases.append("temporal split: steps from one project appear in train and test")
 
-    # The id covers the content, so it is computed from a staging copy before the manifest exists.
-    staging = os.path.join(out_root, ".staging")
-    os.makedirs(staging, exist_ok=True)
-    os.makedirs(os.path.join(staging, "episodes"), exist_ok=True)
-    os.makedirs(os.path.join(staging, "eval"), exist_ok=True)
-    for episode in all_episodes:
-        save_json(os.path.join(staging, "episodes", episode["id"].replace("/", "__") + ".json"),
-                  episode)
-    render.write_jsonl(os.path.join(staging, "sft.jsonl"), sft)
-    render.write_jsonl(os.path.join(staging, "pairs.jsonl"), pairs)
-    render.write_jsonl(os.path.join(staging, "eval", "cases.jsonl"), cases)
-    save_json(os.path.join(staging, "split.json"), assignment)
-    save_json(os.path.join(staging, "conformance.json"), conformance)
-    dataset_id = _hash_tree(staging)[:12]
+    staging = tempfile.mkdtemp(dir=out_root, prefix=".build-")
+    try:
+        os.makedirs(os.path.join(staging, "episodes"), exist_ok=True)
+        os.makedirs(os.path.join(staging, "eval"), exist_ok=True)
+        for episode in all_episodes:
+            render.write_json(os.path.join(staging, "episodes",
+                                           episode["id"].replace("/", "__") + ".json"), episode)
+        render.write_jsonl(os.path.join(staging, "sft.jsonl"), sft)
+        render.write_jsonl(os.path.join(staging, "pairs.jsonl"), pairs)
+        render.write_jsonl(os.path.join(staging, "eval", "cases.jsonl"), cases)
+        render.write_json(os.path.join(staging, "split.json"), assignment)
+        render.write_json(os.path.join(staging, "conformance.json"), conformance)
+        dataset_id = _hash_tree(staging)[:12]
 
-    final_dir = os.path.join(out_root, dataset_id)
-    os.makedirs(final_dir, exist_ok=True)
-    for name in ("episodes", "eval"):
-        os.makedirs(os.path.join(final_dir, name), exist_ok=True)
-    for entry in sorted(os.listdir(staging)):
-        src = os.path.join(staging, entry)
-        dst = os.path.join(final_dir, entry)
-        if os.path.isdir(src):
-            for inner in sorted(os.listdir(src)):
-                os.replace(os.path.join(src, inner), os.path.join(dst, inner))
-        else:
-            os.replace(src, dst)
-    shutil.rmtree(staging, ignore_errors=True)
+        final_dir = os.path.join(out_root, dataset_id)
+        os.makedirs(final_dir, exist_ok=True)
+        for entry in sorted(os.listdir(staging)):
+            src = os.path.join(staging, entry)
+            dst = os.path.join(final_dir, entry)
+            if os.path.isdir(src):
+                for inner in sorted(os.listdir(src)):
+                    os.replace(os.path.join(src, inner), os.path.join(dst, inner))
+            else:
+                os.replace(src, dst)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
     manifest = {"dataset_id": dataset_id, "schema_version": SCHEMA_VERSION,
-                "git_commit": _git_commit(), "projects": {k: {"episodes": v["episodes"],
-                                                              "steps": v["steps"]}
-                                                          for k, v in projects.items()},
+                "git_commit": _git_commit(), "projects": projects, "raw": raw_info,
                 "counts": {"episodes": len(all_episodes), "sft_rows": len(sft),
                            "pairs": len(pairs), "eval_cases": len(cases)},
-                "split": assignment, "conformance": conformance, "biases": biases}
+                "split": assignment, "conformance": conformance, "biases": biases,
+                "skipped": skipped}
     with open(os.path.join(final_dir, "dataset-card.md"), "w", encoding="utf-8", newline="\n") as f:
         f.write(render.card(manifest))
-    save_json(os.path.join(final_dir, "manifest.json"), manifest)
+    render.write_json(os.path.join(final_dir, "manifest.json"), manifest)
     manifest["path"] = final_dir
     return manifest
 ```
@@ -1902,7 +2005,7 @@ def build(raw_dir, out_root):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_render.py -v`
-Expected: PASS (4 passed).
+Expected: PASS (9 passed).
 
 - [ ] **Step 5: Commit**
 
