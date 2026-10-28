@@ -1914,6 +1914,7 @@ def _git_commit():
 
 def build(raw_dir, out_root):
     """Read every exported project, build episodes, render, and write the dataset."""
+    os.makedirs(out_root, exist_ok=True)
     projects, all_episodes, conformance, skipped, raw_info = {}, [], {}, [], {}
     names = sorted(d for d in os.listdir(raw_dir)
                    if os.path.isdir(os.path.join(raw_dir, d)) and not d.startswith(".")
