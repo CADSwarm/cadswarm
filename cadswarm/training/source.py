@@ -1,7 +1,8 @@
-"""Find a project's team database and read its tables, paged by primary key.
+"""Find a project's team database and read its tables.
 
 Reuses cadswarm.space.SpaceClient: the same HTTP client the app uses, so there is no second SQL
-dialect and no second error type. A paused or unreachable database is reported, never raised.
+dialect and no second error type. A missing project raises SourceError; a database that is down
+surfaces the client's SpaceError, which the export layer records instead of aborting.
 """
 import json
 import os
@@ -10,7 +11,7 @@ import re
 from ..paths import project_layout
 from ..space import SpaceClient
 
-# The primary key of each table: unique, so `where key > last` never skips a duplicate.
+# The primary key of each table: unique, so a local sort is total and stable.
 PAGE_KEY = {"member": "id", "cad_object": "key", "param": "key", "op": "id", "task": "id",
             "brief": "id", "review": "id", "team_event": "seq"}
 
@@ -34,42 +35,40 @@ def read_host(project_dir):
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError) as e:
-        raise SourceError(f"no readable host.json ({e})")
+        raise SourceError(f"no readable host.json ({e})") from e
 
 
-def quote(value):
-    """A SQL literal. SpacetimeDB's dialect is SQLite-like; the only hazard is a quote in a key."""
+def sort_key(value):
+    """Numbers before strings, so an integer primary key sorts numerically rather than as text."""
     if isinstance(value, bool):
-        return "1" if value else "0"
+        return (0, int(value))
     if isinstance(value, (int, float)):
-        return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
+        return (0, value)
+    return (1, str(value or ""))
 
 
 class Source:
-    def __init__(self, project, project_dir, uri, db, token, client=None, chunk=5000):
+    def __init__(self, project, project_dir, uri, db, token, client=None):
         self.project = project
         self.project_dir = os.path.abspath(project_dir) if project_dir else ""
         self.uri = uri
         self.db = db
         self.token = token
-        self.chunk = chunk
-        self.client = client or SpaceClient(uri, db, token)
+        self.client = client if client is not None else SpaceClient(uri, db, token)
 
     @classmethod
-    def for_project(cls, project_dir, chunk=5000):
+    def for_project(cls, project_dir):
         host = read_host(project_dir)
         return cls(project_name(project_dir), project_dir, host["uri"], host["db"],
-                   host.get("token", ""), chunk=chunk)
+                   host.get("token", ""))
 
     def rows(self, table):
-        """Every row of `table`, ordered by its primary key, one `limit`-sized page at a time."""
+        """Every row of `table`, sorted by its primary key.
+
+        SpacetimeDB's SQL rejects ORDER BY, so paging by a key is unsafe: a page is an arbitrary
+        subset and `where key > last` would silently skip rows. One whole-table read it is.
+        """
+        if table not in PAGE_KEY:
+            raise SourceError(f"unknown table {table!r}")
         key = PAGE_KEY[table]
-        out, after = [], None
-        while True:
-            where = "" if after is None else f" where {key} > {quote(after)}"
-            batch = self.client.sql(f"select * from {table}{where} order by {key} limit {self.chunk}")
-            out += batch
-            if len(batch) < self.chunk:
-                return out
-            after = batch[-1][key]
+        return sorted(self.client.sql(f"select * from {table}"), key=lambda row: sort_key(row.get(key)))
