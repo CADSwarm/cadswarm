@@ -33,9 +33,12 @@ def read_host(project_dir):
     path = os.path.join(project_layout(project_dir)["root"], "host.json")
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            host = json.load(f)
     except (OSError, ValueError) as e:
         raise SourceError(f"no readable host.json ({e})") from e
+    if not isinstance(host, dict) or not host.get("uri") or not host.get("db"):
+        raise SourceError("host.json has no team uri/db")
+    return host
 
 
 def sort_key(value):
@@ -71,4 +74,7 @@ class Source:
         if table not in PAGE_KEY:
             raise SourceError(f"unknown table {table!r}")
         key = PAGE_KEY[table]
-        return sorted(self.client.sql(f"select * from {table}"), key=lambda row: sort_key(row.get(key)))
+        rows = self.client.sql(f"select * from {table}")
+        if rows and key not in rows[0]:
+            raise SourceError(f"table {table!r} has no {key!r} column")
+        return sorted(rows, key=lambda row: sort_key(row[key]))

@@ -52,6 +52,19 @@ def test_a_missing_host_file_is_a_source_error(tmp_path):
         source.read_host(str(tmp_path))
 
 
+def test_a_malformed_host_file_is_a_source_error(tmp_path):
+    for payload in ('["not", "an", "object"]', '{"db": "x"}'):
+        (tmp_path / "host.json").write_text(payload, encoding="utf-8")
+        with pytest.raises(source.SourceError):
+            source.Source.for_project(str(tmp_path))
+
+
+def test_a_table_without_its_primary_key_fails_loudly():
+    client = FakeClient({"op": [{"kind": "create_primitive"}]})
+    with pytest.raises(source.SourceError):
+        source.Source("P", "C:/p", "http://x", "db", "tok", client=client).rows("op")
+
+
 def test_for_project_reads_uri_and_db_from_host_json(tmp_path):
     (tmp_path / "host.json").write_text(json.dumps({"uri": "http://127.0.0.1:3000", "db": "cadswarm-x",
                                                     "token": "secret"}), encoding="utf-8")

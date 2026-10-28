@@ -6,11 +6,12 @@ with spaces ("Lexus IS350") would otherwise be only half replaced.
 import re
 
 PATTERNS = [
-    (re.compile(r"[A-Za-z]:[\\/][^\n\"']*"), "<path>"),
+    # `\b` keeps `https://host/path` from being read as drive `s:/`.
+    (re.compile(r"\b[A-Za-z]:[\\/][^\n\"']*"), "<path>"),
     (re.compile(r"\\\\[^\n\"']+"), "<path>"),
-    (re.compile(r"/(?:home|Users)/[^\s\"']*"), "<path>"),
+    (re.compile(r"/(?:home|Users)/[^\n\"']*"), "<path>"),
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<email>"),
-    (re.compile(r"\b[0-9a-f]{64}\b"), "<token>"),
+    (re.compile(r"\b[0-9a-fA-F]{64}\b"), "<token>"),
 ]
 
 
