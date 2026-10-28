@@ -321,6 +321,13 @@ You can also type a rule yourself. It is confirmed at once. The reviewer flags p
 Rules live in the project database on the hosting computer; learning needs no account, keys or
 network. `python -m cadswarm.style_memory show --project <folder>` lists them.
 
+### Shapes judged on how they look
+
+A bracket is allowed to be a box; a car body is not. Before a helper finishes a shape that is judged on how
+it looks, `surface_quality` reports how much of it is flat and whether that reads as a block model, and the
+reviewer treats a fully faceted organic shape as a finding. The bar is inferred from the request and the
+part names, so tables, plates and enclosures are never punished for being boxy.
+
 ---
 
 ## How it works
