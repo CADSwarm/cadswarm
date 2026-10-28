@@ -1033,6 +1033,18 @@ def _step(op, actors, index):
             "status": op.get("status"), "error_code": op.get("error_code") or ""}
 
 
+step_from_op = _step
+
+
+def replay_project(raw):
+    """(before, final, degraded) for the project's whole op log, in order.
+
+    The dataset build uses this for conformance: the replay must end where the live model is.
+    """
+    ordered = sorted(raw.get("op") or [], key=lambda o: (o.get("created_ms", 0), o.get("id", "")))
+    return replay([step_from_op(op, {}, i) for i, op in enumerate(ordered)])
+
+
 def _corrections(events):
     out = []
     for event in events or []:
@@ -1482,9 +1494,7 @@ def build(raw_dir, out_root):
         projects[project] = {"episodes": len(found),
                              "steps": sum(len(e["steps"]) for e in found),
                              "source": source}
-        ordered = sorted(raw.get("op") or [], key=lambda o: (o.get("created_ms", 0), o.get("id", "")))
-        steps = [episodes_mod._step(op, {}, i) for i, op in enumerate(ordered)]
-        _, final, _ = state.replay(steps)
+        _, final, _ = episodes_mod.replay_project(raw)
         conformance[project] = state.conformance(final, raw.get("cad_object") or [],
                                                  raw.get("param") or [])
 
