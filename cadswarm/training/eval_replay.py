@@ -63,16 +63,14 @@ def _document_name(case):
 def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, client=None):
     """Run `policy` on a scratch document and score it against the case's reference model."""
     created = None
-    if client is None:
-        created = workdir or tempfile.mkdtemp(prefix="cadswarm-eval-")
-        os.makedirs(created, exist_ok=True)
-        worker = WorkerClient(os.path.join(created, _document_name(case)),
-                              python=python, script=script)
-    else:
-        worker = client
-        created = workdir
-    seen = []
+    worker = client
     try:
+        if client is None:
+            created = workdir or tempfile.mkdtemp(prefix="cadswarm-eval-")
+            os.makedirs(created, exist_ok=True)
+            worker = WorkerClient(os.path.join(created, _document_name(case)),
+                                  python=python, script=script)
+        seen = []
         for _ in range(max_steps):
             op = policy.next_op(seen)
             if op is None:
@@ -85,10 +83,12 @@ def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, c
         final = worker.call("status").get("result") or {}
         objects = final.get("objects") or []
         candidates = [o for o in objects if o.get("name") != "Params"]
-        printable = bool(candidates) and bool(
-            (worker.call("printability", {}).get("result") or {}).get("ok"))
+        verdict = (worker.call("printability", {}).get("result") or {})
+        # The worker's check is `all([])`: an empty check list says nothing, so require one.
+        printable = bool(candidates) and bool(verdict.get("objects")) and bool(verdict.get("ok"))
     finally:
-        worker.stop()
+        if worker is not None:
+            worker.stop()
         if client is None and workdir is None and created:
             shutil.rmtree(created, ignore_errors=True)
 

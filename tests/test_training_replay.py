@@ -1,6 +1,8 @@
 """Scoring a policy by running it, through the same JSON-lines worker the app uses."""
 import os
 
+import pytest
+
 from cadswarm.training import eval_replay
 
 
@@ -22,11 +24,25 @@ class FakeWorker:
                                                        {"name": "Base", "bbox": [0, 0, 0, 1, 1, 1],
                                                         "volume": 1.0}], "params": {}}}
         if op == "printability":
-            return {"ok": True, "result": {"ok": True, "objects": []}}
+            return {"ok": True, "result": {"ok": True,
+                                           "objects": [{"name": "Base", "fits_bed": True}]}}
         raise AssertionError(op)
 
     def stop(self):
         pass
+
+
+class NoSolidsWorker(FakeWorker):
+    """A document whose only objects are not solids: the worker checked nothing."""
+
+    def call(self, op, args=None, allowed=None):
+        if op == "status":
+            return {"ok": True, "result": {"objects": [{"name": "Params", "bbox": None, "volume": None},
+                                                       {"name": "Sketch", "bbox": None,
+                                                        "volume": None}], "params": {}}}
+        if op == "printability":
+            return {"ok": True, "result": {"ok": True, "objects": []}}
+        return super().call(op, args, allowed)
 
 
 class EmptyWorker(FakeWorker):
@@ -66,6 +82,25 @@ def test_a_build_that_produced_nothing_is_not_printable():
     got = eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]), client=EmptyWorker())
     assert got["printable"] is False
     assert eval_replay.report([got], policy="random")["printable_rate"] == 0.0
+
+
+def test_a_document_with_no_solids_is_not_printable():
+    got = eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]), client=NoSolidsWorker())
+    assert got["printable"] is False
+
+
+def test_a_failed_worker_start_leaves_no_scratch_dir(monkeypatch, tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(eval_replay.tempfile, "mkdtemp", lambda **kwargs: str(scratch))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("no FreeCAD")
+
+    monkeypatch.setattr(eval_replay, "WorkerClient", boom)
+    with pytest.raises(RuntimeError):
+        eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]))
+    assert not scratch.exists()
 
 
 def test_the_random_baseline_is_deterministic_and_stops_at_the_cap():
