@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 type Outcome = std::result::Result<std::result::Result<(), String>, InternalError>;
-const REDUCER_TIMEOUT: Duration = Duration::from_secs(30);
+const REDUCER_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone)]
 pub struct OpRow {

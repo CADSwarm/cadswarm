@@ -302,7 +302,10 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Re
         for (name, b64) in map {
             if let Some(s) = b64.as_str() {
                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s) {
-                    space.put_preview(name, bytes)?;
+                    // A preview is cosmetic: a slow database must not take the host down with it.
+                    if let Err(e) = space.put_preview(name, bytes) {
+                        eprintln!("[host] preview for {name} failed (continuing): {e:#}");
+                    }
                 }
             }
         }
