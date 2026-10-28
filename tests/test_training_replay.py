@@ -103,6 +103,14 @@ def test_a_caller_supplied_workdir_is_kept(tmp_path):
     assert got["steps"] == 1 and tmp_path.exists()
 
 
+def test_the_params_sheet_is_ignored_on_both_sides():
+    with_params = case([box("Base")])
+    with_params["final"]["objects"]["Params"] = {"bbox": None, "volume": None}
+    got = eval_replay.replay(with_params, eval_replay.ScriptedPolicy([box("Base")]),
+                             client=FakeWorker())
+    assert got["completion"] == 1.0 and got["geometry"]["names"] == 1.0
+
+
 def test_report_aggregates_and_names_the_policy():
     rows = [eval_replay.replay(case([box("Base")]), eval_replay.ScriptedPolicy([box("Base")]),
                                client=FakeWorker())]

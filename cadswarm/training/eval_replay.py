@@ -95,7 +95,9 @@ def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, c
     attempted = len(seen)
     valid = sum(1 for step in seen if step["ok"])
     rejected = sum(1 for step in seen if step["code"] == "lock_violation")
-    reference = (case.get("final") or {}).get("objects") or {}
+    reference = {name: value for name, value in ((case.get("final") or {}).get("objects") or {}).items()
+                 if name != "Params"}
+    candidates = [o for o in objects if o.get("name") != "Params"]
     return {"case": case.get("id", "?"), "steps": attempted,
             "valid_op_rate": round(valid / attempted, 4) if attempted else 0.0,
             "rejection_rate": round(rejected / attempted, 4) if attempted else 0.0,
