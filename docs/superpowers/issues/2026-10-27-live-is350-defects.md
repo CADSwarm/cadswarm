@@ -52,7 +52,31 @@ Live context at the time: `DoorFL` task `t_bd68ea69` claimed by `worker1-dcacbab
 5. **No hand-driving.** Remove the temptation for a coding agent to create tasks, message helpers or
    move parts by hand. If the loop cannot fix a defect, that is a product bug.
 
+## Overnight incident (2026-10-27 ~23:40–23:58)
+
+The team stopped because the host **exited** on a single `put_preview` error while SpacetimeDB was
+waiting on `https://auth.spacetimedb.com` to validate the token: every reducer timed out at 30 s, the
+preview write returned an error, and `refresh()` propagated it with `?` up to `main`. Fixed on
+`feat/design-feedback`:
+
+- a failed preview is logged and skipped (it is cosmetic);
+- reducers wait 120 s instead of 30 s (`REDUCER_TIMEOUT`).
+
+The local datastore is **3.05 GB / 872,686 transactions** (682 files) after a day of ops and artifact
+blobs. That is why replay and early writes are slow. SpacetimeDB's CLI has no compact/vacuum command, so
+the morning job is to prune what the module keeps (event history, `op-result:` artifacts) or rebuild the
+database and re-create the brief board. Do not delete the model: `model.FCStd` and `files/` are fine.
+
+## Overnight watcher
+
+`cadswarm/watch.py` runs every 10 minutes, audits every part with `surface_quality`, renders every third
+cycle, writes `.cadswarm-team/watch.log` and `watch-summary.md`, and teaches a **confirmed** team rule
+(never geometry, tasks or messages) when a new class of defect appears: invalid/open solids, parts
+outside the car envelope, a slab body or collapsed pillars. It also keeps the machine awake and the
+process unthrottled, so a minimised FreeCAD does not pause it.
+
 ## Suggested next session
+
 
 1. Install the current host (`host/target/release/cadswarm-host.exe`) and the `cadswarm` package files
    into the FreeCAD add-on, restart the team **through the app**, and let the next review file the fix
