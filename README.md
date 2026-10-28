@@ -397,8 +397,8 @@ notices. A host restarted mid-brief does this too, for the agents the previous h
 
 On Windows, one command brings up the whole stack on this machine: it builds the host and the web app,
 serves the web app, opens a Cloudflare quick tunnel so phones can reach it, sets up the data folder
-against Maincloud, runs the host with your keys from `scripts\with-env.ps1`, and prints a single-use
-phone link and QR code.
+against Maincloud, runs the host with your environment (an optional `cadswarm.env` is loaded through
+`scripts\with-env.ps1`, and nothing is required), and prints a single-use phone link and QR code.
 
 ```powershell
 powershell -File scripts\demo-up.ps1               # first run: builds everything
@@ -449,19 +449,26 @@ comes from the workbench (or that download, on an older install). From a checkou
 them yourself with `cargo build --release` in `host/` and
 `cargo build --release --target wasm32-unknown-unknown` in `module/`.
 
-Optional services read keys from the environment, never from the repo. Copy `.env.example` to
-`cadswarm.env` next to the checkout (for example `Projects\cadswarm.env`, shared by every worktree) or
-to a git-ignored `.env` inside one checkout, and run commands through the loader, which sets the
-variables for that process only:
+Nothing in the checkout needs keys or a config file. The AI helpers run on the sign-in of whichever
+CLI you already use (`claude`, `codex` or `opencode`), the host starts them the same way, and
+SpacetimeDB publishing and hosting use the CLI's stored login (`spacetime login`). Tests and the host
+run as they are:
+
+```powershell
+python -m pytest -q
+host\target\release\cadswarm-host.exe --data .\team run
+```
+
+Only the optional demo services (Elastic recall, Creao, Factory) and a machine that cannot sign in
+interactively need variables. Set them in your shell, or write them to a git-ignored `cadswarm.env`
+next to the checkout and let the loader set them for one command -- it never requires the file:
 
 ```powershell
 powershell -File scripts\with-env.ps1 python -m pytest -q
-powershell -File scripts\with-env.ps1 host\target\release\cadswarm-host.exe --data .\team run
 ```
 
-`-EnvFile <path>` or `CADSWARM_ENV_FILE` picks a specific file. `.env.example` lists every variable:
-agent API-key fallbacks and developer overrides. SpacetimeDB publishing uses the CLI's stored login
-(`spacetime login`), not an environment variable.
+`.env.example` lists the extras and the developer overrides; `-EnvFile <path>` or
+`CADSWARM_ENV_FILE` picks a specific file.
 
 ```powershell
 cd cadswarm
