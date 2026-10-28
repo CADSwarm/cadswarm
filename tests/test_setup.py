@@ -144,3 +144,9 @@ def test_the_guides_cli_choice_is_written_to_the_hosts_settings(tmp_path):
     assert hosting.set_agent_client(str(tmp_path), "") is False      # "just watch" clears the choice in the GUI only
     assert hosting.set_agent_client("", "codex") is False            # no folder yet: never write ./host.json
 
+
+
+def test_every_agents_doc_carries_the_shape_rule():
+    """OpenCode has no prompt hook, so the rule must be in the generated AGENTS.md itself."""
+    from cadswarm.agent_setup import AGENT_DOC
+    assert "surface_quality" in AGENT_DOC

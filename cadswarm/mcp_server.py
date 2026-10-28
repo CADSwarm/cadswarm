@@ -105,6 +105,12 @@ Work like a careful teammate:
    saving and the VERIFIED stiffness, read out any warnings, and only with their OK call lattice_apply (it adds
    a mesh next to the original, which stays unchanged). If no design meets the target, say so and pass on the
    suggestions in the notes. Never present it as certification; printed parts still need testing.
+15. Shape quality. Some parts are judged on how they look (a car body, fairing, helmet, furniture, product
+    exterior) and some on what they do (brackets, plates, enclosures). Before you call an aesthetic part
+    done, call surface_quality(topic="<what the person asked for>", names=[...]). `fails` means the part
+    reads as a block model: build its main surfaces as lofts or sweeps in run_part_script (Part.makeLoft
+    across 20+ stations), keep separate boxes out of the shell, and fix it before reporting done. A boxy
+    part needs none of this; call it anyway if you are unsure.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 # The team is joined in the background while the client already has our tools. A tool called before the join

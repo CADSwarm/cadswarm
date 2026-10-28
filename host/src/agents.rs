@@ -294,7 +294,7 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
     let style_check = if style.trim().is_empty() {
         String::new()
     } else {
-        format!("\n5. Team design style: the rules below are how this team designs. Each part that breaks one is a \
+        format!("\n6. Team design style: the rules below are how this team designs. Each part that breaks one is a \
                  problem; write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n{style}\n")
     };
     format!(
@@ -308,6 +308,11 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
          3. Fit: the enclosure's inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs must sit at\n\
             hole_N_x/hole_N_y; each port cutout must be centred on its <port>_pos and <port>_z.\n\
          4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n\
+         5. Shape: if the brief is for an object judged on how it looks (car, vehicle, body, helmet, fairing,\n\
+            furniture or a product exterior), call surface_quality(topic=\"<the person's request>\") on the\n\
+            shell and the greenhouse. A `fails` verdict is a problem: write it as\n\
+            \"style: organic shape built from flat faces (<n> of <m> faces are flat)\". A separate box roof\n\
+            or box pillars on a body are problems too. Boxy parts (brackets, plates, enclosures) are fine.\n\
          {style_check}\
          For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
          precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
@@ -443,6 +448,14 @@ mod tests {
         assert!(!p.contains("Team design style"), "no style rules learned yet");
         let with_style = review_prompt("b_x", "a case", "esp32", [220.0, 220.0, 250.0], 1, "- walls are 2.4 mm");
         assert!(with_style.contains("walls are 2.4 mm"));
+    }
+
+    #[test]
+    fn the_reviewer_prompt_checks_the_shape_of_an_aesthetic_brief() {
+        let p = review_prompt("b_x", "model a car body", "", [200.0, 200.0, 200.0], 1, "- Car bodies are lofted.");
+        assert!(p.contains("surface_quality"), "{p}");
+        assert!(p.contains("organic") && p.contains("flat faces"), "{p}");
+        assert!(p.contains("6. Team design style"), "the style step still follows: {p}");
     }
 
     #[test]
