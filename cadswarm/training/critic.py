@@ -15,5 +15,5 @@ def heuristic(final, printable=None):
     score = 0.4 * known / len(objects)
     score += 0.4 * (1.0 if printable else 0.0) if printable is not None else 0.2
     share = curved.get("curved_share") if isinstance(curved, dict) else None
-    score += 0.2 * (0.5 if share is None else min(float(share) / 0.2, 1.0))
-    return round(min(score, 1.0), 3)
+    score += 0.2 * (0.5 if share is None else min(max(float(share), 0.0) / 0.2, 1.0))
+    return round(max(0.0, min(score, 1.0)), 3)

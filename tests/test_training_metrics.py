@@ -34,6 +34,15 @@ def test_geometry_reports_none_when_no_box_or_volume_was_recorded():
     assert empty["bbox"] is None and empty["volume"] is None
 
 
+def test_a_name_with_no_recorded_volume_does_not_drag_the_average_down():
+    """Params always exists on both sides and never has a volume: it must not score 0."""
+    view = {"objects": {"Params": {"volume": None}, "A": {"volume": 10.0}}}
+    got = metrics.geometry(view, view)
+    assert got["volume"] == 1.0
+    assert metrics.geometry({"objects": {"Params": {"volume": None}}},
+                            {"objects": {"Params": {"volume": None}}})["volume"] is None
+
+
 def test_aggregate_averages_and_ignores_missing_values():
     got = metrics.aggregate([{"completion": 1.0, "geometry": {"bbox": 1.0}},
                              {"completion": 0.0, "geometry": {"bbox": 0.0}}])

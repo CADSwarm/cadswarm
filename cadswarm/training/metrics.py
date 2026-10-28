@@ -43,7 +43,8 @@ def geometry(reference, candidate):
     boxes = [bbox_iou((ref[n] or {}).get("bbox"), (got[n] or {}).get("bbox")) for n in shared
              if (ref[n] or {}).get("bbox") and (got[n] or {}).get("bbox")]
     volumes = [volume_ratio((ref[n] or {}).get("volume"), (got[n] or {}).get("volume"))
-               for n in shared]
+               for n in shared
+               if (ref[n] or {}).get("volume") and (got[n] or {}).get("volume")]
     return {"names": jaccard(ref, got),
             "bbox": round(sum(boxes) / len(boxes), 4) if boxes else None,
             "volume": round(sum(volumes) / len(volumes), 4) if volumes else None}
