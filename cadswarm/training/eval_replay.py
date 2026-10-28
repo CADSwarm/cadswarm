@@ -107,10 +107,17 @@ def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, c
             "printable": printable, "ops": seen}
 
 
-def report(results, policy):
-    """One comparable row set per policy, with the case count that produced it."""
+def report(results, policy, meta=None):
+    """One comparable row set per policy, with the case count that produced it.
+
+    `meta` names what was measured: a scorecard that does not say which dataset and split it came
+    from cannot be compared with another one.
+    """
     summary = metrics.aggregate(results)
     summary.update({"policy": policy, "cases": len(results),
                     "printable_rate": round(sum(1 for r in results if r.get("printable"))
                                             / len(results), 4) if results else 0.0})
+    if meta is not None:
+        summary["dataset_id"] = meta.get("dataset_id")
+        summary["split_mode"] = meta.get("split_mode")
     return summary

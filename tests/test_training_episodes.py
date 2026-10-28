@@ -99,3 +99,35 @@ def test_split_falls_back_to_time_with_one_project():
     got = split.assign(eps)
     assert got["mode"] == "temporal" and not set(got["train"]) & set(got["test"])
     assert got["test"] == ["a/8", "a/9"]
+
+
+def test_an_episode_with_no_mutating_step_is_not_a_build():
+    import json
+    data = raw()
+    script = op("op_q3", 2, 3_000, created=(), reason="run_part_script")
+    script["result_json"] = json.dumps({"result": {"solids": 1, "bb": [0, 0, 0, 1, 1, 1]},
+                                        "created": [], "modified": [], "deleted": [],
+                                        "recomputed": [], "broken": []})
+    data["op"] = [op("op_q1", 2, 1_000, reason="brep"),
+                  op("op_q2", 2, 2_000, reason="get_object"), script]
+    dropped = []
+    assert episodes.build_episodes(data, "P", dropped=dropped) == []
+    assert [item["reason"] for item in dropped] == ["no mutating step"]
+
+
+def test_a_step_whose_args_are_not_json_is_degraded_not_empty():
+    data = raw()
+    data["op"][0]["args_json"] = "{not json"
+    episode = [e for e in episodes.build_episodes(data, "P") if e["id"].endswith("/t1")][0]
+    step = episode["steps"][0]
+    assert step["parse_error"] is True and step["render_ok"] is False
+    assert step["args"] == {} and step["state_confidence"] == "degraded"
+    assert any("not JSON" in warning for warning in episode["warnings"])
+
+
+def test_the_review_attached_is_the_highest_round_not_the_last_row():
+    data = raw()
+    data["review"] = [{"brief": "b1", "round": 3, "passed": True, "findings_json": "[]"},
+                      {"brief": "b1", "round": 1, "passed": False, "findings_json": "[]"}]
+    episode = [e for e in episodes.build_episodes(data, "P") if e["id"].endswith("/t1")][0]
+    assert episode["review"]["round"] == 3 and episode["review"]["passed"] is True

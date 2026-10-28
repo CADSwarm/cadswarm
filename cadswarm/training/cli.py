@@ -27,6 +27,17 @@ def _build(args):
     return 0
 
 
+def _dataset_meta(root):
+    """The dataset and split a scorecard measured, from the manifest beside the cases."""
+    try:
+        with open(os.path.join(root, "manifest.json"), encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return {"dataset_id": os.path.basename(os.path.abspath(root)), "split_mode": None}
+    return {"dataset_id": manifest.get("dataset_id", ""),
+            "split_mode": (manifest.get("split") or {}).get("mode")}
+
+
 def _eval(args):
     root = os.path.join(args.dataset, "eval", "cases.jsonl")
     with open(root, encoding="utf-8") as f:
@@ -36,7 +47,7 @@ def _eval(args):
     policy = policies[args.policy]
     rows = [eval_replay.replay(case, policy(case), python=args.python, script=args.script)
             for case in cases]
-    report = eval_replay.report(rows, policy=args.policy)
+    report = eval_replay.report(rows, policy=args.policy, meta=_dataset_meta(args.dataset))
     print(json.dumps(report, indent=2))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:

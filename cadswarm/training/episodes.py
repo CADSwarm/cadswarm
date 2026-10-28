@@ -6,7 +6,7 @@ freestyle stretch per actor, split on a 15-minute idle gap. An op never lands tw
 """
 import json
 
-from . import labels
+from . import labels, prompts
 from .state import replay
 
 IDLE_GAP_MS = 15 * 60 * 1000
@@ -24,12 +24,34 @@ def _json(value, default):
         return default
 
 
+def mutating(op):
+    """A build step: a mutating op that actually changed the model.
+
+    `run_part_script` is also the team's measurement tool. A done script that reports geometry but
+    touched no object created nothing, so an episode made only of those is inspection work, not a
+    build; render it and the builder learns to measure instead of to build.
+    """
+    if op.get("kind") not in prompts.BUILD_OPS or op.get("status") != "done":
+        return False
+    return bool(names(op))
+
+
 def _result(op):
     return _json(op.get("result_json"), {})
 
 
 def _args(op):
-    return _json(op.get("args_json"), {})
+    """(args, parsed): a row whose `args_json` is not JSON is not silently an op with no args."""
+    value = op.get("args_json")
+    if isinstance(value, dict):
+        return value, True
+    if not value:
+        return {}, True
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}, False
+    return (parsed, True) if isinstance(parsed, dict) else ({}, False)
 
 
 def names(op):
@@ -49,7 +71,7 @@ def _actors(members):
 
 
 def _match_task(op, tasks):
-    explicit = op.get("task") or _args(op).get("task")
+    explicit = op.get("task") or _args(op)[0].get("task")
     if explicit and explicit in tasks:
         return explicit
     touched, at = set(names(op)), op.get("created_ms", 0)
@@ -69,10 +91,11 @@ def _match_task(op, tasks):
 
 def _step(op, actors, index):
     result = _result(op)
+    args, parsed = _args(op)
     return {"index": index, "team_seq": result.get("seq"), "op_id": op.get("id"),
             "at_ms": op.get("created_ms", 0),
             "actor": actors.get(op.get("by"), {"id": op.get("by"), "name": "?", "kind": "unknown"}),
-            "op": op.get("kind"), "args": _args(op),
+            "op": op.get("kind"), "args": args, "parse_error": not parsed, "render_ok": parsed,
             "result": {key: result.get(key) for key in ("result",) + FIELDS},
             "status": op.get("status"), "error_code": op.get("error_code") or ""}
 
@@ -121,12 +144,28 @@ def _corrected_step(correction, steps):
     return None
 
 
+def _round(review):
+    try:
+        return float(review.get("round") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _review(reviews, brief):
+    """The highest round, not the last row: review rows arrive in whatever order the export saw."""
+    found = reviews.get((brief or {}).get("id")) or []
+    return max(found, key=_round) if found else {}
+
+
 def _episode(project, key, group, actors, tasks, briefs, reviews, corrections, feedback):
     steps = [_step(op, actors, i) for i, op in enumerate(group["ops"])]
     before, final, degraded = replay(steps)
     for position, step in enumerate(steps):
         step["state_before"] = before[position]
-        step["state_confidence"] = "degraded" if position in degraded else "full"
+        if position in degraded or step.get("parse_error"):
+            step["state_confidence"] = "degraded"
+        else:
+            step["state_confidence"] = "full"
 
     task = tasks.get(key[1]) if key[0] == "task" else None
     brief = briefs.get((task or {}).get("brief") or "") or {}
@@ -138,7 +177,7 @@ def _episode(project, key, group, actors, tasks, briefs, reviews, corrections, f
         index = _corrected_step(correction, steps)
         if index is not None:
             found.append({**correction, "after_index": index})
-    review = (reviews.get(brief.get("id")) or [{}])[-1] if brief else {}
+    review = _review(reviews, brief)
     episode = {
         "schema_version": 1,
         "id": f"{project}/{key[1]}",
@@ -161,15 +200,21 @@ def _episode(project, key, group, actors, tasks, briefs, reviews, corrections, f
                   "params": final["params"], "surface_quality": None},
         "labels": {"outcome": labels.outcome(brief, [task] if task else []),
                    "quality": labels.quality(review or None, found)},
-        "warnings": [f"step {i}: unknown object names" for i in degraded],
+        "warnings": [f"step {i}: unknown object names" for i in degraded]
+                    + [f"step {i}: args_json is not JSON" for i, s in enumerate(steps)
+                       if s.get("parse_error")],
         "first_ms": steps[0]["at_ms"],
     }
     labels.attach(episode)
     return episode
 
 
-def build_episodes(raw, project):
-    """Every op of one project, grouped into episodes. Input order never matters."""
+def build_episodes(raw, project, dropped=None):
+    """Every build of one project, grouped into episodes. Input order never matters.
+
+    An episode with no mutating step is inspection work, not a build: it teaches the builder
+    nothing and would dominate every count, so it is dropped and recorded rather than rendered.
+    """
     actors = _actors(raw.get("member") or [])
     ops = sorted(raw.get("op") or [], key=lambda o: (o.get("created_ms", 0), o.get("id", "")))
     tasks = {t["id"]: t for t in raw.get("task") or []}
@@ -189,7 +234,8 @@ def build_episodes(raw, project):
         task_id = _match_task(op, tasks)
         if task_id:
             key = ("task", task_id)
-            attribution = "task_linked" if (op.get("task") or _args(op).get("task")) else "object_window"
+            attribution = ("task_linked" if (op.get("task") or _args(op)[0].get("task"))
+                           else "object_window")
             free_open[actor] = None      # a freestyle stretch ends when the actor returns to a task
         else:
             key = free_open.get(actor)
@@ -205,5 +251,13 @@ def build_episodes(raw, project):
         if attribution == "task_linked":
             groups[key]["attribution"] = "task_linked"
 
-    return [_episode(project, key, groups[key], actors, tasks, briefs, reviews, corrections, feedback)
-            for key in order]
+    found = []
+    for key in order:
+        group = groups[key]
+        if not any(mutating(op) for op in group["ops"]):
+            if dropped is not None:
+                dropped.append({"id": f"{project}/{key[1]}", "reason": "no mutating step"})
+            continue
+        found.append(_episode(project, key, group, actors, tasks, briefs, reviews, corrections,
+                              feedback))
+    return found

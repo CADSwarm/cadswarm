@@ -146,6 +146,14 @@ def test_the_params_sheet_is_ignored_on_both_sides():
     assert got["completion"] == 1.0 and got["geometry"]["names"] == 1.0
 
 
+def test_report_carries_the_dataset_and_split_it_measured():
+    rows = [eval_replay.replay(case([box("Base")]), eval_replay.ScriptedPolicy([box("Base")]),
+                               client=FakeWorker())]
+    got = eval_replay.report(rows, policy="reference",
+                             meta={"dataset_id": "d37f1cc51301", "split_mode": "temporal"})
+    assert got["dataset_id"] == "d37f1cc51301" and got["split_mode"] == "temporal"
+
+
 def test_report_aggregates_and_names_the_policy():
     rows = [eval_replay.replay(case([box("Base")]), eval_replay.ScriptedPolicy([box("Base")]),
                                client=FakeWorker())]
