@@ -311,7 +311,7 @@ class Source:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_training_redact.py tests/test_training_source.py -v`
-Expected: PASS (16 passed).
+Expected: PASS (19 passed).
 
 - [ ] **Step 5: Commit**
 
@@ -751,6 +751,31 @@ def test_a_swept_result_marks_the_step_degraded():
     assert degraded == [0]
 
 
+def test_a_swept_result_inside_the_step_shape_is_degraded_too():
+    """The dataset build wraps the worker payload under "result": the blob sits one level down."""
+    swept = step("run_part_script", {"name": "A"}, modified=["A"])
+    swept["result"] = {"result": {"blob": "abc"}, "created": [], "modified": ["A"],
+                       "deleted": [], "recomputed": [], "broken": []}
+    _, _, degraded = state.replay([swept])
+    assert degraded == [0]
+
+
+def test_insert_mesh_volume_mm3_is_kept():
+    mesh = step("insert_mesh", {"name": "M"}, created=["M"], volume=3.0, name="M")
+    mesh["result"]["result"] = {"name": "M", "volume_mm3": 30.0}
+    s = state.empty()
+    state.apply(s, mesh)
+    assert s["objects"]["M"]["volume"] == 30.0
+
+
+def test_a_script_volume_is_compared_even_though_its_shape_is_unknown():
+    s = state.empty()
+    state.apply(s, step("run_part_script", {"name": "A"}, created=["A"], volume=100.0, name="A"))
+    report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
+                                   {"name": "A", "type_id": "Part::Feature", "volume": 120.0}], [])
+    assert report["volume_mismatch"] == ["A"]
+
+
 def test_replay_returns_the_state_before_each_step_and_flags_unknown_objects():
     steps = [step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]),
              step("set_props", {"name": "Ghost"}, modified=["Ghost"])]
@@ -872,7 +897,10 @@ def apply(state, step):
     args = step.get("args") or {}
     created = result.get("created") or []
     payload = result.get("result") or {}
-    volume = payload.get("volume") if len(created) == 1 else None
+    named = payload.get("name")
+    volume = None
+    if len(created) == 1 and named in (None, created[0]):
+        volume = payload.get("volume", payload.get("volume_mm3"))
     unknown = []
 
     for name in result.get("deleted") or []:
@@ -906,13 +934,19 @@ def apply(state, step):
     return unknown
 
 
+def _swept(step):
+    """A done step whose result payload was spilled: the change happened, its detail is gone."""
+    result = step.get("result") or {}
+    inner = result.get("result") if isinstance(result.get("result"), dict) else {}
+    return step.get("status") == "done" and ("blob" in result or "blob" in inner)
+
+
 def replay(steps):
     state = empty()
     before, degraded = [], []
     for index, step in enumerate(steps):
         before.append(clone(state))
-        # A swept result (`{"blob": hash}`) says a change happened but not what it was.
-        if apply(state, step) or (step.get("status") == "done" and "blob" in (step.get("result") or {})):
+        if apply(state, step) or _swept(step):
             degraded.append(index)
     return before, state, degraded
 
@@ -937,12 +971,12 @@ def conformance(state, cad_objects, params):
     type_bad = sorted(name for name, row in live.items()
                       if name in mine and mine[name]["type"] is not None
                       and row.get("type_id") != mine[name]["type"])
-    unknown_type = sorted(name for name, obj in mine.items() if obj.get("type") is None)
+    unknown_type = sorted(name for name in mine if name in live and mine[name].get("type") is None)
     volume_bad = []
     for name in sorted(live):
         row, got = live[name], mine.get(name) or {}
         live_volume = row.get("volume") or 0
-        if not got.get("known") or not got.get("volume") or not live_volume:
+        if not got.get("volume") or not live_volume:
             continue
         if abs(got["volume"] - live_volume) > 0.01 * live_volume:
             volume_bad.append(name)
@@ -956,7 +990,7 @@ def conformance(state, cad_objects, params):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_state.py -v`
-Expected: PASS (16 passed).
+Expected: PASS (19 passed).
 
 - [ ] **Step 5: Commit**
 
