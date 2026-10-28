@@ -115,7 +115,9 @@ more or less room) and scrolls when the window is short. It has three parts:
   - No `@` is chat between people. AI helpers never see it.
   Tasks only go to AI helpers: people pick their own work.
 - **Tasks** and **Activity** fold open underneath. Tasks lists everything that needs doing, whole-team
-  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. Activity is what
+  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. A task stuck on
+  a helper's question is marked **stuck**: answer it and press **Start it** again, and it reopens for any
+  helper (a finished or cancelled task keeps its outcome). Activity is what
   happened (parts added, tasks finished, files saved, renames) and 🤝 the messages helpers send each other.
 - **AI helpers work together.** A helper can see who is free (`list_helpers`), hand another helper part of
   a job (`delegate_task`, which wakes that helper) and ask the helper who holds a part to change it. When a
