@@ -2006,7 +2006,7 @@ def build(raw_dir, out_root):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_render.py -v`
-Expected: PASS (9 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 
