@@ -2226,13 +2226,21 @@ git commit -m "feat(training): geometry metrics and the heuristic critic"
 - Consumes: `..worker_client.WorkerClient`, `metrics.geometry`, `metrics.jaccard`.
 - Produces: `eval_replay.ScriptedPolicy(ops)`, `eval_replay.RandomPolicy(seed)`, each with
   `.next_op(seen) -> dict|None`; `eval_replay.replay(case, policy, python=None, script=None,
-  workdir=None, max_steps=40, client=None) -> dict`; `eval_replay.report(results) -> dict`.
+  workdir=None, max_steps=40, client=None) -> dict`; `eval_replay.report(results, policy) -> dict`.
+
+**Two things the harness must not lie about.** A build that produced nothing is not "printable"
+(the worker's check is `all([])`, which is true for an empty document), and two cases must never
+share one document — a reused scratch file accumulates the previous case's objects and inflates
+every score. So a case gets its own document name, and the scratch directory is removed if the
+harness created it.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/test_training_replay.py
 """Scoring a policy by running it, through the same JSON-lines worker the app uses."""
+import os
+
 from cadswarm.training import eval_replay
 
 
@@ -2250,7 +2258,8 @@ class FakeWorker:
             return {"ok": True, "result": {"name": args["name"]}, "created": [args["name"]],
                     "modified": [], "deleted": [], "recomputed": []}
         if op == "status":
-            return {"ok": True, "result": {"objects": [{"name": "Base", "bbox": [0, 0, 0, 1, 1, 1],
+            return {"ok": True, "result": {"objects": [{"name": "Params", "bbox": None, "volume": None},
+                                                       {"name": "Base", "bbox": [0, 0, 0, 1, 1, 1],
                                                         "volume": 1.0}], "params": {}}}
         if op == "printability":
             return {"ok": True, "result": {"ok": True, "objects": []}}
@@ -2258,6 +2267,14 @@ class FakeWorker:
 
     def stop(self):
         pass
+
+
+class EmptyWorker(FakeWorker):
+    def call(self, op, args=None, allowed=None):
+        if op == "status":
+            return {"ok": True, "result": {"objects": [{"name": "Params", "bbox": None,
+                                                        "volume": None}], "params": {}}}
+        return super().call(op, args, allowed)
 
 
 def case(ops):
@@ -2285,6 +2302,12 @@ def test_a_refused_op_counts_against_the_valid_rate():
     assert got["valid_op_rate"] == 0.0 and got["rejection_rate"] == 1.0
 
 
+def test_a_build_that_produced_nothing_is_not_printable():
+    got = eval_replay.replay(case([]), eval_replay.ScriptedPolicy([]), client=EmptyWorker())
+    assert got["printable"] is False
+    assert eval_replay.report([got], policy="random")["printable_rate"] == 0.0
+
+
 def test_the_random_baseline_is_deterministic_and_stops_at_the_cap():
     one = eval_replay.replay(case([box("Base")]), eval_replay.RandomPolicy(seed=4), client=FakeWorker(),
                              max_steps=3)
@@ -2299,11 +2322,34 @@ def test_a_policy_that_returns_nothing_stops():
     assert got["steps"] == 0 and got["valid_op_rate"] == 0.0
 
 
+def test_each_case_gets_its_own_document_and_the_scratch_dir_is_removed(monkeypatch):
+    paths = []
+
+    def make(doc_path, **kwargs):
+        paths.append(doc_path)
+        return FakeWorker()
+
+    monkeypatch.setattr(eval_replay, "WorkerClient", make)
+    ops = [box("Base")]
+    eval_replay.replay(case(ops), eval_replay.ScriptedPolicy(ops))
+    eval_replay.replay(case(ops), eval_replay.ScriptedPolicy(ops))
+    assert len(paths) == 2 and paths[0] != paths[1]
+    assert not os.path.exists(os.path.dirname(paths[0]))
+
+
+def test_a_caller_supplied_workdir_is_kept(tmp_path):
+    got = eval_replay.replay(case([box("Base")]), eval_replay.ScriptedPolicy([box("Base")]),
+                             client=FakeWorker(), workdir=str(tmp_path))
+    assert got["steps"] == 1 and tmp_path.exists()
+
+
 def test_report_aggregates_and_names_the_policy():
     rows = [eval_replay.replay(case([box("Base")]), eval_replay.ScriptedPolicy([box("Base")]),
                                client=FakeWorker())]
     got = eval_replay.report(rows, policy="reference")
     assert got["policy"] == "reference" and got["cases"] == 1 and got["completion"] == 1.0
+    empty = eval_replay.report([], policy="reference")
+    assert empty["cases"] == 0 and empty["printable_rate"] == 0.0
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -2317,12 +2363,18 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'cadswarm.training.eval
 # cadswarm/training/eval_replay.py
 """Score a policy by building in a real FreeCAD document.
 
-A fresh scratch document per case, the same WorkerClient the app uses, and the worker's own
-error codes surfaced rather than swallowed. The reference policy is the ceiling; the random
-policy is the floor; `base` and `trained` are what the numbers are actually about.
+A fresh document per case, the same WorkerClient the app uses, and the worker's own error codes
+surfaced rather than swallowed. The reference policy is the ceiling; the random policy is the
+floor; `base` and `trained` are what the numbers are actually about.
+
+Two honesty rules: a document containing nothing but the Params sheet is not printable (the
+worker's check is `all([])`, which is true for an empty document), and cases never share a
+document file.
 """
 import os
 import random
+import re
+import shutil
 import tempfile
 
 from ..worker_client import WorkerClient, WorkerError
@@ -2343,15 +2395,18 @@ class ScriptedPolicy:
 
 
 class RandomPolicy:
-    """A deterministic floor: valid-shaped primitives with unrelated names."""
+    """A deterministic floor: valid-shaped primitives with unrelated names.
+
+    `replay` owns the step cap; this policy stops itself only when `max_steps` is given.
+    """
     name = "random"
 
-    def __init__(self, seed, max_steps=8):
+    def __init__(self, seed, max_steps=None):
         self.random = random.Random(seed)
         self.max_steps = max_steps
 
     def next_op(self, seen):
-        if len(seen) >= self.max_steps:
+        if self.max_steps is not None and len(seen) >= self.max_steps:
             return None
         kind = self.random.choice(["box", "cylinder", "sphere"])
         return {"op": "create_primitive",
@@ -2359,15 +2414,26 @@ class RandomPolicy:
 
 
 def _op_view(objects):
-    return {"objects": {o.get("name"): {"bbox": o.get("bbox"), "volume": o.get("volume"),
-                                        "known": True} for o in objects or []}}
+    return {"objects": {o.get("name"): {"bbox": o.get("bbox"), "volume": o.get("volume")}
+                        for o in objects or []}}
+
+
+def _document_name(case):
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(case.get("id") or "case"))
+    return f"{safe}.FCStd"
 
 
 def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, client=None):
     """Run `policy` on a scratch document and score it against the case's reference model."""
-    root = workdir or tempfile.mkdtemp(prefix="cadswarm-eval-")
-    os.makedirs(root, exist_ok=True)
-    worker = client or WorkerClient(os.path.join(root, "eval.FCStd"), python=python, script=script)
+    created = None
+    if client is None:
+        created = workdir or tempfile.mkdtemp(prefix="cadswarm-eval-")
+        os.makedirs(created, exist_ok=True)
+        worker = WorkerClient(os.path.join(created, _document_name(case)),
+                              python=python, script=script)
+    else:
+        worker = client
+        created = workdir
     seen = []
     try:
         for _ in range(max_steps):
@@ -2380,21 +2446,25 @@ def replay(case, policy, python=None, script=None, workdir=None, max_steps=40, c
             except WorkerError as e:
                 seen.append({"op": op["op"], "args": op.get("args"), "ok": False, "code": e.code})
         final = worker.call("status").get("result") or {}
-        printable = bool((worker.call("printability", {}).get("result") or {}).get("ok"))
+        objects = final.get("objects") or []
+        candidates = [o for o in objects if o.get("name") != "Params"]
+        printable = bool(candidates) and bool(
+            (worker.call("printability", {}).get("result") or {}).get("ok"))
     finally:
         worker.stop()
+        if client is None and workdir is None and created:
+            shutil.rmtree(created, ignore_errors=True)
 
     attempted = len(seen)
     valid = sum(1 for step in seen if step["ok"])
     rejected = sum(1 for step in seen if step["code"] == "lock_violation")
     reference = (case.get("final") or {}).get("objects") or {}
-    candidate = _op_view(final.get("objects"))
-    return {"case": case["id"], "steps": attempted,
+    return {"case": case.get("id", "?"), "steps": attempted,
             "valid_op_rate": round(valid / attempted, 4) if attempted else 0.0,
             "rejection_rate": round(rejected / attempted, 4) if attempted else 0.0,
             "completion": metrics.jaccard(reference.keys(),
-                                          [o.get("name") for o in final.get("objects") or []]),
-            "geometry": metrics.geometry({"objects": reference}, candidate),
+                                          [o.get("name") for o in objects]),
+            "geometry": metrics.geometry({"objects": reference}, _op_view(objects)),
             "printable": printable, "ops": seen}
 
 
@@ -2402,15 +2472,15 @@ def report(results, policy):
     """One comparable row set per policy, with the case count that produced it."""
     summary = metrics.aggregate(results)
     summary.update({"policy": policy, "cases": len(results),
-                    "printable_rate": round(sum(1 for r in results if r["printable"]) / len(results), 4)
-                    if results else 0.0})
+                    "printable_rate": round(sum(1 for r in results if r.get("printable"))
+                                            / len(results), 4) if results else 0.0})
     return summary
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_replay.py -v`
-Expected: PASS (5 passed).
+Expected: PASS (8 passed).
 
 - [ ] **Step 5: Commit**
 
