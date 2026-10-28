@@ -17,3 +17,6 @@ demo/perch/runs/
 
 # Vite dependency cache
 .vite/
+
+# Subagent-driven-development scratch (progress ledger, task briefs, review packages).
+.superpowers/

@@ -165,7 +165,7 @@ SCHEMA_VERSION = 1
 import re
 
 PATTERNS = [
-    (re.compile(r"[A-Za-z]:\\(?:[^\\\s\"']+\\)*[^\\\s\"']*"), "<path>"),
+    (re.compile(r"[A-Za-z]:\\(?:[^\\\n\"'<>|?*]+\\)*[^\\\n\"'<>|?*]*"), "<path>"),
     (re.compile(r"/(?:home|Users)/[^/\s\"']+(?:/[^\s\"']*)?"), "<path>"),
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<email>"),
 ]
@@ -549,7 +549,7 @@ def test_conformance_reports_missing_extra_and_type_mismatch():
     state.apply(s, step("create_primitive", {"kind": "box", "name": "B"}, created=["B"]))
     report = state.conformance(s, [{"name": "A", "type_id": "Part::Box", "volume": 0.0},
                                    {"name": "C", "type_id": "Part::Cylinder", "volume": 0.0}], [])
-    assert report["missing"] == ["C"] and report["extra"] == ["B"] and report["fraction"] == 0.5
+    assert report["missing"] == ["C"] and report["extra"] == ["B"] and report["fraction"] == 0.3333
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -942,7 +942,7 @@ def test_split_falls_back_to_time_with_one_project():
     eps = [{"id": f"a/{i}", "project": "A", "first_ms": i} for i in range(10)]
     got = split.assign(eps)
     assert got["mode"] == "temporal" and not set(got["train"]) & set(got["test"])
-    assert got["test"] == ["a/9"]
+    assert got["test"] == ["a/8", "a/9"]
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
