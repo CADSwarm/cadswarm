@@ -81,7 +81,8 @@ opening one. Your sign-in for each team is kept, so you don't need a new invite 
   may ask to allow access through its firewall). Choose **Maincloud** instead to let teammates join from
   anywhere; the guide's **Sign in to SpacetimeDB…** button opens your browser so you sign in once.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
-  FreeCAD.
+  FreeCAD. While a team is live it also keeps the computer awake and out of Windows' background
+  ("Efficiency mode") throttling, so minimising or hiding FreeCAD does not pause the build.
 - The first setup downloads about 70 MB of helper software into CADSwarm's app folder, plus the team
   server download above if you host. Nothing is installed into FreeCAD itself. On Linux, an official FreeCAD
   the installer fetched for you is unpacked there too (`FreeCAD-<version>`, about 3 GB).

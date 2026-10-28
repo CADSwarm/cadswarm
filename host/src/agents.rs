@@ -396,6 +396,7 @@ mod tests {
             data_dir: data, freecad_python: PathBuf::from("freecad"), worker_script: PathBuf::from("w.py"),
             web_url: String::new(), cadswarm_python: PathBuf::from("python"), agent_client: client.into(),
             agent_command: command,
+            keep_awake: true,
         }
     }
 

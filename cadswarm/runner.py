@@ -837,6 +837,8 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         raise SystemExit("usage: cadswarm_launch.py runner <helper folder> [project name]")
+    from cadswarm.power import keep_running_in_background
+    keep_running_in_background()  # a minimised/hidden helper runner must not be throttled to a crawl
     Runner(argv[0], argv[1] if len(argv) > 1 else "").run()
 
 

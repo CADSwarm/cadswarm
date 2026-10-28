@@ -9,6 +9,7 @@ mod executor;
 mod guard;
 #[allow(dead_code)]
 mod module_bindings;
+mod power;
 mod space;
 mod ticket;
 mod worker;
@@ -85,6 +86,7 @@ fn main() -> Result<()> {
                 cadswarm_python: python,
                 agent_client: agent,
                 agent_command: Vec::new(),
+                keep_awake: true,
             };
             cfg.save()?;
             println!("wrote {}", HostConfig::path(&cfg.data_dir).display());
@@ -121,6 +123,9 @@ pub fn mint_invite(space: &space::Space, cfg: &HostConfig, kind: &str, role: &st
 fn run(cfg: &HostConfig) -> Result<()> {
     // One host per folder: a second one is refused before it touches the database.
     let _instance = guard::InstanceGuard::acquire(&cfg.data_dir)?;
+    if cfg.keep_awake {
+        power::keep_running_in_background();
+    }
     let space = space::Space::connect(cfg)?;
     let mut worker = worker::WorkerDriver::new(
         cfg.freecad_python.clone(),
