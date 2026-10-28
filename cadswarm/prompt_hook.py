@@ -70,14 +70,17 @@ def lattice_hint(prompt):
 # Words that usually mean "this is judged on how it looks". A false positive only adds a short reminder.
 SHAPE_WORDS = re.compile(r"\b(car|cars|vehicle|sedan|coupe|motorcycle|motorbike|boat|hull|aircraft|fuselage|"
                          r"fairing|helmet|body|bodywork|exterior|bonnet|hood|fender|bumper|grille|spoiler|"
-                         r"dashboard|chair|furniture|shoe|toy|figurine|bottle|vase|"
-                         r"looks? (wrong|bad|terrible|cheap|flat|off)|boxy|slab[- ]sided|blocky|polygons?|"
+                         r"roof|pillar|windshield|dashboard|chair|furniture|shoe|toy|figurine|bottle|vase|"
+                         r"looks? (wrong|bad|terrible|cheap|flat|off|like)|boxy|slab[- ]sided|blocky|polygons?|"
                          r"proportions?|curvy|smooth|realistic|like the real)\b", re.I)
 SHAPE_HINT = ("\n## This looks like a shape judged on how it looks\n"
               "Before calling it done, call surface_quality(topic=<the person's request>) on the shell and "
               "the greenhouse: `fails` means it reads as a block model. Build the main surfaces as lofts or "
               "sweeps in run_part_script (Part.makeLoft across 20+ stations), not extrusions, and keep box "
-              "roofs and box pillars out of a body. A bracket or plate is allowed to be a box.")
+              "roofs and box pillars out of a body. A bracket or plate is allowed to be a box. When they say "
+              "it looks wrong, record their exact words with record_feedback(verdict=\"bad\", issues=[...], "
+              "by=\"person\") and save any photo they send with add_reference; before rebuilding, call "
+              "model_feedback for that subject and open the reference images.")
 
 
 def aesthetic_hint(prompt):

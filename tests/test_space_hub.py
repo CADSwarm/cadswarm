@@ -693,3 +693,19 @@ def test_a_helper_can_ask_the_hub_for_one_fea_report(world):
     assert hub.get("/fea/reports", report="fea_1a2b") == {"id": "fea_1a2b"}  # the module's events stay inside
     hub.get("/fea/reports")
     assert seen == [("fea_reports", {"report": "fea_1a2b", "limit": 100}), ("fea_reports", {"limit": 100})]
+
+
+def test_feedback_and_reference_routes_become_helper_ops(world):
+    hub, fake = world
+    finish_ops_with(fake, {"verdicts": [], "lessons": []})
+    hub.post("/feedback", {"verdict": "bad", "subject": "car", "issues": ["roof is a box"], "by": "person"})
+    assert fake.calls[-1][1][2] == "record_feedback"
+    assert json.loads(fake.calls[-1][1][3])["verdict"] == "bad"
+    hub.get("/feedback", subject="car", limit=5)
+    assert fake.calls[-1][1][2] == "feedback_recent"
+    assert json.loads(fake.calls[-1][1][3]) == {"subject": "car", "limit": 5}
+    hub.post("/references", {"subject": "car", "filename": "is350.png", "image_base64": "AA=="})
+    assert fake.calls[-1][1][2] == "add_reference"
+    hub.get("/references", subject="car")
+    assert fake.calls[-1][1][2] == "list_references"
+    assert json.loads(fake.calls[-1][1][3]) == {"subject": "car"}

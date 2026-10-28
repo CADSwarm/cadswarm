@@ -111,6 +111,9 @@ Work like a careful teammate:
     reads as a block model: build its main surfaces as lofts or sweeps in run_part_script (Part.makeLoft
     across 20+ stations), keep separate boxes out of the shell, and fix it before reporting done. A boxy
     part needs none of this; call it anyway if you are unsure.
+    When your person says a model looks wrong, relay their words with record_feedback(by="person") and
+    attach any photo with add_reference; before rebuilding, call model_feedback and look at the reference
+    images.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 # The team is joined in the background while the client already has our tools. A tool called before the join
@@ -450,6 +453,95 @@ def surface_quality(names: list[str] | None = None, topic: str = "", intent: str
     return {"intent": chosen, "objects": objects,
             "failing": [o["name"] for o in objects if o["verdict"] == "fails"],
             "advisory": chosen == "aesthetic"}
+
+
+MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+
+
+def _read_image(path):
+    """A local image as base64, refusing anything the project store should not hold."""
+    import base64
+    path = os.path.abspath(os.path.expanduser(str(path or "")))
+    if not os.path.isfile(path):
+        raise ValueError(f"There's no file {path}")
+    if os.path.getsize(path) > MAX_REFERENCE_BYTES:
+        raise ValueError("Images are limited to 20 MB")
+    with open(path, "rb") as f:
+        data = f.read()
+    if not data:
+        raise ValueError(f"{path} is empty")
+    return base64.b64encode(data).decode()
+
+
+def _save_images(paths, subject):
+    """Copy the person's photos into the project beside their verdict; return the project paths."""
+    out = []
+    for path in (paths or [])[:6]:
+        try:
+            body = {"subject": subject, "label": "feedback", "filename": os.path.basename(path),
+                    "image_base64": _read_image(path)}
+        except (OSError, ValueError):
+            continue
+        saved = call("POST", "/references", body)
+        if isinstance(saved, dict) and saved.get("image"):
+            out.append(saved["image"])
+    return out
+
+
+@mcp.tool()
+def record_feedback(verdict: str, issues: list[str] | None = None, note: str | None = None,
+                    objects: list[str] | None = None, tags: list[str] | None = None,
+                    images: list[str] | None = None, subject: str | None = None,
+                    topic: str | None = None, by: str = "person") -> dict:
+    """Record how your person judged the model: their verdict, their exact words, and photos if they sent any.
+
+    Pass `by="person"` only when they actually said it ("the roof looks like a box", "this is fine now");
+    your own opinion is `by="helper"` and waits for a person to confirm it. `issues` are short phrases in
+    their words. `images` are local file paths they gave you (PNG/JPEG/WebP, 20 MB); each is copied into
+    the project under reference/<subject>/ and returned. Shape evidence is attached automatically.
+    """
+    verdict = str(verdict or "").lower()
+    if verdict not in ("bad", "mixed", "good"):
+        return {"error": "verdict must be bad, mixed or good", "code": "bad_args"}
+    if by not in ("person", "helper"):
+        return {"error": "by must be person or helper", "code": "bad_args"}
+    stats = surface_quality(objects, topic=topic or "") if objects else None
+    evidence = {"intent": (stats or {}).get("intent", "mechanical"),
+                "objects": (stats or {}).get("objects", [])}
+    body = {"verdict": verdict, "issues": issues or [], "note": note or "", "objects": objects or [],
+            "tags": tags or [], "subject": subject or "", "by": by, "evidence": evidence,
+            "images": _save_images(images, subject or "model")}
+    return call("POST", "/feedback", body, doing="recording feedback")
+
+
+@mcp.tool()
+def model_feedback(subject: str = "", limit: int = 10) -> dict:
+    """What this team said about a kind of model: recent verdicts in their words, and the lessons learned.
+
+    Call it before rebuilding something a person already judged; quote their words, not a paraphrase."""
+    return call("GET", "/feedback", subject=subject, limit=limit)
+
+
+@mcp.tool()
+def add_reference(subject: str, image_path: str = "", label: str = "", notes: str = "",
+                  dimensions: str = "", source_url: str = "") -> dict:
+    """Save the look a design should match: a photo, sketch or render, plus what it is.
+
+    `subject` is the kind of thing ("car", "helmet"); `dimensions` free text like "4710 x 1840 x 1435 mm";
+    `image_path` is a local file (PNG/JPEG/WebP, 20 MB) on your machine. The image goes into the project so
+    every teammate can open it, and list_references gives the path back."""
+    if not image_path:
+        return {"error": "image_path is required", "code": "bad_args"}
+    return call("POST", "/references", {"subject": subject, "label": label, "notes": notes,
+                                        "dimensions": dimensions, "source_url": source_url,
+                                        "filename": os.path.basename(image_path),
+                                        "image_base64": _read_image(image_path)})
+
+
+@mcp.tool()
+def list_references(subject: str = "") -> dict:
+    """The reference images the team saved, with notes and dimensions. Open the `image` path to look at it."""
+    return call("GET", "/references", subject=subject)
 
 
 @mcp.tool()

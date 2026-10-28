@@ -166,3 +166,42 @@ def test_surface_quality_leaves_a_bracket_alone_and_takes_an_override(monkeypatc
     got = mcp_server.surface_quality(["Bracket"], topic="a mount bracket", intent="aesthetic")
     assert got["intent"] == "aesthetic" and got["failing"] == ["Bracket"]
     assert mcp_server.surface_quality(intent="sideways")["code"] == "bad_args"
+
+
+def test_record_feedback_attaches_the_shape_evidence(monkeypatch, session):
+    posts = []
+    def route(path, body=None):
+        posts.append((path, body))
+        if path == "/surface":
+            return {"objects": [{"name": "BodyShell", "faces": 194, "planar": 146, "curved": 48, "valid": True}]}
+        return {"id": 7, "subject": "car", "recorded": 1}
+    session.client.post = route
+    got = mcp_server.record_feedback("bad", ["roof is a box"], subject="car", objects=["BodyShell"],
+                                     topic="a Lexus IS350 body")
+    assert got["id"] == 7
+    feedback_post = posts[-1][1]
+    assert feedback_post["verdict"] == "bad" and feedback_post["issues"] == ["roof is a box"]
+    assert feedback_post["evidence"]["intent"] == "aesthetic"
+    assert feedback_post["evidence"]["objects"][0]["planar_share"] == 0.753
+
+
+def test_record_feedback_refuses_a_bad_verdict(session):
+    assert mcp_server.record_feedback("meh")["code"] == "bad_args"
+    assert mcp_server.record_feedback("bad", by="nobody")["code"] == "bad_args"
+
+
+def test_add_reference_reads_a_local_image_and_posts_it(monkeypatch, session, tmp_path):
+    image = tmp_path / "is350.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+    posts = []
+    session.client.post = lambda path, body=None: posts.append((path, body)) or {"subject": "car"}
+    mcp_server.add_reference("car", str(image), label="front", dimensions="4710 x 1840 x 1435")
+    body = posts[0][1]
+    assert body["filename"] == "is350.png" and body["label"] == "front"
+    import base64
+    assert base64.b64decode(body["image_base64"]) == image.read_bytes()
+
+
+def test_add_reference_refuses_a_missing_file(session):
+    with pytest.raises(ValueError):
+        mcp_server.add_reference("car", "C:/nope/none.png")

@@ -59,6 +59,8 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
 - A shape judged on how it looks (car body, fairing, helmet, product exterior) must be lofted, not
   extruded: call `surface_quality` before finishing it. A bracket, plate or enclosure is allowed to be a box.
+- When your person says it looks wrong, record their exact words with `record_feedback` (`by="person"`)
+  and attach their photos with `add_reference`; before rebuilding, read `model_feedback` and open the references.
 - Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
   from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
   you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you

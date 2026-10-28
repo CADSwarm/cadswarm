@@ -9,3 +9,8 @@ def test_a_shape_request_gets_the_surface_hint():
 
 def test_a_bracket_gets_no_hint():
     assert aesthetic_hint("a bracket for the shelf") == ""
+
+
+def test_the_critique_hint_tells_the_agent_to_record_and_look_at_references():
+    hint = aesthetic_hint("the roof looks like a box, here is a photo")
+    assert "record_feedback" in hint and "add_reference" in hint
