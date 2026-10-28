@@ -619,7 +619,7 @@ def export_project(project_dir, out_dir):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_export.py -v`
-Expected: PASS (10 passed).
+Expected: PASS (9 passed).
 
 - [ ] **Step 5: Commit**
 
