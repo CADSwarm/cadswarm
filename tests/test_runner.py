@@ -110,6 +110,7 @@ def test_an_idle_poll_is_one_cheap_read_and_news_gets_a_full_look(tmp_path, monk
     calm["v_task"] = []
     calm["v_receipt"] = []
     calm["v_event"] = [{"seq": 5, "kind": "op", "actor": 2, "at_ms": 1, "data_json": "{}"}]
+    calm["v_event_head"] = [{"ws": 1, "seq": 5}]
     r, clock, spawned = make_runner(tmp_path, t=calm)
     r.state["started"] = True  # don't wake it just to say hello
     r.save_state()
@@ -121,12 +122,13 @@ def test_an_idle_poll_is_one_cheap_read_and_news_gets_a_full_look(tmp_path, monk
     queries.clear()
 
     clock[0] += 1
-    r.step()  # nothing happened: only the event cursor is read
-    assert len(queries) == 1 and "v_event" in queries[0], queries
+    r.step()  # nothing happened: only the one-row event head is read, never the history
+    assert queries == ["SELECT * FROM v_event_head"], queries
     assert spawned == []
 
     # A message arrives (which the module records as an event): the full look wakes the helper.
     r.hub.space.tables["v_event"].append({"seq": 6, "kind": "message", "actor": 3, "at_ms": 2, "data_json": "{}"})
+    r.hub.space.tables["v_event_head"] = [{"ws": 1, "seq": 6}]
     r.hub.space.tables["v_message"].append(msg("m_new", 3, "member:1", "steer", "now the base"))
     clock[0] += 1
     r.step()

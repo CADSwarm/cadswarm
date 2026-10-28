@@ -42,6 +42,9 @@ AGENT_DOC = """{begin}
 Your teammates' AI helpers are editing the same live model right now.
 All CAD work goes through the `cadswarm` MCP tools: never edit .FCStd files directly.
 Your human may be new to CAD: keep dimensions in mm and use plain words.
+If the `cadswarm` tools aren't there yet, they are still starting: wait about 5 seconds and look again
+(for up to a minute). Never start the CADSwarm server yourself and never read CADSwarm's code or config
+to find them: a second copy takes your seat on the team and can drop you from it.
 
 **Be brief.** People watch the model change live, so don't narrate: no running commentary, no restating tool
 calls or their results, no plans-before-acting. Reply in one or two short sentences; when you finish, say what
