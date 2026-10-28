@@ -30,9 +30,10 @@ def test_the_prompt_is_bounded_and_deterministic():
     request = {"text": "x" * 9000, "plan_json": {"note": "y" * 9000}}
     summary = {"objects": [], "objects_total": 0,
                "params": {f"p{i:03d}": "1" for i in range(200)}}
-    text = prompts.render_request(request, summary, [])
+    previous = [{"op": "run_part_script", "args": {"code": "z" * 50_000}}] * 8
+    text = prompts.render_request(request, summary, previous)
     assert len(text) < 9000 and "params_total" in text
-    assert text == prompts.render_request(request, summary, [])
+    assert text == prompts.render_request(request, summary, previous)
 
 
 def test_sft_rows_skip_bad_and_degraded_steps():
@@ -101,3 +102,4 @@ def test_leftover_export_directories_are_ignored(tmp_path):
     write_project(raw, "ok.new", {"project": "P", "status": "ok", "schema_sha256": "abc"})
     manifest = dataset.build(str(raw), str(tmp_path / "out"))
     assert manifest["counts"]["episodes"] == 1 and manifest["projects"]["P"]["episodes"] == 1
+    assert {"ok.old", "ok.new"} <= {item["project"] for item in manifest["skipped"]}

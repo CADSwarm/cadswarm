@@ -11,6 +11,7 @@ MAX_TEXT = 2000
 MAX_PLAN = 4000
 MAX_PARAMS = 40
 MAX_OPS = 8
+MAX_ARGS = 200
 
 SYSTEM = """You are the builder for a CAD team. You see one request, its plan, the current model
 state and the last few operations. Reply with exactly one op as JSON and nothing else:
@@ -47,7 +48,10 @@ def render_request(request, summary, previous=()):
     if len(params) > MAX_PARAMS:
         view["params"] = {key: params[key] for key in sorted(params)[:MAX_PARAMS]}
         view["params_total"] = len(params)
-    recent = [{"op": step.get("op"), "args": step.get("args")} for step in list(previous)[-MAX_OPS:]]
+    recent = []
+    for step in list(previous)[-MAX_OPS:]:
+        args = json.dumps(step.get("args") or {}, sort_keys=True, ensure_ascii=False)
+        recent.append({"op": step.get("op"), "args": _clip(args, MAX_ARGS)})
     return ("Request: " + _clip(request.get("text"), MAX_TEXT) + "\n"
             + "Plan: " + _clip(json.dumps(request.get("plan_json") or {}, sort_keys=True,
                                           ensure_ascii=False), MAX_PLAN) + "\n"

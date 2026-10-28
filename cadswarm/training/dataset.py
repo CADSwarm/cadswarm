@@ -62,15 +62,24 @@ def build(raw_dir, out_root):
     os.makedirs(out_root, exist_ok=True)
     projects, all_episodes, conformance, skipped, raw_info = {}, [], {}, [], {}
     names = sorted(d for d in os.listdir(raw_dir)
-                   if os.path.isdir(os.path.join(raw_dir, d)) and not d.startswith(".")
-                   and not d.endswith(SKIP_SUFFIXES))
+                   if os.path.isdir(os.path.join(raw_dir, d)))
+    usable = []
+    for name in names:
+        if name.startswith(".") or name.endswith(SKIP_SUFFIXES):
+            skipped.append({"project": name, "reason": "leftover or hidden directory"})
+            continue
+        usable.append(name)
+    names = usable
     for directory in names:
         try:
             source = _read_source(raw_dir, directory)
         except (OSError, ValueError) as e:
             skipped.append({"project": directory, "reason": f"no readable source.json: {e}"})
             continue
-        if (source or {}).get("status") != "ok":
+        if not isinstance(source, dict):
+            skipped.append({"project": directory, "reason": "source.json is not an object"})
+            continue
+        if source.get("status") != "ok":
             skipped.append({"project": source.get("project") or directory,
                             "reason": str((source or {}).get("status") or "no status")})
             continue
