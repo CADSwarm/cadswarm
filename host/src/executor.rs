@@ -189,7 +189,7 @@ pub fn run_op(
     let mut objects = Value::Array(vec![]);
     if done.ok && op.mutating {
         // The op is already committed; a refresh failure only leaves object details stale.
-        match refresh(space, worker, &touched(&done)) {
+        match refresh(space, worker, &touched(&done), true) {
             Ok(all) => objects = touched_objects(&all, &touched(&done)),
             Err(e) => eprintln!("[host] refresh after op {} failed: {e:#}", op.id),
         }
@@ -277,7 +277,7 @@ fn export(space: &Space, worker: &mut WorkerDriver, cfg: &HostConfig, op: &OpRow
 /// Push object details, params and previews for `names` (or everything when empty).
 /// A failing `mesh` query (the worker may not have it yet) is logged and previews are skipped.
 /// Returns every object's summary from the worker (the style memory reads the touched ones).
-pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Result<Value> {
+pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String], previews: bool) -> Result<Value> {
     let status = worker.call("status", &json!({}), None).map_err(|e| anyhow::anyhow!("status: {e}"))?;
     let objects = status["result"]["objects"].clone();
     space.sync_objects(objects.to_string(), status["result"]["params"].to_string())?;
@@ -286,7 +286,7 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Re
     } else {
         names.iter().map(|n| json!(n)).collect()
     };
-    if names.is_empty() {
+    if !previews || names.is_empty() {
         return Ok(objects);
     }
     // The team's mesh_deviation setting (default 0.2 mm) sets the preview tolerance.

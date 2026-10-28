@@ -464,6 +464,7 @@ def surface_quality(names: list[str] | None = None, topic: str = "", intent: str
 
 
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+MAX_REFERENCE_BASE64 = 1_500_000  # one websocket message, not a file store: keep references small
 IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
 
 
@@ -479,7 +480,11 @@ def _read_image(path):
         data = f.read()
     if not data:
         raise ValueError(f"{path} is empty")
-    return base64.b64encode(data).decode()
+    encoded = base64.b64encode(data).decode()
+    if len(encoded) > MAX_REFERENCE_BASE64:
+        raise ValueError(f"{path} is {len(data) // 1024} KB; reference images must be under about 1 MB "
+                         f"so they fit in one team-server message. Resize or compress it.")
+    return encoded
 
 
 def _download_image(url):
@@ -498,7 +503,11 @@ def _download_image(url):
     name = os.path.basename(urllib.parse.urlparse(str(url)).path) or "reference"
     if not os.path.splitext(name)[1]:
         name += IMAGE_TYPES[kind]
-    return name, base64.b64encode(data).decode()
+    encoded = base64.b64encode(data).decode()
+    if len(encoded) > MAX_REFERENCE_BASE64:
+        raise ValueError(f"{url} is {len(data) // 1024} KB; reference images must be under about 1 MB. "
+                         f"Resize or compress it.")
+    return name, encoded
 
 
 def _save_images(paths, subject):

@@ -289,6 +289,9 @@ IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
 
 def _image_bytes(image_base64):
     """Decoded image bytes, refusing anything the project store should not hold."""
+    if len(str(image_base64 or "")) > 2_000_000:
+        raise HelperError("bad_args", "That reference image is too large for the team server "
+                                      "(2 MB encoded max); resize or compress it.")
     try:
         data = base64.b64decode(str(image_base64 or ""), validate=True)
     except (ValueError, TypeError):

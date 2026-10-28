@@ -388,6 +388,20 @@ pub fn check_delete_task(task_id: &str, t: &Closing) -> Result<(), String> {
     check_cancel_task(task_id, t)
 }
 
+/// A single websocket message cannot exceed the server's frame limit (32 MB); one 40 MB reference
+/// upload took the whole team offline. Reference images are capped at 2 MB of encoded args; bigger
+/// payloads belong in project files saved in chunks, not in an op row.
+pub const MAX_OP_ARGS: usize = 2_000_000;
+
+pub fn check_op_payload(kind: &str, args_len: usize) -> Result<(), String> {
+    if kind == "add_reference" && args_len > MAX_OP_ARGS {
+        return Err(format!(
+            "bad_args: the reference image is too large for the team server ({} KB encoded; {} KB max). Resize or compress the photo to about 1 MB and try again.",
+            args_len / 1024, MAX_OP_ARGS / 1024));
+    }
+    Ok(())
+}
+
 /// A blocked task is a helper waiting for a person's decision, so only a person reopens it, and only
 /// from `blocked`: a finished or cancelled task keeps its outcome.
 pub fn check_reopen_task(task_id: &str, status: &str, caller_kind: &str) -> Result<(), String> {
@@ -962,5 +976,12 @@ mod tests {
         assert!(taken.starts_with("name_in_use:"), "{taken}");
         assert!(check_rename("lid builder", None, 7).unwrap_err().starts_with("bad_args:"));
         assert!(check_rename("", None, 7).is_err());
+    }
+
+    #[test]
+    fn a_reference_upload_is_capped_to_one_websocket_message() {
+        assert!(check_op_payload("add_reference", 1_000_000).is_ok());
+        assert!(check_op_payload("add_reference", MAX_OP_ARGS + 1).unwrap_err().starts_with("bad_args:"));
+        assert!(check_op_payload("save_file", MAX_OP_ARGS * 10).is_ok(), "file saves are not capped here");
     }
 }

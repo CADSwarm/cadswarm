@@ -510,3 +510,11 @@ def test_a_reference_keeps_its_credit_and_licence(tmp_path):
     item = listed["result"]["references"][0]
     assert item["credit"] == "Lexus press" and item["license"] == "press use"
     assert item["source_url"] == "https://example.com/x"
+
+def test_a_reference_that_is_too_large_for_the_op_is_refused(tmp_path):
+    import base64
+    p = project(tmp_path)
+    too_big = base64.b64encode(b"x" * 2_100_000).decode()
+    got = helper.handle(p, {"id": 1, "op": "add_reference", "args": {
+        "subject": "car", "filename": "x.png", "image_base64": too_big}})
+    assert got["code"] == "bad_args" and "too large" in got["error"]

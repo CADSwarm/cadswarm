@@ -255,3 +255,10 @@ def test_render_views_proxies_the_worker_query(session):
     assert got["files"]
     assert posts[0][0] == "/render" and posts[0][1]["size"] == 400
     assert posts[0][1]["views"] == ["front"] and posts[0][1]["names"] == ["BodyShell"]
+
+
+def test_a_reference_image_larger_than_one_message_is_refused(tmp_path, session):
+    big = tmp_path / "big.png"
+    big.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 1_600_000)
+    got = mcp_server.add_reference("car", image_path=str(big))
+    assert got["code"] == "bad_args" and "Resize or compress" in got["error"]

@@ -146,7 +146,7 @@ fn run(cfg: &HostConfig) -> Result<()> {
             None
         }
     };
-    executor::refresh(&space, &mut worker, &[])?;
+    executor::refresh(&space, &mut worker, &[], false)?;
     executor::write_status(cfg, &mut worker)?;
     let mut orchestrator = briefs::Orchestrator::new(cfg.clone());
     println!("cadswarm-host running on {} / {} (fence {})", cfg.uri, cfg.db, space.fence());
