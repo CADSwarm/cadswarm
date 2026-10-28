@@ -271,6 +271,50 @@ def test_a_failed_run_says_what_the_cli_printed(tmp_path):
     assert "> build" not in r.last_error and "\x1b" not in r.last_error
 
 
+def test_a_codex_wake_repairs_an_old_helpers_missing_mcp_approval(tmp_path, monkeypatch):
+    """Helpers set up before this fix have the server but no approval default: every call was refused."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, _clock, spawned = make_runner(tmp_path, client="codex")
+    cfg = os.path.join(r.folder, ".codex", "config.toml")
+    os.makedirs(os.path.dirname(cfg))
+    with open(cfg, "w", encoding="utf-8") as f:
+        f.write("[mcp_servers.cadswarm]\ncommand = 'x'\n")
+    assert r.wake([("m:x", "- hi")], first=True)
+    assert spawned
+    with open(cfg, encoding="utf-8") as f:
+        assert "default_tools_approval_mode = 'approve'" in f.read()
+
+
+def test_a_blocked_codex_run_is_reported_even_though_it_exits_zero(tmp_path):
+    """Codex refusing every MCP call leaves exit 0: the panel showed "Ready" while nothing happened."""
+    calm = tables()
+    calm["v_message"], calm["v_task"] = [], []
+    r, _clock, _spawned = make_runner(tmp_path, client="codex", t=calm)
+    log = os.path.join(r.folder, ".cadswarm", "helper.log")
+    with open(log, "w", encoding="utf-8") as f:
+        f.write("2026-10-27 17:13:28 waking the helper for 2 new thing(s)\n")
+
+    class Refused:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    r.child_log_at = os.path.getsize(log)
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("mcp: cadswarm/list_tasks started\n"
+                "MCP tool call requires approval, but approval policy is never\n"
+                "I could not reach the team.\n")
+    r.child = Refused()
+    assert r.child_running() is False
+    assert "approval" in r.last_error and "exit" not in r.last_error
+    r.state["started"] = True  # don't wake it just to say hello; the next step only reports the failure
+    r.save_state()
+    assert r.step()
+    status = json.load(open(os.path.join(r.folder, ".cadswarm", "runner.json")))
+    assert status["state"] == "error" and "approval" in status["detail"]
+
+
 def test_a_helpers_picked_model_beats_the_environment(monkeypatch):
     monkeypatch.setenv("CADSWARM_HELPER_MODEL", "env/model")
     argv, _ = runner.agent_command("opencode", "opencode", "/h", "x", resume=False, model="anthropic/claude-sonnet-5-5")

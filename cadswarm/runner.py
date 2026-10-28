@@ -34,7 +34,7 @@ import urllib.request
 if __package__ in (None, ""):  # run as a script: make `cadswarm` importable
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cadswarm.agent_setup import default_model, find_agent_cli  # noqa: E402
+from cadswarm.agent_setup import default_model, ensure_codex_approval, find_agent_cli  # noqa: E402
 from cadswarm.client import HubRequestError, load_json, save_json, state_dir  # noqa: E402
 from cadswarm.space_hub import POLL_VIEWS, SpaceHub  # noqa: E402
 
@@ -55,6 +55,9 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RUNNER_LINE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ")
 RUN_FAILED = re.compile(r"\b(error|failed|failure|invalid|denied|forbidden|unauthorized|unexpected argument)\b"
                         r"|not\s+(been\s+)?trusted|api key", re.IGNORECASE)
+# Codex's own words when it refuses an MCP call it wanted a person to approve. A background run has nobody
+# to ask, so every cadswarm tool fails and the run still exits 0: without this the panel says "Ready".
+MCP_BLOCKED = re.compile(r"requires approval, but approval policy is never", re.IGNORECASE)
 # A warm OpenCode server: start it once, then every message connects to it instead of paying the CLI's
 # startup, config load and MCP boot again (~3-9 s). Measured: a trivial wake went from 3.3 s to 0.9 s, and
 # the team's MCP server starts once for many runs rather than once per run.
@@ -623,6 +626,9 @@ class Runner:
         if not exe:
             self.write_status("missing", f"{client} isn't installed on this computer")
             return False
+        if client == "codex" and ensure_codex_approval(self.folder):
+            self.log("let Codex approve the cadswarm tools in .codex/config.toml: a background run can't "
+                     "answer its approval prompt")
         prompt = wake_prompt(self.cfg.get("name") or "an AI helper", self.project or "your team's project",
                              [line for _, line in work], first)
         model = self.cfg.get("model") or (default_model(client) if client == "opencode" else "")
@@ -663,10 +669,8 @@ class Runner:
             return
         self.present, self.last_beat = True, self.clock()
 
-    def child_said(self):
-        """": <first line the run printed>", e.g. "error: unexpected argument '--full-auto' found", or "".
-        A CLI that dies at startup writes its reason first and tips/usage after it, so the first line names
-        the cause; the whole log is one click away in the Tools tab."""
+    def run_output(self):
+        """What this run itself printed so far (the log after `child_log_at`), ANSI codes stripped."""
         path = os.path.join(state_dir(self.folder), "helper.log")
         try:
             with open(path, "rb") as f:
@@ -674,7 +678,13 @@ class Runner:
                 text = f.read(65536).decode("utf-8", "replace")
         except OSError:
             return ""
-        lines = [ANSI.sub("", line).strip() for line in text.splitlines() if line.strip()]
+        return ANSI.sub("", text)
+
+    def child_said(self):
+        """": <first line the run printed>", e.g. "error: unexpected argument '--full-auto' found", or "".
+        A CLI that dies at startup writes its reason first and tips/usage after it, so the first line names
+        the cause; the whole log is one click away in the Tools tab."""
+        lines = [line.strip() for line in self.run_output().splitlines() if line.strip()]
         # The runner's own bookkeeping lines are timestamped; the CLI's reason is the first other line.
         lines = [line for line in lines if not RUNNER_LINE.match(line)]
         # A CLI may print a banner first ("> build · model"), so prefer a line that names a failure.
@@ -689,6 +699,11 @@ class Runner:
             self.log(f"the helper finished (exit {code})")
             self.last_error = "" if code == 0 else (
                 f"its last run failed (exit {code})" + self.child_said())
+            if MCP_BLOCKED.search(self.run_output()):
+                # Exit 0, but Codex refused every call: say so instead of showing a helper that looks Ready.
+                self.last_error = ("Codex refused every CADSwarm tool call: it asks for approval and a "
+                                   "background run can't answer. Update CADSwarm's Codex setup, then restart "
+                                   "this helper.")
             self.child = None
             self.last_run_end = self.clock()
             self.save_state()
