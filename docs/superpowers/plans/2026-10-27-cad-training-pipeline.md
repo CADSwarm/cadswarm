@@ -1705,7 +1705,7 @@ MAX_TEXT = 2000
 MAX_PLAN = 4000
 MAX_PARAMS = 40
 MAX_OPS = 8
-MAX_ARGS = 400
+MAX_ARGS = 200   # 8 ops x 200 + text/plan caps keeps the request under 9k chars
 
 SYSTEM = """You are the builder for a CAD team. You see one request, its plan, the current model
 state and the last few operations. Reply with exactly one op as JSON and nothing else:
