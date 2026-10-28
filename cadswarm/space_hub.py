@@ -164,6 +164,8 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/style/inbox", self.style_inbox),
             ("POST", r"/style/teach", self.style_teach), ("POST", r"/style/resolve", self.style_resolve),
             ("POST", r"/style/learn", self.style_learn),
+            # How flat vs curved a part is: an aesthetic shape may not be a pile of planes.
+            ("POST", r"/surface", self.surface_quality),
             # Components library and team precision settings (space_library.py).
             *self.library_routes(),
         ]
@@ -1102,6 +1104,9 @@ class SpaceHub(LibraryRoutes):
 
     def style_learn(self, body):
         return self.run_op("learn_style", {})
+
+    def surface_quality(self, body):
+        return self.run_op("surface_quality", {"names": body.get("names") or []})
 
     def prune_storage(self, body):
         return self.run_op("prune_storage", dict(body or {}))

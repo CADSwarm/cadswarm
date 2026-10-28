@@ -410,6 +410,42 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
 
 
+def _current_brief_text():
+    """The request of a brief that is still running, so the classifier sees the person's words."""
+    try:
+        rows = S.client.get("/briefs")
+    except HubRequestError:
+        return ""
+    for b in (rows.get("briefs") if isinstance(rows, dict) else None) or []:
+        if isinstance(b, dict) and b.get("status") not in ("ready", "failed", "cancelled"):
+            return str(b.get("text") or "")
+    return ""
+
+
+@mcp.tool()
+def surface_quality(names: list[str] | None = None, topic: str = "", intent: str | None = None) -> dict:
+    """Whether a part reads as smooth or as a block model, and what to do about it.
+
+    `topic` is what the person asked for in their words (pass the request, not a summary): it decides
+    whether the part is judged on form (car body, helmet, fairing, product exterior) or on function
+    (bracket, plate, table, enclosure). Boxy parts are allowed to be boxy and come back `not required`.
+    For an aesthetic part, `fails` means more than 60 % of the faces are flat or there are too few
+    curved faces: build the main surfaces as lofts/sweeps in run_part_script and fix it before
+    reporting done. `intent` ("aesthetic" or "mechanical") overrides the classifier for this call.
+    """
+    if intent not in (None, "aesthetic", "mechanical"):
+        return {"error": "intent must be aesthetic or mechanical", "code": "bad_args"}
+    r = call("POST", "/surface", {"names": names or []}, doing="checking surface quality", targets=names)
+    if "error" in r:
+        return r
+    from .shape_intent import assess, classify
+    chosen = intent or classify(topic or _current_brief_text(), names or [])["intent"]
+    objects = [{**o, **assess(o, chosen)} for o in r["objects"]]
+    return {"intent": chosen, "objects": objects,
+            "failing": [o["name"] for o in objects if o["verdict"] == "fails"],
+            "advisory": chosen == "aesthetic"}
+
+
 @mcp.tool()
 def check_interference(names: list[str] | None = None) -> dict:
     """Pairwise solid overlaps among visible parts (or `names`). Clashes list overlap volume in mm^3."""

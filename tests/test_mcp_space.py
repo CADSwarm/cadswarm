@@ -147,3 +147,22 @@ def test_a_warm_server_shows_idle_once_its_runner_waits(tmp_path):
     # A host-spawned agent has no runner at all: it just says what it is doing.
     (tmp_path / ".cadswarm" / "runner.json").unlink()
     assert mcp_server.Session.doing_now(s) == "starting"
+
+
+def test_surface_quality_composes_the_verdict_from_the_topic(monkeypatch, session):
+    session.client.post = lambda path, body=None: {
+        "objects": [{"name": "BodyShell", "faces": 194, "planar": 146, "curved": 48, "valid": True}]}
+    got = mcp_server.surface_quality(["BodyShell"], topic="a Lexus IS350 body")
+    assert got["intent"] == "aesthetic"
+    assert got["failing"] == ["BodyShell"]
+    assert got["objects"][0]["verdict"] == "fails"
+    assert "block model" in got["objects"][0]["advice"][0]
+
+
+def test_surface_quality_leaves_a_bracket_alone_and_takes_an_override(monkeypatch, session):
+    session.client.post = lambda path, body=None: {
+        "objects": [{"name": "Bracket", "faces": 6, "planar": 6, "curved": 0, "valid": True}]}
+    assert mcp_server.surface_quality(["Bracket"], topic="a mount bracket")["failing"] == []
+    got = mcp_server.surface_quality(["Bracket"], topic="a mount bracket", intent="aesthetic")
+    assert got["intent"] == "aesthetic" and got["failing"] == ["Bracket"]
+    assert mcp_server.surface_quality(intent="sideways")["code"] == "bad_args"
