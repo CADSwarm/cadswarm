@@ -637,10 +637,24 @@ git commit -m "feat(training): export a project's tables to raw JSONL"
 - Test: `tests/test_training_state.py`
 
 **Interfaces:**
-- Produces: `state.empty() -> dict`; `state.clone(state) -> dict`; `state.type_of(op, args) -> str`;
-  `state.touched(step) -> list[str]`; `state.apply(state, step) -> list[str]` (returns unknown names);
+- Produces: `state.PARAMS`; `state.empty() -> dict`; `state.clone(state) -> dict`;
+  `state.type_of(op, args) -> str|None`; `state.touched(step) -> list[str]`;
+  `state.apply(state, step) -> list[str]` (returns unknown names);
   `state.replay(steps) -> (list[dict] before_states, dict final, list[int] degraded_indexes)`;
-  `state.summary(state, max_objects=120) -> dict`; `state.conformance(state, cad_objects, params) -> dict`.
+  `state.summary(state, max_objects=120) -> dict`;
+  `state.conformance(state, cad_objects, params) -> dict`.
+
+**Two facts measured on the live database, which shape this module.**
+
+1. `cad_object` always contains the shared `Params` spreadsheet — the worker creates it when it
+   opens a document, before any op is logged. A replay starting truly empty therefore flags every
+   `set_param` as touching an unknown object (every one reports `modified: ["Params"]`, verified on
+   two real rows), which would mark a whole op class `degraded` and silently drop it from SFT.
+2. `insert_mesh` creates a `Mesh::Feature`, not a `Part::Feature`. An unknown op must not be
+   stamped with a type the log never reported.
+
+So `empty()` seeds `Params`, `type_of` returns `None` rather than guessing, and conformance skips
+the type comparison where the replay has no type.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -657,6 +671,18 @@ def step(op, args, created=(), modified=(), deleted=(), recomputed=(), status="d
                        "deleted": list(deleted), "recomputed": list(recomputed), "broken": []}}
 
 
+def test_the_params_sheet_exists_before_the_first_op():
+    assert state.empty()["objects"]["Params"]["type"] == "Spreadsheet::Sheet"
+
+
+def test_set_param_is_not_degraded():
+    s = state.empty()
+    unknown = state.apply(s, step("set_param", {"alias": "wall", "value": "2.4 mm"},
+                                  modified=["Params"]))
+    assert unknown == [] and s["objects"]["Params"]["rev"] == 2
+    assert s["params"]["wall"] == {"value": "2.4 mm", "num": 2.4}
+
+
 def test_created_objects_are_typed_from_the_op():
     s = state.empty()
     state.apply(s, step("create_primitive", {"kind": "box", "name": "Base"}, created=["Base"]))
@@ -665,19 +691,45 @@ def test_created_objects_are_typed_from_the_op():
     assert s["objects"]["Hood"]["type"] == "Part::Feature"
 
 
-def test_a_boolean_consumes_its_inputs():
+def test_a_capitalised_kind_is_still_recognised():
+    s = state.empty()
+    state.apply(s, step("boolean", {"kind": "Cut", "name": "C"}, created=["C"]))
+    assert s["objects"]["C"]["type"] == "Part::Cut"
+
+
+def test_insert_mesh_is_a_mesh_feature():
+    s = state.empty()
+    state.apply(s, step("insert_mesh", {"name": "Lattice"}, created=["Lattice"]))
+    assert s["objects"]["Lattice"]["type"] == "Mesh::Feature"
+
+
+def test_an_unknown_op_gets_no_invented_type():
+    s = state.empty()
+    state.apply(s, step("teleport_part", {"name": "X"}, created=["X"]))
+    assert s["objects"]["X"]["type"] is None and s["objects"]["X"]["known"] is False
+
+
+def test_a_boolean_removes_the_inputs_it_reports_deleted():
     s = state.empty()
     state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
     state.apply(s, step("create_primitive", {"kind": "box", "name": "B"}, created=["B"]))
     state.apply(s, step("boolean", {"kind": "cut", "name": "C"}, created=["C"], deleted=["A", "B"]))
-    assert sorted(s["objects"]) == ["C"] and s["objects"]["C"]["type"] == "Part::Cut"
+    assert sorted(s["objects"]) == ["C", "Params"]
+    assert s["objects"]["C"]["type"] == "Part::Cut"
 
 
 def test_a_failed_op_changes_nothing():
     s = state.empty()
     state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
     state.apply(s, step("create_primitive", {"kind": "box", "name": "B"}, created=["B"], status="failed"))
-    assert sorted(s["objects"]) == ["A"]
+    assert "B" not in s["objects"]
+
+
+def test_a_reported_volume_replaces_a_stale_one():
+    s = state.empty()
+    state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
+    state.apply(s, step("run_part_script", {"name": "A"}, modified=["A"], volume=12.5))
+    assert s["objects"]["A"]["volume"] == 12.5 and s["objects"]["A"]["known"] is True
 
 
 def test_replay_returns_the_state_before_each_step_and_flags_unknown_objects():
@@ -689,18 +741,13 @@ def test_replay_returns_the_state_before_each_step_and_flags_unknown_objects():
     assert degraded == [1]
 
 
-def test_set_param_tracks_the_alias_and_its_number():
-    s = state.empty()
-    state.apply(s, step("set_param", {"alias": "wall", "value": "2.4 mm"}))
-    assert s["params"]["wall"] == {"value": "2.4 mm", "num": 2.4}
-
-
 def test_summary_is_bounded_and_sorted():
     s = state.empty()
     for i in range(130):
-        state.apply(s, step("create_primitive", {"kind": "box", "name": f"o{i:03d}"}, created=[f"o{i:03d}"]))
+        state.apply(s, step("create_primitive", {"kind": "box", "name": f"o{i:03d}"},
+                            created=[f"o{i:03d}"]))
     got = state.summary(s, max_objects=120)
-    assert len(got["objects"]) == 120 and got["objects_total"] == 130
+    assert len(got["objects"]) == 120 and got["objects_total"] == 131
     assert [o["name"] for o in got["objects"]] == sorted(o["name"] for o in got["objects"])
 
 
@@ -708,15 +755,25 @@ def test_conformance_reports_missing_extra_and_type_mismatch():
     s = state.empty()
     state.apply(s, step("create_primitive", {"kind": "box", "name": "A"}, created=["A"]))
     state.apply(s, step("create_primitive", {"kind": "box", "name": "B"}, created=["B"]))
-    report = state.conformance(s, [{"name": "A", "type_id": "Part::Box", "volume": 0.0},
+    report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
+                                   {"name": "A", "type_id": "Part::Box", "volume": 0.0},
                                    {"name": "C", "type_id": "Part::Cylinder", "volume": 0.0}], [])
-    assert report["missing"] == ["C"] and report["extra"] == ["B"] and report["fraction"] == 0.3333
+    assert report["missing"] == ["C"] and report["extra"] == ["B"]
+    assert report["fraction"] == 0.5
+
+
+def test_conformance_does_not_convict_a_type_the_replay_lacks():
+    s = state.empty()
+    state.apply(s, step("teleport_part", {"name": "X"}, created=["X"]))
+    report = state.conformance(s, [{"name": "Params", "type_id": "Spreadsheet::Sheet", "volume": 0.0},
+                                   {"name": "X", "type_id": "Part::Box", "volume": 0.0}], [])
+    assert report["type_mismatch"] == []
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `python -m pytest tests/test_training_state.py -v`
-Expected: FAIL — `AttributeError: module 'cadswarm.training.state' has no attribute 'empty'`.
+Expected: FAIL — `AttributeError: module 'cadswarm.training.state' has no attribute 'PARAMS'`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -725,18 +782,24 @@ Expected: FAIL — `AttributeError: module 'cadswarm.training.state' has no attr
 """The object table after every step, reconstructed from the op log alone.
 
 A value the worker never reported stays `known: False` and `None`: the replay is useful precisely
-because it does not guess. A failed op is a no-op, because the worker rolls it back.
+because it does not guess. A failed op is a no-op, because the worker rolls it back. The shared
+`Params` sheet is seeded because the worker creates it before the first op is logged.
 """
 import re
 
+PARAMS = "Params"
+PARAMS_TYPE = "Spreadsheet::Sheet"
+MESH_TYPE = "Mesh::Feature"
 PRIMITIVE_TYPE = {"box": "Part::Box", "cylinder": "Part::Cylinder", "sphere": "Part::Sphere",
                   "cone": "Part::Cone", "torus": "Part::Torus"}
 BOOLEAN_TYPE = {"cut": "Part::Cut", "fuse": "Part::Fuse", "common": "Part::Common"}
+FEATURE_OPS = {"create_extrusion", "run_part_script", "insert_component", "insert_standard_part"}
 FIELDS = ("created", "modified", "deleted", "recomputed", "broken")
 
 
 def empty():
-    return {"objects": {}, "params": {}}
+    return {"objects": {PARAMS: {"type": PARAMS_TYPE, "rev": 1, "known": True, "volume": None}},
+            "params": {}}
 
 
 def clone(state):
@@ -755,11 +818,17 @@ def number(value):
 
 
 def type_of(op, args):
+    """The type this op creates, or None when the log does not say. Never a guess."""
+    kind = str(args.get("kind") or "").lower()
     if op == "create_primitive":
-        return PRIMITIVE_TYPE.get(args.get("kind"), "Part::Feature")
+        return PRIMITIVE_TYPE.get(kind)
     if op == "boolean":
-        return BOOLEAN_TYPE.get(args.get("kind"), "Part::Feature")
-    return "Part::Feature"
+        return BOOLEAN_TYPE.get(kind)
+    if op == "insert_mesh":
+        return MESH_TYPE
+    if op in FEATURE_OPS:
+        return "Part::Feature"
+    return None
 
 
 def touched(step):
@@ -774,23 +843,34 @@ def apply(state, step):
     result = step.get("result") or {}
     args = step.get("args") or {}
     created = result.get("created") or []
+    payload = result.get("result") or {}
+    volume = payload.get("volume") if len(created) == 1 else None
     unknown = []
+
     for name in result.get("deleted") or []:
         if state["objects"].pop(name, None) is None:
             unknown.append(name)
-    payload = result.get("result") or {}
+
     for name in created:
+        created_type = type_of(step.get("op"), args)
         state["objects"][name] = {
-            "type": type_of(step.get("op"), args), "rev": 0,
-            # A script's objects are only described by the snapshot the worker never took.
-            "known": step.get("op") != "run_part_script",
-            "volume": payload.get("volume") if len(created) == 1 else None,
+            "type": created_type, "rev": 0,
+            # A script or a component's shape is only described by a snapshot the worker never took.
+            "known": created_type is not None and step.get("op") != "run_part_script",
+            "volume": volume,
         }
-    for name in (result.get("modified") or []) + (result.get("recomputed") or []):
-        if name in state["objects"]:
-            state["objects"][name]["rev"] = state["objects"][name].get("rev", 0) + 1
-        else:
+
+    changed = list(dict.fromkeys((result.get("modified") or []) + (result.get("recomputed") or [])))
+    for name in changed:
+        if name not in state["objects"]:
             unknown.append(name)
+            continue
+        obj = state["objects"][name]
+        obj["rev"] = obj.get("rev", 0) + 1
+        if isinstance(payload.get("volume"), (int, float)):
+            obj["volume"] = payload["volume"]
+            obj["known"] = True
+
     if step.get("op") == "set_param" and args.get("alias"):
         state["params"][args["alias"]] = {"value": args.get("value"), "num": number(args.get("value"))}
     return unknown
@@ -823,11 +903,13 @@ def conformance(state, cad_objects, params):
     mine = state["objects"]
     missing = sorted(set(live) - set(mine))
     extra = sorted(set(mine) - set(live))
-    type_bad = sorted(n for n, row in live.items()
-                      if n in mine and row.get("type_id") != mine[n]["type"])
+    type_bad = sorted(name for name, row in live.items()
+                      if name in mine and mine[name]["type"] is not None
+                      and row.get("type_id") != mine[name]["type"])
     volume_bad = []
-    for name, row in live.items():
-        got, live_volume = mine.get(name) or {}, row.get("volume") or 0
+    for name in sorted(live):
+        row, got = live[name], mine.get(name) or {}
+        live_volume = row.get("volume") or 0
         if not got.get("known") or not got.get("volume") or not live_volume:
             continue
         if abs(got["volume"] - live_volume) > 0.01 * live_volume:
@@ -841,7 +923,7 @@ def conformance(state, cad_objects, params):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_state.py -v`
-Expected: PASS (7 passed).
+Expected: PASS (13 passed).
 
 - [ ] **Step 5: Commit**
 
