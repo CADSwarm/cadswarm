@@ -2721,6 +2721,58 @@ worker never started — check `--python` and `--script`.
 
 ---
 
+
+## Task 10: Correctness fixes found by the whole-branch review
+
+The live build exposed three ways the artifact overstates itself. Each is a small filter or
+guard, and each was measured on `cadswarm-data/datasets/d37f1cc51301`.
+
+**1. SFT targets that the prompt forbids.** 492 of 715 rows were query/helper ops
+(`brep`, `style_inbox`, `get_object`, …) that `prompts.SYSTEM` does not define; 60 of 73 episodes
+were inspection work that created nothing. The builder must learn the 13 mutating ops only, and
+an episode with no mutating step is not a build.
+
+**2. One target was 538,105 characters** (`add_reference` carrying a base64 image). The request
+is bounded; the target was not. A 16 GB QLoRA run would OOM or silently truncate.
+
+**3. Eval cases could not measure anything.** All 15 held-out cases had zero reference objects
+(every test episode ended with only `Params`), 22 of 145 reference ops are not worker ops, and 30
+never completed. A do-nothing policy would have scored a perfect ceiling.
+
+Also fixed, from the same review: one malformed project could abort the whole build; the dataset
+was published file-by-file under its final content address; a corrupt local sqlite was
+indistinguishable from "no corrections" in the card; a step with unparseable args was rendered as
+if it had none; and the review attached to an episode was chosen by row order rather than round.
+
+**Files:** `cadswarm/training/prompts.py`, `render.py`, `dataset.py`, `episodes.py`,
+`eval_replay.py`, `cli.py`, and the tests for render, episodes, replay and dataset.
+
+**Interfaces:**
+- `prompts.BUILD_OPS: tuple[str, ...]` — the 13 mutating ops, the same tuple that builds `SYSTEM`.
+- `prompts.MAX_TARGET = 8000`; `render.sft_rows` drops a row whose rendered target exceeds it.
+- `render.case_rows` keeps only `done` steps whose op is in `BUILD_OPS`, drops a case with no such
+  step or no non-`Params` object, and keeps the episode's start state.
+- `eval_replay.report(results, policy, meta=None)` merges `{"dataset_id", "split_mode"}`.
+- `dataset.build` contains each project in its own `try`, publishes with one `os.replace`, and
+  carries `source.warnings` into `raw_info` and the card.
+- `episodes` marks a step `parse_error` when `args_json` cannot be parsed (`render_ok: False`,
+  `state_confidence: degraded`), and picks the review with the highest `round`.
+
+**Tests to add or change:**
+- `test_sft_rows_only_contain_ops_the_prompt_defines` (and no row whose target exceeds
+  `MAX_TARGET`).
+- `test_an_episode_with_no_mutating_step_is_not_a_build`.
+- `test_cases_exclude_ops_the_worker_cannot_run_and_cases_without_objects`.
+- `test_report_carries_the_dataset_and_split_it_measured`.
+- `test_one_broken_project_does_not_stop_the_build`.
+- `test_the_dataset_is_published_in_one_step`.
+
+**Gate:** rebuild the live dataset. Expect fewer SFT rows than 715 and fewer than 15 cases, and
+every `sft.jsonl` target must name an op in `prompts.SYSTEM`. Report the new counts; do not
+"recover" the old ones.
+
+---
+
 ## Plans 2 and 3
 
 This plan stops at a dataset plus a working replay harness, which is testable software on its own.
