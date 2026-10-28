@@ -42,7 +42,7 @@ Tests: `tests/test_training_{redact,source,export,state,episodes,labels,render,m
 
 ---
 
-### Task 1: Package skeleton, redaction, and paged source reads
+### Task 1: Package skeleton, redaction, and whole-table reads
 
 **Files:**
 - Create: `cadswarm/training/__init__.py`, `cadswarm/training/redact.py`, `cadswarm/training/source.py`
@@ -51,8 +51,15 @@ Tests: `tests/test_training_{redact,source,export,state,episodes,labels,render,m
 **Interfaces:**
 - Produces: `redact.text(str) -> str`; `source.PAGE_KEY: dict[str,str]`; `source.slug(name) -> str`;
   `source.project_name(dir) -> str`; `source.read_host(dir) -> dict` (raises `SourceError`);
-  `source.Source(project, project_dir, uri, db, token, client=None, chunk=5000)` with
-  `.rows(table) -> list[dict]`; `source.Source.for_project(dir, chunk=5000) -> Source`.
+  `source.sort_key(value) -> tuple`; `source.Source(project, project_dir, uri, db, token,
+  client=None)` with `.rows(table) -> list[dict]`;
+  `source.Source.for_project(dir) -> Source`.
+
+**Why there is no paging.** A live probe of the Lexus database shows SpacetimeDB rejects
+`ORDER BY` (`Unsupported: SELECT * FROM op ORDER BY id`) while accepting `LIMIT`. Without a
+server-side order, a page is an arbitrary subset, so `where key > last` silently skips rows. One
+whole-table read, sorted locally by the primary key, is the only correct shape. 678 ops came back
+in a single body today; the export layer is the place to solve size if it ever matters.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -62,8 +69,12 @@ Tests: `tests/test_training_{redact,source,export,state,episodes,labels,render,m
 from cadswarm.training import redact
 
 
-def test_windows_paths_are_replaced():
+def test_windows_backslash_paths_are_replaced():
     assert redact.text(r"model at C:\Users\waves\Documents\CadSwarm\Lexus IS350") == "model at <path>"
+
+
+def test_windows_forward_slash_paths_are_replaced():
+    assert redact.text("open C:/Users/waves/x.FCStd") == "open <path>"
 
 
 def test_posix_home_paths_are_replaced():
@@ -74,13 +85,17 @@ def test_emails_are_replaced():
     assert redact.text("ask waves@example.com about it") == "ask <email> about it"
 
 
+def test_hex_tokens_are_replaced():
+    assert redact.text("invite " + "a" * 64) == "invite <token>"
+
+
 def test_plain_text_is_untouched():
     assert redact.text("wall thickness 2.4 mm") == "wall thickness 2.4 mm"
 ```
 
 ```python
 # tests/test_training_source.py
-"""Reading a team database through the same client the app uses, paged by primary key."""
+"""Reading a team database through the same client the app uses, ordered locally."""
 import json
 import os
 import re
@@ -91,7 +106,7 @@ from cadswarm.training import source
 
 
 class FakeClient:
-    """Answers the subset of SQL `Source.rows` produces, so paging is tested without a server."""
+    """Returns rows exactly as given, so the local sort is the unit under test."""
 
     def __init__(self, tables):
         self.tables = tables
@@ -99,34 +114,34 @@ class FakeClient:
 
     def sql(self, query):
         self.queries.append(query)
-        table = re.search(r"from (\w+)", query).group(1)
-        rows = list(self.tables.get(table, []))
-        after = re.search(r"where (\w+) > '([^']*)'", query)
-        if after:
-            key, value = after.groups()
-            rows = [r for r in rows if str(r[key]) > value]
-        limit = re.search(r"limit (\d+)", query)
-        return rows[: int(limit.group(1))] if limit else rows
+        return list(self.tables.get(re.search(r"from (\w+)", query).group(1), []))
 
 
-def test_rows_are_paged_by_primary_key_and_come_back_complete():
-    rows = [{"id": f"op_{i:02d}", "created_ms": 5} for i in range(5)]
-    client = FakeClient({"op": rows})
-    got = source.Source("P", "C:/p", "http://x", "db", "tok", client=client, chunk=2).rows("op")
-    assert [r["id"] for r in got] == [r["id"] for r in rows]
-    assert len(client.queries) == 3 and all("limit 2" in q for q in client.queries)
+def make(tables):
+    return source.Source("P", "C:/p", "http://x", "db", "tok", client=FakeClient(tables))
 
 
-def test_single_short_page_stops_after_one_query():
+def test_rows_come_back_sorted_by_primary_key():
+    client = FakeClient({"op": [{"id": "op_b"}, {"id": "op_a"}]})
+    got = source.Source("P", "C:/p", "http://x", "db", "tok", client=client).rows("op")
+    assert [row["id"] for row in got] == ["op_a", "op_b"]
+
+
+def test_each_table_is_one_whole_read_with_no_order_by():
     client = FakeClient({"task": [{"id": "t1"}]})
     source.Source("P", "C:/p", "http://x", "db", "tok", client=client).rows("task")
-    assert len(client.queries) == 1
+    assert client.queries == ["select * from task"]
 
 
-def test_quotes_in_a_key_do_not_break_paging():
-    client = FakeClient({"cad_object": [{"key": "1:it's"}]})
-    source.Source("P", "C:/p", "http://x", "db", "tok", client=client, chunk=1).rows("cad_object")
-    assert len(client.queries) == 2 and "it''s" in client.queries[1]
+def test_integer_keys_sort_numerically_not_lexically():
+    client = FakeClient({"member": [{"id": 10}, {"id": 2}]})
+    got = source.Source("P", "C:/p", "http://x", "db", "tok", client=client).rows("member")
+    assert [row["id"] for row in got] == [2, 10]
+
+
+def test_an_unknown_table_is_a_source_error():
+    with pytest.raises(source.SourceError):
+        make({}).rows("agent_turn")
 
 
 def test_a_missing_host_file_is_a_source_error(tmp_path):
@@ -138,7 +153,8 @@ def test_for_project_reads_uri_and_db_from_host_json(tmp_path):
     (tmp_path / "host.json").write_text(json.dumps({"uri": "http://127.0.0.1:3000", "db": "cadswarm-x",
                                                     "token": "secret"}), encoding="utf-8")
     got = source.Source.for_project(str(tmp_path))
-    assert (got.uri, got.db, got.project) == ("http://127.0.0.1:3000", "cadswarm-x", os.path.basename(str(tmp_path)))
+    assert (got.uri, got.db, got.project) == ("http://127.0.0.1:3000", "cadswarm-x",
+                                              os.path.basename(str(tmp_path)))
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -161,18 +177,24 @@ SCHEMA_VERSION = 1
 
 ```python
 # cadswarm/training/redact.py
-"""Strip machine-specific and private strings before a record is written to a dataset."""
+"""Strip machine-specific and private strings before a record is written to a dataset.
+
+Paths are matched to the end of the line: over-redaction is the safe direction, and a folder name
+with spaces ("Lexus IS350") would otherwise be only half replaced.
+"""
 import re
 
 PATTERNS = [
-    (re.compile(r"[A-Za-z]:\\(?:[^\\\n\"'<>|?*]+\\)*[^\\\n\"'<>|?*]*"), "<path>"),
-    (re.compile(r"/(?:home|Users)/[^/\s\"']+(?:/[^\s\"']*)?"), "<path>"),
+    (re.compile(r"[A-Za-z]:[\\/][^\n\"']*"), "<path>"),
+    (re.compile(r"\\\\[^\n\"']+"), "<path>"),
+    (re.compile(r"/(?:home|Users)/[^\s\"']*"), "<path>"),
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<email>"),
+    (re.compile(r"\b[0-9a-f]{64}\b"), "<token>"),
 ]
 
 
 def text(value):
-    """The same string with paths and e-mails replaced. Non-strings pass through."""
+    """The same string with paths, e-mails and 64-hex tokens replaced. Non-strings pass through."""
     if not isinstance(value, str):
         return value
     for pattern, replacement in PATTERNS:
@@ -182,10 +204,11 @@ def text(value):
 
 ```python
 # cadswarm/training/source.py
-"""Find a project's team database and read its tables, paged by primary key.
+"""Find a project's team database and read its tables.
 
 Reuses cadswarm.space.SpaceClient: the same HTTP client the app uses, so there is no second SQL
-dialect and no second error type. A paused or unreachable database is reported, never raised.
+dialect and no second error type. A missing project raises SourceError; a database that is down
+surfaces the client's SpaceError, which the export layer records instead of aborting.
 """
 import json
 import os
@@ -194,7 +217,7 @@ import re
 from ..paths import project_layout
 from ..space import SpaceClient
 
-# The primary key of each table: unique, so `where key > last` never skips a duplicate.
+# The primary key of each table: unique, so a local sort is total and stable.
 PAGE_KEY = {"member": "id", "cad_object": "key", "param": "key", "op": "id", "task": "id",
             "brief": "id", "review": "id", "team_event": "seq"}
 
@@ -218,58 +241,58 @@ def read_host(project_dir):
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError) as e:
-        raise SourceError(f"no readable host.json ({e})")
+        raise SourceError(f"no readable host.json ({e})") from e
 
 
-def quote(value):
-    """A SQL literal. SpacetimeDB's dialect is SQLite-like; the only hazard is a quote in a key."""
+def sort_key(value):
+    """Numbers before strings, so an integer primary key sorts numerically rather than as text."""
     if isinstance(value, bool):
-        return "1" if value else "0"
+        return (0, int(value))
     if isinstance(value, (int, float)):
-        return str(value)
-    return "'" + str(value).replace("'", "''") + "'"
+        return (0, value)
+    return (1, str(value or ""))
 
 
 class Source:
-    def __init__(self, project, project_dir, uri, db, token, client=None, chunk=5000):
+    def __init__(self, project, project_dir, uri, db, token, client=None):
         self.project = project
         self.project_dir = os.path.abspath(project_dir) if project_dir else ""
         self.uri = uri
         self.db = db
         self.token = token
-        self.chunk = chunk
-        self.client = client or SpaceClient(uri, db, token)
+        self.client = client if client is not None else SpaceClient(uri, db, token)
 
     @classmethod
-    def for_project(cls, project_dir, chunk=5000):
+    def for_project(cls, project_dir):
         host = read_host(project_dir)
         return cls(project_name(project_dir), project_dir, host["uri"], host["db"],
-                   host.get("token", ""), chunk=chunk)
+                   host.get("token", ""))
 
     def rows(self, table):
-        """Every row of `table`, ordered by its primary key, one `limit`-sized page at a time."""
+        """Every row of `table`, sorted by its primary key.
+
+        SpacetimeDB's SQL rejects ORDER BY, so paging by a key is unsafe: a page is an arbitrary
+        subset and `where key > last` would silently skip rows. One whole-table read it is.
+        """
+        if table not in PAGE_KEY:
+            raise SourceError(f"unknown table {table!r}")
         key = PAGE_KEY[table]
-        out, after = [], None
-        while True:
-            where = "" if after is None else f" where {key} > {quote(after)}"
-            batch = self.client.sql(f"select * from {table}{where} order by {key} limit {self.chunk}")
-            out += batch
-            if len(batch) < self.chunk:
-                return out
-            after = batch[-1][key]
+        return sorted(self.client.sql(f"select * from {table}"), key=lambda row: sort_key(row.get(key)))
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_training_redact.py tests/test_training_source.py -v`
-Expected: PASS (10 passed).
+Expected: PASS (12 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add cadswarm/training tests/test_training_redact.py tests/test_training_source.py
-git commit -m "feat(training): paged team-database reads and redaction"
+git commit -m "feat(training): whole-table reads and redaction"
 ```
+
+---
 
 ---
 

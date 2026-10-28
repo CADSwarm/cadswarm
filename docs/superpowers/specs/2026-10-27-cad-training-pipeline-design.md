@@ -125,13 +125,15 @@ lazily. Nothing in the package imports `FreeCAD` at module import time.
 
 `python -m cadswarm.training export --project "<dir>" [--project …] [--all] --out cadswarm-data/datasets`
 
-Reads `host.json` for `uri`/`db`/`token`, then `select * from <table> order by <key>` over the
-documented `/v1/database/<db>/sql` endpoint, chunked by key (`--chunk 5000`) so a large DB
-never returns one giant body. Tables: `member, cad_object, param, op, task, brief, review,
-team_event`. Plus from the project folder: `style_events`, `style_rules` (hub.sqlite) and
-`knowledge.db` design docs, and a listing of `exports/`, `snapshots/`, `files/`.
+Reads `host.json` for `uri`/`db`/`token`, then `select * from <table>` over the documented
+`/v1/database/<db>/sql` endpoint. There is no paging: SpacetimeDB rejects `ORDER BY`
+(`Unsupported: SELECT * FROM op ORDER BY id`, measured), so a key-ranged page would be an
+arbitrary subset and `where key > last` would silently skip rows. Each table comes back in one
+body and is sorted locally by its primary key. Tables: `member, cad_object, param, op, task,
+brief, review, team_event`. Plus from the project folder: `style_events`, `style_rules`
+(hub.sqlite) and `knowledge.db` design docs, and a listing of `exports/`, `snapshots/`, `files/`.
 
-Writes `raw/<dataset-id>/<project>/<table>.jsonl` and `source.json`:
+Writes `raw/<project>/<table>.jsonl` and `source.json`:
 
 ```json
 {"project":"Lexus IS350","mode":"local","db":"cadswarm-lexus-is350-40de","uri":"http://127.0.0.1:3000",
