@@ -237,3 +237,67 @@ def test_failed_ops_that_keep_failing_become_a_problem(env):
     style.distil()
     [rule] = by_type(style, "recurring_problem")
     assert "boolean keeps failing with recompute_error" in rule["statement"]
+
+
+BAD_CAR = {"verdict": "bad", "subject": "car", "issues": ["roof is a box", "too slab-sided"], "by": "person",
+           "actor": ALICE,
+           "evidence": {"intent": "aesthetic",
+                        "objects": [{"name": "BodyShell", "faces": 194, "planar": 146, "curved": 48,
+                                     "planar_share": 0.753}]}}
+
+
+def test_a_person_s_bad_verdict_becomes_a_feedback_lesson(env):
+    style, clock = env
+    style.observe_feedback(BAD_CAR)
+    style.observe_feedback({**BAD_CAR, "issues": ["roof is a box"], "brief": "b_2"})
+    style.distil()
+    rules = {r["key"]: r for r in style.rules() if r["type"] == "feedback_lesson"}
+    theme = rules["theme:roof is a box"]
+    assert theme["status"] == "active" and "roof is a box" in theme["statement"]
+    standard = rules["standard:car"]
+    assert "flat faces under 60" in standard["statement"]
+
+
+def test_a_helper_s_own_opinion_never_goes_active(env):
+    style, clock = env
+    for brief in ("", "b_2"):
+        style.observe_feedback({"verdict": "bad", "subject": "car", "issues": ["too round"], "by": "helper",
+                                "actor": AGENT, "brief": brief})
+    style.distil()
+    assert not [r for r in style.rules() if r["type"] == "feedback_lesson"]
+
+
+def test_a_good_verdict_teaches_the_approach_that_was_accepted(env):
+    style, clock = env
+    good = {"verdict": "good", "subject": "car", "by": "person", "actor": ALICE,
+            "evidence": {"intent": "aesthetic",
+                         "objects": [{"name": "BodyShell", "faces": 194, "planar": 60, "curved": 134,
+                                      "planar_share": 0.31}]}}
+    style.observe_feedback(good)
+    style.observe_feedback({**good, "brief": "b_2"})
+    style.distil()
+    got = [r for r in style.rules() if r["key"] == "accepted:car"]
+    assert got and "Accepted on car" in got[0]["statement"]
+
+
+def test_feedback_for_a_mechanical_subject_teaches_no_standard(env):
+    style, clock = env
+    style.observe_feedback({"verdict": "bad", "subject": "bracket", "issues": ["holes too close"],
+                            "by": "person", "actor": ALICE,
+                            "evidence": {"intent": "mechanical",
+                                         "objects": [{"name": "Bracket", "faces": 6, "planar": 6,
+                                                      "curved": 0, "planar_share": 1.0}]}})
+    style.distil()
+    keys = {r["key"] for r in style.rules()}
+    assert "theme:holes too close" in keys
+    assert not any(k.startswith(("standard:", "accepted:")) for k in keys)
+
+
+def test_feedback_reads_back_newest_first_and_filtered_by_subject(env):
+    style, clock = env
+    style.observe_feedback(BAD_CAR)
+    style.observe_feedback({**BAD_CAR, "subject": "bracket", "issues": ["holes too close"]})
+    got = style.feedback("car")
+    assert [v["issues"] for v in got["verdicts"]] == [["roof is a box", "too slab-sided"]]
+    assert got["verdicts"][0]["by"] == "person" and got["verdicts"][0]["author"] == "alice"
+    assert all(v["subject"] == "car" for v in got["verdicts"])

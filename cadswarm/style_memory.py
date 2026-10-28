@@ -64,10 +64,14 @@ CANDIDATE_TTL_DAYS = 14.0  # a candidate nobody answers and nothing supports aga
 # The triage inbox shows one decision per subject, under the kind of thing learned.
 SECTION_LABELS = {"param_convention": "Shared sizes", "correction_pattern": "Corrections",
                   "preferred_component": "Preferred parts", "modelling_practice": "Habits",
-                  "recurring_problem": "Review problems", "proposed": "Helper proposals",
-                  "taught": "Your rules"}
-SECTION_ORDER = tuple(SECTION_LABELS)
+                  "recurring_problem": "Review problems", "feedback_lesson": "Feedback",
+                  "proposed": "Helper proposals", "taught": "Your rules"}
+SECTION_ORDER = ("param_convention", "correction_pattern", "preferred_component", "modelling_practice",
+                 "recurring_problem", "feedback_lesson", "proposed", "taught")
 RECOMMEND_ORDER = {"confirm": 0, "look": 1, "dismiss": 2}
+FEEDBACK_VERDICTS = ("bad", "mixed", "good")
+FEEDBACK_TAGS = ("proportions", "surfacing", "detail", "panels", "fit", "color")
+MIN_FEEDBACK_OBSERVATIONS = 2
 
 
 class StyleError(Exception):
@@ -118,12 +122,31 @@ def normalize_problem(text):
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _slug(text):
+    """A subject or file-stem name: lowercase words joined by dashes."""
+    return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")[:40] or "model"
+
+
 def confidence(n, consistency, people, occasions, age_days):
     """0..1: enough observations, mostly agreeing, from more than one person or occasion, and recent."""
     volume = 1 - math.exp(-n / 4.0)
     spread = min(1.0, (people + occasions) / 3.0)
     decay = 0.5 ** (max(0.0, age_days) / HALF_LIFE_DAYS)
     return round(consistency * volume * spread * decay, 3)
+
+
+def feedback_confidence(n, consistency, people, occasions, age_days):
+    """A verdict is deliberate, so it counts faster than an op: two agreeing ones can teach a rule."""
+    volume = 1 - math.exp(-n / 1.5)
+    spread = min(1.0, (people + occasions) / 2.0)
+    decay = 0.5 ** (max(0.0, age_days) / HALF_LIFE_DAYS)
+    return round(consistency * volume * spread * decay, 3)
+
+
+def feedback_gate(conf, n, occasions):
+    """One person rating two different models is enough; rating the same model twice is not."""
+    ok = conf >= ACTIVE_CONFIDENCE and n >= MIN_FEEDBACK_OBSERVATIONS and occasions >= 2
+    return "active" if ok else "candidate"
 
 
 def gate(conf, n, people, occasions):
@@ -159,6 +182,8 @@ def recommend(kind, evidence, confidence, source=""):
         if confidence >= 0.5 and n >= 5:
             return "confirm"
         return "dismiss" if n <= 1 else "look"
+    if kind == "feedback_lesson":
+        return "confirm" if n >= 2 else "look"  # a person's verdicts are deliberate, not inferred
     return "look"
 
 
@@ -184,6 +209,8 @@ def subject_of(rule):
         return f"habit:{key}"
     if kind == "recurring_problem":
         return f"problem:{rule.get('scope') or 'team'}:{key}"
+    if kind == "feedback_lesson":
+        return f"feedback:{rule.get('scope') or 'team'}:{key}"
     return f"{kind}:{rule['id']}"
 
 
@@ -191,7 +218,8 @@ def section_of(subject):
     """Which kind section a subject belongs to: a shared size even when its correction is stronger."""
     for prefix, kind in (("param:", "param_convention"), ("edit:", "correction_pattern"),
                          ("part:", "preferred_component"), ("habit:", "modelling_practice"),
-                         ("problem:", "recurring_problem"), ("proposal:", "proposed"), ("taught:", "taught")):
+                         ("problem:", "recurring_problem"), ("feedback:", "feedback_lesson"),
+                         ("proposal:", "proposed"), ("taught:", "taught")):
         if subject.startswith(prefix):
             return kind
     return "taught"
@@ -262,12 +290,13 @@ class StyleMemory:
     def _add(self, kind, actor, data, op_kind=None, ok=True, error_code="", brief="", board=""):
         actor = actor or {}
         with self.lock:
-            self.db.execute(
+            cur = self.db.execute(
                 "INSERT INTO style_events (at, actor_id, actor_name, actor_kind, kind, op_kind, ok, error_code, "
                 "brief, board, data) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (self.clock(), actor.get("id"), actor.get("name") or "", actor.get("kind") or "", kind, op_kind,
                  1 if ok else 0, error_code or "", brief or "", board or "", json.dumps(data)))
             self._since_distil += 1
+            return cur.lastrowid
 
     def _last_param_set(self, alias):
         row = self.db.execute(
@@ -327,6 +356,48 @@ class StyleMemory:
     def due(self):
         return self._since_distil >= DISTIL_EVERY
 
+    def observe_feedback(self, a):
+        """A verdict on how the model looks: the person's words, the subject, and the shape that earned it.
+
+        A person's verdict counts as evidence; a helper's own opinion is stored as a proposal and never
+        becomes active on its own (the same rule as `teach_style`)."""
+        verdict = str(a.get("verdict") or "").lower()
+        if verdict not in FEEDBACK_VERDICTS:
+            raise StyleError("bad_args", f"verdict must be one of {list(FEEDBACK_VERDICTS)}")
+        actor = dict(a.get("actor") or {})
+        by = "helper" if str(a.get("by") or "").lower() == "helper" else "person"
+        if not actor.get("kind"):
+            actor["kind"] = "agent" if by == "helper" else "human"
+        issues = [str(i).strip() for i in (a.get("issues") or []) if str(i).strip()][:12]
+        data = {"verdict": verdict, "issues": issues, "note": str(a.get("note") or "")[:2000],
+                "subject": _slug(a.get("subject") or "model"),
+                "tags": [t for t in (a.get("tags") or []) if t in FEEDBACK_TAGS],
+                "images": [str(i) for i in (a.get("images") or [])][:6], "by": by,
+                "objects": [str(o)[:80] for o in (a.get("objects") or [])][:20],
+                "evidence": a.get("evidence") or {}}
+        rid = self._add("feedback", actor, data, "feedback", brief=a.get("brief") or "",
+                        board=a.get("board") or "")
+        return {"id": rid, "subject": data["subject"], "recorded": 1}
+
+    def feedback(self, subject="", limit=10):
+        """Recent verdicts and the lessons learned from them, newest first."""
+        rows = self.db.execute("SELECT * FROM style_events WHERE kind='feedback' ORDER BY id DESC LIMIT ?",
+                               (max(1, min(int(limit or 10), 50)),)).fetchall()
+        want = _slug(subject) if subject else ""
+        verdicts = []
+        for row in rows:
+            d = json.loads(row["data"])
+            if want and d.get("subject") != want:
+                continue
+            verdicts.append({"at": row["at"], "id": row["id"], "verdict": d.get("verdict"),
+                             "subject": d.get("subject"), "issues": d.get("issues") or [],
+                             "note": d.get("note") or "", "tags": d.get("tags") or [],
+                             "images": d.get("images") or [], "by": d.get("by"),
+                             "author": row["actor_name"]})
+        lessons = [r for r in self.rules(("confirmed", "active", "candidate"))
+                   if r["type"] == "feedback_lesson" and (not want or r["scope"] == want)]
+        return {"verdicts": verdicts, "lessons": lessons}
+
     # ----------------------------------------------------------------- distil
 
     def _events(self):
@@ -339,20 +410,26 @@ class StyleMemory:
         now = self.clock()
         out = []
 
-        def emit(type_, scope, key, template, value, obs, consistency, n=None):
+        def emit(type_, scope, key, template, value, obs, consistency, n=None, fast=False):
             n = len(obs) if n is None else n
             people = len({o["actor_name"] for o in obs if o["actor_kind"] == "human"})
             # Separate occasions: different briefs, or different days for ops outside a brief.
             occasions = len({o["brief"] or time.strftime("%Y-%m-%d", time.gmtime(o["at"])) for o in obs})
             last = max(o["at"] for o in obs)
-            conf = confidence(n, consistency, people, occasions, (now - last) / 86400)
+            age = (now - last) / 86400
+            if fast:
+                conf = feedback_confidence(n, consistency, people, occasions, age)
+                status = feedback_gate(conf, n, occasions)
+            else:
+                conf = confidence(n, consistency, people, occasions, age)
+                status = gate(conf, n, people, occasions)
             out.append({"id": rule_id(type_, scope, key), "type": type_, "scope": scope, "key": key,
                         "template": template, "value": value, "confidence": conf, "seen_at": last,
                         "evidence": {"n": round(n, 2), "people": people, "occasions": occasions,
                                      "consistency": round(consistency, 2),
                                      "humans": sum(1 for o in obs if o["actor_kind"] == "human"),
                                      "agents": sum(1 for o in obs if o["actor_kind"] == "agent")},
-                        "status": gate(conf, n, people, occasions)})
+                        "status": status})
 
         ops = [e for e in events if e["kind"] == "op"]
         corrections = [e for e in events if e["kind"] == "correction"]
@@ -480,6 +557,49 @@ class StyleMemory:
                 emit("recurring_problem", "team", f"op:{key}",
                      f"{op_kind} keeps failing with {code} ({len(obs)} times): check its inputs first.",
                      {"op": op_kind, "code": code}, obs, 1.0)
+
+        # What a person said about how the model looks. Their words are the lesson; a helper's own
+        # opinion waits like a proposal and never becomes active on its own.
+        said = [e for e in events if e["kind"] == "feedback" and e["data"].get("by") == "person"]
+        by_issue, examples = defaultdict(list), {}
+        for e in said:
+            d = e["data"]
+            if d.get("verdict") not in ("bad", "mixed"):
+                continue
+            for issue in d.get("issues") or []:
+                norm = normalize_problem(issue)
+                if norm:
+                    by_issue[(d.get("subject") or "model", norm)].append(e)
+                    examples.setdefault(norm, issue.strip())
+        for (subject, norm), obs in by_issue.items():
+            emit("feedback_lesson", subject, f"theme:{norm}",
+                 f"Rejected on {subject} {len(obs)}\u00d7: \u201c{examples[norm]}\u201d. Design to avoid it.",
+                 {"issue": examples[norm], "subject": subject}, obs, 1.0, fast=True)
+        rejected, accepted = defaultdict(list), defaultdict(list)
+        for e in said:
+            evidence = e["data"].get("evidence") or {}
+            objs = [o for o in evidence.get("objects") or [] if isinstance(o, dict) and o.get("faces")]
+            subject = e["data"].get("subject") or "model"
+            if evidence.get("intent") != "aesthetic" or not objs:
+                continue
+            worst = max(float(o.get("planar_share") or 0) for o in objs)
+            best = min(objs, key=lambda o: float(o.get("planar_share") or 0))
+            if e["data"].get("verdict") in ("bad", "mixed") and worst > 0.6:
+                rejected[subject].append(e)
+            elif e["data"].get("verdict") == "good" and worst <= 0.6:
+                accepted[subject].append((e, best))
+        for subject, obs in rejected.items():
+            emit("feedback_lesson", subject, f"standard:{subject}",
+                 f"This team rejects faceted shells on {subject}: keep flat faces under 60 % and loft the "
+                 f"main surfaces (seen {len(obs)}\u00d7).", {"subject": subject, "max_planar_share": 0.6},
+                 obs, 1.0, fast=True)
+        for subject, pairs in accepted.items():
+            obs = [e for e, _ in pairs]
+            best = pairs[-1][1]
+            emit("feedback_lesson", subject, f"accepted:{subject}",
+                 f"Accepted on {subject}: lofted shell with {round(100 * float(best.get('planar_share') or 0))} % "
+                 f"flat faces and {best.get('curved', 0)} curved faces (seen {len(obs)}\u00d7).",
+                 {"subject": subject, "planar_share": best.get("planar_share")}, obs, 1.0, fast=True)
         return out
 
     def distil(self):
