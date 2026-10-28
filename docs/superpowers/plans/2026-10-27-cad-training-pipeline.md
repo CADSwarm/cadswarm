@@ -334,7 +334,14 @@ git commit -m "feat(training): whole-table reads and redaction"
 - Consumes: `source.Source.rows`, `source.slug`, `source.project_name`, `source.SourceError`.
 - Produces: `export.TABLES: tuple[str,...]`; `export.export_source(source, out_dir) -> dict`;
   `export.export_project(project_dir, out_dir) -> dict`. Both return the `source.json` content:
-  `{project, mode, db, uri, status, tables: {name: count}, schema_sha256}`.
+  `{project, mode, db, uri, status, tables: {name: count}, schema_sha256, warnings}`.
+
+**Why the directory is swapped whole.** A dataset build hashes this cache, so the directory must
+never be a mix of two runs. All rows are fetched into memory first, written into a sibling
+`<dir>.new`, and only then swapped in; a failed re-export leaves the previous complete directory
+(or nothing), never stale tables beside a fresh `source.json`. JSON fields are redacted by
+parsing, walking strings and re-serialising, because a regex over raw JSON can stop inside an
+escape and leave invalid JSON.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -343,6 +350,8 @@ git commit -m "feat(training): whole-table reads and redaction"
 """One project's tables become JSONL files, and a hostile source is recorded rather than fatal."""
 import json
 import sqlite3
+
+import pytest
 
 from cadswarm.training import export
 
@@ -353,6 +362,7 @@ class FakeSource:
         self.project_dir = project_dir or ""
         self.uri = "http://127.0.0.1:3000"
         self.db = "cadswarm-test"
+        self.token = "eyJhbGciOiJSUzI1NiJ9.secret"
         self.tables = {"member": [{"id": 1, "name": "alice", "kind": "human"}],
                        "op": [{"id": "op_1", "kind": "create_primitive", "created_ms": 1}]}
 
@@ -365,27 +375,53 @@ class PausedSource(FakeSource):
         raise export.SpaceError(503, "database is paused")
 
 
+def raw(tmp_path, name="test-project"):
+    return tmp_path / "raw" / name
+
+
 def test_export_writes_one_file_per_table_and_a_source_record(tmp_path):
     info = export.export_source(FakeSource(), str(tmp_path))
-    raw = tmp_path / "raw" / "test-project"
-    assert json.loads((raw / "op.jsonl").read_text(encoding="utf-8").splitlines()[0])["id"] == "op_1"
-    assert (raw / "member.jsonl").exists()
+    assert json.loads((raw(tmp_path) / "op.jsonl").read_text(encoding="utf-8").splitlines()[0])["id"] == "op_1"
+    assert (raw(tmp_path) / "member.jsonl").exists()
     assert info["status"] == "ok" and info["tables"]["op"] == 1
-    assert (raw / "source.json").exists()
+    assert (raw(tmp_path) / "source.json").exists()
 
 
 def test_the_token_never_reaches_disk(tmp_path):
-    source = FakeSource()
-    source.token = "eyJhbGciOiJSUzI1NiJ9.secret"
-    export.export_source(source, str(tmp_path))
+    export.export_source(FakeSource(), str(tmp_path))
     written = "".join(p.read_text(encoding="utf-8") for p in tmp_path.rglob("*") if p.is_file())
     assert "eyJhbGciOiJSUzI1NiJ9" not in written
 
 
+def test_paths_and_emails_inside_json_fields_are_redacted(tmp_path):
+    source = FakeSource()
+    source.tables["op"] = [{"id": "op_1", "args_json": json.dumps(
+        {"code": r"FreeCAD.open(r'C:\Users\waves\Lexus IS350\model.FCStd')",
+         "note": "ask waves@example.com"})}]
+    export.export_source(source, str(tmp_path))
+    line = (raw(tmp_path) / "op.jsonl").read_text(encoding="utf-8")
+    assert "<path>" in line and "<email>" in line
+    assert json.loads(line)["args_json"]  # still valid JSON
+    assert "waves@example.com" not in line
+
+
 def test_a_paused_database_is_recorded_as_skipped(tmp_path):
+    (raw(tmp_path) / "op.jsonl").parent.mkdir(parents=True)
+    (raw(tmp_path) / "op.jsonl").write_text('{"id": "stale"}\n', encoding="utf-8")
     info = export.export_source(PausedSource(), str(tmp_path))
     assert info["status"].startswith("skipped:") and "paused" in info["status"]
-    assert (tmp_path / "raw" / "test-project" / "source.json").exists()
+    assert (raw(tmp_path) / "source.json").exists()
+    assert not (raw(tmp_path) / "op.jsonl").exists()   # a stale table never sits beside a skip
+
+
+def test_two_exports_of_the_same_rows_are_byte_identical(tmp_path):
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    export.export_source(FakeSource(), str(first))
+    export.export_source(FakeSource(), str(second))
+    for name in ("op.jsonl", "member.jsonl", "source.json"):
+        assert (first / "raw" / "test-project" / name).read_bytes() == \
+               (second / "raw" / "test-project" / name).read_bytes()
 
 
 def test_style_events_are_read_from_the_project_sqlite(tmp_path):
@@ -399,6 +435,25 @@ def test_style_events_are_read_from_the_project_sqlite(tmp_path):
     con.close()
     info = export.export_source(FakeSource(project_dir=str(project)), str(tmp_path / "out"))
     assert info["tables"]["style_events"] == 1
+
+
+def test_a_broken_style_database_is_a_warning_not_a_silent_empty(tmp_path):
+    project = tmp_path / "proj"
+    (project / ".cadswarm-team").mkdir(parents=True)
+    (project / ".cadswarm-team" / "hub.sqlite").write_text("not a database", encoding="utf-8")
+    info = export.export_source(FakeSource(project_dir=str(project)), str(tmp_path / "out"))
+    assert info["status"] == "ok" and any("style" in w for w in info["warnings"])
+
+
+def test_export_project_records_a_project_it_cannot_read(tmp_path):
+    info = export.export_project(str(tmp_path / "nothing-here"), str(tmp_path / "out"))
+    assert info["status"].startswith("skipped:") and info["tables"] == {}
+
+
+def test_export_project_exports_through_for_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(export.Source, "for_project", classmethod(lambda cls, path: FakeSource()))
+    info = export.export_project(str(tmp_path), str(tmp_path / "out"))
+    assert info["status"] == "ok" and info["tables"]["op"] == 1
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -412,13 +467,15 @@ Expected: FAIL — `AttributeError: module 'cadswarm.training.export' has no att
 # cadswarm/training/export.py
 """One project -> raw/<project>/*.jsonl and source.json.
 
-The export is a cache: the dataset build hashes it, so re-running over unchanged tables produces
-the same bytes and the same dataset id. A source that is paused, unreachable or missing is
-recorded in source.json and never aborts the run.
+The export is a cache: the dataset build hashes it, so re-exporting unchanged tables must produce
+the same bytes. A source that is paused, unreachable, missing or broken is recorded in source.json
+and never aborts the caller's loop. The directory is swapped in whole, so a failed re-export can
+never leave old tables beside a new status.
 """
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 
 from ..client import save_json
@@ -429,9 +486,49 @@ from .source import Source, SourceError, project_name, slug
 
 TABLES = ("member", "cad_object", "param", "op", "task", "brief", "review", "team_event")
 SQLITE_TABLES = ("style_events", "style_rules")
-REDACTED_FIELDS = {"text", "detail", "title", "summary", "body", "note", "problem", "statement"}
+# Columns that are prose, and columns that are a JSON document. Ids and hashes are neither: they
+# are what makes records joinable, so they are never rewritten.
+TEXT_FIELDS = {"text", "detail", "title", "summary", "body", "note", "problem", "statement",
+               "template", "status_text", "brief", "evidence"}
+JSON_FIELDS = {"args_json", "result_json", "data_json", "plan_json", "findings_json", "data",
+               "props_json", "expressions_json", "placement_json"}
 
 __all__ = ["TABLES", "export_source", "export_project", "SpaceError"]
+
+
+def _redact_json(raw):
+    """Redact the string leaves of a JSON document and re-serialise it.
+
+    A regex over the raw text can stop inside a JSON escape and leave invalid JSON; parsing
+    first keeps the document readable by everything downstream.
+    """
+    if not isinstance(raw, str):
+        return raw
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return redact.text(raw)
+    return json.dumps(_redact_leaves(value), sort_keys=True, ensure_ascii=False)
+
+
+def _redact_leaves(value):
+    if isinstance(value, str):
+        return redact.text(value)
+    if isinstance(value, list):
+        return [_redact_leaves(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_leaves(item) for key, item in value.items()}
+    return value
+
+
+def _redacted(row):
+    out = dict(row)
+    for key, value in out.items():
+        if key in JSON_FIELDS:
+            out[key] = _redact_json(value)
+        elif key in TEXT_FIELDS:
+            out[key] = redact.text(value)
+    return out
 
 
 def _write_jsonl(path, rows):
@@ -440,24 +537,18 @@ def _write_jsonl(path, rows):
             f.write(json.dumps(_redacted(row), ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def _redacted(row):
-    """Free-text fields only: ids, hashes and numbers are what make records joinable."""
-    out = dict(row)
-    for key, value in out.items():
-        if key in REDACTED_FIELDS:
-            out[key] = redact.text(value)
-    return out
-
-
 def _read_sqlite(path, table):
+    """Rows of one style table, `[]` when it is absent. A broken database raises on purpose."""
     if not os.path.exists(path):
         return []
     con = sqlite3.connect(path)
     con.row_factory = sqlite3.Row
     try:
-        return [dict(row) for row in con.execute(f"select * from {table}")]
-    except sqlite3.DatabaseError:
-        return []
+        return [dict(row) for row in con.execute(f"select * from {table} order by id")]
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            return []
+        raise
     finally:
         con.close()
 
@@ -467,41 +558,60 @@ def _schema_hash(tables):
     return hashlib.sha256(json.dumps(shape, sort_keys=True).encode()).hexdigest()
 
 
+def _publish(root, tables, info):
+    """Write a complete directory beside the old one and swap it in."""
+    staging, old = root + ".new", root + ".old"
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging, exist_ok=True)
+    for name, rows in tables.items():
+        _write_jsonl(os.path.join(staging, name + ".jsonl"), rows)
+    save_json(os.path.join(staging, "source.json"), info)
+    shutil.rmtree(old, ignore_errors=True)
+    if os.path.exists(root):
+        os.replace(root, old)
+    try:
+        os.replace(staging, root)
+    except OSError:
+        if os.path.exists(old) and not os.path.exists(root):
+            os.replace(old, root)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
+
+
 def export_source(source, out_dir):
     """Write every table and return the source record. Never raises for a bad database."""
-    root = os.path.join(out_dir, "raw", slug(source.project))
-    os.makedirs(root, exist_ok=True)
-    tables, status = {}, "ok"
+    tables, warnings, status = {}, [], "ok"
     try:
         for table in TABLES:
             tables[table] = source.rows(table)
         if source.project_dir:
             db = project_layout(source.project_dir)["db"]
             for table in SQLITE_TABLES:
-                tables[table] = _read_sqlite(db, table)
-    except (SourceError, SpaceError) as e:
-        status = f"skipped: {e}"
+                try:
+                    tables[table] = _read_sqlite(db, table)
+                except sqlite3.DatabaseError as e:
+                    tables[table] = []
+                    warnings.append(f"{table}: {e}")
+    except Exception as e:  # one hostile database must not stop the other projects
+        status = f"skipped: {type(e).__name__}: {e}"
         tables = {}
-    counts = {name: len(rows) for name, rows in tables.items()}
-    for name, rows in tables.items():
-        _write_jsonl(os.path.join(root, name + ".jsonl"), rows)
     info = {"project": source.project, "mode": "local", "db": source.db, "uri": source.uri,
-            "status": status, "tables": counts, "schema_sha256": _schema_hash(tables)}
-    save_json(os.path.join(root, "source.json"), info)
+            "status": status, "tables": {name: len(rows) for name, rows in tables.items()},
+            "schema_sha256": _schema_hash(tables), "warnings": warnings}
+    _publish(os.path.join(out_dir, "raw", slug(source.project)), tables, info)
     return info
 
 
 def export_project(project_dir, out_dir):
-    """Read `host.json`, export, and record a missing project instead of raising."""
+    """Read `host.json`, export, and record a missing or broken project instead of raising."""
     name = project_name(project_dir)
     try:
         source = Source.for_project(project_dir)
-    except SourceError as e:
-        info = {"project": name, "mode": "unknown", "db": "", "uri": "", "status": f"skipped: {e}",
-                "tables": {}, "schema_sha256": ""}
-        root = os.path.join(out_dir, "raw", slug(name))
-        os.makedirs(root, exist_ok=True)
-        save_json(os.path.join(root, "source.json"), info)
+    except Exception as e:
+        info = {"project": name, "mode": "unknown", "db": "", "uri": "",
+                "status": f"skipped: {type(e).__name__}: {e}", "tables": {},
+                "schema_sha256": "", "warnings": []}
+        _publish(os.path.join(out_dir, "raw", slug(name)), {}, info)
         return info
     return export_source(source, out_dir)
 ```
@@ -509,7 +619,7 @@ def export_project(project_dir, out_dir):
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `python -m pytest tests/test_training_export.py -v`
-Expected: PASS (4 passed).
+Expected: PASS (10 passed).
 
 - [ ] **Step 5: Commit**
 
