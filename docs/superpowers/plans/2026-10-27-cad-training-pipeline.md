@@ -78,7 +78,7 @@ def test_windows_forward_slash_paths_are_replaced():
 
 
 def test_posix_home_paths_are_replaced():
-    assert redact.text("read /home/waves/projects/x.FCStd now") == "read <path> now"
+    assert redact.text("read /home/waves/My Documents/x.FCStd") == "read <path>"
 
 
 def test_emails_are_replaced():
@@ -87,6 +87,14 @@ def test_emails_are_replaced():
 
 def test_hex_tokens_are_replaced():
     assert redact.text("invite " + "a" * 64) == "invite <token>"
+
+
+def test_uppercase_hex_tokens_are_replaced():
+    assert redact.text("token " + "A" * 64) == "token <token>"
+
+
+def test_urls_are_not_mistaken_for_drive_paths():
+    assert redact.text("see https://example.com/a/b now") == "see https://example.com/a/b now"
 
 
 def test_plain_text_is_untouched():
@@ -149,6 +157,19 @@ def test_a_missing_host_file_is_a_source_error(tmp_path):
         source.read_host(str(tmp_path))
 
 
+def test_a_malformed_host_file_is_a_source_error(tmp_path):
+    for payload in ('["not", "an", "object"]', '{"db": "x"}'):
+        (tmp_path / "host.json").write_text(payload, encoding="utf-8")
+        with pytest.raises(source.SourceError):
+            source.Source.for_project(str(tmp_path))
+
+
+def test_a_table_without_its_primary_key_fails_loudly():
+    client = FakeClient({"op": [{"kind": "create_primitive"}]})
+    with pytest.raises(source.SourceError):
+        source.Source("P", "C:/p", "http://x", "db", "tok", client=client).rows("op")
+
+
 def test_for_project_reads_uri_and_db_from_host_json(tmp_path):
     (tmp_path / "host.json").write_text(json.dumps({"uri": "http://127.0.0.1:3000", "db": "cadswarm-x",
                                                     "token": "secret"}), encoding="utf-8")
@@ -185,11 +206,12 @@ with spaces ("Lexus IS350") would otherwise be only half replaced.
 import re
 
 PATTERNS = [
-    (re.compile(r"[A-Za-z]:[\\/][^\n\"']*"), "<path>"),
+    # `\b` keeps `https://host/path` from being read as drive `s:/`.
+    (re.compile(r"\b[A-Za-z]:[\\/][^\n\"']*"), "<path>"),
     (re.compile(r"\\\\[^\n\"']+"), "<path>"),
-    (re.compile(r"/(?:home|Users)/[^\s\"']*"), "<path>"),
+    (re.compile(r"/(?:home|Users)/[^\n\"']*"), "<path>"),
     (re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"), "<email>"),
-    (re.compile(r"\b[0-9a-f]{64}\b"), "<token>"),
+    (re.compile(r"\b[0-9a-fA-F]{64}\b"), "<token>"),
 ]
 
 
@@ -239,9 +261,12 @@ def read_host(project_dir):
     path = os.path.join(project_layout(project_dir)["root"], "host.json")
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            host = json.load(f)
     except (OSError, ValueError) as e:
         raise SourceError(f"no readable host.json ({e})") from e
+    if not isinstance(host, dict) or not host.get("uri") or not host.get("db"):
+        raise SourceError("host.json has no team uri/db")
+    return host
 
 
 def sort_key(value):
@@ -277,13 +302,16 @@ class Source:
         if table not in PAGE_KEY:
             raise SourceError(f"unknown table {table!r}")
         key = PAGE_KEY[table]
-        return sorted(self.client.sql(f"select * from {table}"), key=lambda row: sort_key(row.get(key)))
+        rows = self.client.sql(f"select * from {table}")
+        if rows and key not in rows[0]:
+            raise SourceError(f"table {table!r} has no {key!r} column")
+        return sorted(rows, key=lambda row: sort_key(row[key]))
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `python -m pytest tests/test_training_redact.py tests/test_training_source.py -v`
-Expected: PASS (12 passed).
+Expected: PASS (16 passed).
 
 - [ ] **Step 5: Commit**
 
