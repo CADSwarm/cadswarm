@@ -464,11 +464,17 @@ impl Orchestrator {
     /// A one-job agent whose member has gone quiet (its MCP server is gone) is not a teammate: take it
     /// off the team, which also hands its task back so a fresh worker can finish it. Checked every few
     /// seconds so a host that was closed mid-brief recovers the work within half a minute of restarting.
+    /// Only agents this host started (they have a folder under its agents/): a teammate's own helper
+    /// that merely has such a name goes stale when their laptop sleeps, and a revoked identity can never
+    /// rejoin.
     fn sweep_stale_agents(cfg: &HostConfig, space: &Space) {
+        let ours: HashSet<String> = crate::agents::run_dirs(cfg).into_iter()
+            .map(|n| n.to_ascii_lowercase())
+            .collect();
         let stale: Vec<String> = space.members().into_iter()
             .filter(|m| m.status == "stale" && m.kind != "host" && m.kind != "human")
             .map(|m| m.name)
-            .filter(|n| is_one_job_agent(n))
+            .filter(|n| is_one_job_agent(n) && ours.contains(&n.to_ascii_lowercase()))
             .collect();
         for name in stale {
             Self::retire_agent(cfg, space, &name);
@@ -1019,7 +1025,8 @@ mod tests {
         }
     }
 
-    fn task(id: &str, status: &str, objects: &[&str]) -> crate::space::TaskRow {        crate::space::TaskRow {
+    fn task(id: &str, status: &str, objects: &[&str]) -> crate::space::TaskRow {
+        crate::space::TaskRow {
             id: id.into(),
             status: status.into(),
             objects: objects.iter().map(|s| s.to_string()).collect(),
