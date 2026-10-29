@@ -156,13 +156,24 @@ def mesh_sig(mesh):
             tuple(round(v, 4) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)))
 
 
+# Volume and Area per shape, keyed by the OCC shape handle plus cheap facts about it. Every mutating op
+# fingerprints every object twice; integrating a 2000-face grille took 5 s, the whole Lexus 15 s a time.
+_MASS_CACHE = {}
+
+
 def shape_sig(shape):
     if shape is None or shape.isNull():
         return None
     bb = shape.BoundBox
-    vol = shape.Volume if shape.Solids else 0.0
-    return (round(vol, 6), round(shape.Area, 6), tuple(round(v, 6) for v in
-            (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)), len(shape.Faces))
+    box = tuple(round(v, 6) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax))
+    # The handle alone could be reused by a new shape once the old one is freed: the counts and box guard it.
+    key = (shape.hashCode(), len(shape.Faces), len(shape.Edges), len(shape.Vertexes), box)
+    mass = _MASS_CACHE.get(key)
+    if mass is None:
+        if len(_MASS_CACHE) > 20_000:
+            _MASS_CACHE.clear()
+        mass = _MASS_CACHE[key] = (round(shape.Volume if shape.Solids else 0.0, 6), round(shape.Area, 6))
+    return (mass[0], mass[1], box, len(shape.Faces))
 
 
 def value_repr(v):
