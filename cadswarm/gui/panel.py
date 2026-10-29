@@ -895,6 +895,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.suggestions = {"setting": [], "style": []}  # what AI helpers suggested, waiting for a person
         self.answered = set()   # suggestions answered here, hidden until the team's list catches up
         self.fetching = False
+        self.opening_style = False  # the style dialog is open and reads the inbox itself
         w = QtGui.QWidget()
         lay = QtGui.QVBoxLayout(w)
         lay.setContentsMargins(10, 10, 10, 10)
@@ -1826,7 +1827,7 @@ class TeamPanel(QtGui.QDockWidget):
     def fetch_suggestions(self):
         """Re-read what AI helpers suggested, off the GUI thread; it comes back through the event queue."""
         s = self.session
-        if not s.connected or self.fetching:
+        if not s.connected or self.fetching or self.opening_style:
             return
         self.fetching = True
         client, events = s.client, s.events
@@ -1884,7 +1885,12 @@ class TeamPanel(QtGui.QDockWidget):
 
     def open_style(self):
         """The Team tab only says how much waits; the dialog is where the decisions are made."""
-        style_ui.show_style()
+        # The dialog reads the same inbox itself: polling it behind them would just queue ops behind the host.
+        self.opening_style = True
+        try:
+            style_ui.show_style()
+        finally:
+            self.opening_style = False
         self.fetch_suggestions()
 
     def answer(self, r, accept):
