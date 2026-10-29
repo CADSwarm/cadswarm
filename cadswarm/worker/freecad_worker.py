@@ -23,9 +23,13 @@ import base64
 import json
 import math
 import os
+import queue
 import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import time
 import threading
 import traceback
@@ -909,22 +913,68 @@ def q_brep(a):
     return {"objects": out}
 
 
+# Inside the host's 120 s per op, with room for the snapshot; CADSWARM_INTERFERENCE_SECONDS for tests.
+INTERFERENCE_SECONDS = float(os.environ.get("CADSWARM_INTERFERENCE_SECONDS") or 90)
+
+
 def q_interference(a):
     names = a.get("names") or [o.Name for o in doc.Objects
                                if getattr(o, "Visibility", False) and hasattr(o, "Shape")
                                and not o.Shape.isNull() and o.Shape.Solids]
-    shapes = [(n, get_obj(n).Shape) for n in names]
+    shapes = [(n, get_obj(n).Shape) for n in names]  # unknown names fail here, as before
     tol = float(a.get("min_volume") or setting(a, "interference_min_vol", 1e-3))
-    clashes = []
+    # Pairs whose (loose, cheap) boxes overlap, cheapest boolean first so one slow pair costs the least.
+    candidates = []
     for i in range(len(shapes)):
         for j in range(i + 1, len(shapes)):
             (na, sa), (nb, sb) = shapes[i], shapes[j]
-            if not sa.BoundBox.intersect(sb.BoundBox):
+            if sa.BoundBox.intersect(sb.BoundBox):
+                candidates.append((len(sa.Faces) * len(sb.Faces), na, nb))
+    pairs = [(na, nb) for _, na, nb in sorted(candidates)]
+    if not pairs:
+        return {"checked": names, "clashes": [], "complete": True}
+    # One boolean of the new Lexus skin against an old roof panel ran past the host's 120 s limit, which
+    # kills FreeCAD and stalls every helper; an OCC boolean can't be interrupted, so the pairs run in a
+    # child that is stopped at the budget. What it didn't finish is reported unchecked, never as clear.
+    run_dir = tempfile.mkdtemp(prefix="cadswarm-clash-")
+    try:
+        snap = os.path.join(run_dir, "model.FCStd")
+        doc.saveCopy(snap)
+        child = subprocess.Popen(
+            [sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "clash_child.py"),
+             snap, json.dumps(pairs), repr(tol)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            creationflags=0x08000000 if os.name == "nt" else 0)  # CREATE_NO_WINDOW
+        lines = queue.Queue()
+        threading.Thread(target=lambda: [lines.put(l) for l in child.stdout] and None, daemon=True).start()
+        deadline = time.time() + INTERFERENCE_SECONDS
+        answered, clashes, failed, done = set(), [], [], False
+        while not done and time.time() < deadline:
+            try:
+                msg = json.loads(lines.get(timeout=max(0.1, deadline - time.time())))
+            except (queue.Empty, ValueError):
+                if child.poll() is not None and lines.empty():
+                    break
                 continue
-            vol = sa.common(sb).Volume
-            if vol > tol:
-                clashes.append({"a": na, "b": nb, "volume": round(vol, 4)})
-    return {"checked": names, "clashes": clashes}
+            if msg.get("done"):
+                done = True
+            elif "a" in msg:
+                answered.add((msg["a"], msg["b"]))
+                if "error" in msg:
+                    failed.append({"a": msg["a"], "b": msg["b"], "why": msg["error"]})
+                elif msg.get("clash"):
+                    clashes.append({"a": msg["a"], "b": msg["b"], "volume": msg["volume"]})
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+    why = f"not finished within {INTERFERENCE_SECONDS:g} s; check this pair on its own"
+    unchecked = failed + [{"a": p[0], "b": p[1], "why": why} for p in pairs if p not in answered]
+    out = {"checked": names, "clashes": clashes, "complete": done and not failed}
+    if unchecked:
+        out["unchecked"] = unchecked
+    return out
 
 
 def q_export(a):

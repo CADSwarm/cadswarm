@@ -404,6 +404,35 @@ def test_moving_a_part_whose_placement_is_bound_is_refused_not_ignored(fc):
     assert c.call("get_object", {"name": "Lid"})["result"]["placement"]["base"][0] == 5
 
 
+def test_interference_finds_a_clash_and_says_it_checked_every_pair(fc):
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "A", "props": {"Length": 10, "Width": 10, "Height": 10}})
+    c.call("create_primitive", {"kind": "box", "name": "B", "props": {"Length": 10, "Width": 10, "Height": 10},
+                                "placement": {"base": [5, 0, 0]}})
+    c.call("create_primitive", {"kind": "box", "name": "Far", "props": {"Length": 1}, "placement": {"base": [500, 0, 0]}})
+    r = c.call("interference", {"names": ["A", "B", "Far"]})["result"]
+    assert [(x["a"], x["b"]) for x in r["clashes"]] == [("A", "B")] and abs(r["clashes"][0]["volume"] - 500) < 1
+    assert r["complete"] is True and "unchecked" not in r
+
+
+@pytest.mark.skipif(not HAVE_FREECAD, reason="FreeCAD not installed")
+def test_interference_past_its_budget_reports_pairs_unchecked_not_clear(tmp_path, monkeypatch):
+    """A boolean that never ends used to hold the worker until the host killed FreeCAD; now it is cut off."""
+    monkeypatch.setenv("CADSWARM_INTERFERENCE_SECONDS", "0.01")
+    c = WorkerClient(str(tmp_path / "model.FCStd"))
+    c.start()
+    try:
+        c.call("create_primitive", {"kind": "box", "name": "A", "props": {"Length": 10}})
+        c.call("create_primitive", {"kind": "box", "name": "B", "props": {"Length": 10},
+                                    "placement": {"base": [5, 0, 0]}})
+        r = c.call("interference", {"names": ["A", "B"]})["result"]
+        assert r["complete"] is False and r["clashes"] == []
+        assert [(u["a"], u["b"]) for u in r["unchecked"]] == [("A", "B")] and "not finished" in r["unchecked"][0]["why"]
+    finally:
+        c.stop()
+        c._kill()
+
+
 def test_a_bspline_part_reports_its_real_extent_not_its_control_points(fc):
     """Shape.BoundBox follows BSpline control points (170 mm out on the Lexus steering wheel): a helper read a
     correct boolean cut as leaking and blocked its task."""
