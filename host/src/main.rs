@@ -164,7 +164,17 @@ fn run(cfg: &HostConfig) -> Result<()> {
     // The SDK never reopens a closed WebSocket (SpacetimeDB restart, network drop, idle timeout):
     // without this the host stays offline until someone restarts it. Retry at most every 10s.
     let mut last_reconnect: Option<std::time::Instant> = None;
+    // Keep the op history small (see Space::prune_history): at start, then every few minutes. A queued
+    // op older than the stale window was left by an agent that gave up long ago; replaying its script
+    // on today's model would undo newer work.
+    let mut last_prune: Option<std::time::Instant> = None;
     loop {
+        if last_prune.map_or(true, |t| t.elapsed() >= Duration::from_secs(600)) && space.is_active() {
+            last_prune = Some(std::time::Instant::now());
+            if let Err(e) = space.prune_history(200, Duration::from_secs(3600)) {
+                eprintln!("[host] pruning op history failed: {e:#}");
+            }
+        }
         if !space.is_active() {
             if last_reconnect.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
                 last_reconnect = Some(std::time::Instant::now());

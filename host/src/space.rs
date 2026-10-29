@@ -322,6 +322,13 @@ impl Space {
         self.call("heartbeat", |cb| self.conn.reducers.heartbeat_then(fence, String::new(), cb))
     }
 
+    /// Drop finished ops beyond the newest `keep` and queued ones older than `stale`. Op rows carry whole
+    /// part scripts, so unpruned history grows until the host's subscription is refused.
+    pub fn prune_history(&self, keep: u32, stale: Duration) -> Result<()> {
+        let (fence, stale_ms) = (self.fence(), stale.as_millis() as u64);
+        self.call("prune_history", |cb| self.conn.reducers.prune_history_then(fence, keep, stale_ms, cb))
+    }
+
     pub fn start_op(&self, id: &str) -> Result<()> {
         let (fence, id) = (self.fence(), id.to_string());
         self.call("start_op", |cb| self.conn.reducers.start_op_then(fence, id, cb))
