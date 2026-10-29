@@ -237,6 +237,14 @@ def call(method, path, body=None, doing=None, targets=None, **params):
         return waiting
     if S.dead:
         return {"error": f"This agent session can no longer act: {S.dead}", "code": "inactive"}
+    fresh = unseen_messages()
+    if any(m.get("kind") == "steer" or m.get("to") == "you" for m in fresh):
+        S.seen_messages.update(m["id"] for m in fresh)
+        raise HeldForMessages(
+            "NOT run: messages for you arrived, and this call was held so you read them first (nothing was "
+            "done, so repeating the call is safe). A steer is a COMMAND, a person's instruction: do it first.\n"
+            + "\n".join(f"- from {m['from']} ({m['kind']}): {m['body']}" for m in fresh)
+            + "\nThen ack_messages with their ids and carry on.")
     if doing:
         S.doing = doing
         S.client.log_activity("tool_call", doing, targets)
@@ -246,26 +254,29 @@ def call(method, path, body=None, doing=None, targets=None, **params):
         if e.code in ("fence_stale", "taken_over", "removed", "left"):
             S.dead = str(e)
         return {"error": str(e), **{k: v for k, v in e.body.items() if k != "error"}}
-    note = new_messages() if isinstance(result, dict) else None
-    return {**result, "new_messages": note} if note else result
+    if not fresh or not isinstance(result, dict):
+        return result
+    S.seen_messages.update(m["id"] for m in fresh)
+    return {**result, "new_messages": {"note": "Messages to the team arrived while you worked. Read them with "
+                                               "get_inbox, then ack_messages.", "messages": fresh}}
 
 
-def new_messages():
-    """Messages that arrived since this helper last heard, each shown once. The unread list is part of a prompt's
+class HeldForMessages(Exception):
+    """Raised instead of running a tool call while a steer or a direct message is unread. The MCP reply is then an
+    error, which a code-mode helper's script cannot drop the way it drops an extra field of a result."""
+
+
+def unseen_messages():
+    """Messages that arrived since this helper last heard, not yet shown. The unread list is part of a prompt's
     context, and a headless worker gets a single prompt: a person's steer sent mid-task never reached it."""
     unread_notes = getattr(S.client, "unread_notes", None)  # a hub from before this existed has no inbox to peek at
     if unread_notes is None or time.time() - S.inbox_checked < INBOX_CHECK_SECONDS:
-        return None
+        return []
     S.inbox_checked = time.time()
     try:
-        fresh = unread_notes(S.seen_messages)
+        return unread_notes(S.seen_messages)
     except HubRequestError:
-        return None
-    if not fresh:
-        return None
-    S.seen_messages.update(m["id"] for m in fresh)
-    return {"note": "Messages arrived while you worked. A steer is a COMMAND, a person's instruction: do it first. "
-                    "Read them with get_inbox, then ack_messages.", "messages": fresh}
+        return []
 
 
 def my_name():

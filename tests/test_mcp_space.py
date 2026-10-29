@@ -40,14 +40,29 @@ def fake_session(joined=True):
                                  join_error=None, seen_messages=set(), inbox_checked=0.0)
 
 
-def test_a_message_that_arrives_mid_task_rides_on_the_next_tool_result_once(session, monkeypatch):
-    """A headless worker gets one prompt; without this a person's steer never reached it until it finished."""
+def test_a_message_to_the_helper_holds_its_next_call_until_it_has_been_shown(session, monkeypatch):
+    """A headless worker gets one prompt, and a code-mode one keeps only the fields its own script returns: a
+    message riding on a result was dropped (a Lexus helper rebuilt parts its manager had told it to leave)."""
     monkeypatch.setattr(mcp_server, "INBOX_CHECK_SECONDS", 0)
     assert "new_messages" not in mcp_server.lock_objects(["Lid"])
-    session.client.unread = [{"id": "m_1", "from": "Lucky", "kind": "steer", "body": "stop the door, do the hood"}]
+    session.client.posts.clear()
+    session.client.unread = [{"id": "m_1", "from": "Lucky", "kind": "steer", "to": "all",
+                              "body": "stop the door, do the hood"}]
+    with pytest.raises(mcp_server.HeldForMessages) as e:
+        mcp_server.lock_objects(["Lid"])
+    assert "stop the door, do the hood" in str(e.value) and "NOT run" in str(e.value)
+    assert session.client.posts == [], "the held call did nothing, so repeating it is safe"
+    assert mcp_server.lock_objects(["Lid"])["ok"], "each message is shown once; the repeat goes through"
+    session.client.unread = [{"id": "m_2", "from": "manager", "kind": "message", "to": "you", "body": "leave the DRLs"}]
+    with pytest.raises(mcp_server.HeldForMessages, match="leave the DRLs"):
+        mcp_server.lock_objects(["Lid"])
+
+
+def test_a_broadcast_still_rides_on_the_next_tool_result_once(session, monkeypatch):
+    monkeypatch.setattr(mcp_server, "INBOX_CHECK_SECONDS", 0)
+    session.client.unread = [{"id": "m_3", "from": "worker2", "kind": "message", "to": "all", "body": "Hood done"}]
     r = mcp_server.lock_objects(["Lid"])
-    assert r["ok"] and r["new_messages"]["messages"][0]["body"] == "stop the door, do the hood"
-    assert "COMMAND" in r["new_messages"]["note"]
+    assert r["ok"] and r["new_messages"]["messages"][0]["body"] == "Hood done"
     assert "new_messages" not in mcp_server.lock_objects(["Lid"]), "each message is shown once"
 
 

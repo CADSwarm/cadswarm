@@ -810,8 +810,8 @@ class SpaceHub(LibraryRoutes):
         if not fresh:
             return []
         names = self._names()
-        return [{"id": m["id"], "from": names.get(m["from"], "?"), "kind": m["kind"], "body": m["body"][:600]}
-                for m in fresh]
+        return [{"id": m["id"], "from": names.get(m["from"], "?"), "kind": m["kind"],
+                 "to": "all" if m["to"] == "all" else "you", "body": m["body"][:1500]} for m in fresh]
 
     def inbox(self, limit=10):
         names = self._names()
