@@ -159,6 +159,24 @@ def mesh_sig(mesh):
 # Volume and Area per shape, keyed by the OCC shape handle plus cheap facts about it. Every mutating op
 # fingerprints every object twice; integrating a 2000-face grille took 5 s, the whole Lexus 15 s a time.
 _MASS_CACHE = {}
+_BOX_CACHE = {}
+
+
+def tight_box(shape):
+    """The shape's real extent. Shape.BoundBox is built from BSpline control points and ran up to 170 mm
+    outside the Lexus parts: a helper read a correct boolean cut as leaking 68 mm and gave up on the bumper.
+    Cached per shape handle, since the exact box is ~30 ms a part."""
+    key = (shape.hashCode(), len(shape.Faces), len(shape.Edges), len(shape.Vertexes))
+    box = _BOX_CACHE.get(key)
+    if box is None:
+        if len(_BOX_CACHE) > 20_000:
+            _BOX_CACHE.clear()
+        try:
+            box = shape.optimalBoundingBox()
+        except Exception:  # an older FreeCAD, or a shape OCC can't bound exactly
+            box = shape.BoundBox
+        _BOX_CACHE[key] = box
+    return box
 
 
 def shape_sig(shape):
@@ -456,7 +474,7 @@ def op_run_part_script(a):
             # The bound placement is applied on top of the shape's own coordinates, so a shape built where it
             # belongs lands twice as far out (TrunkLid and both taillights ended up metres behind the car).
             doc.recompute()
-            bb = obj.Shape.BoundBox
+            bb = tight_box(obj.Shape)
             out["bbox"] = [round(v, 1) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
             out["warning"] = (f"{obj.Name}'s placement is driven by expressions {bound}, which move your shape "
                               f"on top of its own coordinates: it now spans {out['bbox']}. Build the shape at the "
@@ -840,7 +858,7 @@ def obj_summary(o):
         info["component"] = o.CadSwarmComponent  # placed from the components library
     shape = getattr(o, "Shape", None)
     if shape is not None and not shape.isNull():
-        bb = shape.BoundBox
+        bb = tight_box(shape)
         if bb.isValid():  # an empty shape's box spans +-1.8e308, which read as a part outside the car
             info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
         info["volume"] = round(shape.Volume, 3) if shape.Solids else 0.0
@@ -962,7 +980,7 @@ def q_faces(a):
     import fea_runner
     names = a.get("names") or []
     shape, warnings = fea_target(names)
-    bb = shape.BoundBox
+    bb = tight_box(shape)
     out = {"names": names, "bbox": [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)],
            "faces": fea_runner.face_table(shape)[:300], "face_count": len(shape.Faces), "warnings": warnings}
     if a.get("select"):
@@ -1110,7 +1128,7 @@ def q_printability(a):
     objects = []
     for n in names:
         s = get_obj(n).Shape
-        bb = s.BoundBox
+        bb = tight_box(s)
         size = [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]
         # The footprint may be rotated on the bed, so compare the sorted XY extents.
         fits = all(x <= b for x, b in zip(sorted(size[:2]), sorted(bed[:2]))) and size[2] <= bed[2]
@@ -1145,7 +1163,7 @@ def q_surface_quality(a):
             kinds[k] = kinds.get(k, 0) + 1
         faces = len(sh.Faces)
         planar = kinds.get("Plane", 0)
-        bb = sh.BoundBox
+        bb = tight_box(sh)
         out.append({
             "name": o.Name, "label": o.Label, "faces": faces, "planar": planar,
             "curved": faces - planar, "bspline": kinds.get("BSplineSurface", 0),

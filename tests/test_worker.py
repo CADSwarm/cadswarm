@@ -404,6 +404,24 @@ def test_moving_a_part_whose_placement_is_bound_is_refused_not_ignored(fc):
     assert c.call("get_object", {"name": "Lid"})["result"]["placement"]["base"][0] == 5
 
 
+def test_a_bspline_part_reports_its_real_extent_not_its_control_points(fc):
+    """Shape.BoundBox follows BSpline control points (170 mm out on the Lexus steering wheel): a helper read a
+    correct boolean cut as leaking and blocked its task."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Tube", "code": textwrap.dedent("""
+        import math, Part
+        from FreeCAD import Vector
+        def ring(z):
+            bs = Part.BSplineCurve()
+            bs.interpolate([Vector(50 * math.cos(a), 50 * math.sin(a), z)
+                            for a in [2 * math.pi * k / 7 for k in range(7)]], True)
+            return Part.Wire(bs.toShape())
+        shape = Part.makeLoft([ring(0), ring(100)], True)
+    """)})
+    box = c.call("get_object", {"name": "Tube"})["result"]["bbox"]
+    assert max(abs(v) for v in box[:2] + box[3:5]) < 52, box  # the ring's radius, not its control polygon
+
+
 def test_an_empty_part_reports_no_bbox_instead_of_infinity(fc):
     c, _ = fc
     # Two boxes that don't touch: their common part is a valid shape with nothing in it.
