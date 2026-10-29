@@ -158,6 +158,33 @@ def _agent_trace(code, exc):
     return detail + where
 
 
+_SECTIONS = {}
+
+
+def section_points(shape, axis, at, step=2.0):
+    """Points along `shape` cut by the plane axis = at ("x", "y" or "z"): one slice per plane, cached. Helpers
+    found a skin with shape.common(line) per sample, a boolean each, and ran out of time."""
+    import FreeCAD
+    key = (shape.hashCode(), axis, round(float(at), 3), float(step))
+    if key not in _SECTIONS:
+        normal = {"x": FreeCAD.Vector(1, 0, 0), "y": FreeCAD.Vector(0, 1, 0), "z": FreeCAD.Vector(0, 0, 1)}[axis]
+        _SECTIONS[key] = [p for w in shape.slice(normal, float(at)) for p in w.discretize(Distance=float(step))]
+    return _SECTIONS[key]
+
+
+def surface_y(shape, x, z, side=1, tol=2.5):
+    """The outermost Y of `shape` at station X = x, height z: the max for side=1, the min for side=-1; None where
+    the section has no point within `tol` of z."""
+    ys = [p.y for p in section_points(shape, "x", x) if abs(p.z - z) <= tol]
+    return (max(ys) if side > 0 else min(ys)) if ys else None
+
+
+def surface_z(shape, x, y, top=True, tol=2.5):
+    """The top (or bottom) Z of `shape` at station X = x, lateral position y; None where nothing is there."""
+    zs = [p.z for p in section_points(shape, "x", x) if abs(p.y - y) <= tol]
+    return (max(zs) if top else min(zs)) if zs else None
+
+
 def main():
     req = json.loads(sys.stdin.buffer.read().decode("utf-8"))
     # FreeCAD and OCC print to stdout from C++, past sys.stdout. Keep the reply on a private duplicate of
@@ -183,7 +210,8 @@ def main():
         doc = FreeCAD.openDocument(req["doc_path"])  # the snapshot copy
         ns = {"App": FreeCAD, "FreeCAD": FreeCAD, "Part": Part, "doc": doc, "Vector": FreeCAD.Vector,
               "Placement": FreeCAD.Placement, "Rotation": FreeCAD.Rotation, "math": math,
-              "params": req.get("params") or {}}
+              "params": req.get("params") or {}, "section_points": section_points, "surface_y": surface_y,
+              "surface_z": surface_z}
         if guards:
             ns["__builtins__"] = script_builtins()
             sys.addaudithook(_script_audit)

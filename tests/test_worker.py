@@ -451,6 +451,20 @@ def test_a_bspline_part_reports_its_real_extent_not_its_control_points(fc):
     assert max(abs(v) for v in box[:2] + box[3:5]) < 52, box  # the ring's radius, not its control polygon
 
 
+def test_scripts_get_slice_probes_for_reading_a_skin(fc):
+    """Helpers kept finding a skin with shape.common(line) per sample and timing out; the probes slice once."""
+    c, _ = fc
+    r = c.call("run_part_script", {"code": textwrap.dedent("""
+        s = Part.makeBox(100, 200, 50, Vector(0, -100, 0))
+        result = {"left": surface_y(s, 50, 25), "right": surface_y(s, 50, 25, side=-1),
+                  "top": surface_z(s, 50, 0), "bottom": surface_z(s, 50, 0, top=False),
+                  "outside": surface_y(s, 500, 25), "points": len(section_points(s, "x", 50)) > 10}
+    """)})["result"]["result"]
+    assert r["left"] == pytest.approx(100) and r["right"] == pytest.approx(-100)
+    assert r["top"] == pytest.approx(50) and r["bottom"] == pytest.approx(0)
+    assert r["outside"] is None and r["points"]
+
+
 def test_an_empty_part_reports_no_bbox_instead_of_infinity(fc):
     c, _ = fc
     # Two boxes that don't touch: their common part is a valid shape with nothing in it.

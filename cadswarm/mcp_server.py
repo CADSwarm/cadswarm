@@ -445,9 +445,11 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
     assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
     recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
     (use save_file), no subprocesses; limited time (~60 s) and memory. Names starting with _ are refused
-    (write type(x).__name__, never x.__class__; Part.__sortEdges__ is allowed). To probe a shape use
-    s.isInside(Vector(...), tol, True), s.distToShape(...) or s.slice(...): one boolean per sample point
-    runs out of time. Errors: script_error (your traceback), timeout, sandbox_limit (memory),
+    (write type(x).__name__, never x.__class__; Part.__sortEdges__ is allowed). To read where a skin is, use
+    the built-in probes, which slice once per station: surface_y(shape, x, z, side=1) is its outermost Y at
+    (x, z) (side=-1 for the min), surface_z(shape, x, y, top=True) its top Z at (x, y), and
+    section_points(shape, "x", x) every point of that section. Never call common()/cut() per sample point
+    (each is a boolean: a grid of them runs out of time). Errors: script_error (your traceback), timeout, sandbox_limit (memory),
     sandbox_unavailable, not_allowed."""
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
 

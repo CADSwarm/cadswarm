@@ -283,8 +283,9 @@ def _verdict(out, timeout, memory_mb, level, code=""):
             raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. It runs "
                                f"slow shape calls repeatedly at {', '.join(looped[:6])}; on a large skin a boolean "
                                "can take seconds and thousands of probes add up. Do one boolean against a "
-                               "combined tool shape, and read a surface with one shape.slice(Vector(1,0,0), x) "
-                               "per station (then the wire points) instead of common() or isInside() grids.")
+                               "combined tool shape, and read a skin with the built-in surface_y(shape, x, z), "
+                               "surface_z(shape, x, y) or section_points(shape, 'x', x), which slice once per "
+                               "station, instead of common() or isInside() grids.")
         raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. "
                            "Simplify the geometry or split the work into smaller steps.")
     if reply is not None:
