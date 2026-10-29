@@ -802,6 +802,17 @@ class SpaceHub(LibraryRoutes):
                 and not (helper and m["kind"] == "chat")]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
 
+    def unread_notes(self, seen, limit=5):
+        """Unread messages whose id is not in `seen`, as {id, from, kind, body}, without marking them delivered.
+        A headless helper gets one prompt and never sees the unread list in a later one, so its MCP server
+        shows each of these once with a tool result."""
+        fresh = [m for m in self._unconsumed() if m["id"] not in seen][:int(limit)]
+        if not fresh:
+            return []
+        names = self._names()
+        return [{"id": m["id"], "from": names.get(m["from"], "?"), "kind": m["kind"], "body": m["body"][:600]}
+                for m in fresh]
+
     def inbox(self, limit=10):
         names = self._names()
         rows = self._unconsumed()[:int(limit)]

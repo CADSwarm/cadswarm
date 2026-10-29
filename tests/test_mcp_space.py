@@ -26,13 +26,29 @@ class RecordingHub:
     def get(self, path, **params):
         return {"path": path, **params}
 
+    unread = ()
+
+    def unread_notes(self, seen):
+        return [m for m in self.unread if m["id"] not in seen]
+
 
 def fake_session(joined=True):
     ready = threading.Event()
     if joined:
         ready.set()
     return types.SimpleNamespace(client=RecordingHub(), dead=None, doing="", cfg={"name": "a"}, ready=ready,
-                                 join_error=None)
+                                 join_error=None, seen_messages=set(), inbox_checked=0.0)
+
+
+def test_a_message_that_arrives_mid_task_rides_on_the_next_tool_result_once(session, monkeypatch):
+    """A headless worker gets one prompt; without this a person's steer never reached it until it finished."""
+    monkeypatch.setattr(mcp_server, "INBOX_CHECK_SECONDS", 0)
+    assert "new_messages" not in mcp_server.lock_objects(["Lid"])
+    session.client.unread = [{"id": "m_1", "from": "Lucky", "kind": "steer", "body": "stop the door, do the hood"}]
+    r = mcp_server.lock_objects(["Lid"])
+    assert r["ok"] and r["new_messages"]["messages"][0]["body"] == "stop the door, do the hood"
+    assert "COMMAND" in r["new_messages"]["note"]
+    assert "new_messages" not in mcp_server.lock_objects(["Lid"]), "each message is shown once"
 
 
 @pytest.fixture

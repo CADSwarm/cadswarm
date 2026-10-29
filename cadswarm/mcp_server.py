@@ -127,6 +127,8 @@ BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the Free
 # The team is joined in the background while the client already has our tools. A tool called before the join
 # finished waits this long for it; an unreachable database is retried within the same window.
 JOIN_WAIT_SECONDS = 90
+# How often a tool result may look for messages that arrived mid-task (three database reads each time).
+INBOX_CHECK_SECONDS = 15
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
 
@@ -146,6 +148,8 @@ class Session:
         self.fea_jobs = set()  # this session's unfinished FEA jobs, polled so their outcome always reaches the team
         self.ready = threading.Event()  # set once the join finished, joined or not
         self.join_error = None  # why this process could not join, for every tool call to say
+        self.seen_messages = set()  # message ids already shown with a tool result (see new_messages)
+        self.inbox_checked = 0.0
 
     def connect(self):
         ident = self.client.join(None, self.cfg["name"], "agent", self.cfg.get("client"), self.cfg.get("role", "member"))
@@ -237,13 +241,31 @@ def call(method, path, body=None, doing=None, targets=None, **params):
         S.doing = doing
         S.client.log_activity("tool_call", doing, targets)
     try:
-        if method == "GET":
-            return S.client.get(path, **params)
-        return S.client.post(path, body)
+        result = S.client.get(path, **params) if method == "GET" else S.client.post(path, body)
     except HubRequestError as e:
         if e.code in ("fence_stale", "taken_over", "removed", "left"):
             S.dead = str(e)
         return {"error": str(e), **{k: v for k, v in e.body.items() if k != "error"}}
+    note = new_messages() if isinstance(result, dict) else None
+    return {**result, "new_messages": note} if note else result
+
+
+def new_messages():
+    """Messages that arrived since this helper last heard, each shown once. The unread list is part of a prompt's
+    context, and a headless worker gets a single prompt: a person's steer sent mid-task never reached it."""
+    unread_notes = getattr(S.client, "unread_notes", None)  # a hub from before this existed has no inbox to peek at
+    if unread_notes is None or time.time() - S.inbox_checked < INBOX_CHECK_SECONDS:
+        return None
+    S.inbox_checked = time.time()
+    try:
+        fresh = unread_notes(S.seen_messages)
+    except HubRequestError:
+        return None
+    if not fresh:
+        return None
+    S.seen_messages.update(m["id"] for m in fresh)
+    return {"note": "Messages arrived while you worked. A steer is a COMMAND, a person's instruction: do it first. "
+                    "Read them with get_inbox, then ack_messages.", "messages": fresh}
 
 
 def my_name():

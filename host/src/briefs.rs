@@ -22,6 +22,8 @@ pub const MAX_SPAWN_FAILURES: u32 = 3;
 const SPAWN_BACKOFF: [Duration; 3] = [Duration::from_secs(2), Duration::from_secs(10), Duration::from_secs(30)];
 
 pub const MAX_WORKERS: usize = 3;
+/// How long after starting a worker a short-handed generation may get another.
+const TOP_UP_AFTER: Duration = Duration::from_secs(120);
 pub const MAX_REVIEW_ROUNDS: u32 = 3;
 /// How often the host clears one-job agents whose MCP server is gone (see `sweep_stale_agents`).
 const ORPHAN_SWEEP: Duration = Duration::from_secs(10);
@@ -52,6 +54,8 @@ pub struct BriefState {
     /// The brief is `reviewing` but this host holds no reviewer run for it: it restarted mid-review,
     /// or a round from a previous run already left a verdict. Either way the review must be asked again.
     pub review_orphaned: bool,
+    /// Long enough since this brief last started a worker that a short-handed generation may be topped up.
+    pub can_top_up: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -98,6 +102,11 @@ pub fn next_action(s: &BriefState) -> Action {
         // (which hands the task back), so it becomes `open` here rather than spawning a worker that
         // would find nothing to claim.
         "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
+        // One worker of a generation finished or was stopped while tasks still wait: without this the rest
+        // of the generation carried the brief short-handed until every one of them exited.
+        "building" if s.open > 0 && s.workers_alive < MAX_WORKERS && s.can_top_up => {
+            Action::Build(s.open.min(MAX_WORKERS - s.workers_alive))
+        }
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
         // No reviewer of ours is running this round: a host restarted, or the only verdict is from a
         // previous run. Judge that verdict if it is final, otherwise run the round again. (Building
@@ -224,6 +233,9 @@ struct Runtime {
     retry_at: Option<Instant>,
     /// The folder of the last agent that failed to start, for its log.
     last_failed: Option<String>,
+    /// When this brief last started a worker; a top-up waits TOP_UP_AFTER from then, so tasks nobody
+    /// can claim do not start a worker every tick.
+    last_spawn: Option<Instant>,
 }
 
 /// What the brief has done so far, compared tick to tick to spot a generation worth respecting.
@@ -669,6 +681,7 @@ impl Orchestrator {
             review,
             reviewed_round: rt.reviewed_round,
             review_orphaned: rt.review_round == 0 && rt.reviewer.is_none(),
+            can_top_up: rt.last_spawn.map_or(true, |t| t.elapsed() >= TOP_UP_AFTER),
         };
 
         // A generation that moved the brief forward (wrote the plan, opened or finished a task, took
@@ -797,6 +810,7 @@ impl Orchestrator {
                     let name = format!("worker{}-{}", rt.spawned, &b.id[2..]);
                     eprintln!("[host] brief {}: starting {name}", b.id);
                     let prompt = format!("{}{style}", crate::agents::worker_prompt(&b.id, rt.spawned));
+                    rt.last_spawn = Some(Instant::now());
                     match Self::start(&self.cfg, space, "agent", "member", &name, &prompt) {
                         Ok(agent) => rt.workers.push(agent),
                         Err(e) => {
@@ -883,6 +897,13 @@ mod tests {
     fn building_restarts_workers_if_they_all_died_and_reviews_when_done() {
         assert_eq!(next_action(&BriefState { open: 2, ..st("building") }), Action::Build(2));
         assert_eq!(next_action(&BriefState { open: 2, workers_alive: 1, ..st("building") }), Action::Wait);
+        // Once the cooldown since the last start is over, the missing workers are started.
+        assert_eq!(next_action(&BriefState { open: 2, workers_alive: 1, can_top_up: true, ..st("building") }),
+                   Action::Build(2));
+        assert_eq!(next_action(&BriefState { open: 4, workers_alive: 2, can_top_up: true, ..st("building") }),
+                   Action::Build(1));
+        assert_eq!(next_action(&BriefState { open: 4, workers_alive: 3, can_top_up: true, ..st("building") }),
+                   Action::Wait);
         // A task whose helper went quiet is `awaiting_takeover` only until the host's sweep takes that
         // member off the team and hands the task back; spawning a worker now would find nothing to
         // claim. (A teammate's helper may hold a real claimed task too.)

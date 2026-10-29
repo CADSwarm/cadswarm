@@ -171,6 +171,16 @@ def test_inbox_puts_human_steering_first_skips_my_own_and_others_mail(world):
     assert ("mark_delivered", (2, ["m_b", "m_a"])) in fake.calls
 
 
+def test_unread_notes_list_each_new_message_once_without_marking_it_read(world):
+    """A headless helper gets no new prompt mid-task, so its tool results carry what arrived meanwhile."""
+    hub, fake = world
+    notes = hub.unread_notes(set())
+    assert [(n["id"], n["from"], n["kind"]) for n in notes] == [("m_b", "carol", "steer"), ("m_a", notes[1]["from"], notes[1]["kind"])]
+    assert [n["id"] for n in hub.unread_notes({"m_b"})] == ["m_a"]
+    assert hub.unread_notes({"m_a", "m_b"}) == []
+    assert not [c for c in fake.calls if c[0] == "mark_delivered"], "noticing is not reading: get_inbox still does that"
+
+
 def test_consumed_messages_leave_the_inbox(world):
     hub, fake = world
     fake.tables["v_receipt"] = [{"message_id": "m_b", "member": 1, "state": "consumed"}]
