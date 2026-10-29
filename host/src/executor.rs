@@ -186,11 +186,15 @@ pub fn run_op(
     if let Ok(result) = serde_json::from_str::<Value>(&done.result_json) {
         publish_style_profile(space, &result);
     }
+    let after = std::time::Instant::now();
     let mut objects = Value::Array(vec![]);
     if done.ok && op.mutating {
         // The op is already committed; a refresh failure only leaves object details stale.
-        match refresh(space, worker, &touched(&done), true) {
-            Ok(all) => objects = touched_objects(&all, &touched(&done)),
+        // `refresh` reads no names as "every part": an op that changed nothing (a helper's test script)
+        // must not re-mesh and re-upload the whole model, which held up the queue for a minute per op.
+        let names = touched(&done);
+        match refresh(space, worker, &names, !names.is_empty()) {
+            Ok(all) => objects = touched_objects(&all, &names),
             Err(e) => eprintln!("[host] refresh after op {} failed: {e:#}", op.id),
         }
     }
@@ -203,6 +207,10 @@ pub fn run_op(
         obs["objects"] = objects;
         obs["prior_actors"] = prior;
         observe(space, h, "observe_op", &obs);
+    }
+    // The next queued op waits for this: say so when it is slow (agents give up on an op after 150 s).
+    if after.elapsed() > std::time::Duration::from_secs(5) {
+        eprintln!("[host] op {} follow-up (refresh, previews, style) took {:.1}s", op.id, after.elapsed().as_secs_f64());
     }
     Ok(())
 }
@@ -291,6 +299,7 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String], previ
     }
     // The team's mesh_deviation setting (default 0.2 mm) sets the preview tolerance.
     let args = json!({"names": names, "max_bytes": 200_000, "_settings": space.settings_rows()});
+    let t = std::time::Instant::now();
     let meshes = match worker.call("mesh", &args, None) {
         Ok(m) => m,
         Err(e) => {
@@ -298,17 +307,24 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String], previ
             return Ok(objects);
         }
     };
+    let meshed = t.elapsed();
+    let mut sent = 0usize;
     if let Some(map) = meshes["result"]["meshes"].as_object() {
         for (name, b64) in map {
             if let Some(s) = b64.as_str() {
                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s) {
                     // A preview is cosmetic: a slow database must not take the host down with it.
+                    sent += bytes.len();
                     if let Err(e) = space.put_preview(name, bytes) {
                         eprintln!("[host] preview for {name} failed (continuing): {e:#}");
                     }
                 }
             }
         }
+    }
+    if t.elapsed() > std::time::Duration::from_secs(5) {
+        eprintln!("[host] previews for {} part(s): mesh {:.1}s, upload {} KB in {:.1}s", names.len(),
+                  meshed.as_secs_f64(), sent / 1024, (t.elapsed() - meshed).as_secs_f64());
     }
     Ok(objects)
 }

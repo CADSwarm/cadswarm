@@ -260,7 +260,15 @@ class Session:
                 events.put(("progress", "Joining your team\u2026"))
                 client, ident = self._join_retrying(cfg, identity, name, host_dir, events)
                 events.put(("progress", "Loading the team\u2019s model\u2026"))
-                breps, _gone, mirrored = client.mirror_changes({})
+                try:
+                    breps, _gone, mirrored = client.mirror_changes({})
+                except HubRequestError as e:
+                    # The parts come from the host, which may be busy or restarting. Joining does not need
+                    # them: keep the model on screen and let the mirror loop fetch them once it answers.
+                    # Failing here left the person "Not joined" until they clicked Try again.
+                    if not _not_there_yet(e):
+                        raise
+                    breps, mirrored = None, None
                 snap = client.panel_snapshot()
             except Exception as e:  # a stopped server, a stale sign-in, a team that is too busy
                 events.put(("rejoin", (cfg, None, None, project, None, None, None,
@@ -296,9 +304,14 @@ class Session:
         self._end_session()  # a previous session's threads must never act on this one
         self._adopt(cfg, client, ident, project)
         try:
-            self.apply_breps(breps or {})
-            self.mirrored = mirrored or {}  # what the model shows now: the mirror loop only fetches changes
-            self.remove_objects([o.Name for o in self.mirror().Objects if o.Name not in self.mirrored])
+            if mirrored is None:
+                # The host didn't send the parts yet: the mirror loop starts from nothing, so it fetches them
+                # all on its first pass; nothing on screen is removed meanwhile.
+                self.mirrored = {}
+            else:
+                self.apply_breps(breps or {})
+                self.mirrored = mirrored  # what the model shows now: the mirror loop only fetches changes
+                self.remove_objects([o.Name for o in self.mirror().Objects if o.Name not in self.mirrored])
             if snap:
                 self.apply_snapshot(snap)
             self.frame_model()

@@ -175,7 +175,7 @@ fn run(cfg: &HostConfig) -> Result<()> {
                         // An op whose start_op failed with the connection is still queued and may run
                         // now; one that did start is no longer queued, and start_op refuses a repeat.
                         tried.clear();
-                        if let Err(e) = executor::refresh(&space, &mut worker, &[]) {
+                        if let Err(e) = executor::refresh(&space, &mut worker, &[], false) {
                             eprintln!("[host] refresh after reconnect failed: {e:#}");
                         }
                         println!("[host] reconnected (fence {})", space.fence());

@@ -999,14 +999,41 @@ def q_mesh(a):
         shape = _solid_shape(obj)
         if shape is None:
             continue
-        t, data = tol, stl_bytes(shape, tol)
-        for _ in range(6):  # coarsen until it fits the preview budget
-            if len(data) <= budget:
-                break
-            t *= 2
-            data = stl_bytes(shape, t)
-        out[name] = base64.b64encode(data).decode()
+        out[name] = base64.b64encode(budget_stl(shape, tol, budget)).decode()
     return {"meshes": out}
+
+
+def budget_stl(shape, tol, budget):
+    """Binary STL of `shape` that fits `budget` bytes, as fine as that allows.
+
+    Each try meshes a fresh copy: a shape keeps its first triangulation, and asking the same shape for a
+    coarser one returns that finer mesh again (a car's suspension stayed 15 MB at any tolerance). The
+    angular limit matters as much as the linear one for small curved detail like springs and spokes;
+    the start is sized to the part, since 0.2 mm on a 4 m body is a scan, not a preview."""
+    lin = max(tol, shape.BoundBox.DiagonalLength / 4000)
+    ang = 0.5
+    data = b""
+    for _ in range(8):
+        data = mesh_stl(shape.copy(True, False), lin, ang)
+        if len(data) <= budget:
+            break
+        lin, ang = lin * 2, min(ang * 1.5, 1.2)
+    return data
+
+
+def mesh_stl(shape, linear, angular):
+    """Binary STL from MeshPart (linear and angular deflection); plain tessellation if MeshPart is missing."""
+    try:
+        import MeshPart
+    except ImportError:
+        return stl_bytes(shape, linear)
+    m = MeshPart.meshFromShape(Shape=shape, LinearDeflection=linear, AngularDeflection=angular, Relative=False)
+    out = bytearray(b"cadswarm preview".ljust(80, b"\0"))
+    out += struct.pack("<I", m.CountFacets)
+    for f in m.Facets:
+        n, (p, q, r) = f.Normal, f.Points
+        out += struct.pack("<12fH", n.x, n.y, n.z, *p, *q, *r, 0)
+    return bytes(out)
 
 
 def face_normal(face):
