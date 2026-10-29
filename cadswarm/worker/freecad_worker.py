@@ -1026,16 +1026,21 @@ def budget_stl(shape, tol, budget):
     Each try meshes a fresh copy: a shape keeps its first triangulation, and asking the same shape for a
     coarser one returns that finer mesh again (a car's suspension stayed 15 MB at any tolerance). The
     angular limit matters as much as the linear one for small curved detail like springs and spokes;
-    the start is sized to the part, since 0.2 mm on a 4 m body is a scan, not a preview."""
-    lin = max(tol, shape.BoundBox.DiagonalLength / 4000)
+    the start is sized to the part, since 0.2 mm on a 4 m body is a scan, not a preview.
+
+    Few, big steps: every op waits for this, and eight fine tries on a 32-station car skin took 43 s while
+    no try fit anyway. Three tries at most, each four times coarser, keeping the smallest."""
+    lin = max(tol, shape.BoundBox.DiagonalLength / 1000)
     ang = 0.5
-    data = b""
-    for _ in range(8):
+    best = None
+    for _ in range(3):
         data = mesh_stl(shape.copy(True, False), lin, ang)
+        if best is None or len(data) < len(best):
+            best = data
         if len(data) <= budget:
             break
-        lin, ang = lin * 2, min(ang * 1.5, 1.2)
-    return data
+        lin, ang = lin * 4, min(ang * 2, 1.2)
+    return best
 
 
 def mesh_stl(shape, linear, angular):
