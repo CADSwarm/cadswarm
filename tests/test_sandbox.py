@@ -465,6 +465,15 @@ def test_unit_timeout_names_booleans_run_in_a_loop():
     assert e.value.code == "timeout"
     assert "line 3 (.common)" in msg and "line 5 (.cut)" in msg and "line 6 (.fuse)" in msg
     assert "line 7" not in msg and "slice" in msg
+    # Point probes are cheap one at a time but not by the thousand in nested loops.
+    scan = ("for x in range(15):\n"
+            "    s.isInside(v, 0.01, True)\n"
+            "    for z in range(9):\n"
+            "        for y in range(111):\n"
+            "            s.isInside(Vector(x, y, z), 0.01, True)\n")
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", scan)
+    assert "line 5 (.isInside in nested loops)" in str(e.value) and "line 2" not in str(e.value)
     # No boolean in a loop: the generic advice only.
     with pytest.raises(sb.SandboxError) as e:
         sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "shape = a.cut(b)\n")

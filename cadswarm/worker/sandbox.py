@@ -248,26 +248,30 @@ def _tail(data, n=600):
 
 
 BOOLEANS = {"common", "cut", "fuse", "section"}
+PROBES = {"isInside", "distToShape"}  # fine by the hundred, not by the thousand
 
 
 def _looped_booleans(code):
-    """Booleans the script runs inside a loop, comprehension or helper function: "line 14 (.common)"."""
+    """Slow calls the script repeats: booleans inside any loop, comprehension or helper function
+    ("line 14 (.common)"), and point probes nested two loops deep ("line 9 (.isInside in nested loops)")."""
     try:
         tree = ast.parse(code or "")
     except SyntaxError:
         return []
     found = []
 
-    def walk(node, repeated):
-        if (repeated and isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr in BOOLEANS):
-            found.append(f"line {node.lineno} (.{node.func.attr})")
+    def walk(node, depth):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if depth and node.func.attr in BOOLEANS:
+                found.append(f"line {node.lineno} (.{node.func.attr})")
+            elif depth >= 2 and node.func.attr in PROBES:
+                found.append(f"line {node.lineno} (.{node.func.attr} in nested loops)")
         repeats = isinstance(node, (ast.For, ast.While, ast.FunctionDef, ast.Lambda, ast.ListComp,
                                     ast.SetComp, ast.DictComp, ast.GeneratorExp))
         for child in ast.iter_child_nodes(node):
-            walk(child, repeated or repeats)
+            walk(child, depth + repeats)
 
-    walk(tree, False)
+    walk(tree, 0)
     return sorted(set(found), key=lambda s: int(s.split()[1]))
 
 
@@ -277,9 +281,10 @@ def _verdict(out, timeout, memory_mb, level, code=""):
         looped = _looped_booleans(code)
         if looped:
             raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. It runs "
-                               f"booleans repeatedly at {', '.join(looped[:6])}; each one on a large skin can "
-                               "take seconds. Do one boolean against a combined tool shape, and probe surfaces "
-                               "with shape.slice(Vector(1,0,0), x) or distToShape instead of common().")
+                               f"slow shape calls repeatedly at {', '.join(looped[:6])}; on a large skin a boolean "
+                               "can take seconds and thousands of probes add up. Do one boolean against a "
+                               "combined tool shape, and read a surface with one shape.slice(Vector(1,0,0), x) "
+                               "per station (then the wire points) instead of common() or isInside() grids.")
         raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. "
                            "Simplify the geometry or split the work into smaller steps.")
     if reply is not None:
