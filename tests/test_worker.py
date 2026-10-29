@@ -393,6 +393,22 @@ def test_an_empty_part_reports_no_bbox_instead_of_infinity(fc):
     assert "bbox" not in obj
 
 
+def test_a_coarser_render_is_really_coarser(fc):
+    """Coarsening is how a render that overshot (1.2 M triangles on the Lexus) now fits instead of failing."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Coil", "code": textwrap.dedent("""
+        import Part
+        from FreeCAD import Vector
+        helix = Part.makeHelix(4, 400, 30)
+        ring = Part.Wire(Part.makeCircle(3, Vector(30, 0, 0), Vector(0, 1, 0)))
+        shape = Part.Wire(helix).makePipeShell([ring], True, True)
+    """)})
+    c.call("mesh", {"names": ["Coil"], "tolerance": 0.01, "max_bytes": 50_000_000})  # cache a fine triangulation
+    fine = c.call("render_views", {"deviation": 0.05, "views": ["front"], "size": 200})["result"]
+    coarse = c.call("render_views", {"deviation": 5.0, "views": ["front"], "size": 200})["result"]
+    assert coarse["triangles"] < fine["triangles"], "a coarser render must not reuse the cached fine mesh"
+
+
 def test_previews_fit_their_budget_even_after_a_fine_mesh(fc):
     """A shape keeps its first triangulation: coarsening must mesh a fresh copy, or the budget never holds."""
     c, _ = fc

@@ -1151,23 +1151,36 @@ def _auto_deviation():
     return max(1.0, min(50.0, diagonal / 700.0))
 
 
+def render_mesh(shape, deviation):
+    """(points, triangles) for a render, from a fresh copy: a shape keeps its first triangulation, so a coarser
+    retry on the same shape returns the fine one again. The angular limit keeps small curved detail in check."""
+    try:
+        import MeshPart
+    except ImportError:
+        return shape.copy(True, False).tessellate(deviation)
+    return MeshPart.meshFromShape(Shape=shape.copy(True, False), LinearDeflection=deviation,
+                                  AngularDeflection=0.5, Relative=False).Topology
+
+
 def q_render_views(a):
     """Orthographic clay renders (PNG) so a helper or person can see the model, not just its numbers."""
     render_meshes = _render_module().render_meshes
     want = set(a.get("names") or [])
-    deviation = float(a.get("deviation") or _auto_deviation())
-    meshes = []
-    for o in doc.Objects:
-        sh = getattr(o, "Shape", None)
-        if sh is None or sh.isNull() or not sh.Faces:
-            continue
-        if want and o.Name not in want and o.Label not in want:
-            continue
-        verts, facets = sh.tessellate(deviation)
-        meshes.append((o.Name, verts, facets))
-    total = sum(len(m[2]) for m in meshes)
-    if not meshes:
+    chosen = a.get("deviation")
+    deviation = float(chosen or _auto_deviation())
+    shapes = [(o.Name, o.Shape) for o in doc.Objects
+              if getattr(o, "Shape", None) is not None and not o.Shape.isNull() and o.Shape.Faces
+              and (not want or o.Name in want or o.Label in want)]
+    if not shapes:
         raise OpError("not_found", f"No solid geometry in {sorted(want) or 'the model'}")
+    # A size-based deviation still overshot on a car (grille mesh, spoked wheels): unless the caller chose
+    # one, coarsen until the render fits.
+    for _ in range(1 if chosen else 4):
+        meshes = [(name, *render_mesh(sh, deviation)) for name, sh in shapes]
+        total = sum(len(m[2]) for m in meshes)
+        if total <= 950_000:
+            break
+        deviation *= 2
     if total > 950_000:
         raise OpError("bad_args", f"{total} triangles at deviation {deviation:.1f} mm is too many for a "
                                  f"render (950000 max); pass a coarser deviation, e.g. {deviation * 2:.1f}")
