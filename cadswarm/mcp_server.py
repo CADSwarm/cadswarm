@@ -444,8 +444,11 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
     objects (use the op tools: set_props, set_placement, boolean, ...). A script can only return two things:
     assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
     recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
-    (use save_file), no subprocesses; limited time (~60 s) and memory. Errors: script_error (your traceback),
-    timeout, sandbox_limit (memory), sandbox_unavailable."""
+    (use save_file), no subprocesses; limited time (~60 s) and memory. Names starting with _ are refused
+    (write type(x).__name__, never x.__class__; Part.__sortEdges__ is allowed). To probe a shape use
+    s.isInside(Vector(...), tol, True), s.distToShape(...) or s.slice(...): one boolean per sample point
+    runs out of time. Errors: script_error (your traceback), timeout, sandbox_limit (memory),
+    sandbox_unavailable, not_allowed."""
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
 
 
