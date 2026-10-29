@@ -20,6 +20,22 @@ def open_on_start():
     except Exception as e:  # noqa: BLE001 - never break FreeCAD's startup over this
         import FreeCAD
         FreeCAD.Console.PrintWarning(f"[CADSwarm] could not open the team panel: {e}\n")
+    # Finish the cleanup an earlier update left (Windows often holds the old folder), reopen the
+    # documents an update saved, then ask GitHub for a newer release in the background; the little
+    # update window does the rest.
+    try:
+        import FreeCAD
+        from cadswarm import update
+        for path in update.take_reopen():  # empty unless an update just restarted FreeCAD
+            try:
+                FreeCAD.openDocument(path)
+            except Exception as e:  # one missing file must not stop the others
+                FreeCAD.Console.PrintWarning(f"[CADSwarm] couldn't reopen {path}: {e}\n")
+        from cadswarm.gui import updates
+        updates.on_start()
+    except Exception as e:  # noqa: BLE001
+        import FreeCAD
+        FreeCAD.Console.PrintWarning(f"[CADSwarm] could not check for updates: {e}\n")
 
 
 QtCore.QTimer.singleShot(2000, open_on_start)
@@ -56,7 +72,8 @@ static char * icon_xpm[] = {
                                      "CadSwarm_Export", "CadSwarm_Lighten", "CadSwarm_OptimizePart", "CadSwarm_RunFea",
                                      "CadSwarm_FeaReports",
                                      "CadSwarm_Pointers", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
-                                     "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
+                                     "Separator", "CadSwarm_CheckUpdates", "CadSwarm_Disconnect",
+                                     "CadSwarm_StopHosting"])
 
     def Activated(self):
         from cadswarm.gui import panel

@@ -35,7 +35,8 @@ DEFAULT_WEB_URL = "https://cadswarm.design/app"
 HOST_PROCESS_NAMES = ("cadswarm-host", "spacetime")
 
 # Download-on-first-use. `CADSWARM_RELEASE_BASE` points at a folder or server during development.
-RELEASE_BASE = "https://github.com/SachchitBalamurugan/cadswarm/releases/latest/download"
+REPO = "SachchitBalamurugan/cadswarm"  # GitHub redirects an old name to the current one
+RELEASE_BASE = f"https://github.com/{REPO}/releases/latest/download"
 RELEASE_ASSETS = {
     "windows-x86_64": "cadswarm-host-windows-x86_64.exe",
     "linux-x86_64": "cadswarm-host-linux-x86_64",

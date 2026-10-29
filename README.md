@@ -80,6 +80,12 @@ opening one. Your sign-in for each team is kept, so you don't need a new invite 
   up for, and teammates on the same network join by reaching this computer's network address (Windows
   may ask to allow access through its firewall). Choose **Maincloud** instead to let teammates join from
   anywhere; the guide's **Sign in to SpacetimeDB…** button opens your browser so you sign in once.
+- **CADSwarm updates itself.** When a new release is published, a small window says a new release is
+  here. **Update now** saves your open documents, leaves the team (releasing your part locks), stops
+  your AI helpers and, if you host, the team server, installs the release and reopens FreeCAD with
+  your documents back. If teammates are online, it asks once before the team goes quiet. **Later**
+  hides that release for a day. You can also check any time from **Tools ▸ Check for updates…**.
+  A git checkout is never replaced (that's a developer's tree); `CADSWARM_UPDATE=0` turns checks off.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
   FreeCAD.
 - The first setup downloads about 70 MB of helper software into CADSwarm's app folder, plus the team
@@ -510,9 +516,12 @@ pwsh scripts\package-release.ps1 -ModuleOnly                 # cadswarm_module.w
 
 Push a `v*` tag (`git tag v0.1.0; git push origin v0.1.0`) and `.github/workflows/release.yml`
 builds all five host platforms plus the module on GitHub, writes `SHA256SUMS.txt`, and publishes the
-release the guide resolves as `releases/latest/download`. To test the download path without a
-release, point `CADSWARM_RELEASE_BASE` at a local folder (`file:///C:/path/to/dist`) holding the same
-files.
+release the guide resolves as `releases/latest/download`. The same release also carries
+`cadswarm-workbench.zip` (the add-on, stamped with the tag), which is what the app's update window
+downloads and checksums. To build that zip by hand: `pwsh scripts/package-workbench.ps1 -Version
+v0.1.18`. Bump `cadswarm/version.py` (and `package.xml`) when preparing a release so checkouts and
+installs made from `main` know what they are. To test the download path without a release, point
+`CADSWARM_RELEASE_BASE` at a local folder (`file:///C:/path/to/dist`) holding the same files.
 
 ## Where the team's data lives
 
