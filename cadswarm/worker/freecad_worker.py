@@ -361,6 +361,12 @@ def op_set_expression(a):
 
 def op_set_placement(a):
     obj = get_obj(a.get("name"))
+    bound = {path: expr for path, expr in (obj.ExpressionEngine or []) if path.lstrip(".").startswith("Placement")}
+    if bound:
+        # The next recompute puts the bound values back, so the move would report success and change
+        # nothing (a helper moved TrunkLid three times this way while it sat 3.5 m behind the car).
+        raise OpError("bad_args", f"{obj.Name}'s placement is driven by expressions {bound}; change those Params, "
+                                  "or clear the expressions first (set_props with expressions set to null)")
     obj.Placement = to_placement(a.get("placement"))
     return {"name": obj.Name, "placement": placement_json(obj.Placement)}
 

@@ -1,4 +1,5 @@
 """Worker layer: script guard, FreeCAD discovery, worker supervision, save/rollback, exec timeout."""
+import base64
 import importlib.util
 import os
 import sys
@@ -364,6 +365,35 @@ def test_brief_hold_is_waited_out(fc):
     threading.Timer(0.6, release).start()
     resp = c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10}})
     assert resp["created"] == ["Plate"]
+
+
+def test_moving_a_part_whose_placement_is_bound_is_refused_not_ignored(fc):
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "Lid", "props": {"Length": 10}})
+    c.call("set_expression", {"name": "Lid", "prop": ".Placement.Base.x", "expr": "40 mm"})
+    with pytest.raises(WorkerError) as e:
+        c.call("set_placement", {"name": "Lid", "placement": {"base": [0, 0, 0]}})
+    assert e.value.code == "bad_args" and "Placement.Base.x" in str(e.value)
+    c.call("set_expression", {"name": "Lid", "prop": ".Placement.Base.x", "expr": None})
+    c.call("set_placement", {"name": "Lid", "placement": {"base": [5, 0, 0]}})
+    assert c.call("get_object", {"name": "Lid"})["result"]["placement"]["base"][0] == 5
+
+
+def test_previews_fit_their_budget_even_after_a_fine_mesh(fc):
+    """A shape keeps its first triangulation: coarsening must mesh a fresh copy, or the budget never holds."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Coil", "code": textwrap.dedent("""
+        import Part
+        from FreeCAD import Vector
+        helix = Part.makeHelix(4, 400, 30)
+        ring = Part.Wire(Part.makeCircle(3, Vector(30, 0, 0), Vector(0, 1, 0)))
+        shape = Part.Wire(helix).makePipeShell([ring], True, True)
+    """)})
+    fine = c.call("mesh", {"names": ["Coil"], "tolerance": 0.01, "max_bytes": 50_000_000})
+    budget = 120_000
+    coarse = c.call("mesh", {"names": ["Coil"], "max_bytes": budget})
+    assert len(fine["result"]["meshes"]["Coil"]) > len(coarse["result"]["meshes"]["Coil"])
+    assert len(base64.b64decode(coarse["result"]["meshes"]["Coil"])) <= budget
 
 
 def test_script_guard_end_to_end(fc, tmp_path):
