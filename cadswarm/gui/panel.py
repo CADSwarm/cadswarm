@@ -351,6 +351,8 @@ class Session:
         save_identity(cfg["db"], self.ident)
         # Note the team so it can be reopened later (this computer hosts it only if host_dir_for says so).
         hosted = host_dir_for(cfg["db"])
+        if hosted:
+            self._remember_host_pids(hosted)
         self.project = project or p.GetString("ProjectName")
         remember_team(self.project, cfg["uri"], cfg["db"],
                       hosted, p.GetString("HostMode") if hosted else "")
@@ -363,6 +365,19 @@ class Session:
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self.drain)
         self.set_state("connected")
+
+    def _remember_host_pids(self, folder):
+        """Keep "Stop hosting" working across restarts (and after an update): the PIDs it needs are
+        the ones running now, not the ones an earlier FreeCAD saw."""
+        try:
+            status = hosting.host_status(folder)
+            if status.get("pid"):
+                prefs().SetString("HostPid", str(status["pid"]))
+            pid = hosting.pid_on_port(hosting.LOCAL_PORT)
+            if pid:
+                prefs().SetString("SpacetimePid", str(pid))
+        except Exception as e:
+            warn(f"couldn't note the team server's process: {e}")
 
     def _start_workers(self):
         """Start the background loops once the team is on screen. They never touch Qt or the document;
@@ -1191,7 +1206,9 @@ class TeamPanel(QtGui.QDockWidget):
                               fea_ui.show_run_simulation),
                              ("Simulation reports…", "The strength checks (FEA) your helpers ran",
                               show_fea_reports),
-                             ("Storage and free up space…", "What uses the project's room", show_storage))),
+                             ("Storage and free up space…", "What uses the project's room", show_storage),
+                             ("Check for updates…", "Get the newest CADSwarm release; your work is saved "
+                                                    "and FreeCAD reopens on it", check_updates))),
                 ("Team rules", (("Precision settings…", "Clearances, fits and precision for the whole team",
                                  library_ui.show_settings),
                                 ("Learned design style…", "The design rules CADSwarm learned from your team",
@@ -3808,6 +3825,12 @@ def stop_hosting():
     stop()
 
 
+def check_updates():
+    """Tools ▸ Check for updates: the little window, or a word that you're already up to date."""
+    from .updates import check_for_updates
+    check_for_updates()
+
+
 def hosted_project_folder():
     """The project folder this computer hosts for the team it is in now, or None."""
     folder = host_dir_for(prefs().GetString("Db"))
@@ -4278,6 +4301,9 @@ def register_commands():
     Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy a new invite code for a teammate", invite_teammates))
     Gui.addCommand("CadSwarm_StopHosting", Cmd("Stop hosting", "Stop the team server on this computer",
                                                stop_hosting, False))
+    Gui.addCommand("CadSwarm_CheckUpdates", Cmd("Check for updates…", "Get the newest CADSwarm release; your work is "
+                                                                     "saved and FreeCAD reopens on it",
+                                                check_updates, False))
     Gui.addCommand("CadSwarm_Panel", Cmd("Team panel", "Show presence, locks, tasks and chat", show_panel, False))
     Gui.addCommand("CadSwarm_Lock", Cmd("Lock selected", "Lock the selected mirror parts to you", lock_selected))
     Gui.addCommand("CadSwarm_Release", Cmd("Release selected", "Release your locks on the selected parts", release_selected))

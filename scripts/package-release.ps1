@@ -73,7 +73,8 @@ if ($ModuleOnly) {
 # Checksums over every CadSwarm asset in the folder, in a stable order. The guide reads this file
 # (and the one CI uploads next to all platforms' assets) before trusting a download.
 $assets = Get-ChildItem -Path $outDir -File |
-    Where-Object { $_.Name -like "cadswarm-host-*" -or $_.Name -eq "cadswarm_module.wasm" } |
+    Where-Object { $_.Name -like "cadswarm-host-*" -or $_.Name -eq "cadswarm_module.wasm" -or
+                   $_.Name -eq "cadswarm-workbench.zip" } |
     Sort-Object Name
 if ($assets.Count -eq 0) { throw "no release assets were produced in $outDir" }
 $sumLines = $assets | ForEach-Object {
