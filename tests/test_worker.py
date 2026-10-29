@@ -62,6 +62,11 @@ BYPASSES = [
     "m.write('x.stl')",
     "print(__builtins__)",
     "x = doc.__dict__",
+    # __class__ is let through only to read its __name__; walking on from the class still is not
+    "x = ().__class__.__bases__",
+    "x = ().__class__",
+    "c = [].__class__\nx = c.__name__",
+    "x = ().__class__.__base__.__subclasses__()",
     "FreeCAD.closeDocument(doc.Name)",
     "import functools\nfunctools.sys",
 ]
@@ -81,6 +86,8 @@ LEGIT = [
     "from Part import __sortEdges__\nresult = len(__sortEdges__(Part.makeBox(1, 1, 1).Edges))",
     # what the refusal of f.Surface.__class__ tells helpers to write instead
     "result = sum(1 for f in Part.makeBox(1, 1, 1).Faces if type(f.Surface).__name__ == 'Plane')",
+    # ...and the habit they keep writing, which reads the same string
+    "result = [f.Surface.__class__.__name__ for f in Part.makeBox(1, 1, 1).Faces]",
 ]
 
 

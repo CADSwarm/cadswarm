@@ -69,13 +69,18 @@ def script_violation(code):
         tree = ast.parse(code)
     except SyntaxError:
         return None
+    # x.__class__.__name__ is only a string, the same as the allowed type(x).__name__, and helpers write it all
+    # the time to tell faces apart. Any other use of __class__ (walking on to __bases__...) stays refused.
+    class_names = {id(n.value) for n in ast.walk(tree)
+                   if isinstance(n, ast.Attribute) and n.attr == "__name__"
+                   and isinstance(n.value, ast.Attribute) and n.value.attr == "__class__"}
     for node in ast.walk(tree):
         line = getattr(node, "lineno", 0)
         if isinstance(node, ast.Attribute):
             attr = node.attr
             if attr in SCRIPT_BANNED_ATTRS or (attr.startswith("export") and not attr.endswith("ToString")):
                 return f"line {line}: '.{attr}' (writes files or reaches outside the part)"
-            if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and not (
+            if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and id(node) not in class_names and not (
                     isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
                 # Helpers reach for these to check a shape's kind; say what works instead of making them guess.
                 hint = (" (for a kind use type(x).__name__, e.g. type(f.Surface).__name__ == 'Plane', or "
