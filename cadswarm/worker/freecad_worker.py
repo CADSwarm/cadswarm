@@ -440,6 +440,16 @@ def op_run_part_script(a):
         if a.get("label"):
             obj.Label = a["label"]
         out = {"name": obj.Name, "volume": shape.Volume if shape.Solids else 0.0}
+        bound = {p: e for p, e in (obj.ExpressionEngine or []) if p.lstrip(".").startswith("Placement")}
+        if bound:
+            # The bound placement is applied on top of the shape's own coordinates, so a shape built where it
+            # belongs lands twice as far out (TrunkLid and both taillights ended up metres behind the car).
+            doc.recompute()
+            bb = obj.Shape.BoundBox
+            out["bbox"] = [round(v, 1) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
+            out["warning"] = (f"{obj.Name}'s placement is driven by expressions {bound}, which move your shape "
+                              f"on top of its own coordinates: it now spans {out['bbox']}. Build the shape at the "
+                              "origin, or clear those expressions and build it where it belongs.")
     if reply.get("result") is not None:
         out["result"] = reply["result"]
     return out

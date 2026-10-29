@@ -379,6 +379,19 @@ def test_brief_hold_is_waited_out(fc):
     assert resp["created"] == ["Plate"]
 
 
+def test_a_script_shape_for_a_part_with_a_bound_placement_comes_back_with_a_warning(fc):
+    """Built at world coordinates, then placed again by Params: TrunkLid and both taillights landed metres
+    behind the car this way, and nothing said so."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Lens", "code": "import Part\nshape = Part.makeBox(10, 10, 10)"})
+    c.call("set_expression", {"name": "Lens", "prop": ".Placement.Base.x", "expr": "4000 mm"})
+    r = c.call("run_part_script", {"name": "Lens", "code": "import Part\nfrom FreeCAD import Vector\n"
+                                   "shape = Part.makeBox(10, 10, 10, Vector(4000, 0, 0))"})
+    w = r["result"]["warning"]
+    assert "Placement.Base.x" in w and "origin" in w
+    assert r["result"]["bbox"][0] == 8000, "the warning shows where the part really ended up"
+
+
 def test_moving_a_part_whose_placement_is_bound_is_refused_not_ignored(fc):
     c, _ = fc
     c.call("create_primitive", {"kind": "box", "name": "Lid", "props": {"Length": 10}})
