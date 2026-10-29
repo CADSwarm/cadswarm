@@ -342,6 +342,7 @@ class Runner:
         self.started = self.clock()  # this process's claim on the folder (see other_runner)
         self.child = None
         self.child_started = 0.0
+        self.run_keys = set()  # the things the current run was woken for (see refresh_config)
         self.child_log_at = 0  # where the current run's own output starts in helper.log (see child_said)
         self.state = load_json(os.path.join(state_dir(self.folder), "runner-state.json")) or {}
         self.seen = set(self.state.get("seen") or [])
@@ -607,6 +608,12 @@ class Runner:
         self.last_run_end = now - RESUME_AFTER
         self.resume_check_at = now
         self.resumes = {}
+        if was_running:
+            # Whatever the stopped run was woken for is still unanswered: a message it never acked stays
+            # pending, so wake the new AI for it (it raised no new event, hence the full look).
+            self.seen -= self.run_keys
+            self.seq = None
+        self.run_keys = set()
         if new_client != old_client:
             # The new CLI has no session with us: its first run must be fresh, not `--continue` (which
             # would reopen a conversation the old AI had).
@@ -701,7 +708,8 @@ class Runner:
         self.child_started = self.clock()
         self.present = False  # the agent's MCP server takes the seat (a newer fence)
         self.runs.append(self.clock())
-        self.seen |= {k for k, _ in work}
+        self.run_keys = {k for k, _ in work}
+        self.seen |= self.run_keys
         self.state["started"] = True
         self.save_state()
         self.write_status("working", work[0][1][2:120] if work else "introducing itself")

@@ -374,6 +374,42 @@ def test_switching_the_ai_mid_run_stops_it_and_wakes_the_new_one(tmp_path, monke
     assert "You still hold task t_mine" in prompt  # handed straight back, no minute-and-a-half wait
 
 
+def test_a_message_the_stopped_run_never_answered_wakes_the_new_ai(tmp_path, monkeypatch):
+    """Seen live: a switch mid-answer stopped the run, and the person's question was never answered,
+    because the runner had already marked it seen when it woke the old AI."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    t = tables()
+    t["v_task"], t["v_receipt"] = [], []
+    t["v_message"] = [msg("m_steer", 3, "member:1", "steer", "make the lid 20 mm")]
+    r, clock, spawned = make_runner(tmp_path, t=t)
+    r.state["started"] = True
+    r.save_state()
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append("claude run")
+
+    r.spawn = lambda argv, stdin: spawned.append((argv, stdin)) or Busy()
+    assert r.step() is True and "make the lid 20 mm" in spawned[-1][1]  # the old AI starts answering
+    cfg_path = tmp_path / "helper" / ".cadswarm" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.update({"client": "opencode", "model": "openai/gpt-5.1", "warm": False})
+    cfg_path.write_text(json.dumps(cfg))
+    clock[0] += runner.MIN_GAP_SECONDS + 1
+
+    assert r.step() is True
+    assert killed == ["claude run"]
+    argv, prompt = spawned[-1]
+    assert argv[0] == "/bin/opencode" and "make the lid 20 mm" in prompt
+
+
 def test_a_model_change_keeps_the_same_ais_conversation(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
     monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
