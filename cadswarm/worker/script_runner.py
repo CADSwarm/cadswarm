@@ -77,7 +77,10 @@ def script_violation(code):
                 return f"line {line}: '.{attr}' (writes files or reaches outside the part)"
             if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and not (
                     isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
-                return f"line {line}: private/dunder attribute '.{attr}'"
+                # Helpers reach for these to check a shape's kind; say what works instead of making them guess.
+                hint = (" (to check a shape's kind use s.ShapeType or isinstance(s, Part.Face))"
+                        if attr in ("__class__", "__getstate__", "__dict__") else "")
+                return f"line {line}: private/dunder attribute '.{attr}'{hint}"
         elif isinstance(node, ast.Name):
             if node.id in SCRIPT_BANNED_NAMES or (node.id.startswith("__") and node.id not in SCRIPT_DUNDER_OK):
                 return f"line {line}: '{node.id}'"
