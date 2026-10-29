@@ -287,7 +287,10 @@ def _verdict(out, timeout, memory_mb, level, code=""):
                                "surface_z(shape, x, y) or section_points(shape, 'x', x), which slice once per "
                                "station, instead of common() or isInside() grids.")
         raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. "
-                           "Simplify the geometry or split the work into smaller steps.")
+                           "Usual causes: a loft with dozens of sections or hundreds of points each (8-12 "
+                           "sections is enough for a smooth panel), fuse() or removeSplitter() on a whole skin "
+                           "(pieces that don't touch go in Part.makeCompound), and probing many stations in the "
+                           "same script as the build. Probe in one script, build in the next.")
     if reply is not None:
         if reply.get("code") == "sandbox_limit":
             reply["error"] = f"Script ran out of memory (limit {memory_mb} MB)"

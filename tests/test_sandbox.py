@@ -477,11 +477,11 @@ def test_unit_timeout_names_booleans_run_in_a_loop():
     # No boolean in a loop: the generic advice only.
     with pytest.raises(sb.SandboxError) as e:
         sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "shape = a.cut(b)\n")
-    assert "line" not in str(e.value) and "smaller steps" in str(e.value)
+    assert "line" not in str(e.value) and "makeCompound" in str(e.value)
     # Code that doesn't parse still gets the generic message.
     with pytest.raises(sb.SandboxError) as e:
         sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "for (:\n")
-    assert "smaller steps" in str(e.value)
+    assert "Probe in one script" in str(e.value)
 
 
 def test_unit_limits_come_from_env(monkeypatch):
