@@ -76,6 +76,9 @@ LEGIT = [
     "brep = Part.makeBox(1, 1, 1).exportBrepToString()",
     "import numpy as np\nresult = float(np.linspace(0, 1, 5).sum())",
     "shape = Part.makeBox(*[p for p in (1, 2, 3)])",
+    # FreeCAD's own edge sorter is a public function with a dunder name; lofts and wires need it.
+    "edges = Part.makeBox(1, 1, 1).Edges[:4]\nwires = [Part.Wire(e) for e in Part.__sortEdges__(edges)]",
+    "from Part import __sortEdges__\nresult = len(__sortEdges__(Part.makeBox(1, 1, 1).Edges))",
 ]
 
 

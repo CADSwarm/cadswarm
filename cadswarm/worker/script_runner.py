@@ -54,7 +54,9 @@ SCRIPT_BANNED_ATTRS = {
     "pathlib", "io", "ctypes", "ctypeslib", "socket", "f2py", "distutils", "system", "popen",
     "closeDocument", "setActiveDocument",
 }
-SCRIPT_DUNDER_OK = {"__init__", "__name__"}  # everything else dunder is how sandboxes get escaped
+# Everything else dunder is how sandboxes get escaped. Part.__sortEdges__ is FreeCAD's public edge sorter
+# (helpers need it to build wires for lofts); it only reorders the edges it is given.
+SCRIPT_DUNDER_OK = {"__init__", "__name__", "__sortEdges__"}
 SCRIPT_BANNED_NAMES = {"getattr", "setattr", "delattr", "locals", "__import__", "__builtins__"}
 
 
@@ -81,7 +83,8 @@ def script_violation(code):
                 return f"line {line}: '{node.id}'"
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name in SCRIPT_BANNED_ATTRS or alias.name.startswith(("_", "export")):
+                if alias.name in SCRIPT_BANNED_ATTRS or (alias.name.startswith(("_", "export"))
+                                                          and alias.name not in SCRIPT_DUNDER_OK):
                     return f"line {line}: importing '{alias.name}'"
     return None
 
