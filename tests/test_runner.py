@@ -273,6 +273,47 @@ def test_a_failed_run_says_what_the_cli_printed(tmp_path):
     assert "> build" not in r.last_error and "\x1b" not in r.last_error
 
 
+def test_a_busy_run_keeps_going_and_a_quiet_or_endless_one_is_stopped(tmp_path):
+    """A 20-minute wall-clock limit stopped a helper in the middle of its third fix of the night."""
+    r, clock, _spawned = make_runner(tmp_path)
+    log = os.path.join(r.folder, ".cadswarm", "helper.log")
+    open(log, "w", encoding="utf-8").close()
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append(1)
+
+    def start():
+        r.child, r.child_started = Busy(), clock[0]
+        r.child_log_at = r.child_log_seen = os.path.getsize(log)
+        r.child_active_at = clock[0]
+
+    def work(minutes):
+        for _ in range(minutes):
+            clock[0] += 60
+            with open(log, "a", encoding="utf-8") as f:
+                f.write("> build · a tool call\n")
+            assert r.child_running() is True
+
+    start()
+    work(45)  # writing all the time: well past the old 20 minutes
+    clock[0] += runner.RUN_IDLE + 1  # then silence
+    assert r.child_running() is False and killed == [1]
+
+    start()
+    work(int(runner.RUN_TIMEOUT // 60) - 1)
+    clock[0] += 120
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("still going\n")
+    assert r.child_running() is False and killed == [1, 1], "even a busy run stops at the hard limit"
+
+
 def test_a_codex_wake_repairs_an_old_helpers_missing_mcp_approval(tmp_path, monkeypatch):
     """Helpers set up before this fix have the server but no approval default: every call was refused."""
     monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")

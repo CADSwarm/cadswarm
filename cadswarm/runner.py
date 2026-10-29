@@ -42,7 +42,8 @@ POLL_SECONDS = 1            # one poll is now a single cheap read, so news is no
 FULL_CHECK_SECONDS = 5      # ...and every few seconds look properly for anything that raised no event
 HEARTBEAT_SECONDS = 10
 ALIVE_SECONDS = 30          # runner.json older than this means no runner is looking after the folder
-RUN_TIMEOUT = 20 * 60       # one wake-up may take this long before it is stopped
+RUN_IDLE = 15 * 60          # a run whose output has not grown for this long is stuck, and is stopped
+RUN_TIMEOUT = 2 * 60 * 60   # even a busy run stops here (a fixed 20 minutes cut helpers off mid-task)
 MAX_RUNS_PER_HOUR = 30
 MIN_GAP_SECONDS = 5
 RESUME_AFTER = 90           # a run can end with the helper's own task still claimed: nudge it again this soon
@@ -342,6 +343,8 @@ class Runner:
         self.started = self.clock()  # this process's claim on the folder (see other_runner)
         self.child = None
         self.child_started = 0.0
+        self.child_active_at = 0.0  # when the run's output last grew (see child_running)
+        self.child_log_seen = 0
         self.child_log_at = 0  # where the current run's own output starts in helper.log (see child_said)
         self.state = load_json(os.path.join(state_dir(self.folder), "runner-state.json")) or {}
         self.seen = set(self.state.get("seen") or [])
@@ -644,7 +647,8 @@ class Runner:
             self.child = self.spawn(argv, stdin_text)
         finally:
             self.child_env = {}
-        self.child_started = self.clock()
+        self.child_started = self.child_active_at = self.clock()
+        self.child_log_seen = self.child_log_at
         self.present = False  # the agent's MCP server takes the seat (a newer fence)
         self.runs.append(self.clock())
         self.seen |= {k for k, _ in work}
@@ -668,6 +672,15 @@ class Runner:
         except HubRequestError:
             return
         self.present, self.last_beat = True, self.clock()
+
+    def log_size(self):
+        """helper.log's size through an open handle: Windows updates the listed size lazily while the CLI
+        holds the file open, so a stat by path would make a busy run look quiet."""
+        try:
+            with open(os.path.join(state_dir(self.folder), "helper.log"), "rb") as f:
+                return os.fstat(f.fileno()).st_size
+        except OSError:
+            return self.child_log_seen
 
     def run_output(self):
         """What this run itself printed so far (the log after `child_log_at`), ANSI codes stripped."""
@@ -709,8 +722,12 @@ class Runner:
             self.save_state()
             self.mark_idle()
             return False
-        if self.clock() - self.child_started > RUN_TIMEOUT:
-            self.log("the helper ran too long and was stopped")
+        size = self.log_size()
+        if size != self.child_log_seen:
+            self.child_log_seen, self.child_active_at = size, self.clock()
+        quiet = self.clock() - self.child_active_at > RUN_IDLE
+        if quiet or self.clock() - self.child_started > RUN_TIMEOUT:
+            self.log("the helper went quiet and was stopped" if quiet else "the helper ran too long and was stopped")
             self.child.kill()
             self.child = None
             self.last_run_end = self.clock()
