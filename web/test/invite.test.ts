@@ -41,4 +41,15 @@ describe('reaching a local team from another device', () => {
     expect(reachableUri('http://127.0.0.1:3000', 'localhost')).toBe('http://127.0.0.1:3000');
     expect(reachableUri('http://127.0.0.1:3000', '')).toBe('http://127.0.0.1:3000');
   });
+  it('keeps 127.0.0.1 on the public site, which is never the host computer', () => {
+    // The site used to rewrite these to https://www.cadswarm.design:3000, which points at nothing.
+    expect(reachableUri('http://127.0.0.1:3000', 'www.cadswarm.design')).toBe('http://127.0.0.1:3000');
+    expect(reachableUri('http://127.0.0.1:3000', 'cadswarm.design')).toBe('http://127.0.0.1:3000');
+    expect(reachableUri('http://127.0.0.1:3000', 'example.org')).toBe('http://127.0.0.1:3000');
+  });
+  it('uses a home-network name the host might be reached by', () => {
+    expect(reachableUri('http://127.0.0.1:3000', 'macbook.local')).toBe('http://macbook.local:3000');
+    expect(reachableUri('http://127.0.0.1:3000', '172.20.4.9')).toBe('http://172.20.4.9:3000');
+    expect(reachableUri('http://127.0.0.1:3000', '172.32.4.9')).toBe('http://127.0.0.1:3000');
+  });
 });
