@@ -157,6 +157,18 @@ def _review(reviews, brief):
     return max(found, key=_round) if found else {}
 
 
+def _assignee_kind(task, actors):
+    """`agent` or `human`: the member who holds the task, else the one it was assigned to by name.
+
+    Never the assignee's name or the task's status, which is what an unmatched lookup used to leak.
+    """
+    holder = actors.get(task.get("owner"))
+    if holder:
+        return holder["kind"]
+    by_name = {actor["name"]: actor["kind"] for actor in actors.values()}
+    return by_name.get(task.get("assignee") or "", "unknown")
+
+
 def _episode(project, key, group, actors, tasks, briefs, reviews, corrections, feedback):
     steps = [_step(op, actors, i) for i, op in enumerate(group["ops"])]
     before, final, degraded = replay(steps)
@@ -187,7 +199,7 @@ def _episode(project, key, group, actors, tasks, briefs, reviews, corrections, f
                     "plan_json": _json(brief.get("plan_json"), {})},
         "segments": [{"task_id": task["id"], "title": task.get("title", ""),
                       "detail": task.get("detail", ""), "objects": task.get("objects") or [],
-                      "assignee_kind": task.get("assignee") or task.get("status", ""),
+                      "assignee_kind": _assignee_kind(task, actors),
                       "status": task.get("status", ""),
                       "result": _json(task.get("result_json"), {})}] if task else [],
         "steps": steps,

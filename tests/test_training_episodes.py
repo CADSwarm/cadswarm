@@ -54,6 +54,18 @@ def test_a_task_op_ends_the_freestyle_stretch():
     assert [s["op_id"] for s in t1["steps"]] == ["op_1", "op_2", "op_4", "op_5"]
 
 
+def test_a_segment_names_the_kind_of_member_holding_the_task():
+    def kind(task_fields):
+        data = raw()
+        data["task"][0].update(task_fields)
+        t1 = [e for e in episodes.build_episodes(data, "P") if e["id"].endswith("/t1")][0]
+        return t1["segments"][0]["assignee_kind"]
+
+    assert kind({"owner": 2, "assignee": "alice"}) == "agent"   # the holder outranks the name
+    assert kind({"owner": 0, "assignee": "alice"}) == "human"
+    assert kind({"owner": 0, "assignee": ""}) == "unknown"      # never the task's status
+
+
 def test_legacy_ops_without_a_task_column_are_attributed_by_objects():
     data = raw()
     for op_row in data["op"]:
