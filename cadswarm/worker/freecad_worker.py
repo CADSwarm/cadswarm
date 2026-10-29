@@ -820,7 +820,8 @@ def obj_summary(o):
     shape = getattr(o, "Shape", None)
     if shape is not None and not shape.isNull():
         bb = shape.BoundBox
-        info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
+        if bb.isValid():  # an empty shape's box spans +-1.8e308, which read as a part outside the car
+            info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
         info["volume"] = round(shape.Volume, 3) if shape.Solids else 0.0
         anchor = anchor_of(shape)
         if anchor:

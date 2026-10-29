@@ -379,6 +379,15 @@ def test_moving_a_part_whose_placement_is_bound_is_refused_not_ignored(fc):
     assert c.call("get_object", {"name": "Lid"})["result"]["placement"]["base"][0] == 5
 
 
+def test_an_empty_part_reports_no_bbox_instead_of_infinity(fc):
+    c, _ = fc
+    # Two boxes that don't touch: their common part is a valid shape with nothing in it.
+    c.call("run_part_script", {"name": "Empty", "code": "import Part\nfrom FreeCAD import Vector\n"
+                               "shape = Part.makeBox(1, 1, 1).common(Part.makeBox(1, 1, 1, Vector(5, 0, 0)))"})
+    obj = c.call("get_object", {"name": "Empty"})["result"]
+    assert "bbox" not in obj
+
+
 def test_previews_fit_their_budget_even_after_a_fine_mesh(fc):
     """A shape keeps its first triangulation: coarsening must mesh a fresh copy, or the budget never holds."""
     c, _ = fc
