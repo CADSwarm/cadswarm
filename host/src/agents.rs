@@ -331,7 +331,9 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
          2. check_interference on all parts: any clash between separate parts is a problem.\n\
          3. Fit: the enclosure's inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs must sit at\n\
             hole_N_x/hole_N_y; each port cutout must be centred on its <port>_pos and <port>_z.\n\
-         4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n\
+         4. check_printability: every part must be a closed solid with no wall under 1.2 mm, and fit the bed\n\
+            when the design is meant to print at this size. A full-size object many times the bed (a real\n\
+            car at 1:1, furniture, a building) is not: never file a task to split or shrink its parts.\n\
          5. Shape: if the brief is for an object judged on how it looks (car, vehicle, body, helmet, fairing,\n\
             furniture or a product exterior), call surface_quality(topic=\"<the person's request>\") on the\n\
             shell, the greenhouse and every other visible part, INCLUDING parts built before this brief: an\n\
@@ -349,8 +351,13 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
             (front, left, three_quarter at least) and open the PNGs too. Compare EVERY part against that\n\
             photo: silhouette, proportions, feature placement and the panel breaks. A clear mismatch is a\n\
             problem (\"style: <part> does not match the <product> reference: <what differs>\"), naming the\n\
-            reference. If it is not a named real product (a custom bracket, a one-off housing, a generic\n\
-            part) do NOT search: there is nothing to compare it to.\n\
+            reference. If opening an image gives an error, your model cannot see images: never describe\n\
+            or cite what a photo or render shows; judge from the reference's notes and dimensions and the\n\
+            team's spec files instead. If it is not a named real product (a custom bracket, a one-off\n\
+            housing, a generic part) do NOT search: there is nothing to compare it to.\n\
+         Corrections: when a team spec file in the project, or a message from the person or the team\n\
+         manager, corrects the brief (a feature the brief asked for that the real product does not have),\n\
+         judge against the correction, not the brief's original words.\n\
          {style_check}\
          For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
          precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
@@ -485,6 +492,16 @@ mod tests {
         assert!(run_dir(&c, "planner-abc").join("agent.log").exists());
         forget_identity(&c, "planner-abc");  // already gone: not an error
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_reviewer_prompt_scales_the_bed_check_trusts_spec_corrections_and_does_not_guess_images() {
+        // A Lexus review failed 560 mm fender panels of a 4710 mm car on a 180 mm bed, filed a task to rebuild
+        // DRLs the manager's spec had removed as wrong, and "compared" against photos its text-only model never saw.
+        let p = review_prompt("b_x", "a 1:1 car", "", [180.0, 180.0, 180.0], 2, "");
+        assert!(p.contains("full-size"), "bed fit only for designs meant to print at that size");
+        assert!(p.contains("corrects the brief"), "a newer team spec or the person's message overrides the brief");
+        assert!(p.contains("cannot see"), "a text-only reviewer must not describe images it could not open");
     }
 
     #[test]
