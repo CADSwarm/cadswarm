@@ -454,7 +454,9 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
     shapes and placements from it, but anything you change on doc is discarded and you cannot change other
     objects (use the op tools: set_props, set_placement, boolean, ...). A script can only return two things:
     assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
-    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
+    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. To only measure, assign
+    `result` alone: a `shape` is a real part everyone sees and exports, so delete any probe or cutter solid you
+    made before you report a task done. No network, no files
     (use save_file), no subprocesses; limited time (~60 s) and memory. Names starting with _ are refused
     (write type(x).__name__, never x.__class__; Part.__sortEdges__ is allowed). To read where a skin is, use
     the built-in probes, which slice once per station: surface_y(shape, x, z, side=1) is its outermost Y at

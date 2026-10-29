@@ -307,6 +307,9 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
          to Params with expressions (e.g. \"Params.pcb_l + 2 * Params.gap\"); place the parts the detail names \
          with add_standard_part or insert_component instead of modelling them; run check_interference \
          and fix clashes with your own parts; report_result done with evidence (object names, volumes). \
+         To measure, run a script that assigns only `result`: every `shape` you assign becomes a part in the \
+         shared model that everyone sees and exports. A solid you made only to probe or cut with (FBProbe, \
+         a cutter): delete it before report_result. \
          Read get_inbox between tasks and follow any steer messages. \
          When list_tasks shows no OPEN task for brief \"{brief_id}\", stop."
     )
@@ -492,6 +495,14 @@ mod tests {
         assert!(run_dir(&c, "planner-abc").join("agent.log").exists());
         forget_identity(&c, "planner-abc");  // already gone: not an error
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_worker_measures_without_making_parts_and_cleans_up_its_scratch_solids() {
+        // FBProbe/FBCut, built only to measure the Lexus bumper, stayed in the shared model and drew over it.
+        let p = worker_prompt("b_1", 1);
+        assert!(p.contains("only `result`"), "{p}");
+        assert!(p.contains("delete it before report_result"), "{p}");
     }
 
     #[test]
