@@ -79,6 +79,8 @@ const QUERIES: &[&str] = &[
     "SELECT * FROM v_param",
     "SELECT * FROM v_setting",
     "SELECT * FROM v_object",
+    // Names and hashes only (bytes live in v_artifact_blob): lets the host skip re-sending a blob.
+    "SELECT * FROM v_artifact",
 ];
 
 /// Whether a host whose latest member row has this status should call `rejoin` by itself.
@@ -381,6 +383,11 @@ impl Space {
         let fence = self.fence();
         let (hash, name, mime, brief) = (hash.to_string(), name.to_string(), mime.to_string(), brief.to_string());
         self.call("put_artifact", |cb| self.conn.reducers.put_artifact_then(fence, hash, name, mime, bytes, brief, cb))
+    }
+
+    /// Whether a blob with this hash is already stored (content-addressed, so it is the same bytes).
+    pub fn has_artifact(&self, hash: &str) -> bool {
+        self.conn.db.v_artifact().iter().any(|a| a.hash == hash && a.size > 0)
     }
 
     pub fn submit_op(&self, id: &str, kind: &str, args_json: String) -> Result<()> {

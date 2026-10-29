@@ -46,6 +46,39 @@ pub fn helper_args(mut args: Value, by: u64, name: &str, kind: &str) -> Value {
     args
 }
 
+/// The biggest blob one reducer call may carry: SpacetimeDB closes the websocket on a message over
+/// 32 MB, which drops the host and everyone's ops with it. Leave room for the call's other fields.
+pub const MAX_BLOB_BYTES: usize = 24 * 1024 * 1024;
+
+/// Err(why) when a blob is too large to send without taking the connection down.
+pub fn sendable(name: &str, len: usize) -> Result<(), String> {
+    if len > MAX_BLOB_BYTES {
+        return Err(format!("{name} is too large to share ({} MB, {} MB max); ask for fewer parts or a \
+                            coarser shape", len / (1024 * 1024), MAX_BLOB_BYTES / (1024 * 1024)));
+    }
+    Ok(())
+}
+
+/// For a large `brep` result ({"objects": {name: {.., "brep": text}}}): each part's BRep moved into its own
+/// content-addressed blob ("brep_blob": sha256), plus the blobs as (hash, name, bytes). The whole model in
+/// one blob was 52 MB, over the server's message limit; per part, an unchanged part is not sent again.
+pub fn split_parts(result_json: &str) -> Option<(String, Vec<(String, String, Vec<u8>)>)> {
+    if result_json.len() <= MAX_INLINE_RESULT {
+        return None;
+    }
+    let mut result: Value = serde_json::from_str(result_json).ok()?;
+    let objects = result.get_mut("objects")?.as_object_mut()?;
+    let mut blobs = Vec::new();
+    for (name, info) in objects.iter_mut() {
+        let Some(brep) = info.get("brep").and_then(Value::as_str).map(str::to_string) else { continue };
+        let hash = hex::encode(Sha256::digest(brep.as_bytes()));
+        info.as_object_mut()?.remove("brep");
+        info["brep_blob"] = json!(hash);
+        blobs.push((hash, format!("brep:{name}"), brep.into_bytes()));
+    }
+    (!blobs.is_empty()).then(|| (result.to_string(), blobs))
+}
+
 /// Some((hash, bytes)) when the result is too large to travel in v_op.
 pub fn spill(result_json: &str) -> Option<(String, Vec<u8>)> {
     (result_json.len() > MAX_INLINE_RESULT)
@@ -165,9 +198,30 @@ pub fn run_op(
         _ => worker.call(&op.kind, &args, None),
     };
     let mut done = completion(reply);
+    if op.kind == "brep" {
+        if let Some((kept, blobs)) = split_parts(&done.result_json) {
+            for (hash, name, bytes) in blobs {
+                if space.has_artifact(&hash) {
+                    continue;  // the same shape was shared before: the live view re-asks after every change
+                }
+                if let Err(why) = sendable(&name, bytes.len()) {
+                    done = completion(Err(WorkerError { code: "too_large".into(), message: why }));
+                    break;
+                }
+                space.put_artifact(&hash, &name, "text/plain", bytes, "")?;
+            }
+            if done.ok {
+                done.result_json = kept;
+            }
+        }
+    }
     if let Some((hash, bytes)) = spill(&done.result_json) {
-        space.put_artifact(&hash, &format!("op-result:{}", op.id), "application/json", bytes, "")?;
-        done.result_json = spilled_result(&done.result_json, &hash);
+        if let Err(why) = sendable(&format!("The result of {}", op.kind), bytes.len()) {
+            done = completion(Err(WorkerError { code: "too_large".into(), message: why }));
+        } else {
+            space.put_artifact(&hash, &format!("op-result:{}", op.id), "application/json", bytes, "")?;
+            done.result_json = spilled_result(&done.result_json, &hash);
+        }
     }
     space.complete_op(&op.id, &done)?;
     // complete_op has created the library rows; their previews can go in now.
@@ -428,6 +482,37 @@ mod tests {
         let (hash, bytes) = spill(&big).unwrap();
         assert_eq!(hash.len(), 64);
         assert_eq!(bytes, big.as_bytes());
+    }
+
+    #[test]
+    fn a_whole_model_brep_goes_out_one_part_per_blob() {
+        // 52 MB of BRep in one put_artifact broke the server's 32 MB message limit and dropped the host
+        // every time the live view asked for the model.
+        let body = "b".repeat(40_000);
+        let result = json!({"objects": {
+            "Body": {"label": "Body", "visible": true, "brep": body},
+            "Params": {"label": "Params", "visible": true, "brep": null},
+        }}).to_string();
+        let (kept_json, blobs) = split_parts(&result).unwrap();
+        assert!(kept_json.len() < MAX_INLINE_RESULT);
+        assert_eq!(blobs.len(), 1);
+        let (hash, name, bytes) = &blobs[0];
+        assert_eq!((name.as_str(), bytes.as_slice()), ("brep:Body", body.as_bytes()));
+        let kept: Value = serde_json::from_str(&kept_json).unwrap();
+        assert_eq!(kept["objects"]["Body"]["brep_blob"], json!(hash));
+        assert!(kept["objects"]["Body"].get("brep").is_none());
+        assert_eq!(kept["objects"]["Body"]["visible"], json!(true));
+        assert_eq!(kept["objects"]["Params"]["brep"], Value::Null);
+        // Small results and other ops are left alone.
+        assert!(split_parts(&json!({"objects": {"A": {"brep": "x"}}}).to_string()).is_none());
+        assert!(split_parts(&json!({"x": "a".repeat(40_000)}).to_string()).is_none());
+    }
+
+    #[test]
+    fn a_blob_near_the_message_limit_is_refused_instead_of_sent() {
+        assert!(sendable("op-result:o_1", MAX_BLOB_BYTES).is_ok());
+        let err = sendable("brep:BodyShell", MAX_BLOB_BYTES + 1).unwrap_err();
+        assert!(err.contains("too large") && err.contains("BodyShell"), "{err}");
     }
 
     #[test]

@@ -320,6 +320,20 @@ def test_large_results_are_read_from_the_blob_view(world):
     assert fake.calls[-1][1][2] == "brep"
 
 
+def test_a_whole_model_brep_is_read_back_one_part_blob_at_a_time(world):
+    # The host stores each part's BRep as its own blob: the whole model in one blob was over the server's
+    # 32 MB message limit and dropped the host every time the live view loaded it.
+    hub, fake = world
+    fake.tables["v_artifact_blob"] = [{"hash": "ab" * 32, "ws": 1, "bytes": b"PLATE".hex()},
+                                      {"hash": "cd" * 32, "ws": 1, "bytes": b"LID".hex()}]
+    finish_ops_with(fake, {"objects": {"Plate": {"visible": True, "brep_blob": "ab" * 32},
+                                       "Lid": {"visible": False, "brep_blob": "cd" * 32},
+                                       "Params": {"visible": True, "brep": None}}})
+    got = hub.post("/brep", {"names": ["Plate", "Lid", "Params"]})["objects"]
+    assert got["Plate"]["brep"] == "PLATE" and got["Lid"]["brep"] == "LID" and got["Params"]["brep"] is None
+    assert "brep_blob" not in got["Plate"] and got["Lid"]["visible"] is False
+
+
 def test_a_spilled_result_that_expired_says_so(world):
     hub, fake = world
     finish_ops_with(fake, {"blob": "cd" * 32})

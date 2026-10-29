@@ -450,7 +450,21 @@ class SpaceHub(LibraryRoutes):
                 raise HubRequestError(410, {"error": "That result expired; run it again", "code": "expired"})
             b = rows[0]["bytes"]
             r = json.loads(bytes.fromhex(b) if isinstance(b, str) else bytes(b))
+        objects = r.get("objects") if isinstance(r, dict) else None
+        if isinstance(objects, dict):
+            # A large brep result keeps each part's BRep in its own blob (the whole model in one blob broke
+            # the server's 32 MB message limit): read them back so callers still see "brep".
+            for info in objects.values():
+                if isinstance(info, dict) and "brep_blob" in info:
+                    info["brep"] = self._blob_text(str(info.pop("brep_blob")))
         return r
+
+    def _blob_text(self, sha):
+        rows = self._rows("v_artifact_blob", f"hash = '{sha}'") if re.fullmatch(r"[0-9a-f]{64}", sha) else []
+        if not rows or not rows[0]["bytes"]:
+            raise HubRequestError(410, {"error": "That result expired; run it again", "code": "expired"})
+        b = rows[0]["bytes"]
+        return (bytes.fromhex(b) if isinstance(b, str) else bytes(b)).decode("utf-8")
 
     def ops(self, body):
         return self.run_op(body.get("op"), body.get("args"), body.get("expected_revs"))
