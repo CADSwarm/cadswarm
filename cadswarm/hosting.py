@@ -674,9 +674,12 @@ def set_agent_client(data_dir, agent):
     data = host_config(data_dir)
     if not data.get("db"):
         return False
-    if data.get("agent_client") == agent:
+    if data.get("agent_client") == agent and not data.get("agent_command"):
         return True
     data["agent_client"] = agent
+    # A custom command line wins over the client in the host (agents::agent_command), so picking an AI
+    # must drop it; otherwise the host restarts its workers on the very command the person moved away from.
+    data.pop("agent_command", None)
     tmp = path + ".tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as f:

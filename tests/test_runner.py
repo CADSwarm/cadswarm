@@ -335,6 +335,84 @@ def test_the_runner_wakes_opencode_with_the_folders_model(tmp_path, monkeypatch)
     assert argv[argv.index("--model") + 1] == "openai/gpt-5.1"
 
 
+def test_switching_the_ai_mid_run_stops_it_and_wakes_the_new_one(tmp_path, monkeypatch):
+    """FreeCAD's "Change its AI" only rewrites the folder's config. A run already on the old AI is
+    stopped (its whole tree), the new CLI gets a fresh session, and its first wake carries the task
+    the stopped run still held."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    t = tables()
+    t["v_message"] = []
+    t["v_task"] = [task("t_mine", "lid", assignee="ann-claude", owner=1, status="claimed")]
+    r, clock, spawned = make_runner(tmp_path, t=t)
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append("claude run")
+
+    r.child = Busy()
+    r.child_started = clock[0]
+    r.state["started"] = True
+    r.save_state()
+    cfg_path = tmp_path / "helper" / ".cadswarm" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.update({"client": "opencode", "model": "openai/gpt-5.1", "warm": False})
+    cfg_path.write_text(json.dumps(cfg))
+
+    assert r.step() is True
+    assert killed == ["claude run"]
+    assert r.cfg["client"] == "opencode" and r.warm is False
+    argv, prompt = spawned[-1]
+    assert argv[:4] == ["/bin/opencode", "run", "--standalone", "--auto"]
+    assert argv[argv.index("--model") + 1] == "openai/gpt-5.1" and "--continue" not in argv
+    assert "You still hold task t_mine" in prompt  # handed straight back, no minute-and-a-half wait
+
+
+def test_a_model_change_keeps_the_same_ais_conversation(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    r, _clock, spawned = make_runner(tmp_path, client="opencode")
+    r.warm = False
+    r.state["started"] = True
+    r.save_state()
+    cfg_path = tmp_path / "helper" / ".cadswarm" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.update({"model": "openai/gpt-5.1", "warm": False})
+    cfg_path.write_text(json.dumps(cfg))
+
+    assert r.step() is True
+    assert "started" in r.state  # same CLI: carry on with its own session
+    argv, _prompt = spawned[-1]
+    assert argv[argv.index("--model") + 1] == "openai/gpt-5.1" and "--continue" in argv
+
+
+def test_an_unchanged_config_never_stops_a_running_helper(tmp_path, monkeypatch):
+    """The runner re-reads the folder every poll; only a real change may kill the run."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, clock, _spawned = make_runner(tmp_path)
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append("run")
+
+    r.child = Busy()
+    r.child_started = clock[0]
+    assert r.step() is True
+    assert killed == [] and r.child is not None
+
+
 def test_a_newer_runner_takes_the_folder_so_the_old_one_stops(tmp_path, monkeypatch):
     """Restart clicked twice (or two starts racing) used to leave two or three runners on one helper,
     each polling the team with its own warm server. The later process takes the folder now."""
