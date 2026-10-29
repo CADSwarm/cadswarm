@@ -480,9 +480,11 @@ def surface_quality(names: list[str] | None = None, topic: str = "", intent: str
     r = call("POST", "/surface", {"names": names or []}, doing="checking surface quality", targets=names)
     if "error" in r:
         return r
-    from .shape_intent import assess, classify
+    from .shape_intent import assess, classify, part_intent
     chosen = intent or classify(topic or _current_brief_text(), names or [])["intent"]
-    objects = [{**o, **assess(o, chosen)} for o in r["objects"]]
+    # The request decides the default; a part named for a machined component (a car's brake rotor) is
+    # still judged on function, unless the caller chose an intent for this call.
+    objects = [{**o, **assess(o, intent or part_intent(o["name"], chosen))} for o in r["objects"]]
     return {"intent": chosen, "objects": objects,
             "failing": [o["name"] for o in objects if o["verdict"] == "fails"],
             "advisory": chosen == "aesthetic"}

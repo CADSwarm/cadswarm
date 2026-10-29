@@ -1,5 +1,17 @@
 """Shape intent: a car is judged on form, a bracket on function."""
-from cadswarm.shape_intent import assess, classify, required
+from cadswarm.shape_intent import assess, classify, part_intent, required
+
+
+def test_a_cars_machined_parts_are_judged_on_function_and_its_styled_parts_on_form():
+    """A car brief made every part aesthetic: review round 2 sent back brake rotors and calipers for being flat."""
+    for name in ("RotorFL", "CaliperRR", "SubframeF", "PinFR2", "SuspensionF", "ExhaustPipe", "FloorPan"):
+        assert part_intent(name, "aesthetic") == "mechanical", name
+    for name in ("BodyShell", "TaillightL", "HandleFL", "WheelFL", "MirrorL", "Hood"):
+        assert part_intent(name, "aesthetic") == "aesthetic", name
+    assert part_intent("Bracket", "mechanical") == "mechanical"
+    assert part_intent("Lid", "mechanical") == "mechanical", "no evidence keeps the brief's intent"
+    # CamelCase names are read as words, here and in classify
+    assert classify("", names=["RearBumperLip"])["intent"] == "aesthetic"
 
 
 def test_a_car_body_is_aesthetic_and_a_table_is_mechanical():

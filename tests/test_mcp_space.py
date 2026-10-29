@@ -175,6 +175,18 @@ def test_surface_quality_composes_the_verdict_from_the_topic(monkeypatch, sessio
     assert "block model" in got["objects"][0]["advice"][0]
 
 
+def test_surface_quality_in_a_car_brief_judges_a_brake_rotor_on_function(monkeypatch, session):
+    """Review round 2 filed fix tasks for flat brake rotors and calipers: a machined disc is flat on purpose."""
+    session.client.post = lambda path, body=None: {"objects": [
+        {"name": "RotorFL", "faces": 430, "planar": 342, "curved": 88, "valid": True},
+        {"name": "BodyShell", "faces": 194, "planar": 146, "curved": 48, "valid": True}]}
+    got = mcp_server.surface_quality(["RotorFL", "BodyShell"], topic="a Lexus IS350 F Sport")
+    assert got["failing"] == ["BodyShell"]
+    assert got["objects"][0]["verdict"] == "not required"
+    forced = mcp_server.surface_quality(["RotorFL", "BodyShell"], topic="a Lexus IS350 F Sport", intent="aesthetic")
+    assert forced["failing"] == ["RotorFL", "BodyShell"], "an explicit intent still applies to every part"
+
+
 def test_surface_quality_leaves_a_bracket_alone_and_takes_an_override(monkeypatch, session):
     session.client.post = lambda path, body=None: {
         "objects": [{"name": "Bracket", "faces": 6, "planar": 6, "curved": 0, "valid": True}]}

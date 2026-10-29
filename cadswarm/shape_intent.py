@@ -24,6 +24,11 @@ adapter beam bearing board bolt boss box bracket bushing cabinet case chassis cl
 enclosure fastener fixture flange frame gusset heatsink hinge housing jig knob motor mount mounts
 nut pcb plate profile pulley rail rib shaft shelf spacer standoff table tube washer
 """.split())
+# A vehicle's machined and structural parts: a car brief must not ask a brake rotor to be organic.
+COMPONENTS = frozenset("""
+arm axle brake caliper damper disc driveshaft exhaust floor hub knuckle muffler pan pin rotor spring
+strut subframe suspension tank
+""".split())
 # A make or model is a design brief, whatever else the sentence says.
 BRANDS = frozenset("""
 apple audi bmw corvette ferrari ford honda iphone is350 lamborghini lexus mazda mclaren mercedes
@@ -38,7 +43,17 @@ MIN_CURVED_SHARE = 0.10
 
 
 def _words(text):
-    return set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
+    # CamelCase part names read as words: RotorFL is "rotor fl", not "rotorfl".
+    return set(re.findall(r"[a-z0-9]+", re.sub(r"(?<=[a-z])(?=[A-Z])", " ", str(text or "")).lower()))
+
+
+def part_intent(name, default):
+    """A part named for a machined or structural component is judged on function even in a car brief
+    (review round 2 sent brake rotors and calipers back for being flat); anything else keeps `default`."""
+    words = _words(name)
+    if words & (MECHANICAL | COMPONENTS) and not words & AESTHETIC:
+        return "mechanical"
+    return default
 
 
 def _hits(words, vocabulary):
