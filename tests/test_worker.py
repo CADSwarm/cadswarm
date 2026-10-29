@@ -393,6 +393,19 @@ def test_an_empty_part_reports_no_bbox_instead_of_infinity(fc):
     assert "bbox" not in obj
 
 
+def test_printability_skips_walls_of_a_part_too_big_for_the_bed(fc):
+    """Checking every face pair of a whole car ran past the worker's limit and got FreeCAD killed."""
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "Hood", "props": {"Length": 1800, "Width": 1600,
+                                                                         "Height": 0.5}})
+    c.call("create_primitive", {"kind": "box", "name": "Clip", "props": {"Length": 20, "Width": 20, "Height": 0.5}})
+    r = c.call("printability", {"bed": [180, 180, 180], "min_wall": 1.2})["result"]
+    parts = {o["name"]: o for o in r["objects"]}
+    assert not parts["Hood"]["fits_bed"] and not parts["Hood"]["walls_checked"]
+    assert parts["Clip"]["walls_checked"] and parts["Clip"]["thin_wall_suspects"], "a small part is still checked"
+    assert r["ok"] is False
+
+
 def test_a_coarser_render_is_really_coarser(fc):
     """Coarsening is how a render that overshot (1.2 M triangles on the Lexus) now fits instead of failing."""
     c, _ = fc

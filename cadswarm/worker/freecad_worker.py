@@ -1048,11 +1048,16 @@ def face_normal(face):
     return face.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
 
 
-def thin_walls(shape, min_wall, limit=20):
-    """Best effort: pairs of opposite-facing planar faces closer than `min_wall`."""
+PRINTABILITY_SECONDS = 60  # wall checks stop here, well inside the host's 120 s per op
+
+
+def thin_walls(shape, min_wall, limit=20, deadline=None):
+    """Best effort: pairs of opposite-facing planar faces closer than `min_wall` (stops at `deadline`)."""
     planar = [(i, f) for i, f in enumerate(shape.Faces) if type(f.Surface).__name__ == "Plane"]
     out = []
     for x in range(len(planar)):
+        if deadline and time.time() > deadline:
+            break
         i, fi = planar[x]
         ni = face_normal(fi)
         for y in range(x + 1, len(planar)):
@@ -1073,6 +1078,9 @@ def q_printability(a):
     min_wall = float(a.get("min_wall") or setting(a, "min_wall", 1.2))
     names = a.get("names") or [o.Name for o in doc.Objects if getattr(o, "Visibility", False)
                                and _solid_shape(o) is not None and o.Shape.Solids]
+    # The wall check compares every pair of flat faces. On a whole car it ran past the worker's 120 s limit,
+    # which kills and reloads FreeCAD while every other op waits: stop checking walls at this budget.
+    deadline = time.time() + PRINTABILITY_SECONDS
     objects = []
     for n in names:
         s = get_obj(n).Shape
@@ -1081,9 +1089,13 @@ def q_printability(a):
         # The footprint may be rotated on the bed, so compare the sorted XY extents.
         fits = all(x <= b for x, b in zip(sorted(size[:2]), sorted(bed[:2]))) and size[2] <= bed[2]
         closed = bool(s.Solids) and all(sol.isClosed() for sol in s.Solids) and s.isValid()
+        # A part too big for the bed fails already; its walls can't change that.
+        check = fits and bool(s.Solids) and time.time() < deadline
         objects.append({"name": n, "size": size, "fits_bed": fits, "closed_solid": closed,
-                        "thin_wall_suspects": thin_walls(s, min_wall) if s.Solids else []})
-    ok = all(o["fits_bed"] and o["closed_solid"] and not o["thin_wall_suspects"] for o in objects)
+                        "thin_wall_suspects": thin_walls(s, min_wall, deadline=deadline) if check else [],
+                        "walls_checked": check or not s.Solids})
+    ok = all(o["fits_bed"] and o["closed_solid"] and o["walls_checked"] and not o["thin_wall_suspects"]
+             for o in objects)
     return {"ok": ok, "objects": objects}
 
 
