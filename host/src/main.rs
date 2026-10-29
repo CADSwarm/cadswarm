@@ -168,6 +168,7 @@ fn run(cfg: &HostConfig) -> Result<()> {
     // op older than the stale window was left by an agent that gave up long ago; replaying its script
     // on today's model would undo newer work.
     let mut last_prune: Option<std::time::Instant> = None;
+    let mut last_tick: Option<std::time::Instant> = None;
     loop {
         if last_prune.map_or(true, |t| t.elapsed() >= Duration::from_secs(600)) && space.is_active() {
             last_prune = Some(std::time::Instant::now());
@@ -223,8 +224,15 @@ fn run(cfg: &HostConfig) -> Result<()> {
             if let Err(e) = executor::run_op(&space, &mut worker, helper.as_mut(), cfg, &op) {
                 eprintln!("[host] op {} failed to run: {e:#}", op.id);
             }
+            // Busy helpers keep the queue full for half an hour at a time; the orchestrator (agent
+            // liveness, spawning, handoffs) must still get its turn.
+            if last_tick.map_or(true, |t| t.elapsed() >= Duration::from_secs(2)) {
+                last_tick = Some(std::time::Instant::now());
+                orchestrator.tick(&space, helper.as_mut());
+            }
             continue;
         }
+        last_tick = Some(std::time::Instant::now());
         orchestrator.tick(&space, helper.as_mut());
         std::thread::sleep(Duration::from_millis(100));
     }

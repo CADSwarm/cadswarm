@@ -8,12 +8,25 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const AGENT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// An agent whose log has not grown for this long is stuck (a hung CLI, a model that stopped answering).
+pub const AGENT_IDLE: Duration = Duration::from_secs(15 * 60);
+/// Even a busy agent stops here; a fresh one picks up what it left.
+pub const AGENT_MAX_RUN: Duration = Duration::from_secs(2 * 60 * 60);
 
 pub struct Agent {
     pub name: String,
     child: Child,
     started: Instant,
+    log: PathBuf,
+    /// The log's size when it last grew, and when: every tool call the agent makes lands there.
+    log_len: u64,
+    last_activity: Instant,
+}
+
+/// Whether to stop an agent that has run for `ran` and been quiet for `quiet`. A wall-clock limit alone
+/// killed workers in the middle of a lofted body panel, every time, and their task started over.
+pub fn agent_stalled(ran: Duration, quiet: Duration) -> bool {
+    ran > AGENT_MAX_RUN || quiet > AGENT_IDLE
 }
 
 /// Where `exe` might be: $CADSWARM_{EXE}, then PATH, then the usual install folders, then (for
@@ -225,12 +238,23 @@ impl Agent {
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(prompt.as_bytes()).context("sending the prompt to the agent")?;
         }
-        Ok(Agent { name: name.into(), child, started: Instant::now() })
+        let now = Instant::now();
+        Ok(Agent { name: name.into(), child, started: now, log: dir.join("agent.log"), log_len: 0, last_activity: now })
     }
 
-    /// False once it exited or was killed for running past the timeout.
+    /// False once it exited, or was stopped for going quiet or running past the hard limit.
     pub fn alive(&mut self) -> bool {
-        if self.started.elapsed() > AGENT_TIMEOUT {
+        // Through an open handle: Windows updates a file's listed size and time lazily while another
+        // process holds it open for writing.
+        if let Ok(len) = std::fs::File::open(&self.log).and_then(|f| f.metadata()).map(|m| m.len()) {
+            if len != self.log_len {
+                self.log_len = len;
+                self.last_activity = Instant::now();
+            }
+        }
+        if agent_stalled(self.started.elapsed(), self.last_activity.elapsed()) {
+            eprintln!("[host] stopping {}: ran {} min, quiet for {} min", self.name,
+                      self.started.elapsed().as_secs() / 60, self.last_activity.elapsed().as_secs() / 60);
             self.kill();
             return false;
         }
@@ -358,6 +382,14 @@ pub fn handoff_prompt(handoff_id: &str, context_json: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_busy_agent_keeps_working_and_a_quiet_or_endless_one_is_stopped() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        assert!(!agent_stalled(min(46), min(0)), "still making tool calls after 46 minutes");
+        assert!(agent_stalled(min(20), min(16)), "nothing written for 16 minutes");
+        assert!(agent_stalled(min(121), min(0)), "past the hard limit");
+    }
 
     #[test]
     fn the_env_override_comes_first_and_the_newest_vscode_binary_before_older_ones() {
