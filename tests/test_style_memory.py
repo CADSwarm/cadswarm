@@ -301,3 +301,13 @@ def test_feedback_reads_back_newest_first_and_filtered_by_subject(env):
     assert [v["issues"] for v in got["verdicts"]] == [["roof is a box", "too slab-sided"]]
     assert got["verdicts"][0]["by"] == "person" and got["verdicts"][0]["author"] == "alice"
     assert all(v["subject"] == "car" for v in got["verdicts"])
+
+
+def test_feedback_for_a_subject_is_not_crowded_out_by_newer_ones(env):
+    style, clock = env
+    style.observe_feedback(BAD_CAR)
+    for _ in range(3):
+        style.observe_feedback({**BAD_CAR, "subject": "bracket", "issues": ["holes too close"]})
+    got = style.feedback("car", limit=2)
+    assert [v["subject"] for v in got["verdicts"]] == ["car"]
+    assert len(style.feedback("bracket", limit=2)["verdicts"]) == 2

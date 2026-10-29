@@ -137,7 +137,7 @@ def main(argv=None):
         cycle += 1
         try:
             findings, objects, stats = audit(hub, log)
-            if ns.render_every and cycle % ns.render_every == 1:
+            if ns.render_every and (cycle - 1) % ns.render_every == 0:  # the first cycle, then every Nth
                 rendered = hub.post("/render", {"views": ["left", "three_quarter"], "size": 700})
                 last_render = rendered.get("files") or last_render
                 log(f"rendered {len(last_render or [])} view(s): {last_render}")

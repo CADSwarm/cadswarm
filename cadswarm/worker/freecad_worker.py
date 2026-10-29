@@ -1137,7 +1137,9 @@ def q_render_views(a):
     if total > 950_000:
         raise OpError("bad_args", f"{total} triangles at deviation {deviation:.1f} mm is too many for a "
                                  f"render (950000 max); pass a coarser deviation, e.g. {deviation * 2:.1f}")
-    root = os.path.dirname(os.path.abspath(doc.FileName or "model.FCStd"))
+    # DOC_PATH, not doc.FileName: a document not saved yet has no FileName, and the worker's cwd
+    # (a checkout, in tests) is no place for renders.
+    root = os.path.dirname(DOC_PATH)
     out_dir = os.path.join(root, "renders", time.strftime("%Y-%m-%d %H%M%S"))
     try:
         files = render_meshes(meshes, a.get("views") or None, int(a.get("size") or 900), out_dir)

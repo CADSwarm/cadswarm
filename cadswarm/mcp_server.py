@@ -527,16 +527,17 @@ def _save_images(paths, subject):
 
 @mcp.tool()
 def render_views(names: list[str] | None = None, views: list[str] | None = None, size: int = 900,
-                 deviation: float = 1.5) -> dict:
+                 deviation: float | None = None) -> dict:
     """Pictures of the model (or `names`) as orthographic clay PNGs you can open and look at.
 
     Use it before calling a shape done and whenever someone says it looks wrong: front, rear, left, right,
     top and three_quarter by default. A 1 m bar is drawn at the bottom, so a side view can be compared with
     a reference photo at a known scale. Returns the file paths (under renders/ in the project folder on the
-    host computer) and the triangle count; `deviation` is the tessellation tolerance in mm.
+    host computer) and the triangle count; `deviation` is the tessellation tolerance in mm (left out, it is
+    sized to the model so a whole car fits the triangle budget).
     """
     return call("POST", "/render", {"names": names or [], "views": views or None,
-                                    "size": int(size or 900), "deviation": float(deviation or 1.5)},
+                                    "size": int(size or 900), "deviation": float(deviation) if deviation else None},
                 doing="rendering the model", targets=names)
 
 

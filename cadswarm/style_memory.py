@@ -381,11 +381,13 @@ class StyleMemory:
 
     def feedback(self, subject="", limit=10):
         """Recent verdicts and the lessons learned from them, newest first."""
-        rows = self.db.execute("SELECT * FROM style_events WHERE kind='feedback' ORDER BY id DESC LIMIT ?",
-                               (max(1, min(int(limit or 10), 50)),)).fetchall()
+        limit = max(1, min(int(limit or 10), 50))
         want = _slug(subject) if subject else ""
         verdicts = []
-        for row in rows:
+        # Filter by subject before counting: a LIMIT in SQL would let other subjects' verdicts crowd it out.
+        for row in self.db.execute("SELECT * FROM style_events WHERE kind='feedback' ORDER BY id DESC").fetchall():
+            if len(verdicts) >= limit:
+                break
             d = json.loads(row["data"])
             if want and d.get("subject") != want:
                 continue

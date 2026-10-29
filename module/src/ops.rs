@@ -93,8 +93,10 @@ pub fn prune_history(ctx: &ReducerContext, fence: u32, keep: u32, stale_ms: u64)
         }
     }
     // One 40 MB op (an add_reference with a base64 image, or an embedded script) exceeds the server's
-    // 32 MB websocket message limit and takes the whole team down. Nothing terminal needs its args.
+    // 32 MB websocket message limit and takes the whole team down. Nothing terminal needs its args;
+    // a queued one does (an add_reference may carry up to rules::MAX_OP_ARGS), and stale ones went above.
     let huge: Vec<Op> = ctx.db.op().ws().filter(&m.ws)
+        .filter(|o| matches!(o.status.as_str(), "done" | "failed" | "rejected"))
         .filter(|o| o.args_json.len() > 1_000_000)
         .collect();
     for op in huge {

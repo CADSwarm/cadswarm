@@ -1,5 +1,6 @@
 """The new read-only worker queries, against a real FreeCAD worker."""
 import base64
+import os
 import struct
 
 import pytest
@@ -84,6 +85,8 @@ def test_a_lofted_shell_has_curved_faces(worker):
 def test_render_views_writes_pngs_next_to_the_model(worker):
     r = worker.call("render_views", {"names": ["Small"], "views": ["front"], "size": 240})["result"]
     assert r["files"] and r["files"][0].endswith("front.png")
+    # Beside the model, even before it is first saved; never in the worker's cwd (the checkout).
+    assert os.path.dirname(os.path.dirname(r["dir"])) == os.path.dirname(worker.doc_path)
     with open(r["files"][0], "rb") as f:
         assert f.read(8) == b"\x89PNG\r\n\x1a\n"
     assert r["triangles"] >= 12

@@ -17,3 +17,6 @@ demo/perch/runs/
 
 # Vite dependency cache
 .vite/
+
+# Clay renders the worker writes beside a model (cadswarm/render.py).
+renders/

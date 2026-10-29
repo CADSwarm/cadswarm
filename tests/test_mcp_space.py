@@ -255,6 +255,9 @@ def test_render_views_proxies_the_worker_query(session):
     assert got["files"]
     assert posts[0][0] == "/render" and posts[0][1]["size"] == 400
     assert posts[0][1]["views"] == ["front"] and posts[0][1]["names"] == ["BodyShell"]
+    assert posts[0][1]["deviation"] is None, "left out, the worker sizes the tolerance to the model"
+    mcp_server.render_views(deviation=4)
+    assert posts[1][1]["deviation"] == 4.0
 
 
 def test_a_reference_image_larger_than_one_message_is_refused(tmp_path, session):
