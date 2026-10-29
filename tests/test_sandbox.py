@@ -450,6 +450,31 @@ def test_unit_verdict_mapping():
     assert e.value.code == "script_error"
 
 
+def test_unit_timeout_names_booleans_run_in_a_loop():
+    from cadswarm.worker import sandbox as sb
+    code = ("fb = doc.getObject('FrontBumper').Shape\n"
+            "def surf(x):\n"
+            "    return fb.common(Part.makeLine(a, b))\n"
+            "for i in range(60):\n"
+            "    s = s.cut(tool)\n"
+            "ys = [fb.fuse(t) for t in tools]\n"
+            "shape = fb.cut(cutter)\n")
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", code)
+    msg = str(e.value)
+    assert e.value.code == "timeout"
+    assert "line 3 (.common)" in msg and "line 5 (.cut)" in msg and "line 6 (.fuse)" in msg
+    assert "line 7" not in msg and "slice" in msg
+    # No boolean in a loop: the generic advice only.
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "shape = a.cut(b)\n")
+    assert "line" not in str(e.value) and "smaller steps" in str(e.value)
+    # Code that doesn't parse still gets the generic message.
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "for (:\n")
+    assert "smaller steps" in str(e.value)
+
+
 def test_unit_limits_come_from_env(monkeypatch):
     from cadswarm.worker import sandbox as sb
     monkeypatch.setenv("CADSWARM_SCRIPT_TIMEOUT", "7")

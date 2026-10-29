@@ -19,6 +19,7 @@ Every level has a wall-clock timeout; the child is killed, never the worker. Set
   CADSWARM_SCRIPT_TIMEOUT (seconds, 60)  CADSWARM_SCRIPT_MEMORY_MB (2048)  CADSWARM_SCRIPT_SANDBOX=off
   CADSWARM_SANDBOX_LEVEL (appcontainer|lowintegrity: restrict the levels tried; for tests)
 """
+import ast
 import json
 import logging
 import os
@@ -246,9 +247,39 @@ def _tail(data, n=600):
     return data.decode("utf-8", "replace").strip()[-n:]
 
 
-def _verdict(out, timeout, memory_mb, level):
+BOOLEANS = {"common", "cut", "fuse", "section"}
+
+
+def _looped_booleans(code):
+    """Booleans the script runs inside a loop, comprehension or helper function: "line 14 (.common)"."""
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    found = []
+
+    def walk(node, repeated):
+        if (repeated and isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in BOOLEANS):
+            found.append(f"line {node.lineno} (.{node.func.attr})")
+        repeats = isinstance(node, (ast.For, ast.While, ast.FunctionDef, ast.Lambda, ast.ListComp,
+                                    ast.SetComp, ast.DictComp, ast.GeneratorExp))
+        for child in ast.iter_child_nodes(node):
+            walk(child, repeated or repeats)
+
+    walk(tree, False)
+    return sorted(set(found), key=lambda s: int(s.split()[1]))
+
+
+def _verdict(out, timeout, memory_mb, level, code=""):
     started, reply = _parse(out.stdout)
     if out.timed_out:
+        looped = _looped_booleans(code)
+        if looped:
+            raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. It runs "
+                               f"booleans repeatedly at {', '.join(looped[:6])}; each one on a large skin can "
+                               "take seconds. Do one boolean against a combined tool shape, and probe surfaces "
+                               "with shape.slice(Vector(1,0,0), x) or distToShape instead of common().")
         raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. "
                            "Simplify the geometry or split the work into smaller steps.")
     if reply is not None:
@@ -331,7 +362,7 @@ def run_script(python, save_copy, request):
             _remove(run_dir)
         if level != levels[0]:
             log.warning("part script ran at fallback level %s", level)
-        return _verdict(out, timeout, memory_mb, level)
+        return _verdict(out, timeout, memory_mb, level, request.get("code", ""))
     raise SandboxError("sandbox_unavailable", "Part scripts can't run: the sandbox could not start ("
                        + "; ".join(problems) + "). Set CADSWARM_SCRIPT_SANDBOX=off to run them unconfined "
                        "(debugging only).")
