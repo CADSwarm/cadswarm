@@ -152,6 +152,13 @@ def main(argv=None):
                 f.write("\n".join(lines) + "\n")
         except Exception as e:
             log(f"cycle {cycle} failed: {type(e).__name__}: {e}")
+            if "fence_stale" in f"{getattr(e, 'code', '')} {e}":
+                # The watch acts with this person's FreeCAD sign-in, and every time their window rejoins it
+                # takes a new fence (saved to the same file). Pick that up instead of failing every cycle
+                # from then on; never rejoin here, which would sign their window out.
+                host, person = _person(project)
+                hub = SpaceHub({"uri": host["uri"], "db": host["db"]}, identity=person)
+                log(f"picked up the new sign-in (fence {person.get('fence')})")
         if ns.cycles > 0 and cycle >= ns.cycles:
             break
         time.sleep(max(30.0, ns.every * 60.0))
