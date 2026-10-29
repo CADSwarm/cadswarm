@@ -95,6 +95,14 @@ pub fn says_retired(message: &str) -> bool {
     message.contains("left:") || message.contains("not_member:")
 }
 
+/// The connection's liveness, with a panic counted as closed. When the WebSocket drops under a reducer
+/// call, the SDK's message thread panics while holding the connection's lock; from then on its
+/// `is_active` panics on the poisoned lock, and that took the whole host down (2026-10-29) instead of
+/// letting the main loop open a new connection.
+pub fn alive(check: impl FnOnce() -> bool) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(check)).unwrap_or(false)
+}
+
 impl Space {
     /// Connect as the running host: rejoin at a new fence, superseding any older host process.
     pub fn connect(cfg: &HostConfig) -> Result<Space> {
@@ -152,7 +160,7 @@ impl Space {
     /// False once the WebSocket closed (server restart, network drop, idle timeout). The SDK never
     /// reconnects by itself, so the host must open a new `Space`.
     pub fn is_active(&self) -> bool {
-        self.conn.is_active()
+        alive(|| self.conn.is_active())
     }
 
     fn me(&self) -> Option<Member> {
@@ -470,7 +478,20 @@ impl Space {
 
 #[cfg(test)]
 mod rejoin_tests {
-    use super::{says_retired, should_rejoin};
+    use super::{alive, says_retired, should_rejoin};
+
+    #[test]
+    fn a_connection_whose_lock_is_poisoned_counts_as_closed() {
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(Some(())));
+        let held = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("WS sender loop has dropped its recv channel");
+        }).join();
+        assert!(lock.is_poisoned());
+        assert!(!alive(|| lock.lock().unwrap().is_some()));
+        assert!(alive(|| true));
+    }
 
     #[test]
     fn only_a_retired_host_rejoins_by_itself() {

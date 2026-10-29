@@ -137,21 +137,22 @@ pub fn next_action(s: &BriefState) -> Action {
     }
 }
 
-/// The names an export should use, or why it must not run. Parts from stopped or blocked tasks may
-/// be absent on purpose; a part a done task promised but the model does not have is a broken model.
-pub fn export_names(tasks: &[crate::space::TaskRow], present: &[String]) -> Result<Vec<String>, String> {
+/// The names an export should use and the parts done tasks named that the model no longer has, or why
+/// it must not run. Export only follows a passed review, and a done task's part is often gone on purpose
+/// (a brief that says "delete FenderApronL/R" names them), so a missing part is reported, not fatal:
+/// failing there threw away a brief the reviewer had just passed.
+pub fn export_names(tasks: &[crate::space::TaskRow], present: &[String])
+    -> Result<(Vec<String>, Vec<String>), String> {
     let mut missing: Vec<String> = tasks.iter().filter(|t| t.status == "done")
         .flat_map(|t| t.objects.clone())
         .filter(|n| !present.contains(n))
         .collect();
     missing.sort();
     missing.dedup();
-    if !missing.is_empty() {
-        Err(format!("the model is missing {}", missing.join(", ")))
-    } else if present.is_empty() {
+    if present.is_empty() {
         Err("nothing to export: no part was built".into())
     } else {
-        Ok(present.to_vec())
+        Ok((present.to_vec(), missing))
     }
 }
 
@@ -656,6 +657,7 @@ impl Orchestrator {
                         return Ok(());
                     }
                     "failed" | "rejected" => {
+                        eprintln!("[host] brief {} failed: export {id} {}: {}", b.id, op.status, op.error);
                         space.set_brief(&b.id, "failed", "")?;
                         rt.export_op = None;
                         return Ok(());
@@ -853,12 +855,17 @@ impl Orchestrator {
                 let wanted: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
                 let objects = space.objects_present(&wanted);
                 match export_names(&tasks, &objects) {
-                    Ok(objects) => {
+                    Ok((objects, missing)) => {
+                        if !missing.is_empty() {
+                            eprintln!("[host] brief {}: exporting without {} (named by done tasks, not in the \
+                                       model)", b.id, missing.join(", "));
+                        }
                         let id = op_id();
                         space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
                         rt.export_op = Some(id);
                     }
                     Err(why) => {
+                        eprintln!("[host] brief {} failed: {why}", b.id);
                         space.set_brief(&b.id, "failed", &json!({"error": why}).to_string())?;
                     }
                 }
@@ -1055,10 +1062,11 @@ mod tests {
             task("t2", "cancelled", &["Lid"]),
             task("t3", "blocked", &["Clip"]),
         ];
-        assert_eq!(export_names(&tasks, &present), Ok(vec!["Base".to_string()]));
-        // A done task's part must exist, or the brief fails with the names.
-        let broken = vec![task("t1", "done", &["Base", "Lid"])];
-        assert_eq!(export_names(&broken, &present), Err("the model is missing Lid".into()));
+        assert_eq!(export_names(&tasks, &present), Ok((vec!["Base".to_string()], vec![])));
+        // A done task's part that is gone (deleted on purpose: "delete FenderApronL/R") does not veto the
+        // reviewer who just passed the model; the export goes ahead and names it.
+        let deleted = vec![task("t1", "done", &["Base", "Lid"])];
+        assert_eq!(export_names(&deleted, &present), Ok((vec!["Base".to_string()], vec!["Lid".to_string()])));
         // Every task stopped: nothing to export.
         let stopped = vec![task("t2", "cancelled", &["Lid"])];
         assert_eq!(export_names(&stopped, &[]), Err("nothing to export: no part was built".into()));
