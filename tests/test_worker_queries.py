@@ -90,3 +90,14 @@ def test_render_views_writes_pngs_next_to_the_model(worker):
     with open(r["files"][0], "rb") as f:
         assert f.read(8) == b"\x89PNG\r\n\x1a\n"
     assert r["triangles"] >= 12
+
+
+def test_render_views_draws_only_what_is_shown_unless_a_hidden_part_is_named(worker):
+    # A hidden FrontBumper rendered as if it were there, so the PNGs looked closed while FreeCAD showed a hole.
+    worker.call("create_primitive", {"kind": "box", "name": "Ghost", "props": {"Length": 5, "Width": 5, "Height": 5}})
+    worker.call("set_props", {"name": "Ghost", "props": {"Visibility": False}})
+    r = worker.call("render_views", {"views": ["front"], "size": 200})["result"]
+    assert "Ghost" not in r["objects"] and "Small" in r["objects"]
+    assert "Ghost" in r["hidden"]
+    named = worker.call("render_views", {"names": ["Ghost"], "views": ["front"], "size": 200})["result"]
+    assert named["objects"] == ["Ghost"]

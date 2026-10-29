@@ -1274,9 +1274,12 @@ def q_render_views(a):
     want = set(a.get("names") or [])
     chosen = a.get("deviation")
     deviation = float(chosen or _auto_deviation())
-    shapes = [(o.Name, o.Shape) for o in doc.Objects
-              if getattr(o, "Shape", None) is not None and not o.Shape.isNull() and o.Shape.Faces
-              and (not want or o.Name in want or o.Label in want)]
+    solid = [o for o in doc.Objects if getattr(o, "Shape", None) is not None and not o.Shape.isNull()
+             and o.Shape.Faces and (not want or o.Name in want or o.Label in want)]
+    # Draw what FreeCAD shows: a hidden part rendered as if it were there (a hidden FrontBumper made the nose look
+    # closed while the person saw a hole), and a boolean's hidden inputs drew over its result. Named parts always draw.
+    hidden = [] if want else [o.Name for o in solid if not getattr(o, "Visibility", True)]
+    shapes = [(o.Name, o.Shape) for o in solid if o.Name not in hidden]
     if not shapes:
         raise OpError("not_found", f"No solid geometry in {sorted(want) or 'the model'}")
     # A size-based deviation still overshot on a car (grille mesh, spoked wheels): unless the caller chose
@@ -1298,7 +1301,7 @@ def q_render_views(a):
         files = render_meshes(meshes, a.get("views") or None, int(a.get("size") or 900), out_dir)
     except ValueError as e:
         raise OpError("bad_args", str(e))
-    return {"files": files, "dir": out_dir, "objects": [m[0] for m in meshes],
+    return {"files": files, "dir": out_dir, "objects": [m[0] for m in meshes], "hidden": hidden,
             "triangles": total, "deviation": round(deviation, 2)}
 
 
