@@ -79,6 +79,8 @@ LEGIT = [
     # FreeCAD's own edge sorter is a public function with a dunder name; lofts and wires need it.
     "edges = Part.makeBox(1, 1, 1).Edges[:4]\nwires = [Part.Wire(e) for e in Part.__sortEdges__(edges)]",
     "from Part import __sortEdges__\nresult = len(__sortEdges__(Part.makeBox(1, 1, 1).Edges))",
+    # what the refusal of f.Surface.__class__ tells helpers to write instead
+    "result = sum(1 for f in Part.makeBox(1, 1, 1).Faces if type(f.Surface).__name__ == 'Plane')",
 ]
 
 
