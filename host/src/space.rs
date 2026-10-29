@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 type Outcome = std::result::Result<std::result::Result<(), String>, InternalError>;
 const REDUCER_TIMEOUT: Duration = Duration::from_secs(120);
+const DISCONNECTED: &str = "not connected to SpacetimeDB";
 
 #[derive(Debug, Clone)]
 pub struct OpRow {
@@ -146,6 +147,12 @@ impl Space {
             std::thread::sleep(Duration::from_millis(50));
         }
         Err(anyhow!("timed out waiting for SpacetimeDB"))
+    }
+
+    /// False once the WebSocket closed (server restart, network drop, idle timeout). The SDK never
+    /// reconnects by itself, so the host must open a new `Space`.
+    pub fn is_active(&self) -> bool {
+        self.conn.is_active()
     }
 
     fn me(&self) -> Option<Member> {
@@ -284,6 +291,11 @@ impl Space {
         what: &str,
         send: impl FnOnce(Box<dyn FnOnce(&ReducerEventContext, Outcome) + Send>) -> spacetimedb_sdk::Result<()>,
     ) -> Result<()> {
+        // A dropped connection never answers: the SDK queues the call for a message loop that has
+        // already exited. Fail at once so the caller can reconnect instead of waiting out the timeout.
+        if !self.is_active() {
+            return Err(anyhow!("{what}: {DISCONNECTED}"));
+        }
         let (tx, rx) = mpsc::channel();
         send(Box::new(move |_, outcome| {
             let _ = tx.send(outcome);

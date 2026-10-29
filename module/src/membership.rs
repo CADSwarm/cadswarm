@@ -205,6 +205,9 @@ pub fn rejoin(ctx: &ReducerContext, client: String) -> Result<(), String> {
         // creates a new identity, so re-inviting someone always works.
         return Err("removed: a person removed this helper from the team".into());
     }
+    if m.kind == "host" {
+        fail_interrupted_ops(ctx, m.ws);
+    }
     if m.status == "left" || m.status == "taken_over" {
         let (ws, name, kind, role, endpoint) = (m.ws, m.name.clone(), m.kind.clone(), m.role.clone(), m.endpoint_id.clone());
         join_as(ctx, ws, &name, &kind, &client, &role, &endpoint)?;
@@ -226,6 +229,23 @@ pub fn rejoin(ctx: &ReducerContext, client: String) -> Result<(), String> {
     }
     emit(ctx, ws, "rejoined", id, json!({"name": name, "fence": fence}));
     Ok(())
+}
+
+/// A host rejoins only from a fresh connection, before it starts anything, so an op still `running`
+/// belongs to a host process that died or lost SpacetimeDB mid-op. Nothing would ever complete it:
+/// fail it so the agent waiting on it hears back and can resubmit.
+fn fail_interrupted_ops(ctx: &ReducerContext, ws: u64) {
+    let now = now_ms(ctx);
+    let running: Vec<Op> = ctx.db.op().ws().filter(&ws).filter(|o| o.status == "running").collect();
+    for op in running {
+        ctx.db.op().id().update(Op {
+            status: "failed".into(),
+            error_code: "interrupted".into(),
+            error: "The host restarted while running this op. Check the model, then submit it again.".into(),
+            finished_ms: now,
+            ..op
+        });
+    }
 }
 
 pub fn resume_tasks(ctx: &ReducerContext, member: u64) {

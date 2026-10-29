@@ -126,7 +126,7 @@ fn run(cfg: &HostConfig) -> Result<()> {
     if cfg.keep_awake {
         power::keep_running_in_background();
     }
-    let space = space::Space::connect(cfg)?;
+    let mut space = space::Space::connect(cfg)?;
     let mut worker = worker::WorkerDriver::new(
         cfg.freecad_python.clone(),
         cfg.worker_script.clone(),
@@ -161,7 +161,31 @@ fn run(cfg: &HostConfig) -> Result<()> {
     let mut retired = false;
     // Heartbeat like every other member, well inside the module's 30s stale window.
     let mut last_beat: Option<std::time::Instant> = None;
+    // The SDK never reopens a closed WebSocket (SpacetimeDB restart, network drop, idle timeout):
+    // without this the host stays offline until someone restarts it. Retry at most every 10s.
+    let mut last_reconnect: Option<std::time::Instant> = None;
     loop {
+        if !space.is_active() {
+            if last_reconnect.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
+                last_reconnect = Some(std::time::Instant::now());
+                match space::Space::connect(cfg) {
+                    Ok(s) => {
+                        space = s;
+                        retired = false;
+                        // An op whose start_op failed with the connection is still queued and may run
+                        // now; one that did start is no longer queued, and start_op refuses a repeat.
+                        tried.clear();
+                        if let Err(e) = executor::refresh(&space, &mut worker, &[]) {
+                            eprintln!("[host] refresh after reconnect failed: {e:#}");
+                        }
+                        println!("[host] reconnected (fence {})", space.fence());
+                    }
+                    Err(e) => eprintln!("[host] reconnect failed: {e:#}"),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         if retired || space.retired() {
             if last_revive.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
                 last_revive = Some(std::time::Instant::now());
