@@ -83,9 +83,13 @@ def script_violation(code):
             if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and id(node) not in class_names and not (
                     isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
                 # Helpers reach for these to check a shape's kind; say what works instead of making them guess.
-                hint = (" (for a kind use type(x).__name__, e.g. type(f.Surface).__name__ == 'Plane', or "
-                        "s.ShapeType; the surface_quality tool already counts flat faces)"
-                        if attr in ("__class__", "__getstate__", "__dict__") else "")
+                if attr in ("__class__", "__getstate__", "__dict__"):
+                    hint = (" (for a kind use type(x).__name__, e.g. type(f.Surface).__name__ == 'Plane', or "
+                            "s.ShapeType; the surface_quality tool already counts flat faces)")
+                elif attr.startswith("__") and attr.endswith("__"):
+                    hint = " (call the builtin instead: len(x), str(x), x[i], a + b, iter(x)...)"
+                else:
+                    hint = ""
                 return f"line {line}: private/dunder attribute '.{attr}'{hint}"
         elif isinstance(node, ast.Name):
             if node.id in SCRIPT_BANNED_NAMES or (node.id.startswith("__") and node.id not in SCRIPT_DUNDER_OK):
