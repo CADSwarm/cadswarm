@@ -101,9 +101,12 @@ more or less room) and scrolls when the window is short. It has three parts:
   when one is waiting for it) and its status (**◐ Working**, **Ready**, or why it's away). **＋ New helper**
   starts another one on this computer: pick the AI (Claude Code, Codex or OpenCode) and, if you like, a name
   (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
-  one of yours to **Rename** it, **Restart** it or see its log; right-click any helper (even one running on a
-  teammate's computer) to **Remove from the team**. Removing releases its locks, returns the work it held and
-  stops it from rejoining on its own: only a fresh invite brings it back. People are listed underneath.
+  one of yours to **Rename** it, **Change its AI or model** (for example Claude Code → OpenCode when your
+  Claude plan runs out), **Restart** it or see its log; right-click any helper (even one running on a
+  teammate's computer) to **Remove from the team**. Switching keeps its name and its seat on the team: no
+  invite code, and a run in progress is stopped so the new AI picks its task back up. Removing releases its
+  locks, returns the work it held and stops it from rejoining on its own: only a fresh invite brings it back.
+  People are listed underneath.
 - **Chat**: one box for everything.
   - `@name what to do` gives that helper a task (with the parts you have selected) and wakes it; it answers in
     the chat with what it'll do, then what it did. Typing `@` lists the helpers to pick from. Your message
@@ -431,6 +434,13 @@ task prompt:
 
 A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX` or
 `CADSWARM_OPENCODE`. The same CLI runs the planners, the workers and the reviewer.
+
+Change it later without recreating the team: **Tools → AI helpers → Choose the AI for team workers**. The
+host re-reads `host.json` every couple of seconds. Workers already running on the old AI are stopped and
+taken off the team (their tasks go back), so the next tick starts them on the new one; a planner or
+reviewer in the middle of a brief finishes first. A host you run by hand can also be updated in
+`team-model\host.json` (`"agent_client": "opencode"`) while it runs. A custom `agent_command` there
+wins over `agent_client`, so picking an AI in FreeCAD removes it (pin a model on the helper instead).
 
 ## For developers: command line
 

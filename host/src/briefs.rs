@@ -475,20 +475,41 @@ impl Orchestrator {
         }
     }
 
-    /// A person can pick their AI helper in the guide after the host started: re-read host.json every
-    /// couple of seconds so the next agent uses that CLI, instead of requiring a host restart.
-    fn refresh_agent(&mut self) {
+    /// A person can switch the workers' AI after the host started: re-read host.json every couple of
+    /// seconds so the next agent uses that CLI, instead of requiring a host restart. The switch is a
+    /// clean handoff: workers and handoff agents already running are stopped and taken off the team
+    /// (its module hands their tasks back), so the next tick starts them again on the new AI. A planner
+    /// or reviewer in the middle of a brief finishes first: a killed planner can leave half a plan and
+    /// a killed reviewer would fail the brief.
+    fn refresh_agent(&mut self, space: &Space) {
         if self.agent_checked.elapsed() < Duration::from_secs(2) {
             return;
         }
         self.agent_checked = Instant::now();
-        if let Ok(cfg) = HostConfig::load(&self.cfg.data_dir) {
-            if cfg.agent_client != self.cfg.agent_client || cfg.agent_command != self.cfg.agent_command {
-                eprintln!("[host] agents now run {} (from host.json)", cfg.agent_client);
-            }
-            self.cfg.agent_client = cfg.agent_client;
-            self.cfg.agent_command = cfg.agent_command;
+        let Ok(cfg) = HostConfig::load(&self.cfg.data_dir) else { return };
+        if cfg.agent_client == self.cfg.agent_client && cfg.agent_command == self.cfg.agent_command {
+            return;
         }
+        eprintln!("[host] agents now run {} (from host.json); handing running work over", cfg.agent_client);
+        let mut stopped: Vec<String> = Vec::new();
+        for rt in self.runs.values_mut() {
+            for a in rt.workers.iter_mut() {
+                a.kill();
+                stopped.push(a.name.clone());
+            }
+            rt.workers.clear();
+        }
+        for a in self.handoffs.values_mut() {
+            a.kill();
+            stopped.push(a.name.clone());
+        }
+        self.handoffs.clear();
+        self.handoff_failed.clear();
+        for name in stopped {
+            Self::retire_agent(&cfg, space, &name);
+            crate::agents::remove_run_dir(&cfg, &name);
+        }
+        self.cfg = cfg;
     }
 
     /// Mint an identity and start one agent, refusing to spend an invite when its CLI cannot start.
@@ -530,7 +551,7 @@ impl Orchestrator {
     }
 
     pub fn tick(&mut self, space: &Space, mut helper: Option<&mut WorkerDriver>) {
-        self.refresh_agent();
+        self.refresh_agent(space);
         // A one-job agent whose MCP server is gone can never finish its task; take it off the team, which
         // hands the task back. This is also how a host that was restarted mid-brief recovers the work.
         if self.last_sweep.map_or(true, |t| t.elapsed() >= ORPHAN_SWEEP) {

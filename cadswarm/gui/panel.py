@@ -1198,6 +1198,9 @@ class TeamPanel(QtGui.QDockWidget):
                                  style_ui.show_style))),
                 ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex or OpenCode",
                                  add_helper),
+                                ("Choose the AI for team workers…", "Which AI the team server starts for "
+                                                                    "planner, workers and reviewer",
+                                 choose_worker_ai),
                                 ("Invite a teammate…", "Copy a single-use invite code", invite_teammates),
                                 ("Restart my AI helpers", "Restart the helpers that run on this computer",
                                  restart_helpers),
@@ -2005,9 +2008,11 @@ class TeamPanel(QtGui.QDockWidget):
         participant = next((p for p in self.session.model["participants"] if p["name"] == name), None)
         mine = local_helpers(self.session).get(name)
         if mine:
-            folder = mine[0]
+            folder, cfg = mine
             menu.addSeparator()
             menu.addAction("Rename…").triggered.connect(lambda: self.rename_helper(name, folder))
+            menu.addAction("Change its AI or model…").triggered.connect(
+                lambda: self.change_helper_ai(name, folder, cfg))
             menu.addAction("Restart").triggered.connect(lambda: self.restart_helper(folder))
             menu.addAction("Show its log").triggered.connect(lambda: open_log(folder))
         if participant and takes_instructions(participant):
@@ -2031,6 +2036,12 @@ class TeamPanel(QtGui.QDockWidget):
         hub = helper_hub(folder)
         self.session.run_async(lambda _c: hub.rename_me(new), purpose="rename a helper",
                                done=lambda _r: renamed(folder, new))
+
+    def change_helper_ai(self, name, folder, cfg):
+        if not self.session.ensure_connected("change a helper's AI"):
+            return
+        dlg = ChangeHelperDialog(self.session, name, folder, cfg)
+        (getattr(dlg, "exec", None) or dlg.exec_)()
 
     def restart_helper(self, folder):
         from ..paths import LAUNCHER, freecad_python
@@ -2935,6 +2946,63 @@ def list_models_for(client):
     return list_models(client)
 
 
+class ModelPicker:
+    """The model dropdown for the AIs that offer a choice (OpenCode): filled in the background
+    (`opencode models` can take a few seconds) and remembering the last pick for the next helper."""
+
+    def __init__(self, session):
+        self.session = session
+        self.widget = QtGui.QComboBox()
+        self.widget.setEditable(True)
+        self.widget.setInsertPolicy(QtGui.QComboBox.NoInsert)
+        self.widget.setToolTip("The model this helper always runs on. Type a model id if it isn't listed.")
+        self.label = QtGui.QLabel("Model")
+        self.for_client = None
+
+    def show_for(self, client):
+        pickable = client in MODEL_PICKER_CLIENTS
+        self.widget.setVisible(pickable)
+        self.label.setVisible(pickable)
+        if not pickable or self.for_client == client:
+            return
+        self.for_client = client
+        self.fill(client, [])
+
+        def listed(models):
+            try:
+                if self.for_client == client:
+                    self.fill(client, models or [], keep_typed=True)
+            except RuntimeError:  # the dialog was closed before the list arrived
+                pass
+        self.session.run_async(lambda _c: list_models_for(client), done=listed, purpose="list the models")
+
+    def fill(self, client, models, keep_typed=False):
+        last = prefs().GetString(f"HelperModel_{client}")
+        typed = self.widget.currentText().strip() if keep_typed else ""
+        self.widget.clear()
+        self.widget.addItem(MODEL_DEFAULT_TEXT, "")
+        for m in ([last] if last and last not in models else []) + list(models):
+            self.widget.addItem(m, m)
+        pick = typed if typed and typed != MODEL_DEFAULT_TEXT else last
+        i = self.widget.findData(pick) if pick else 0
+        if i >= 0:
+            self.widget.setCurrentIndex(i)
+        else:
+            self.widget.setEditText(pick)
+
+    def start_on(self, model):
+        """Preselect the model an existing helper already runs on (it may not be in the list yet)."""
+        if model:
+            self.widget.setCurrentIndex(-1)
+            self.widget.setEditText(model)
+
+    def picked(self, client):
+        if client not in MODEL_PICKER_CLIENTS:
+            return ""
+        text = self.widget.currentText().strip()
+        return "" if text == MODEL_DEFAULT_TEXT else text
+
+
 class NewHelperDialog(QtGui.QDialog):
     """Start one more AI helper on this computer: pick the AI, optionally name it, done. It runs in the
     background and answers in the chat."""
@@ -2963,13 +3031,8 @@ class NewHelperDialog(QtGui.QDialog):
             self.client.activated.connect(lambda *_: self.picked_client())
         form.addRow("AI", self.client)
         # OpenCode reaches many models: the pick is saved in the helper's folder and sticks.
-        self.model = QtGui.QComboBox()
-        self.model.setEditable(True)
-        self.model.setInsertPolicy(QtGui.QComboBox.NoInsert)
-        self.model.setToolTip("The model this helper always runs on. Type a model id if it isn't listed.")
-        self.model_label = QtGui.QLabel("Model")
-        form.addRow(self.model_label, self.model)
-        self.models_for = None
+        self.picker = ModelPicker(session)
+        form.addRow(self.picker.label, self.picker.widget)
         self.name = QtGui.QLineEdit()
         self.name.setPlaceholderText("Optional")
         self.name.setMaxLength(40)
@@ -3000,44 +3063,8 @@ class NewHelperDialog(QtGui.QDialog):
         self.show_models()
 
     def show_models(self):
-        """The model picker, for the AIs that offer a choice. Starts on the last model picked for this AI
-        and fills in the full list in the background (`opencode models` can take a few seconds)."""
-        client = self.client.currentData()
-        pickable = client in MODEL_PICKER_CLIENTS
-        self.model.setVisible(pickable)
-        self.model_label.setVisible(pickable)
-        if not pickable or self.models_for == client:
-            return
-        self.models_for = client
-        self.fill_models(client, [])
-
-        def listed(models):
-            try:
-                if self.models_for == client:
-                    self.fill_models(client, models or [], keep_typed=True)
-            except RuntimeError:  # the dialog was closed before the list arrived
-                pass
-        self.session.run_async(lambda _c: list_models_for(client), done=listed, purpose="list the models")
-
-    def fill_models(self, client, models, keep_typed=False):
-        last = prefs().GetString(f"HelperModel_{client}")
-        typed = self.model.currentText().strip() if keep_typed else ""
-        self.model.clear()
-        self.model.addItem(MODEL_DEFAULT_TEXT, "")
-        for m in ([last] if last and last not in models else []) + list(models):
-            self.model.addItem(m, m)
-        pick = typed if typed and typed != MODEL_DEFAULT_TEXT else last
-        i = self.model.findData(pick) if pick else 0
-        if i >= 0:
-            self.model.setCurrentIndex(i)
-        else:
-            self.model.setEditText(pick)
-
-    def picked_model(self):
-        if self.client.currentData() not in MODEL_PICKER_CLIENTS:
-            return ""
-        text = self.model.currentText().strip()
-        return "" if text == MODEL_DEFAULT_TEXT else text
+        """The model picker, for the AIs that offer a choice, starting on the last pick for this AI."""
+        self.picker.show_for(self.client.currentData())
 
     def create(self):
         client = self.client.currentData()
@@ -3056,7 +3083,7 @@ class NewHelperDialog(QtGui.QDialog):
         self.note.setText("Setting it up… The first helper on a computer downloads its software (about 70 MB), "
                           "which can take a minute or two.")
         team = self.session.client
-        model = self.picked_model()
+        model = self.picker.picked(client)
         prefs().SetString(f"HelperModel_{client}", model)  # the next new helper of this AI starts on it
 
         def started(folder):
@@ -3074,6 +3101,143 @@ class NewHelperDialog(QtGui.QDialog):
             self.note.setText("")
         self.session.run_async(lambda _c: create_helper(client, name, team, model), done=started,
                                purpose="start an AI helper", failed=failed)
+
+
+class ChangeHelperDialog(QtGui.QDialog):
+    """Move one of this computer's helpers to another AI (or, on OpenCode, another model) without a
+    new invite. The helper keeps its name and its seat; the runner stops the run in progress and the
+    next one starts on the new AI with whatever task it held."""
+
+    def __init__(self, session, name, folder, cfg):
+        super().__init__(Gui.getMainWindow())
+        theme.apply(self)
+        from ..agent_setup import CLIENTS, agent_ready
+        self.session, self.name, self.folder, self.cfg = session, name, folder, cfg
+        self.setWindowTitle(f"CADSwarm: {name}'s AI")
+        fit_to_screen(self, 470, 280)
+        lay = QtGui.QVBoxLayout(self)
+        form = QtGui.QFormLayout()
+        current = cfg.get("client") or "claude"
+        self.client = QtGui.QComboBox()
+        installed = []
+        for key, info in CLIENTS.items():
+            if agent_ready(key):
+                installed.append(key)
+                self.client.addItem(info["label"], key)
+        i = self.client.findData(current)
+        if i >= 0:
+            self.client.setCurrentIndex(i)
+        try:
+            self.client.activated[int].connect(lambda *_: self.picked_client())
+        except (KeyError, TypeError, IndexError):
+            self.client.activated.connect(lambda *_: self.picked_client())
+        form.addRow("AI", self.client)
+        self.picker = ModelPicker(session)
+        form.addRow(self.picker.label, self.picker.widget)
+        lay.addLayout(form)
+        self.note = QtGui.QLabel("")
+        self.note.setWordWrap(True)
+        lay.addWidget(self.note)
+        lay.addStretch(1)
+        row = QtGui.QHBoxLayout()
+        row.addStretch(1)
+        cancel = QtGui.QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        self.ok = QtGui.QPushButton("Switch AI")
+        self.ok.setDefault(True)
+        self.ok.clicked.connect(self.switch)
+        row.addWidget(cancel)
+        row.addWidget(self.ok)
+        lay.addLayout(row)
+        if not installed:
+            links = " or ".join(f"<a href='{v['install_url']}'>{v['label']}</a>" for v in CLIENTS.values())
+            self.note.setText(f"No AI is installed on this computer right now. Install {links} first.")
+            self.note.setOpenExternalLinks(True)
+            self.ok.setEnabled(False)
+        else:
+            self.show_handoff(current)
+        self.show_models()
+
+    def picked_client(self):
+        self.show_models()
+        self.show_handoff(self.client.currentData())
+
+    def show_handoff(self, client):
+        now = (self.cfg.get("client") or "claude")
+        same = client == now
+        self.note.setText(
+            f"<b>{self.name}</b> keeps its name and seat on the team: no invite code, nothing to rejoin. "
+            + ("A run in progress is stopped and the new AI picks its task back up."
+               if not same else
+               "The next message uses this AI; a run in progress is stopped and continues on it."))
+
+    def show_models(self):
+        client = self.client.currentData()
+        self.picker.show_for(client)
+        if client == "opencode":
+            self.picker.start_on(self.cfg.get("model") or prefs().GetString("HelperModel_opencode"))
+
+    def switch(self):
+        client = self.client.currentData()
+        model = self.picker.picked(client)
+        prefs().SetString(f"HelperModel_{client}", model)
+        self.ok.setEnabled(False)
+        self.note.setText("Switching… the helper stays on the team and its task carries over.")
+        from ..agent_setup import switch_helper_client
+        from ..paths import LAUNCHER, freecad_python
+        from ..runner import background_on, runner_alive, start_runner
+        python = freecad_python()
+        project = prefs().GetString("ProjectName")
+
+        def done(_written):
+            if not runner_alive(self.folder) and background_on(self.folder):
+                start_runner(self.folder, python, LAUNCHER, project)
+            from ..agent_setup import CLIENTS
+            say(f"{self.name} now runs on {CLIENTS[client]['label']}" + (f" ({model})" if model else ""))
+            self.accept()
+
+        def failed():
+            self.ok.setEnabled(True)
+            self.note.setText("")
+
+        self.session.run_async(
+            lambda _c: switch_helper_client(self.folder, client, python=python, model=model, project_name=project),
+            done=done, purpose="switch a helper's AI", failed=failed)
+
+
+def choose_worker_ai():
+    """Which AI the host starts for the team's planner, workers and reviewer. The host re-reads
+    host.json every couple of seconds; anything already running is stopped so its task goes back to
+    the team and is picked up on the new AI."""
+    from ..agent_setup import CLIENTS, agent_ready
+    folder = host_dir_for(prefs().GetString("Db"))
+    if not folder:
+        hint("Only the computer hosting the team starts its planner, workers and reviewer. "
+             "The other helpers on this computer are switched from the team list (right-click one).")
+        return
+    cfg = hosting.host_config(folder)
+    current = cfg.get("agent_client") or prefs().GetString("AgentClient") or "claude"
+    installed = [k for k in CLIENTS if agent_ready(k)]
+    if not installed:
+        hint("No AI is installed on this computer yet, so the team server has nothing to start. "
+             "Install Claude Code, Codex or OpenCode first.")
+        return
+    choices = {f"{CLIENTS[k]['label']}" + (" (now)" if k == current else ""): k for k in installed}
+    pick, ok = QtGui.QInputDialog.getItem(
+        Gui.getMainWindow(), "Team workers' AI",
+        "The AI the team server starts for its planner, workers and reviewer:",
+        list(choices), 0, False)
+    if not ok:
+        return
+    key = choices.get(pick)
+    if not key:
+        return
+    if not hosting.set_agent_client(folder, key):
+        hint("Couldn't change the workers' AI: this computer doesn't host this team any more.")
+        return
+    prefs().SetString("AgentClient", key)
+    say(f"Team workers now start on {CLIENTS[key]['label']}. Work already running is stopped and "
+        "picked back up on it.")
 
 
 def restart_helpers():

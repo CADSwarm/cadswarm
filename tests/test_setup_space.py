@@ -190,3 +190,78 @@ def test_nvm_installs_are_ordered_by_version_not_text():
     paths = [f"/h/.nvm/versions/node/v{v}/bin/claude" for v in ("9.11.2", "22.1.0", "18.20.4")]
     newest = sorted(paths, key=agent_setup._node_version, reverse=True)[0]
     assert "v22.1.0" in newest
+
+
+def test_switching_a_helpers_ai_keeps_its_seat_and_writes_the_new_cli(tmp_path, monkeypatch):
+    """A Claude helper running out of credit switches to OpenCode in place: same member, same folder,
+    same sign-in, and no second invite is spent."""
+    calls = []
+    monkeypatch.setattr(agent_setup, "redeem", fake_redeem(calls))
+    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
+    agent_setup.write_agent_config(str(tmp_path), "claude", t, "dana-claude", python="python")
+    ident = (tmp_path / ".cadswarm" / "identity.json").read_text()
+    assert (tmp_path / ".mcp.json").exists()
+
+    written = agent_setup.switch_helper_client(str(tmp_path), "opencode", python="python",
+                                               model="bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+                                               project_name="Robot arm")
+    cfg = json.load(open(tmp_path / ".cadswarm" / "config.json"))
+    assert cfg["client"] == "opencode" and cfg["name"] == "dana-claude" and cfg["db"] == "d"
+    assert cfg["model"] == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    assert cfg["project"] == "Robot arm"
+    assert (tmp_path / ".cadswarm" / "identity.json").read_text() == ident and len(calls) == 1
+    oc = json.load(open(tmp_path / "opencode.json"))
+    assert oc["model"] == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    assert "cadswarm" in oc["mcp"] and "cadswarm:begin" in (tmp_path / "AGENTS.md").read_text()
+    assert str(tmp_path / "opencode.json") in written
+    # The start script now starts the new AI (so "open it in a terminal" agrees with the runner).
+    script = (tmp_path / ".cadswarm" / ("start-helper.cmd" if os.name == "nt" else "start-helper.sh")).read_text()
+    assert "opencode" in script
+    # Back to Claude: the pick stays on the folder for a later switch, and its own config is written.
+    agent_setup.switch_helper_client(str(tmp_path), "claude", python="python", project_name="Robot arm")
+    cfg = json.load(open(tmp_path / ".cadswarm" / "config.json"))
+    assert cfg["client"] == "claude" and cfg["model"] == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    assert (tmp_path / ".cadswarm" / "identity.json").read_text() == ident and len(calls) == 1
+
+
+def test_a_switch_to_opencode_without_a_pick_follows_the_persons_model(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".config" / "opencode").mkdir(parents=True)
+    (home / ".config" / "opencode" / "opencode.json").write_text(json.dumps(
+        {"provider": {"bitdeer": {"models": {"deepseek-ai/DeepSeek-V4.1-Flash-1017": {"name": "DeepSeek"}}}}}))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setattr(agent_setup, "redeem", fake_redeem([]))
+    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
+    agent_setup.write_agent_config(str(tmp_path), "claude", t, "dana-claude", python="python")
+    agent_setup.switch_helper_client(str(tmp_path), "opencode", python="python")
+    assert agent_setup.helper_model(str(tmp_path)) == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+    assert json.load(open(tmp_path / "opencode.json"))["model"] == "bitdeer/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+
+
+def test_switching_refuses_what_is_not_a_connected_helper(tmp_path):
+    with pytest.raises(ValueError, match="isn't an AI helper"):
+        agent_setup.switch_helper_client(str(tmp_path), "opencode", python="python")
+    assert not (tmp_path / "opencode.json").exists()
+    # A helper folder whose sign-in is gone must be set up again, not silently switched.
+    (tmp_path / ".cadswarm").mkdir()
+    (tmp_path / ".cadswarm" / "config.json").write_text(json.dumps({"db": "d", "name": "dana", "client": "claude"}))
+    with pytest.raises(ValueError, match="fresh invite"):
+        agent_setup.switch_helper_client(str(tmp_path), "opencode", python="python")
+    assert not (tmp_path / "opencode.json").exists()
+
+
+def test_a_refused_new_cli_config_leaves_the_helper_as_it_was(tmp_path, monkeypatch):
+    """A Codex config we can't safely edit must not move the helper: the old AI keeps working."""
+    monkeypatch.setattr(agent_setup, "redeem", fake_redeem([]))
+    t = {"v": 1, "uri": "u", "db": "d", "token": "x", "kind": "agent", "role": "member", "host_addr": ""}
+    agent_setup.write_agent_config(str(tmp_path), "claude", t, "dana-claude", python="python")
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "config.toml").write_text("[mcp_servers.cadswarm]\ncommand = 'theirs'\n")
+    with pytest.raises(ValueError, match="merge it by hand"):
+        agent_setup.switch_helper_client(str(tmp_path), "codex", python="python")
+    cfg = json.load(open(tmp_path / ".cadswarm" / "config.json"))
+    assert cfg["client"] == "claude"
