@@ -397,6 +397,12 @@ impl Orchestrator {
                        agent_checked: Instant::now(), cleaned: HashSet::new(), last_sweep: None }
     }
 
+    /// True while an agent this host started is working: a planner, worker, reviewer or handoff.
+    pub fn busy(&self) -> bool {
+        !self.handoffs.is_empty()
+            || self.runs.values().any(|rt| rt.planner.is_some() || rt.reviewer.is_some() || !rt.workers.is_empty())
+    }
+
     /// The status of the newest member row with this name ("" when there is none).
     fn member_status(space: &Space, name: &str) -> String {
         space.members().into_iter()

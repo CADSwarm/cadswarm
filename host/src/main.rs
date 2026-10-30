@@ -229,11 +229,13 @@ fn run(cfg: &HostConfig) -> Result<()> {
             if last_tick.map_or(true, |t| t.elapsed() >= Duration::from_secs(2)) {
                 last_tick = Some(std::time::Instant::now());
                 orchestrator.tick(&space, helper.as_mut());
+                power::set_busy(orchestrator.busy());
             }
             continue;
         }
         last_tick = Some(std::time::Instant::now());
         orchestrator.tick(&space, helper.as_mut());
+        power::set_busy(orchestrator.busy());
         std::thread::sleep(Duration::from_millis(100));
     }
 }
