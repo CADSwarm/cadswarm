@@ -188,6 +188,12 @@ pub fn forget_identity(cfg: &HostConfig, name: &str) {
     }
 }
 
+/// Run `cmd` in `dir`. PWD too: opencode takes its project folder from it, and a host started from a
+/// shell carries that shell's PWD, which would send the agent there without its .cadswarm config.
+fn run_in(cmd: &mut Command, dir: &Path) {
+    cmd.current_dir(dir).env("PWD", dir);
+}
+
 impl Agent {
     /// `ticket` is an agent invite minted by the host.
     pub fn spawn(cfg: &HostConfig, name: &str, ticket: &str, prompt: &str) -> Result<Agent> {
@@ -225,8 +231,8 @@ impl Agent {
         let (program, args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
         let exe = if cfg.agent_command.is_empty() { find_cli(&program)? } else { PathBuf::from(&program) };
         let mut cmd = Command::new(exe);
+        run_in(&mut cmd, &dir);
         cmd.args(&args)
-            .current_dir(&dir)
             .stdin(if cfg.agent_client == "opencode" && cfg.agent_command.is_empty() {
                 Stdio::piped()
             } else {
@@ -430,6 +436,18 @@ mod tests {
         assert_eq!((p.as_str(), a[0].as_str(), a[1].as_str()), ("opencode", "run", "--standalone"));
         assert!(!a.contains(&"build it".to_string()), "the prompt goes in on stdin: {a:?}");
         assert!(agent_command("gpt", &[], dir, "x").is_err());
+    }
+
+    #[test]
+    fn an_agent_runs_in_its_own_folder_even_when_the_host_inherited_a_shells_pwd() {
+        // opencode takes its project folder from $PWD: a host started from a shell elsewhere sent every
+        // agent there, without its .cadswarm config, and each one exited without planning anything.
+        let dir = Path::new("D:/agents/planner-1");
+        let mut cmd = Command::new("opencode");
+        run_in(&mut cmd, dir);
+        assert_eq!(cmd.get_current_dir(), Some(dir));
+        let pwd = cmd.get_envs().find(|(k, _)| *k == "PWD").and_then(|(_, v)| v);
+        assert_eq!(pwd, Some(dir.as_os_str()));
     }
 
     fn cfg(client: &str, command: Vec<String>, data: PathBuf) -> HostConfig {
