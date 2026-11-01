@@ -232,6 +232,8 @@ struct Runtime {
     progress: Progress,
     /// No new agent for this brief before then (the join/leave storm fix).
     retry_at: Option<Instant>,
+    /// The longest any worker of the current generation ran before it exited (see AGENT_STARTED).
+    workers_ran: Duration,
     /// The folder of the last agent that failed to start, for its log.
     last_failed: Option<String>,
     /// When this brief last started a worker; a top-up waits TOP_UP_AFTER from then, so tasks nobody
@@ -419,6 +421,10 @@ impl Orchestrator {
     fn finished(space: &Space, a: &mut Agent) -> bool {
         if !a.alive() {
             return true;
+        }
+        // Its heartbeats stopped with the computer; give it a moment to reconnect before calling it gone.
+        if a.just_woke() {
+            return false;
         }
         if !unusable_member(&Self::member_status(space, &a.name)) {
             return false;
@@ -622,6 +628,7 @@ impl Orchestrator {
         let mut still_alive: Vec<Agent> = Vec::new();
         for mut w in rt.workers.drain(..) {
             if Self::finished(space, &mut w) {
+                rt.workers_ran = rt.workers_ran.max(w.ran());
                 Self::retire_agent(&self.cfg, space, &w.name);
             } else {
                 still_alive.push(w);
@@ -719,7 +726,12 @@ impl Orchestrator {
             }
         }
         if workers_was && workers_alive == 0 {
-            if unproductive(state.done, rt.done_at_spawn, state.open, state.active) && !state.exporting {
+            let ran = std::mem::take(&mut rt.workers_ran);
+            if ran >= crate::agents::AGENT_STARTED {
+                // It worked for a while (stopped at the hard limit, or for going quiet): the CLI starts
+                // fine, so this is not a failed start; the next generation picks up where it left off.
+                rt.retry_at = None;
+            } else if unproductive(state.done, rt.done_at_spawn, state.open, state.active) && !state.exporting {
                 let name = format!("worker{}-{}", rt.spawned, brief_suffix(&b.id));
                 Self::record_failure(rt, &name, "it exited before finishing a task");
             } else {

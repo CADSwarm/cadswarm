@@ -12,6 +12,13 @@ use std::time::{Duration, Instant};
 pub const AGENT_IDLE: Duration = Duration::from_secs(15 * 60);
 /// Even a busy agent stops here; a fresh one picks up what it left.
 pub const AGENT_MAX_RUN: Duration = Duration::from_secs(2 * 60 * 60);
+/// The host looks at its agents every few seconds, and a slow op holds it up for a couple of minutes at
+/// most. A longer gap between two looks means the computer slept: that time is nobody's work.
+pub const SLEPT_AFTER: Duration = Duration::from_secs(5 * 60);
+/// After a sleep, agents need a moment to reconnect before their member row looks alive again.
+pub const WAKE_GRACE: Duration = Duration::from_secs(3 * 60);
+/// An agent that ran this long got going; if it then stops without finishing a task, its CLI works.
+pub const AGENT_STARTED: Duration = Duration::from_secs(10 * 60);
 
 pub struct Agent {
     pub name: String,
@@ -21,6 +28,14 @@ pub struct Agent {
     /// The log's size when it last grew, and when: every tool call the agent makes lands there.
     log_len: u64,
     last_activity: Instant,
+    /// When `alive` last looked, and when it last saw the computer wake from a sleep.
+    last_check: Instant,
+    woke: Option<Instant>,
+}
+
+/// How much of `since_check` the computer spent asleep (all of it past SLEPT_AFTER counts as sleep).
+pub fn slept(since_check: Duration) -> Option<Duration> {
+    (since_check > SLEPT_AFTER).then_some(since_check)
 }
 
 /// Whether to stop an agent that has run for `ran` and been quiet for `quiet`. A wall-clock limit alone
@@ -245,11 +260,21 @@ impl Agent {
             stdin.write_all(prompt.as_bytes()).context("sending the prompt to the agent")?;
         }
         let now = Instant::now();
-        Ok(Agent { name: name.into(), child, started: now, log: dir.join("agent.log"), log_len: 0, last_activity: now })
+        Ok(Agent { name: name.into(), child, started: now, log: dir.join("agent.log"), log_len: 0, last_activity: now,
+                   last_check: now, woke: None })
     }
 
     /// False once it exited, or was stopped for going quiet or running past the hard limit.
     pub fn alive(&mut self) -> bool {
+        // On a laptop that slept for a day, Instant still counts the day: without this every agent is
+        // "past the hard limit" the moment it wakes, mid-task, and the brief starts over.
+        if let Some(gap) = slept(self.last_check.elapsed()) {
+            eprintln!("[host] {}: the computer slept {} min; not counting it against the agent", self.name, gap.as_secs() / 60);
+            self.started += gap;
+            self.last_activity += gap;
+            self.woke = Some(Instant::now());
+        }
+        self.last_check = Instant::now();
         // Through an open handle: Windows updates a file's listed size and time lazily while another
         // process holds it open for writing.
         if let Ok(len) = std::fs::File::open(&self.log).and_then(|f| f.metadata()).map(|m| m.len()) {
@@ -265,6 +290,16 @@ impl Agent {
             return false;
         }
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// How long it has run, not counting time the computer slept.
+    pub fn ran(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    /// True for a few minutes after the computer woke, while the agent reconnects to the team.
+    pub fn just_woke(&self) -> bool {
+        self.woke.is_some_and(|t| t.elapsed() < WAKE_GRACE)
     }
 
     /// Stop it and everything it started. On Windows the MCP server is a grandchild process: killing
@@ -405,6 +440,14 @@ mod tests {
         assert!(!agent_stalled(min(46), min(0)), "still making tool calls after 46 minutes");
         assert!(agent_stalled(min(20), min(16)), "nothing written for 16 minutes");
         assert!(agent_stalled(min(121), min(0)), "past the hard limit");
+    }
+
+    #[test]
+    fn a_long_gap_between_looks_is_sleep_and_a_slow_op_is_not() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(slept(Duration::from_secs(2)), None, "an ordinary tick");
+        assert_eq!(slept(min(3)), None, "a slow op held the host up");
+        assert_eq!(slept(min(1850)), Some(min(1850)), "the laptop slept overnight");
     }
 
     #[test]
