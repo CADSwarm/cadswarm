@@ -99,6 +99,9 @@ class OpError(Exception):
 
 DOC_PATH = None
 doc = None
+# The model file's (size, mtime) while it holds exactly what is in memory, else None. Set by a save and by
+# opening the file; cleared by every mutation until its save.
+ON_DISK = None
 
 
 def open_document(path):
@@ -106,6 +109,7 @@ def open_document(path):
     DOC_PATH = os.path.abspath(path)
     if os.path.exists(DOC_PATH):
         doc = FreeCAD.openDocument(DOC_PATH)
+        mark_on_disk()
     else:
         doc = FreeCAD.newDocument("CadSwarm")
     doc.UndoMode = 1  # required: without it abortTransaction() silently keeps changes
@@ -125,6 +129,27 @@ def params_sheet():
     return sheet
 
 
+def mark_on_disk():
+    global ON_DISK
+    st = os.stat(DOC_PATH)
+    ON_DISK = (st.st_size, st.st_mtime_ns)
+
+
+def snapshot_copy(path):
+    """Write the document to `path` for a child process (a part script, a clash check). The saved model
+    file, when it is current, is copied in milliseconds; saveCopy re-serialises every shape, which took
+    9 s on the 18 MB IS350 model before every script and every interference check."""
+    try:
+        st = os.stat(DOC_PATH)
+        current = ON_DISK == (st.st_size, st.st_mtime_ns)
+    except OSError:
+        current = False
+    if current:
+        shutil.copyfile(DOC_PATH, path)
+    else:
+        doc.saveCopy(path)
+
+
 SAVE_ATTEMPTS = 6
 SAVE_BACKOFF = 0.15  # seconds, growing: ~2s in all before giving up
 
@@ -138,6 +163,7 @@ def save():
     for attempt in range(SAVE_ATTEMPTS):
         try:
             os.replace(tmp, DOC_PATH)
+            mark_on_disk()
             return
         except PermissionError as e:
             if attempt == SAVE_ATTEMPTS - 1:
@@ -449,7 +475,7 @@ def op_run_part_script(a):
     Part::Feature `name` here. The child can't touch the live doc: only the BREP and `result` come back."""
     code = a.get("code", "")
     try:
-        reply = sandbox.run_script(sys.executable, doc.saveCopy, {
+        reply = sandbox.run_script(sys.executable, snapshot_copy, {
             "code": code, "params": params_dict(),
             # test hook: prove the OS boundary on its own, with the in-script guards off
             "guards": not os.environ.get("CADSWARM_TEST_NO_AST_GUARD")})
@@ -768,6 +794,8 @@ MUTATIONS = {
 
 
 def mutate(op, args, allowed):
+    global ON_DISK
+    was_on_disk, ON_DISK = ON_DISK, None
     before = snapshot()
     doc.openTransaction(f"cadswarm:{op}")
     try:
@@ -790,7 +818,12 @@ def mutate(op, args, allowed):
             raise OpError("recompute_error", f"Objects failed to recompute: {broken}")
         # Persist while the transaction is still open: if the file can't be written the abort below
         # puts memory back to match the disk (and the hub, which records nothing for a failed op).
-        save()
+        # A script that only measured (no `shape`) changed nothing: the file on disk is still the model.
+        if op == "run_part_script" and "name" not in (result or {}) and not (created or deleted or modified
+                                                                            or recomputed):
+            ON_DISK = was_on_disk
+        else:
+            save()
         doc.commitTransaction()
     except Exception:
         doc.abortTransaction()
@@ -939,7 +972,7 @@ def q_interference(a):
     run_dir = tempfile.mkdtemp(prefix="cadswarm-clash-")
     try:
         snap = os.path.join(run_dir, "model.FCStd")
-        doc.saveCopy(snap)
+        snapshot_copy(snap)
         child = subprocess.Popen(
             [sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "clash_child.py"),
              snap, json.dumps(pairs), repr(tol)],

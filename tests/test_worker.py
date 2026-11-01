@@ -379,6 +379,31 @@ def test_brief_hold_is_waited_out(fc):
     assert resp["created"] == ["Plate"]
 
 
+MEASURE_PLATE = "result = round(doc.getObject('Plate').Shape.Volume)"
+
+
+def test_a_measuring_script_leaves_the_saved_model_alone(fc):
+    # Re-saving an unchanged 18 MB model cost 9 s per measuring script, three times over with three helpers.
+    c, model = fc
+    c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10, "Width": 10, "Height": 10}})
+    before = os.stat(model).st_mtime_ns
+    r = c.call("run_part_script", {"code": MEASURE_PLATE})
+    assert r["result"]["result"] == 1000
+    assert os.stat(model).st_mtime_ns == before
+
+
+def test_a_script_sees_the_change_made_just_before_it(fc):
+    # Scripts read a copy of the saved model when it is current: it must never be an older one.
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10, "Width": 10, "Height": 10}})
+    assert c.call("run_part_script", {"code": MEASURE_PLATE})["result"]["result"] == 1000
+    c.call("set_props", {"name": "Plate", "props": {"Length": 20}})
+    assert c.call("run_part_script", {"code": MEASURE_PLATE})["result"]["result"] == 2000
+    c.call("run_part_script", {"name": "Plate2", "code": "import Part\nshape = Part.makeBox(5, 5, 5)"})
+    assert c.call("run_part_script", {"code": "result = round(doc.getObject('Plate2').Shape.Volume)"})[
+        "result"]["result"] == 125
+
+
 def test_a_script_shape_for_a_part_with_a_bound_placement_comes_back_with_a_warning(fc):
     """Built at world coordinates, then placed again by Params: TrunkLid and both taillights landed metres
     behind the car this way, and nothing said so."""

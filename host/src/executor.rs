@@ -242,11 +242,13 @@ pub fn run_op(
     }
     let after = std::time::Instant::now();
     let mut objects = Value::Array(vec![]);
-    if done.ok && op.mutating {
+    let names = touched(&done);
+    // A helper's measuring script is a mutating op that changed nothing: re-reading every object's
+    // summary after it cost 8 s on the IS350 model, and helpers run one of those every minute or so.
+    if done.ok && op.mutating && !(names.is_empty() && done.deleted.is_empty()) {
         // The op is already committed; a refresh failure only leaves object details stale.
-        // `refresh` reads no names as "every part": an op that changed nothing (a helper's test script)
-        // must not re-mesh and re-upload the whole model, which held up the queue for a minute per op.
-        let names = touched(&done);
+        // `refresh` reads no names as "every part": a delete must not re-mesh and re-upload the whole
+        // model, which held up the queue for a minute per op.
         match refresh(space, worker, &names, !names.is_empty()) {
             Ok(all) => objects = touched_objects(&all, &names),
             Err(e) => eprintln!("[host] refresh after op {} failed: {e:#}", op.id),
