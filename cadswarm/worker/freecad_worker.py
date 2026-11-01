@@ -192,11 +192,20 @@ _MASS_CACHE = {}
 _BOX_CACHE = {}
 
 
+def sub_counts(shape):
+    """(faces, edges, vertices). len(shape.Edges) builds a Python object per edge: 2 s across the Lexus
+    for the three counts, and every mutating op fingerprints every object twice."""
+    try:
+        return tuple(shape.countSubElements(k) for k in ("Face", "Edge", "Vertex"))
+    except Exception:  # an older FreeCAD without countSubElements
+        return len(shape.Faces), len(shape.Edges), len(shape.Vertexes)
+
+
 def tight_box(shape):
     """The shape's real extent. Shape.BoundBox is built from BSpline control points and ran up to 170 mm
     outside the Lexus parts: a helper read a correct boolean cut as leaking 68 mm and gave up on the bumper.
     Cached per shape handle, since the exact box is ~30 ms a part."""
-    key = (shape.hashCode(), len(shape.Faces), len(shape.Edges), len(shape.Vertexes))
+    key = (shape.hashCode(), *sub_counts(shape))
     box = _BOX_CACHE.get(key)
     if box is None:
         if len(_BOX_CACHE) > 20_000:
@@ -215,13 +224,14 @@ def shape_sig(shape):
     bb = shape.BoundBox
     box = tuple(round(v, 6) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax))
     # The handle alone could be reused by a new shape once the old one is freed: the counts and box guard it.
-    key = (shape.hashCode(), len(shape.Faces), len(shape.Edges), len(shape.Vertexes), box)
+    counts = sub_counts(shape)
+    key = (shape.hashCode(), *counts, box)
     mass = _MASS_CACHE.get(key)
     if mass is None:
         if len(_MASS_CACHE) > 20_000:
             _MASS_CACHE.clear()
         mass = _MASS_CACHE[key] = (round(shape.Volume if shape.Solids else 0.0, 6), round(shape.Area, 6))
-    return (mass[0], mass[1], box, len(shape.Faces))
+    return (mass[0], mass[1], box, counts[0])
 
 
 def value_repr(v):
@@ -795,11 +805,12 @@ MUTATIONS = {
 
 def mutate(op, args, allowed):
     global ON_DISK
-    was_on_disk, ON_DISK = ON_DISK, None
     before = snapshot()
     doc.openTransaction(f"cadswarm:{op}")
     try:
         result = MUTATIONS[op](args)
+        # Only now: a part script takes its snapshot inside the op, while memory still matches the file.
+        was_on_disk, ON_DISK = ON_DISK, None
         doc.recompute()
         after = snapshot()
         created = sorted(set(after) - set(before))
