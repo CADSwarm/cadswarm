@@ -12,6 +12,12 @@ def open_on_start():
     CADSwarm in the workbench list. That is what "sometimes it doesn't connect" looked like. The
     panel rejoins the team by itself (panel.try_auto_rejoin), so this is the whole of "start CADSwarm".
     """
+    try:  # FreeCAD closed while CADSwarm was active last time: give the user their own 3D view colours back
+        from cadswarm.gui import workspace
+        workspace.WORKSPACE.recover()
+    except Exception as e:  # noqa: BLE001
+        import FreeCAD
+        FreeCAD.Console.PrintLog(f"[CADSwarm] workspace recovery: {e}\n")
     try:
         from cadswarm.gui import panel
         if panel.SESSION.panel is None:
@@ -48,20 +54,40 @@ static char * icon_xpm[] = {
         register_command()
         from cadswarm.gui import lighten_ui
         lighten_ui.register_command()
-        # Everything else lives in the team panel's tabs; the toolbar only opens it (and the setup guide).
-        self.appendToolbar("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel"])
+        from cadswarm.gui import workspace
+        workspace.register_command()
+        # While the workbench is active its commands sit in the command ribbon (workspace.py), which hides the
+        # stock toolbars; with the professional look off this toolbar opens the panel and the setup guide.
+        self.appendToolbar("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_ProLook"])
         self.appendMenu("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
                                      "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_Style",
                                      "CadSwarm_Constrain", "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator", "CadSwarm_Interference",
                                      "CadSwarm_Export", "CadSwarm_Lighten", "CadSwarm_OptimizePart", "CadSwarm_RunFea",
                                      "CadSwarm_FeaReports",
-                                     "CadSwarm_Pointers", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
+                                     "CadSwarm_Pointers", "CadSwarm_ProLook", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
                                      "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
 
     def Activated(self):
+        # The professional workspace first (theme, ribbon, status bar), so the panel opens in its colours.
+        # It is defensive throughout: a failure there is logged and never stops the panel or the join.
+        try:
+            from cadswarm.gui import workspace
+            workspace.WORKSPACE.activate()
+        except Exception as e:  # noqa: BLE001
+            import FreeCAD
+            FreeCAD.Console.PrintWarning(f"[CADSwarm] could not set up the workspace: {e}\n")
         from cadswarm.gui import panel
         panel.show_panel()
         panel.SESSION.try_auto_rejoin()  # first time: opens the setup guide; later: back in your team
+
+    def Deactivated(self):
+        # Another workbench: FreeCAD's own look, toolbars and 3D view colours come back.
+        try:
+            from cadswarm.gui import workspace
+            workspace.WORKSPACE.deactivate()
+        except Exception as e:  # noqa: BLE001
+            import FreeCAD
+            FreeCAD.Console.PrintWarning(f"[CADSwarm] could not restore FreeCAD's look: {e}\n")
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"

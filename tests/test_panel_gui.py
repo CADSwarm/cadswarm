@@ -63,7 +63,7 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert retry["tries"] == 4, retry  # the auto-start join + the 3 tries of the failing one
     assert retry["after_retry"] == "connected" and retry["button_after"] == "Leave", retry
     # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
-    assert [t.split(" ")[0] for t in r["tabs"]] == ["Team", "Tasks", "Activity", "Sizes", "Files", "Library",
+    assert [t.split(" ")[0] for t in r["tabs"]] == ["AI", "Team", "Tasks", "Activity", "Sizes", "Files", "Library",
                                                      "Remote", "Tools"], r["tabs"]
     assert r["sizes"] == [["Pcb l", "65 mm"], ["Wall", "3 mm"]], r["sizes"]
     # Values edit in place, like the site's size fields; files show their size like the site's rows.

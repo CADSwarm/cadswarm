@@ -6,12 +6,12 @@ reads from ``palette(...)`` paints these windows flat white there. Instead the C
 windows carry their own colours, taken from the web app's tokens (``web/src/style.css``),
 so a screenshot of the panel and the site reads as the same product.
 
-Only CadSwarm's own widgets are styled: the stylesheet is set on the panel and each dialog,
-never on QApplication, so FreeCAD's dock chrome and the rest of its UI are left alone.
+Only CadSwarm's own widgets are styled here: the stylesheet is set on the panel and each dialog.
+The whole-application look the CADSwarm workbench wears while it is active (light or dark, blue accent)
+is pro_style.py, applied by workspace.py; it restyles the panel through ``panel_sheet``.
 """
 from string import Template
 
-from PySide import QtGui
 
 # One palette, shared by the panel, the guide and the dialogs.
 BG = "#121212"           # window / page
@@ -28,12 +28,17 @@ OK = "#4fb35a"
 ERR = "#e5534b"
 WARN = "#e3b341"
 
+DISABLED_TEXT = "#6f6c66"
+ACCENT_DISABLED = "#6b4a20"
+HANDLE_HOVER = "#4a4a4a"
+
 _TOKENS = dict(BG=BG, SURFACE=SURFACE, SURFACE_2=SURFACE_2, LINE=LINE, LINE_STRONG=LINE_STRONG,
                TEXT=TEXT, BODY=BODY, MUTED=MUTED, ACCENT=ACCENT, ACCENT_HOVER=ACCENT_HOVER,
-               OK=OK, ERR=ERR, WARN=WARN)
+               OK=OK, ERR=ERR, WARN=WARN, DISABLED_TEXT=DISABLED_TEXT, ACCENT_DISABLED=ACCENT_DISABLED,
+               HANDLE_HOVER=HANDLE_HOVER)
 
 # The team panel (its dock is #CadSwarmTeam, the styled sheet inside it is #cadswarmPanel).
-PANEL = Template("""
+PANEL_TEMPLATE = Template("""
 #CadSwarmTeam { background: $BG; }
 #CadSwarmTeam::title { background: $SURFACE_2; color: $TEXT; padding: 4px 8px; }
 #CadSwarmTeam::close-button, #CadSwarmTeam::float-button { background: transparent; }
@@ -44,13 +49,13 @@ PANEL = Template("""
     border-radius: 6px; background: $SURFACE_2; color: $TEXT; }
 #cadswarmPanel QPushButton:hover { border-color: $ACCENT; }
 #cadswarmPanel QPushButton:pressed { background: $LINE; border-color: $ACCENT; }
-#cadswarmPanel QPushButton:disabled { color: #6f6c66; border-color: $LINE; }
+#cadswarmPanel QPushButton:disabled { color: $DISABLED_TEXT; border-color: $LINE; }
 #cadswarmPanel QPushButton[busy="true"] { background: $ACCENT; border-color: $ACCENT; color: white; }
 #cadswarmPanel QPushButton#primary { background: $ACCENT; border-color: $ACCENT; color: white; font-weight: bold; }
 #cadswarmPanel QPushButton#primary:hover { background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
 #cadswarmPanel QPushButton#primary:pressed, #cadswarmPanel QPushButton#primary[busy="true"] {
     background: $ACCENT_HOVER; border-color: $ACCENT_HOVER; }
-#cadswarmPanel QPushButton#primary:disabled { background: #6b4a20; border-color: #6b4a20; color: #b9b5af; }
+#cadswarmPanel QPushButton#primary:disabled { background: $ACCENT_DISABLED; border-color: $ACCENT_DISABLED; color: #b9b5af; }
 #cadswarmPanel QPushButton#quiet, #cadswarmPanel QPushButton#danger { border: none; background: transparent;
     color: $ACCENT; font-weight: bold; padding: 3px 4px; }
 #cadswarmPanel QPushButton#danger { color: $ERR; font-weight: normal; text-align: left; }
@@ -105,12 +110,13 @@ PANEL = Template("""
 #cadswarmPanel QToolTip { background: $SURFACE; color: $TEXT; border: 1px solid $LINE; }
 #cadswarmPanel QScrollBar:vertical { background: $BG; width: 12px; margin: 0; }
 #cadswarmPanel QScrollBar::handle:vertical { background: $LINE_STRONG; border-radius: 6px; min-height: 24px; }
-#cadswarmPanel QScrollBar::handle:vertical:hover { background: #4a4a4a; }
+#cadswarmPanel QScrollBar::handle:vertical:hover { background: $HANDLE_HOVER; }
 #cadswarmPanel QScrollBar:horizontal { background: $BG; height: 12px; margin: 0; }
 #cadswarmPanel QScrollBar::handle:horizontal { background: $LINE_STRONG; border-radius: 6px; min-width: 24px; }
 #cadswarmPanel QScrollBar::add-line, #cadswarmPanel QScrollBar::sub-line { height: 0; width: 0; }
 #cadswarmPanel QScrollBar::add-page, #cadswarmPanel QScrollBar::sub-page { background: transparent; }
-""").substitute(_TOKENS)
+""")
+PANEL = PANEL_TEMPLATE.substitute(_TOKENS)
 
 # A CadSwarm dialog (the setup guide, the library, the optimization dialogs). Unscoped, because the
 # sheet is set on the dialog itself and only reaches that dialog's own widgets.
@@ -186,6 +192,14 @@ QScrollBar::handle:horizontal { background: $LINE_STRONG; border-radius: 6px; mi
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """).substitute(_TOKENS)
+
+
+def panel_sheet(tokens):
+    """The team panel's stylesheet in other colours (the pro workspace's light or dark look). Missing tokens
+    fall back to the CadSwarm dark values."""
+    values = dict(_TOKENS)
+    values.update({k: v for k, v in (tokens or {}).items() if k in _TOKENS})
+    return PANEL_TEMPLATE.substitute(values)
 
 
 def apply(widget, style=DIALOG):

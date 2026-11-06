@@ -33,7 +33,7 @@ from ..naming import MIRROR_DOC, is_mirror_doc, mirror_label
 from ..paths import app_dir
 from ..space_hub import SpaceHub
 from ..teams import recent_teams, remember_team
-from . import fea_ui, library_ui, lighten_ui, overlay, panes, projects_ui, style_ui, theme
+from . import build_pane, fea_ui, library_ui, lighten_ui, overlay, panes, projects_ui, style_ui, theme, workspace
 
 PARAMS_PATH = "User parameter:BaseApp/Preferences/Mod/CadSwarm"
 HEARTBEAT_SECONDS = 10
@@ -521,6 +521,9 @@ class Session:
             elif kind == "suggestions":
                 if self.panel:
                     self.panel.show_suggestions(data)
+            elif kind == "build":
+                if self.panel:
+                    self.panel.build_page.show_route(data)
             elif kind == "done":
                 self.finish_async(*data)
             elif kind == "offline":
@@ -942,6 +945,11 @@ class TeamPanel(QtGui.QDockWidget):
         self.tabs.setElideMode(QtCore.Qt.ElideNone)
         lay.addWidget(self.tabs, 1)
 
+        # ------------------------------------------------------------ AI Build
+        # One prompt becomes a numbered plan; the steps, their op feed and "N of M done · now: X" (build_pane.py).
+        self.build_page = build_pane.BuildPage(session)
+        self.tabs.addTab(self.build_page, "AI Build")
+
         # ---------------------------------------------------------------- Team
         page = QtGui.QWidget()
         tl = page_layout(page)
@@ -1247,7 +1255,7 @@ class TeamPanel(QtGui.QDockWidget):
 
         w.setObjectName("cadswarmPanel")
         # Style the dock itself (self), so the sheet reaches the dock, the scroll area and the page.
-        self.setStyleSheet(PANEL_STYLE)
+        self.setStyleSheet(workspace.panel_style())
         # A small screen scrolls instead of squashing or cropping anything.
         scroll = QtGui.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1287,6 +1295,8 @@ class TeamPanel(QtGui.QDockWidget):
             self.files_page.refresh_if_stale()
         if self.tabs.widget(index) is self.sizes_page:
             self.sizes_page.render(self.session)
+        if self.tabs.widget(index) is getattr(self, "build_page", None):
+            self.build_page.render(self.session)
 
     def show_tab(self, page):
         self.tabs.setCurrentWidget(page)
@@ -1520,6 +1530,7 @@ class TeamPanel(QtGui.QDockWidget):
             if getattr(self, "remote_page", None) is not None:
                 self.remote_qr.clear()
                 self.remote_link.clear()
+        workspace.WORKSPACE.update(s)  # the status bar's connection, editing and avatars follow
 
     def banner_action(self):
         s = self.session
@@ -1545,6 +1556,10 @@ class TeamPanel(QtGui.QDockWidget):
     def render(self, s):
         self.show_state(s)
         self.busy_rows = []
+        try:
+            self.build_page.render(s)
+        except Exception as e:  # noqa: BLE001 - the step view must never stop the rest of the panel
+            warn(f"AI Build view: {e}")
         self.render_team(s)
         self.render_tasks(s)
         self.render_chat(s)
@@ -2317,7 +2332,8 @@ CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper",
 PANEL_MIN_WIDTH = 300
 PANEL_WIDTH = 520
 PANEL_SHARE = 0.3   # of the FreeCAD window's width, until someone drags the panel wider or narrower
-# CadSwarm's own dark surface, so the panel reads the same on a light FreeCAD theme (see theme.py).
+# CadSwarm's own dark surface, so the panel reads the same on a light FreeCAD theme (see theme.py). While the
+# workbench's professional look is on, workspace.panel_style() gives the panel that look's colours instead.
 PANEL_STYLE = theme.PANEL
 SUGGEST_SECONDS = 20     # how often the panel re-reads what AI helpers suggested
 SUGGESTIONS_SHOWN = 4    # cards on the Team tab; any more wait in Tools
