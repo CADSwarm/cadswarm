@@ -65,7 +65,7 @@ class Recorder(QtCore.QObject):
 
 recorder = Recorder()
 viewport.installEventFilter(recorder)  # installed first, so it runs after the mouse controls
-navigation.attach()
+navigation.install()  # what InitGui calls at FreeCAD start: it attaches to the views already open
 assert viewport.property("cadswarmMouse"), "mouse controls not attached"
 navigation.attach()  # a second call must not stack a second filter
 

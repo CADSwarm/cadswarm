@@ -245,8 +245,10 @@ def install():
     if _INSTALLED:
         return
     import FreeCADGui as Gui
+    from PySide import QtWidgets
     _INSTALLED = True
-    Gui.getMainWindow().getMdiArea().subWindowActivated.connect(lambda _w: _attach_quietly())
+    # getMainWindow() is a plain QMainWindow to Python (no getMdiArea), so find the MDI area itself.
+    Gui.getMainWindow().findChild(QtWidgets.QMdiArea).subWindowActivated.connect(lambda _w: _attach_quietly())
     _attach_quietly()
 
 
