@@ -163,7 +163,8 @@ async function start(ticket: Ticket | null): Promise<void> {
 
 async function boot() {
   // `?mock`: a scripted team builds a rotor head, no server needed (demos, screenshots, UI work).
-  if (new URLSearchParams(location.search).has('mock')) {
+  // A demo build (VITE_DEMO=1 npm run build) always plays the mock, for hosts that drop the query string.
+  if (new URLSearchParams(location.search).has('mock') || import.meta.env.VITE_DEMO === '1') {
     const { startMockSwarm } = await import('./mock');
     showBuild(startMockSwarm(store).api, 'rotor-head');
     return;
