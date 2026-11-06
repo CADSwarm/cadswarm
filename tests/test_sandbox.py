@@ -150,15 +150,15 @@ def test_ping_reports_the_isolation_level_and_limits(worker):
         assert info["level"] == "appcontainer", info  # verified on this machine; see README for fallbacks
 
 
-def test_run_folders_are_cleaned_up(worker):
-    import tempfile
-    tmp = Path(tempfile.gettempdir())
-    before = set(tmp.glob("cadswarm-run-*"))
-    c = worker()
+def test_run_folders_are_cleaned_up(worker, tmp_path):
+    """Its own temp root: another CADSwarm team (or a live worker) uses the system temp at the same
+    time, and those folders are not this test's business."""
+    root = tmp_path / "sandbox-tmp"
+    c = worker(CADSWARM_SANDBOX_TMP=root)
     run(c, "shape = Part.makeBox(1, 1, 1)", name="Tidy")
     with pytest.raises(WorkerError):
         run(c, "raise ValueError('x')")
-    assert set(tmp.glob("cadswarm-run-*")) == before
+    assert list(root.glob("cadswarm-run-*")) == []
 
 
 # --------------------------------------------------------------------------
@@ -448,6 +448,40 @@ def test_unit_verdict_mapping():
     with pytest.raises(sb.SandboxError) as e:
         sb._verdict(sb.Outcome(-11, b'{"started": true}\n', b"", False), 5, 100, "x")
     assert e.value.code == "script_error"
+
+
+def test_unit_timeout_names_booleans_run_in_a_loop():
+    from cadswarm.worker import sandbox as sb
+    code = ("fb = doc.getObject('FrontBumper').Shape\n"
+            "def surf(x):\n"
+            "    return fb.common(Part.makeLine(a, b))\n"
+            "for i in range(60):\n"
+            "    s = s.cut(tool)\n"
+            "ys = [fb.fuse(t) for t in tools]\n"
+            "shape = fb.cut(cutter)\n")
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", code)
+    msg = str(e.value)
+    assert e.value.code == "timeout"
+    assert "line 3 (.common)" in msg and "line 5 (.cut)" in msg and "line 6 (.fuse)" in msg
+    assert "line 7" not in msg and "slice" in msg
+    # Point probes are cheap one at a time but not by the thousand in nested loops.
+    scan = ("for x in range(15):\n"
+            "    s.isInside(v, 0.01, True)\n"
+            "    for z in range(9):\n"
+            "        for y in range(111):\n"
+            "            s.isInside(Vector(x, y, z), 0.01, True)\n")
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", scan)
+    assert "line 5 (.isInside in nested loops)" in str(e.value) and "line 2" not in str(e.value)
+    # No boolean in a loop: the generic advice only.
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "shape = a.cut(b)\n")
+    assert "line" not in str(e.value) and "makeCompound" in str(e.value)
+    # Code that doesn't parse still gets the generic message.
+    with pytest.raises(sb.SandboxError) as e:
+        sb._verdict(sb.Outcome(1, b"", b"", True), 5, 100, "x", "for (:\n")
+    assert "Probe in one script" in str(e.value)
 
 
 def test_unit_limits_come_from_env(monkeypatch):

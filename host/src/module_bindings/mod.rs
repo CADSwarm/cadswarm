@@ -42,6 +42,7 @@ pub mod pick_up_task_reducer;
 pub mod pointer_type;
 pub mod preview_type;
 pub mod project_setting_type;
+pub mod prune_history_reducer;
 pub mod put_artifact_reducer;
 pub mod put_component_preview_reducer;
 pub mod put_preview_reducer;
@@ -50,6 +51,7 @@ pub mod redeem_invite_reducer;
 pub mod rejoin_reducer;
 pub mod release_objects_reducer;
 pub mod rename_me_reducer;
+pub mod reopen_task_reducer;
 pub mod report_review_reducer;
 pub mod report_task_reducer;
 pub mod request_handoff_reducer;
@@ -135,6 +137,7 @@ pub use pick_up_task_reducer::pick_up_task;
 pub use pointer_type::Pointer;
 pub use preview_type::Preview;
 pub use project_setting_type::ProjectSetting;
+pub use prune_history_reducer::prune_history;
 pub use put_artifact_reducer::put_artifact;
 pub use put_component_preview_reducer::put_component_preview;
 pub use put_preview_reducer::put_preview;
@@ -143,6 +146,7 @@ pub use redeem_invite_reducer::redeem_invite;
 pub use rejoin_reducer::rejoin;
 pub use release_objects_reducer::release_objects;
 pub use rename_me_reducer::rename_me;
+pub use reopen_task_reducer::reopen_task;
 pub use report_review_reducer::report_review;
 pub use report_task_reducer::report_task;
 pub use request_handoff_reducer::request_handoff;
@@ -291,6 +295,11 @@ pub enum Reducer {
         fence: u32,
         task_id: String,
     },
+    PruneHistory {
+        fence: u32,
+        keep: u32,
+        stale_ms: u64,
+    },
     PutArtifact {
         fence: u32,
         hash: String,
@@ -325,6 +334,11 @@ pub enum Reducer {
     },
     RenameMe {
         name: String,
+    },
+    ReopenTask {
+        fence: u32,
+        task_id: String,
+        reason: String,
     },
     ReportReview {
         fence: u32,
@@ -457,6 +471,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::MarkDelivered { .. } => "mark_delivered",
             Reducer::MovePointer { .. } => "move_pointer",
             Reducer::PickUpTask { .. } => "pick_up_task",
+            Reducer::PruneHistory { .. } => "prune_history",
             Reducer::PutArtifact { .. } => "put_artifact",
             Reducer::PutComponentPreview { .. } => "put_component_preview",
             Reducer::PutPreview { .. } => "put_preview",
@@ -464,6 +479,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::Rejoin { .. } => "rejoin",
             Reducer::ReleaseObjects { .. } => "release_objects",
             Reducer::RenameMe { .. } => "rename_me",
+            Reducer::ReopenTask { .. } => "reopen_task",
             Reducer::ReportReview { .. } => "report_review",
             Reducer::ReportTask { .. } => "report_task",
             Reducer::RequestHandoff { .. } => "request_handoff",
@@ -642,6 +658,15 @@ impl __sdk::Reducer for Reducer {
                     task_id: task_id.clone(),
                 })
             }
+            Reducer::PruneHistory {
+                fence,
+                keep,
+                stale_ms,
+            } => __sats::bsatn::to_vec(&prune_history_reducer::PruneHistoryArgs {
+                fence: fence.clone(),
+                keep: keep.clone(),
+                stale_ms: stale_ms.clone(),
+            }),
             Reducer::PutArtifact {
                 fence,
                 hash,
@@ -699,6 +724,15 @@ impl __sdk::Reducer for Reducer {
             Reducer::RenameMe { name } => {
                 __sats::bsatn::to_vec(&rename_me_reducer::RenameMeArgs { name: name.clone() })
             }
+            Reducer::ReopenTask {
+                fence,
+                task_id,
+                reason,
+            } => __sats::bsatn::to_vec(&reopen_task_reducer::ReopenTaskArgs {
+                fence: fence.clone(),
+                task_id: task_id.clone(),
+                reason: reason.clone(),
+            }),
             Reducer::ReportReview {
                 fence,
                 review_id,

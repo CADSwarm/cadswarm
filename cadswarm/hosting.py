@@ -291,7 +291,16 @@ def find_tool(name, env):
 
 
 def host_bin():
-    return find_tool("cadswarm-host", "CADSWARM_HOST_BIN")
+    """The team server, healing an update that was interrupted while the old one was moved aside."""
+    path = find_tool("cadswarm-host", "CADSWARM_HOST_BIN")
+    if path and not os.path.isfile(path):
+        _restore_missing(path)
+        path = find_tool("cadswarm-host", "CADSWARM_HOST_BIN")
+    if path is None:
+        managed = _managed_host()
+        if _restore_missing(managed):
+            return managed
+    return path
 
 
 def spacetime_bin():
@@ -378,7 +387,30 @@ def _sweep_aside(dest):
         return
     for name in names:
         if name.startswith(prefix):
-            _unlink(os.path.join(folder, name))
+            path = os.path.join(folder, name)
+            if _runs_from(path):
+                continue  # the only working copy if putting the new one in place ever failed
+            _unlink(path)
+
+
+def _restore_missing(dest):
+    """Put a program back under its own name after an update was interrupted while the old copy was
+    moved aside. `dest` is never overwritten; returns the restored path, or None."""
+    if os.path.isfile(dest):
+        return None
+    folder = os.path.dirname(dest)
+    prefix = os.path.basename(dest) + ".old-"
+    try:
+        names = sorted((n for n in os.listdir(folder) if n.startswith(prefix)), reverse=True)
+    except OSError:
+        return None
+    for name in names:
+        try:
+            shutil.copy2(os.path.join(folder, name), dest)  # copy: a running copy keeps its own file
+            return dest
+        except OSError:
+            continue
+    return None
 
 
 def _runs_from(path):
@@ -414,13 +446,22 @@ def _in_place_error(dest, err):
 
 
 def _put_in_place(part, dest):
-    """Finish a download by moving it onto `dest`, keeping a running program out of the way."""
+    """Finish a download by moving it onto `dest`, keeping a running program out of the way.
+
+    Every path ends with a working program under `dest` or the old one still under `dest`: an update
+    that cannot finish must never leave the name empty (a running host would keep going from its
+    moved-aside name and then there is nothing to start tomorrow)."""
     try:
         os.replace(part, dest)
     except OSError as e:
         if not _set_aside_and_replace(part, dest):
-            _unlink(part)
-            raise RuntimeError(_in_place_error(dest, e))
+            try:
+                shutil.copyfile(part, dest)  # a copy can succeed where a rename is being scanned/busy
+                _unlink(part)
+            except OSError:
+                _unlink(part)
+                _restore_missing(dest)
+                raise RuntimeError(_in_place_error(dest, e))
     if os.name != "nt":
         os.chmod(dest, 0o755)
     _sweep_aside(dest)

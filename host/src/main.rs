@@ -9,6 +9,7 @@ mod executor;
 mod guard;
 #[allow(dead_code)]
 mod module_bindings;
+mod power;
 mod space;
 mod ticket;
 mod worker;
@@ -85,6 +86,7 @@ fn main() -> Result<()> {
                 cadswarm_python: python,
                 agent_client: agent,
                 agent_command: Vec::new(),
+                keep_awake: true,
             };
             cfg.save()?;
             println!("wrote {}", HostConfig::path(&cfg.data_dir).display());
@@ -121,7 +123,10 @@ pub fn mint_invite(space: &space::Space, cfg: &HostConfig, kind: &str, role: &st
 fn run(cfg: &HostConfig) -> Result<()> {
     // One host per folder: a second one is refused before it touches the database.
     let _instance = guard::InstanceGuard::acquire(&cfg.data_dir)?;
-    let space = space::Space::connect(cfg)?;
+    if cfg.keep_awake {
+        power::keep_running_in_background();
+    }
+    let mut space = space::Space::connect(cfg)?;
     let mut worker = worker::WorkerDriver::new(
         cfg.freecad_python.clone(),
         cfg.worker_script.clone(),
@@ -141,7 +146,7 @@ fn run(cfg: &HostConfig) -> Result<()> {
             None
         }
     };
-    executor::refresh(&space, &mut worker, &[])?;
+    executor::refresh(&space, &mut worker, &[], false)?;
     executor::write_status(cfg, &mut worker)?;
     let mut orchestrator = briefs::Orchestrator::new(cfg.clone());
     println!("cadswarm-host running on {} / {} (fence {})", cfg.uri, cfg.db, space.fence());
@@ -156,7 +161,42 @@ fn run(cfg: &HostConfig) -> Result<()> {
     let mut retired = false;
     // Heartbeat like every other member, well inside the module's 30s stale window.
     let mut last_beat: Option<std::time::Instant> = None;
+    // The SDK never reopens a closed WebSocket (SpacetimeDB restart, network drop, idle timeout):
+    // without this the host stays offline until someone restarts it. Retry at most every 10s.
+    let mut last_reconnect: Option<std::time::Instant> = None;
+    // Keep the op history small (see Space::prune_history): at start, then every few minutes. A queued
+    // op older than the stale window was left by an agent that gave up long ago; replaying its script
+    // on today's model would undo newer work.
+    let mut last_prune: Option<std::time::Instant> = None;
+    let mut last_tick: Option<std::time::Instant> = None;
     loop {
+        if last_prune.map_or(true, |t| t.elapsed() >= Duration::from_secs(600)) && space.is_active() {
+            last_prune = Some(std::time::Instant::now());
+            if let Err(e) = space.prune_history(200, Duration::from_secs(3600)) {
+                eprintln!("[host] pruning op history failed: {e:#}");
+            }
+        }
+        if !space.is_active() {
+            if last_reconnect.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
+                last_reconnect = Some(std::time::Instant::now());
+                match space::Space::connect(cfg) {
+                    Ok(s) => {
+                        space = s;
+                        retired = false;
+                        // An op whose start_op failed with the connection is still queued and may run
+                        // now; one that did start is no longer queued, and start_op refuses a repeat.
+                        tried.clear();
+                        if let Err(e) = executor::refresh(&space, &mut worker, &[], false) {
+                            eprintln!("[host] refresh after reconnect failed: {e:#}");
+                        }
+                        println!("[host] reconnected (fence {})", space.fence());
+                    }
+                    Err(e) => eprintln!("[host] reconnect failed: {e:#}"),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
         if retired || space.retired() {
             if last_revive.map_or(true, |t| t.elapsed() >= Duration::from_secs(10)) {
                 last_revive = Some(std::time::Instant::now());
@@ -184,9 +224,18 @@ fn run(cfg: &HostConfig) -> Result<()> {
             if let Err(e) = executor::run_op(&space, &mut worker, helper.as_mut(), cfg, &op) {
                 eprintln!("[host] op {} failed to run: {e:#}", op.id);
             }
+            // Busy helpers keep the queue full for half an hour at a time; the orchestrator (agent
+            // liveness, spawning, handoffs) must still get its turn.
+            if last_tick.map_or(true, |t| t.elapsed() >= Duration::from_secs(2)) {
+                last_tick = Some(std::time::Instant::now());
+                orchestrator.tick(&space, helper.as_mut());
+                power::set_busy(orchestrator.busy());
+            }
             continue;
         }
+        last_tick = Some(std::time::Instant::now());
         orchestrator.tick(&space, helper.as_mut());
+        power::set_busy(orchestrator.busy());
         std::thread::sleep(Duration::from_millis(100));
     }
 }

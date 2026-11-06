@@ -57,6 +57,15 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
   already repeat a size, `auto_constrain` previews the shared sizes, equal-spacing patterns and
   shaft/hole fits it can infer; apply the ones you mean.
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
+- A shape judged on how it looks (car body, fairing, helmet, product exterior) must be lofted, not
+  extruded: call `surface_quality` before finishing it. A bracket, plate or enclosure is allowed to be a box.
+- When your person says it looks wrong, record their exact words with `record_feedback` (`by="person"`)
+  and attach their photos with `add_reference`; before rebuilding, read `model_feedback` and open the references.
+- For a real, named thing (a car model, a phone, a connector) find reference images and published
+  dimensions first: `add_reference` (an `image_url` or a photo your person sent), then `list_references`
+  and open them. Never invent proportions for a named product.
+- `render_views` gives you PNGs of the model (front, side, top, three-quarter). Open them before calling
+  a shape done: the numbers cannot show a hole, a floating part or a wrong silhouette.
 - Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
   from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
   you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you

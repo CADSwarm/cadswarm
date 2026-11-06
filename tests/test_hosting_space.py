@@ -296,6 +296,8 @@ def test_an_unreplaceable_program_names_the_team_still_running_it(tmp_path, monk
     dest.write_bytes(b"old")
     src.write_bytes(b"new")
     monkeypatch.setattr(hosting.os, "replace", lambda a, b: (_ for _ in ()).throw(OSError(32, "in use")))
+    monkeypatch.setattr(hosting.shutil, "copyfile",
+                        lambda a, b: (_ for _ in ()).throw(OSError(13, "denied")))  # a real lock blocks both
     monkeypatch.setattr(hosting, "_runs_from", lambda path: [4242])
     monkeypatch.setattr(hosting, "_command_line",
                         lambda pid: 'cadswarm-host.exe --data "C:\\Users\\waves\\Documents\\CadSwarm\\Racing Drone" run')
@@ -669,3 +671,44 @@ def test_read_maincloud_login_says_nothing_when_signed_out(monkeypatch):
     monkeypatch.setattr(hosting.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="You are not logged in"))
     assert hosting._read_maincloud_login() == ""
+
+
+def test_a_program_left_missing_by_an_interrupted_update_is_restored(tmp_path):
+    dest = tmp_path / "cadswarm-host.exe"
+    aside = tmp_path / "cadswarm-host.exe.old-123-1000"
+    aside.write_bytes(b"old")
+    assert hosting._restore_missing(str(dest)) == str(dest)
+    assert dest.read_bytes() == b"old" and aside.exists(), "the moved-aside copy is kept"
+
+
+def test_restore_never_overwrites_a_program_in_place(tmp_path):
+    dest = tmp_path / "cadswarm-host.exe"
+    dest.write_bytes(b"new")
+    (tmp_path / "cadswarm-host.exe.old-1-2").write_bytes(b"old")
+    assert hosting._restore_missing(str(dest)) is None
+    assert dest.read_bytes() == b"new"
+
+
+def test_sweep_keeps_the_copy_a_running_program_uses(tmp_path, monkeypatch):
+    dest = tmp_path / "cadswarm-host.exe"
+    running = tmp_path / "cadswarm-host.exe.old-9-100"
+    idle = tmp_path / "cadswarm-host.exe.old-9-200"
+    running.write_bytes(b"running")
+    idle.write_bytes(b"idle")
+    monkeypatch.setattr(hosting, "_runs_from", lambda p: [9] if str(p) == str(running) else [])
+    hosting._sweep_aside(str(dest))
+    assert running.exists() and not idle.exists()
+
+
+def test_a_copy_finishes_an_update_a_rename_could_not(tmp_path, monkeypatch):
+    """Antivirus or a transient share can refuse a rename while a plain copy still lands."""
+    src, folder = tmp_path / "asset.exe", tmp_path / "bin"
+    folder.mkdir()
+    dest = folder / "cadswarm-host.exe"
+    dest.write_bytes(b"old")
+    src.write_bytes(b"new")
+    monkeypatch.setattr(hosting.os, "replace", lambda a, b: (_ for _ in ()).throw(OSError(32, "in use")))
+    monkeypatch.setattr(hosting, "_runs_from", lambda path: [])
+    hosting._download(src.as_uri(), str(dest))
+    assert dest.read_bytes() == b"new"
+    assert not (folder / "cadswarm-host.exe.part").exists()

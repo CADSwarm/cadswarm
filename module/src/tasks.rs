@@ -188,6 +188,36 @@ pub fn cancel_task(ctx: &ReducerContext, fence: u32, task_id: String, reason: St
     Ok(())
 }
 
+/// A person reopens a blocked task after answering its blocker: it becomes open again for any helper,
+/// and a failed brief it belongs to resumes building. The blocker's summary is kept as the result so
+/// the history is not lost; the reason the person gives is announced to the team.
+#[reducer]
+pub fn reopen_task(ctx: &ReducerContext, fence: u32, task_id: String, reason: String) -> Result<(), String> {
+    let m = me(ctx, fence)?;
+    let t = task_by_id(ctx, m.ws, &task_id)?;
+    rules::check_reopen_task(&task_id, &t.status, &m.kind)?;
+    let now = now_ms(ctx);
+    let reason: String = reason.trim().chars().take(500).collect();
+    let (brief, title, rev) = (t.brief.clone(), t.title.clone(), t.rev + 1);
+    ctx.db.task().id().update(Task {
+        status: "open".into(), owner: 0, rev, updated_ms: now, ..t
+    });
+    if !brief.is_empty() {
+        if let Some(b) = ctx.db.brief().id().find(&brief).filter(|b| b.ws == m.ws) {
+            if b.status == "failed" {
+                ctx.db.brief().id().update(Brief { status: "building".into(), updated_ms: now, ..b });
+                emit(ctx, m.ws, "brief", m.id, json!({"brief": brief, "status": "building", "by": m.name}));
+            }
+        }
+    }
+    let why = if reason.is_empty() { String::new() } else { format!(": {reason}") };
+    system_message(ctx, m.ws, "all",
+                   format!("{} reopened task {task_id} ({title}){why}", m.name), "notice", &task_id);
+    emit(ctx, m.ws, "task_reopened", m.id,
+         json!({"task": task_id, "name": m.name, "reason": reason, "brief": brief}));
+    Ok(())
+}
+
 /// Remove a leftover open task. Nothing was started, so nothing is lost; a claimed task is stopped instead.
 #[reducer]
 pub fn delete_task(ctx: &ReducerContext, fence: u32, task_id: String) -> Result<(), String> {

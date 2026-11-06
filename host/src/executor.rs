@@ -18,6 +18,9 @@ pub const HELPER_KINDS: &[&str] = &[
     "board_spec", "index_design",
     // The team's learned design style (cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style", "teach_style", "resolve_style", "learn_style",
+    // A person's verdict on how the model looks, and the look it should match (cadswarm/style_memory.py,
+    // cadswarm/helper.py).
+    "record_feedback", "feedback_recent", "add_reference", "list_references",
     "fea_run", "fea_status", "fea_publish", "fea_reports",
     // Lighten without losing stiffness (cadswarm/lattice_jobs.py).
     "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status", "lattice_list",
@@ -41,6 +44,39 @@ pub fn helper_args(mut args: Value, by: u64, name: &str, kind: &str) -> Value {
     }
     args["_actor"] = json!({"id": by, "name": name, "kind": kind});
     args
+}
+
+/// The biggest blob one reducer call may carry: SpacetimeDB closes the websocket on a message over
+/// 32 MB, which drops the host and everyone's ops with it. Leave room for the call's other fields.
+pub const MAX_BLOB_BYTES: usize = 24 * 1024 * 1024;
+
+/// Err(why) when a blob is too large to send without taking the connection down.
+pub fn sendable(name: &str, len: usize) -> Result<(), String> {
+    if len > MAX_BLOB_BYTES {
+        return Err(format!("{name} is too large to share ({} MB, {} MB max); ask for fewer parts or a \
+                            coarser shape", len / (1024 * 1024), MAX_BLOB_BYTES / (1024 * 1024)));
+    }
+    Ok(())
+}
+
+/// For a large `brep` result ({"objects": {name: {.., "brep": text}}}): each part's BRep moved into its own
+/// content-addressed blob ("brep_blob": sha256), plus the blobs as (hash, name, bytes). The whole model in
+/// one blob was 52 MB, over the server's message limit; per part, an unchanged part is not sent again.
+pub fn split_parts(result_json: &str) -> Option<(String, Vec<(String, String, Vec<u8>)>)> {
+    if result_json.len() <= MAX_INLINE_RESULT {
+        return None;
+    }
+    let mut result: Value = serde_json::from_str(result_json).ok()?;
+    let objects = result.get_mut("objects")?.as_object_mut()?;
+    let mut blobs = Vec::new();
+    for (name, info) in objects.iter_mut() {
+        let Some(brep) = info.get("brep").and_then(Value::as_str).map(str::to_string) else { continue };
+        let hash = hex::encode(Sha256::digest(brep.as_bytes()));
+        info.as_object_mut()?.remove("brep");
+        info["brep_blob"] = json!(hash);
+        blobs.push((hash, format!("brep:{name}"), brep.into_bytes()));
+    }
+    (!blobs.is_empty()).then(|| (result.to_string(), blobs))
 }
 
 /// Some((hash, bytes)) when the result is too large to travel in v_op.
@@ -162,9 +198,30 @@ pub fn run_op(
         _ => worker.call(&op.kind, &args, None),
     };
     let mut done = completion(reply);
+    if op.kind == "brep" {
+        if let Some((kept, blobs)) = split_parts(&done.result_json) {
+            for (hash, name, bytes) in blobs {
+                if space.has_artifact(&hash) {
+                    continue;  // the same shape was shared before: the live view re-asks after every change
+                }
+                if let Err(why) = sendable(&name, bytes.len()) {
+                    done = completion(Err(WorkerError { code: "too_large".into(), message: why }));
+                    break;
+                }
+                space.put_artifact(&hash, &name, "text/plain", bytes, "")?;
+            }
+            if done.ok {
+                done.result_json = kept;
+            }
+        }
+    }
     if let Some((hash, bytes)) = spill(&done.result_json) {
-        space.put_artifact(&hash, &format!("op-result:{}", op.id), "application/json", bytes, "")?;
-        done.result_json = spilled_result(&done.result_json, &hash);
+        if let Err(why) = sendable(&format!("The result of {}", op.kind), bytes.len()) {
+            done = completion(Err(WorkerError { code: "too_large".into(), message: why }));
+        } else {
+            space.put_artifact(&hash, &format!("op-result:{}", op.id), "application/json", bytes, "")?;
+            done.result_json = spilled_result(&done.result_json, &hash);
+        }
     }
     space.complete_op(&op.id, &done)?;
     // complete_op has created the library rows; their previews can go in now.
@@ -183,11 +240,17 @@ pub fn run_op(
     if let Ok(result) = serde_json::from_str::<Value>(&done.result_json) {
         publish_style_profile(space, &result);
     }
+    let after = std::time::Instant::now();
     let mut objects = Value::Array(vec![]);
-    if done.ok && op.mutating {
+    let names = touched(&done);
+    // A helper's measuring script is a mutating op that changed nothing: re-reading every object's
+    // summary after it cost 8 s on the IS350 model, and helpers run one of those every minute or so.
+    if done.ok && op.mutating && !(names.is_empty() && done.deleted.is_empty()) {
         // The op is already committed; a refresh failure only leaves object details stale.
-        match refresh(space, worker, &touched(&done)) {
-            Ok(all) => objects = touched_objects(&all, &touched(&done)),
+        // `refresh` reads no names as "every part": a delete must not re-mesh and re-upload the whole
+        // model, which held up the queue for a minute per op.
+        match refresh(space, worker, &names, !names.is_empty()) {
+            Ok(all) => objects = touched_objects(&all, &names),
             Err(e) => eprintln!("[host] refresh after op {} failed: {e:#}", op.id),
         }
     }
@@ -200,6 +263,10 @@ pub fn run_op(
         obs["objects"] = objects;
         obs["prior_actors"] = prior;
         observe(space, h, "observe_op", &obs);
+    }
+    // The next queued op waits for this: say so when it is slow (agents give up on an op after 150 s).
+    if after.elapsed() > std::time::Duration::from_secs(5) {
+        eprintln!("[host] op {} follow-up (refresh, previews, style) took {:.1}s", op.id, after.elapsed().as_secs_f64());
     }
     Ok(())
 }
@@ -274,7 +341,7 @@ fn export(space: &Space, worker: &mut WorkerDriver, cfg: &HostConfig, op: &OpRow
 /// Push object details, params and previews for `names` (or everything when empty).
 /// A failing `mesh` query (the worker may not have it yet) is logged and previews are skipped.
 /// Returns every object's summary from the worker (the style memory reads the touched ones).
-pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Result<Value> {
+pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String], previews: bool) -> Result<Value> {
     let status = worker.call("status", &json!({}), None).map_err(|e| anyhow::anyhow!("status: {e}"))?;
     let objects = status["result"]["objects"].clone();
     space.sync_objects(objects.to_string(), status["result"]["params"].to_string())?;
@@ -283,11 +350,12 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Re
     } else {
         names.iter().map(|n| json!(n)).collect()
     };
-    if names.is_empty() {
+    if !previews || names.is_empty() {
         return Ok(objects);
     }
     // The team's mesh_deviation setting (default 0.2 mm) sets the preview tolerance.
     let args = json!({"names": names, "max_bytes": 200_000, "_settings": space.settings_rows()});
+    let t = std::time::Instant::now();
     let meshes = match worker.call("mesh", &args, None) {
         Ok(m) => m,
         Err(e) => {
@@ -295,14 +363,24 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Re
             return Ok(objects);
         }
     };
+    let meshed = t.elapsed();
+    let mut sent = 0usize;
     if let Some(map) = meshes["result"]["meshes"].as_object() {
         for (name, b64) in map {
             if let Some(s) = b64.as_str() {
                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(s) {
-                    space.put_preview(name, bytes)?;
+                    // A preview is cosmetic: a slow database must not take the host down with it.
+                    sent += bytes.len();
+                    if let Err(e) = space.put_preview(name, bytes) {
+                        eprintln!("[host] preview for {name} failed (continuing): {e:#}");
+                    }
                 }
             }
         }
+    }
+    if t.elapsed() > std::time::Duration::from_secs(5) {
+        eprintln!("[host] previews for {} part(s): mesh {:.1}s, upload {} KB in {:.1}s", names.len(),
+                  meshed.as_secs_f64(), sent / 1024, (t.elapsed() - meshed).as_secs_f64());
     }
     Ok(objects)
 }
@@ -406,6 +484,37 @@ mod tests {
         let (hash, bytes) = spill(&big).unwrap();
         assert_eq!(hash.len(), 64);
         assert_eq!(bytes, big.as_bytes());
+    }
+
+    #[test]
+    fn a_whole_model_brep_goes_out_one_part_per_blob() {
+        // 52 MB of BRep in one put_artifact broke the server's 32 MB message limit and dropped the host
+        // every time the live view asked for the model.
+        let body = "b".repeat(40_000);
+        let result = json!({"objects": {
+            "Body": {"label": "Body", "visible": true, "brep": body},
+            "Params": {"label": "Params", "visible": true, "brep": null},
+        }}).to_string();
+        let (kept_json, blobs) = split_parts(&result).unwrap();
+        assert!(kept_json.len() < MAX_INLINE_RESULT);
+        assert_eq!(blobs.len(), 1);
+        let (hash, name, bytes) = &blobs[0];
+        assert_eq!((name.as_str(), bytes.as_slice()), ("brep:Body", body.as_bytes()));
+        let kept: Value = serde_json::from_str(&kept_json).unwrap();
+        assert_eq!(kept["objects"]["Body"]["brep_blob"], json!(hash));
+        assert!(kept["objects"]["Body"].get("brep").is_none());
+        assert_eq!(kept["objects"]["Body"]["visible"], json!(true));
+        assert_eq!(kept["objects"]["Params"]["brep"], Value::Null);
+        // Small results and other ops are left alone.
+        assert!(split_parts(&json!({"objects": {"A": {"brep": "x"}}}).to_string()).is_none());
+        assert!(split_parts(&json!({"x": "a".repeat(40_000)}).to_string()).is_none());
+    }
+
+    #[test]
+    fn a_blob_near_the_message_limit_is_refused_instead_of_sent() {
+        assert!(sendable("op-result:o_1", MAX_BLOB_BYTES).is_ok());
+        let err = sendable("brep:BodyShell", MAX_BLOB_BYTES + 1).unwrap_err();
+        assert!(err.contains("too large") && err.contains("BodyShell"), "{err}");
     }
 
     #[test]

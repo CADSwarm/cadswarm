@@ -10,7 +10,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 type Outcome = std::result::Result<std::result::Result<(), String>, InternalError>;
-const REDUCER_TIMEOUT: Duration = Duration::from_secs(30);
+const REDUCER_TIMEOUT: Duration = Duration::from_secs(120);
+const DISCONNECTED: &str = "not connected to SpacetimeDB";
 
 #[derive(Debug, Clone)]
 pub struct OpRow {
@@ -78,6 +79,8 @@ const QUERIES: &[&str] = &[
     "SELECT * FROM v_param",
     "SELECT * FROM v_setting",
     "SELECT * FROM v_object",
+    // Names and hashes only (bytes live in v_artifact_blob): lets the host skip re-sending a blob.
+    "SELECT * FROM v_artifact",
 ];
 
 /// Whether a host whose latest member row has this status should call `rejoin` by itself.
@@ -92,6 +95,14 @@ pub fn should_rejoin(status: Option<&str>) -> bool {
 /// (spawning agents that cannot join). The error a later call gets must be enough to rejoin.
 pub fn says_retired(message: &str) -> bool {
     message.contains("left:") || message.contains("not_member:")
+}
+
+/// The connection's liveness, with a panic counted as closed. When the WebSocket drops under a reducer
+/// call, the SDK's message thread panics while holding the connection's lock; from then on its
+/// `is_active` panics on the poisoned lock, and that took the whole host down (2026-10-29) instead of
+/// letting the main loop open a new connection.
+pub fn alive(check: impl FnOnce() -> bool) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(check)).unwrap_or(false)
 }
 
 impl Space {
@@ -146,6 +157,12 @@ impl Space {
             std::thread::sleep(Duration::from_millis(50));
         }
         Err(anyhow!("timed out waiting for SpacetimeDB"))
+    }
+
+    /// False once the WebSocket closed (server restart, network drop, idle timeout). The SDK never
+    /// reconnects by itself, so the host must open a new `Space`.
+    pub fn is_active(&self) -> bool {
+        alive(|| self.conn.is_active())
     }
 
     fn me(&self) -> Option<Member> {
@@ -284,6 +301,11 @@ impl Space {
         what: &str,
         send: impl FnOnce(Box<dyn FnOnce(&ReducerEventContext, Outcome) + Send>) -> spacetimedb_sdk::Result<()>,
     ) -> Result<()> {
+        // A dropped connection never answers: the SDK queues the call for a message loop that has
+        // already exited. Fail at once so the caller can reconnect instead of waiting out the timeout.
+        if !self.is_active() {
+            return Err(anyhow!("{what}: {DISCONNECTED}"));
+        }
         let (tx, rx) = mpsc::channel();
         send(Box::new(move |_, outcome| {
             let _ = tx.send(outcome);
@@ -308,6 +330,13 @@ impl Space {
     pub fn heartbeat(&self) -> Result<()> {
         let fence = self.fence();
         self.call("heartbeat", |cb| self.conn.reducers.heartbeat_then(fence, String::new(), cb))
+    }
+
+    /// Drop finished ops beyond the newest `keep` and queued ones older than `stale`. Op rows carry whole
+    /// part scripts, so unpruned history grows until the host's subscription is refused.
+    pub fn prune_history(&self, keep: u32, stale: Duration) -> Result<()> {
+        let (fence, stale_ms) = (self.fence(), stale.as_millis() as u64);
+        self.call("prune_history", |cb| self.conn.reducers.prune_history_then(fence, keep, stale_ms, cb))
     }
 
     pub fn start_op(&self, id: &str) -> Result<()> {
@@ -354,6 +383,11 @@ impl Space {
         let fence = self.fence();
         let (hash, name, mime, brief) = (hash.to_string(), name.to_string(), mime.to_string(), brief.to_string());
         self.call("put_artifact", |cb| self.conn.reducers.put_artifact_then(fence, hash, name, mime, bytes, brief, cb))
+    }
+
+    /// Whether a blob with this hash is already stored (content-addressed, so it is the same bytes).
+    pub fn has_artifact(&self, hash: &str) -> bool {
+        self.conn.db.v_artifact().iter().any(|a| a.hash == hash && a.size > 0)
     }
 
     pub fn submit_op(&self, id: &str, kind: &str, args_json: String) -> Result<()> {
@@ -451,7 +485,20 @@ impl Space {
 
 #[cfg(test)]
 mod rejoin_tests {
-    use super::{says_retired, should_rejoin};
+    use super::{alive, says_retired, should_rejoin};
+
+    #[test]
+    fn a_connection_whose_lock_is_poisoned_counts_as_closed() {
+        let lock = std::sync::Arc::new(std::sync::Mutex::new(Some(())));
+        let held = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("WS sender loop has dropped its recv channel");
+        }).join();
+        assert!(lock.is_poisoned());
+        assert!(!alive(|| lock.lock().unwrap().is_some()));
+        assert!(alive(|| true));
+    }
 
     #[test]
     fn only_a_retired_host_rejoins_by_itself() {

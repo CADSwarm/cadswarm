@@ -54,7 +54,9 @@ SCRIPT_BANNED_ATTRS = {
     "pathlib", "io", "ctypes", "ctypeslib", "socket", "f2py", "distutils", "system", "popen",
     "closeDocument", "setActiveDocument",
 }
-SCRIPT_DUNDER_OK = {"__init__", "__name__"}  # everything else dunder is how sandboxes get escaped
+# Everything else dunder is how sandboxes get escaped. Part.__sortEdges__ is FreeCAD's public edge sorter
+# (helpers need it to build wires for lofts); it only reorders the edges it is given.
+SCRIPT_DUNDER_OK = {"__init__", "__name__", "__sortEdges__"}
 SCRIPT_BANNED_NAMES = {"getattr", "setattr", "delattr", "locals", "__import__", "__builtins__"}
 
 
@@ -67,21 +69,35 @@ def script_violation(code):
         tree = ast.parse(code)
     except SyntaxError:
         return None
+    # x.__class__.__name__ is only a string, the same as the allowed type(x).__name__, and helpers write it all
+    # the time to tell faces apart. Any other use of __class__ (walking on to __bases__...) stays refused.
+    class_names = {id(n.value) for n in ast.walk(tree)
+                   if isinstance(n, ast.Attribute) and n.attr == "__name__"
+                   and isinstance(n.value, ast.Attribute) and n.value.attr == "__class__"}
     for node in ast.walk(tree):
         line = getattr(node, "lineno", 0)
         if isinstance(node, ast.Attribute):
             attr = node.attr
             if attr in SCRIPT_BANNED_ATTRS or (attr.startswith("export") and not attr.endswith("ToString")):
                 return f"line {line}: '.{attr}' (writes files or reaches outside the part)"
-            if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and not (
+            if attr.startswith("_") and attr not in SCRIPT_DUNDER_OK and id(node) not in class_names and not (
                     isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
-                return f"line {line}: private/dunder attribute '.{attr}'"
+                # Helpers reach for these to check a shape's kind; say what works instead of making them guess.
+                if attr in ("__class__", "__getstate__", "__dict__"):
+                    hint = (" (for a kind use type(x).__name__, e.g. type(f.Surface).__name__ == 'Plane', or "
+                            "s.ShapeType; the surface_quality tool already counts flat faces)")
+                elif attr.startswith("__") and attr.endswith("__"):
+                    hint = " (call the builtin instead: len(x), str(x), x[i], a + b, iter(x)...)"
+                else:
+                    hint = ""
+                return f"line {line}: private/dunder attribute '.{attr}'{hint}"
         elif isinstance(node, ast.Name):
             if node.id in SCRIPT_BANNED_NAMES or (node.id.startswith("__") and node.id not in SCRIPT_DUNDER_OK):
                 return f"line {line}: '{node.id}'"
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name in SCRIPT_BANNED_ATTRS or alias.name.startswith(("_", "export")):
+                if alias.name in SCRIPT_BANNED_ATTRS or (alias.name.startswith(("_", "export"))
+                                                          and alias.name not in SCRIPT_DUNDER_OK):
                     return f"line {line}: importing '{alias.name}'"
     return None
 
@@ -142,6 +158,33 @@ def _agent_trace(code, exc):
     return detail + where
 
 
+_SECTIONS = {}
+
+
+def section_points(shape, axis, at, step=2.0):
+    """Points along `shape` cut by the plane axis = at ("x", "y" or "z"): one slice per plane, cached. Helpers
+    found a skin with shape.common(line) per sample, a boolean each, and ran out of time."""
+    import FreeCAD
+    key = (shape.hashCode(), axis, round(float(at), 3), float(step))
+    if key not in _SECTIONS:
+        normal = {"x": FreeCAD.Vector(1, 0, 0), "y": FreeCAD.Vector(0, 1, 0), "z": FreeCAD.Vector(0, 0, 1)}[axis]
+        _SECTIONS[key] = [p for w in shape.slice(normal, float(at)) for p in w.discretize(Distance=float(step))]
+    return _SECTIONS[key]
+
+
+def surface_y(shape, x, z, side=1, tol=2.5):
+    """The outermost Y of `shape` at station X = x, height z: the max for side=1, the min for side=-1; None where
+    the section has no point within `tol` of z."""
+    ys = [p.y for p in section_points(shape, "x", x) if abs(p.z - z) <= tol]
+    return (max(ys) if side > 0 else min(ys)) if ys else None
+
+
+def surface_z(shape, x, y, top=True, tol=2.5):
+    """The top (or bottom) Z of `shape` at station X = x, lateral position y; None where nothing is there."""
+    zs = [p.z for p in section_points(shape, "x", x) if abs(p.y - y) <= tol]
+    return (max(zs) if top else min(zs)) if zs else None
+
+
 def main():
     req = json.loads(sys.stdin.buffer.read().decode("utf-8"))
     # FreeCAD and OCC print to stdout from C++, past sys.stdout. Keep the reply on a private duplicate of
@@ -167,7 +210,8 @@ def main():
         doc = FreeCAD.openDocument(req["doc_path"])  # the snapshot copy
         ns = {"App": FreeCAD, "FreeCAD": FreeCAD, "Part": Part, "doc": doc, "Vector": FreeCAD.Vector,
               "Placement": FreeCAD.Placement, "Rotation": FreeCAD.Rotation, "math": math,
-              "params": req.get("params") or {}}
+              "params": req.get("params") or {}, "section_points": section_points, "surface_y": surface_y,
+              "surface_z": surface_z}
         if guards:
             ns["__builtins__"] = script_builtins()
             sys.addaudithook(_script_audit)

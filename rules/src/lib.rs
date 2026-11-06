@@ -32,6 +32,12 @@ pub const QUERIES: &[&str] = &[
     "analyze_component", "suggest_settings",
     // The team's learned design style (the host's helper, cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style",
+    // A person's verdict on how the model looks, and the look it should match.
+    "feedback_recent", "list_references",
+    // How flat vs curved each part is: an aesthetic shape may not be all planes.
+    "surface_quality",
+    // Pictures of the model, so a text-only helper can see what it built.
+    "render_views",
 ];
 /// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
 pub const FILE_WRITES: &[&str] = &[
@@ -44,6 +50,8 @@ pub const FILE_WRITES: &[&str] = &[
     "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
     // Style rules live in the host's project database: teaching, confirming and re-learning change them.
     "teach_style", "resolve_style", "learn_style",
+    // What people said about how the model looks, and the reference images it should match.
+    "record_feedback", "add_reference",
 ];
 /// Team events a completed (non-mutating) op may carry in its result as `_events` for complete_op to emit:
 /// the host's helper can't call reducers, and an FEA report must pop up for every member.
@@ -85,6 +93,9 @@ pub fn is_query(kind: &str) -> bool { QUERIES.contains(&kind) }
 pub fn is_file_write(kind: &str) -> bool { FILE_WRITES.contains(&kind) }
 /// Anything a reviewer may not do: change geometry or change project files.
 pub fn is_write(kind: &str) -> bool { is_mutating(kind) || is_file_write(kind) }
+/// A reviewer may save the reference photo it judges against: it changes no model and no existing file.
+pub const REFERENCE_WRITES: &[&str] = &["add_reference"];
+pub fn reviewer_may_write(kind: &str) -> bool { REFERENCE_WRITES.contains(&kind) }
 pub fn valid_kind(kind: &str) -> bool { matches!(kind, "human" | "agent" | "host" | "reviewer") }
 pub fn valid_role(role: &str) -> bool { matches!(role, "lead" | "member") }
 
@@ -375,6 +386,32 @@ pub fn check_delete_task(task_id: &str, t: &Closing) -> Result<(), String> {
         return Err(format!("not_deletable: Task {task_id} is {}; stop it instead", t.status));
     }
     check_cancel_task(task_id, t)
+}
+
+/// A single websocket message cannot exceed the server's frame limit (32 MB); one 40 MB reference
+/// upload took the whole team offline. Reference images are capped at 2 MB of encoded args; bigger
+/// payloads belong in project files saved in chunks, not in an op row.
+pub const MAX_OP_ARGS: usize = 2_000_000;
+
+pub fn check_op_payload(kind: &str, args_len: usize) -> Result<(), String> {
+    if kind == "add_reference" && args_len > MAX_OP_ARGS {
+        return Err(format!(
+            "bad_args: the reference image is too large for the team server ({} KB encoded; {} KB max). Resize or compress the photo to about 1 MB and try again.",
+            args_len / 1024, MAX_OP_ARGS / 1024));
+    }
+    Ok(())
+}
+
+/// A blocked task is a helper waiting for a person's decision, so only a person reopens it, and only
+/// from `blocked`: a finished or cancelled task keeps its outcome.
+pub fn check_reopen_task(task_id: &str, status: &str, caller_kind: &str) -> Result<(), String> {
+    if caller_kind != "human" {
+        return Err(format!("not_allowed: Task {task_id} is {status}; only a person can reopen it"));
+    }
+    if status != "blocked" {
+        return Err(format!("not_reopenable: Task {task_id} is {status}; only a blocked task can be reopened"));
+    }
+    Ok(())
 }
 
 /// Statuses a brief never leaves: its result (or its failure) is kept.
@@ -897,6 +934,41 @@ mod tests {
 
 
     #[test]
+    fn feedback_and_references_are_known_ops() {
+        for k in ["record_feedback", "add_reference", "feedback_recent", "list_references"] {
+            assert!(check_op(k, &json!({}), &[], |_| None, |_| true, 1).is_ok(), "{k}");
+        }
+        assert!(is_write("record_feedback") && is_write("add_reference"));
+        assert!(is_query("feedback_recent") && is_query("list_references"));
+        assert!(!is_write("feedback_recent") && !is_write("list_references"));
+    }
+
+    #[test]
+    fn a_reviewer_may_save_a_reference_photo_but_not_change_work() {
+        assert!(reviewer_may_write("add_reference"));
+        assert!(is_write("add_reference"), "it is still a file write for everyone else");
+        for k in ["save_file", "set_props", "record_feedback", "teach_style"] {
+            assert!(!reviewer_may_write(k), "{k}");
+        }
+    }
+
+    #[test]
+    fn only_a_person_reopens_a_blocked_task() {
+        assert!(check_reopen_task("t_1", "blocked", "human").is_ok());
+        assert!(check_reopen_task("t_1", "blocked", "agent").unwrap_err().starts_with("not_allowed:"));
+        assert!(check_reopen_task("t_1", "open", "human").unwrap_err().starts_with("not_reopenable:"));
+        assert!(check_reopen_task("t_1", "done", "human").unwrap_err().starts_with("not_reopenable:"));
+        assert!(check_reopen_task("t_1", "cancelled", "human").unwrap_err().starts_with("not_reopenable:"));
+    }
+
+    #[test]
+    fn surface_quality_is_a_read_only_query() {
+        assert!(is_query("surface_quality"));
+        assert!(!is_write("surface_quality"));
+        assert!(check_op("surface_quality", &json!({"names": ["Body"]}), &[], |_| None, |_| true, 1).is_ok());
+    }
+
+    #[test]
     fn a_rename_needs_a_valid_name_nobody_else_holds() {
         assert!(check_rename("lid-builder", None, 7).is_ok());
         assert!(check_rename("Lid-Builder", Some(7), 7).is_ok()); // only the case of its own name changed
@@ -904,5 +976,12 @@ mod tests {
         assert!(taken.starts_with("name_in_use:"), "{taken}");
         assert!(check_rename("lid builder", None, 7).unwrap_err().starts_with("bad_args:"));
         assert!(check_rename("", None, 7).is_err());
+    }
+
+    #[test]
+    fn a_reference_upload_is_capped_to_one_websocket_message() {
+        assert!(check_op_payload("add_reference", 1_000_000).is_ok());
+        assert!(check_op_payload("add_reference", MAX_OP_ARGS + 1).unwrap_err().starts_with("bad_args:"));
+        assert!(check_op_payload("save_file", MAX_OP_ARGS * 10).is_ok(), "file saves are not capped here");
     }
 }

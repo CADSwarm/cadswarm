@@ -15,13 +15,14 @@ fn parse_obj(s: &str) -> Result<Value, String> {
 pub fn submit_op(ctx: &ReducerContext, fence: u32, op_id: String, kind: String, args_json: String, expected_revs_json: String) -> Result<(), String> {
     let m = me(ctx, fence)?;
     let mutating = rules::is_mutating(&kind);
-    if m.kind == "reviewer" && rules::is_write(&kind) {
-        return Err("not_allowed: the reviewer can only inspect".into());
+    if m.kind == "reviewer" && rules::is_write(&kind) && !rules::reviewer_may_write(&kind) {
+        return Err("not_allowed: the reviewer can only inspect (and save a reference photo)".into());
     }
     if op_id.is_empty() || ctx.db.op().id().find(&op_id).is_some() {
         return Err("bad_args: op_id must be new and non-empty".into());
     }
     let args = parse_obj(&args_json)?;
+    rules::check_op_payload(&kind, args_json.len())?;
     let mine = locks_of(ctx, m.id);
     let ws = m.ws;
     rules::check_op(
@@ -60,6 +61,47 @@ pub fn submit_op(ctx: &ReducerContext, fence: u32, op_id: String, kind: String, 
     let mode = if mutating { "editing" } else { "inspecting" };
     let first = targets.first().cloned().unwrap_or_default();
     set_pointer(ctx, ws, m.id, &first, point_on(ctx, m.id, &first), mode, &kind.replace('_', " "), &op_id);
+    Ok(())
+}
+
+/// Keep the host's op subscription small: finished ops older than the newest `keep` are deleted, and
+/// so are queued/running ops older than `stale_ms` (a host that died left them behind; replaying an
+/// old script on today's model would be worse than dropping it). The op rows carry whole part scripts
+/// in `args_json`, so history grows into megabytes and a host's websocket subscription is refused
+/// ("Space limit") — which looks exactly like a dead connection.
+#[reducer]
+pub fn prune_history(ctx: &ReducerContext, fence: u32, keep: u32, stale_ms: u64) -> Result<(), String> {
+    let m = me(ctx, fence)?;
+    require_kind(&m, "host")?;
+    let keep = keep.max(50) as usize;
+    let now = now_ms(ctx);
+    let mut finished: Vec<Op> = ctx.db.op().ws().filter(&m.ws)
+        .filter(|o| matches!(o.status.as_str(), "done" | "failed" | "rejected"))
+        .collect();
+    finished.sort_by_key(|o| o.created_ms);
+    let drop = finished.len().saturating_sub(keep);
+    for op in finished.into_iter().take(drop) {
+        ctx.db.op().id().delete(&op.id);
+    }
+    if stale_ms > 0 {
+        let stale: Vec<Op> = ctx.db.op().ws().filter(&m.ws)
+            .filter(|o| matches!(o.status.as_str(), "queued" | "running"))
+            .filter(|o| now.saturating_sub(o.created_ms) > stale_ms)
+            .collect();
+        for op in stale {
+            ctx.db.op().id().delete(&op.id);
+        }
+    }
+    // One 40 MB op (an add_reference with a base64 image, or an embedded script) exceeds the server's
+    // 32 MB websocket message limit and takes the whole team down. Nothing terminal needs its args;
+    // a queued one does (an add_reference may carry up to rules::MAX_OP_ARGS), and stale ones went above.
+    let huge: Vec<Op> = ctx.db.op().ws().filter(&m.ws)
+        .filter(|o| matches!(o.status.as_str(), "done" | "failed" | "rejected"))
+        .filter(|o| o.args_json.len() > 1_000_000)
+        .collect();
+    for op in huge {
+        ctx.db.op().id().delete(&op.id);
+    }
     Ok(())
 }
 

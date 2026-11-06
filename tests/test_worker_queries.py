@@ -1,11 +1,12 @@
 """The new read-only worker queries, against a real FreeCAD worker."""
 import base64
+import os
 import struct
 
 import pytest
 
 from cadswarm.config import find_freecad_python
-from cadswarm.worker_client import WorkerClient
+from cadswarm.worker_client import WorkerClient, WorkerError
 
 try:
     find_freecad_python()
@@ -62,3 +63,41 @@ def test_an_op_result_names_the_vertex_its_pointer_rests_on(worker):
     # Top face, the corner nearest the default isometric camera.
     assert r["pointer"] == {"object": "Corner", "point": [10.0, 6.0, 4.0]}
     assert worker.call("get_object", {"name": "Corner"})["result"]["anchor"] == [10.0, 6.0, 4.0]
+
+
+def test_surface_quality_counts_flat_against_curved_faces(worker):
+    r = worker.call("surface_quality", {"names": ["Small"]})["result"]["objects"][0]
+    assert r["name"] == "Small" and r["faces"] == 6 and r["planar"] == 6 and r["curved"] == 0
+    assert r["valid"] is True and r["bbox"][3] - r["bbox"][0] == 20
+
+
+def test_a_lofted_shell_has_curved_faces(worker):
+    worker.call("run_part_script", {"name": "Shell", "code": (
+        "sections = [Part.Wire(Part.makeCircle(20 + i, Vector(0, 0, i * 10))) for i in range(6)]\n"
+        "shape = Part.makeSolid(Part.makeLoft(sections, True))")})
+    r = worker.call("surface_quality", {"names": ["Shell"]})["result"]["objects"][0]
+    assert r["curved"] > 0 and r["planar"] < r["faces"]
+    with pytest.raises(WorkerError) as err:
+        worker.call("surface_quality", {"names": ["Nope"]})
+    assert err.value.code == "not_found"
+
+
+def test_render_views_writes_pngs_next_to_the_model(worker):
+    r = worker.call("render_views", {"names": ["Small"], "views": ["front"], "size": 240})["result"]
+    assert r["files"] and r["files"][0].endswith("front.png")
+    # Beside the model, even before it is first saved; never in the worker's cwd (the checkout).
+    assert os.path.dirname(os.path.dirname(r["dir"])) == os.path.dirname(worker.doc_path)
+    with open(r["files"][0], "rb") as f:
+        assert f.read(8) == b"\x89PNG\r\n\x1a\n"
+    assert r["triangles"] >= 12
+
+
+def test_render_views_draws_only_what_is_shown_unless_a_hidden_part_is_named(worker):
+    # A hidden FrontBumper rendered as if it were there, so the PNGs looked closed while FreeCAD showed a hole.
+    worker.call("create_primitive", {"kind": "box", "name": "Ghost", "props": {"Length": 5, "Width": 5, "Height": 5}})
+    worker.call("set_props", {"name": "Ghost", "props": {"Visibility": False}})
+    r = worker.call("render_views", {"views": ["front"], "size": 200})["result"]
+    assert "Ghost" not in r["objects"] and "Small" in r["objects"]
+    assert "Ghost" in r["hidden"]
+    named = worker.call("render_views", {"names": ["Ghost"], "views": ["front"], "size": 200})["result"]
+    assert named["objects"] == ["Ghost"]

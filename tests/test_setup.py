@@ -155,3 +155,13 @@ def test_picking_an_ai_drops_a_custom_agent_command(tmp_path):
     data = json.loads((tmp_path / "host.json").read_text(encoding="utf-8"))
     assert data["agent_client"] == "opencode" and "agent_command" not in data
 
+
+def test_every_agents_doc_carries_the_shape_rule():
+    """OpenCode has no prompt hook, so the rule must be in the generated AGENTS.md itself."""
+    from cadswarm.agent_setup import AGENT_DOC
+    assert "surface_quality" in AGENT_DOC
+
+
+def test_agents_are_told_to_relay_what_the_person_said():
+    from cadswarm.agent_setup import AGENT_DOC
+    assert "record_feedback" in AGENT_DOC and 'by="person"' in AGENT_DOC

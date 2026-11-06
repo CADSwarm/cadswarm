@@ -105,11 +105,30 @@ Work like a careful teammate:
    saving and the VERIFIED stiffness, read out any warnings, and only with their OK call lattice_apply (it adds
    a mesh next to the original, which stays unchanged). If no design meets the target, say so and pass on the
    suggestions in the notes. Never present it as certification; printed parts still need testing.
+15. Shape quality. Some parts are judged on how they look (a car body, fairing, helmet, furniture, product
+    exterior) and some on what they do (brackets, plates, enclosures). Before you call an aesthetic part
+    done, call surface_quality(topic="<what the person asked for>", names=[...]). `fails` means the part
+    reads as a block model: build its main surfaces as lofts or sweeps in run_part_script (Part.makeLoft
+    across 20+ stations), keep separate boxes out of the shell, and fix it before reporting done. A boxy
+    part needs none of this; call it anyway if you are unsure. Before calling a shape done, and whenever
+    someone says it looks wrong, call render_views and open the PNGs: numbers cannot show a black hole or a
+    part in the wrong place. The rule covers the whole model, not just what you built: run surface_quality
+    over existing parts too, and fix a failing one you are allowed to touch (ask its owner or a person first).
+    When your person says a model looks wrong, relay their words with record_feedback(by="person") and
+    attach any photo with add_reference; before rebuilding, call model_feedback and look at the reference
+    images.
+16. Reference first. When the thing has a real, named counterpart (a car model, a phone, a connector, a
+    standard part), look up reference images and published dimensions before you model it: save them with
+    add_reference (image_url for one on the web, image_path for a photo your person sent), then open the
+    files with list_references. Never invent proportions for a named product. In a review, a named object
+    with no saved reference is a problem.
 If a teammate goes stale (see model_status), you may take_over their work to finish it."""
 BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
 # The team is joined in the background while the client already has our tools. A tool called before the join
 # finished waits this long for it; an unreachable database is retried within the same window.
 JOIN_WAIT_SECONDS = 90
+# How often a tool result may look for messages that arrived mid-task (three database reads each time).
+INBOX_CHECK_SECONDS = 15
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
 
@@ -129,6 +148,8 @@ class Session:
         self.fea_jobs = set()  # this session's unfinished FEA jobs, polled so their outcome always reaches the team
         self.ready = threading.Event()  # set once the join finished, joined or not
         self.join_error = None  # why this process could not join, for every tool call to say
+        self.seen_messages = set()  # message ids already shown with a tool result (see new_messages)
+        self.inbox_checked = 0.0
 
     def connect(self):
         ident = self.client.join(None, self.cfg["name"], "agent", self.cfg.get("client"), self.cfg.get("role", "member"))
@@ -216,17 +237,46 @@ def call(method, path, body=None, doing=None, targets=None, **params):
         return waiting
     if S.dead:
         return {"error": f"This agent session can no longer act: {S.dead}", "code": "inactive"}
+    fresh = unseen_messages()
+    if any(m.get("kind") == "steer" or m.get("to") == "you" for m in fresh):
+        S.seen_messages.update(m["id"] for m in fresh)
+        raise HeldForMessages(
+            "NOT run: messages for you arrived, and this call was held so you read them first (nothing was "
+            "done, so repeating the call is safe). A steer is a COMMAND, a person's instruction: do it first.\n"
+            + "\n".join(f"- from {m['from']} ({m['kind']}): {m['body']}" for m in fresh)
+            + "\nThen ack_messages with their ids and carry on.")
     if doing:
         S.doing = doing
         S.client.log_activity("tool_call", doing, targets)
     try:
-        if method == "GET":
-            return S.client.get(path, **params)
-        return S.client.post(path, body)
+        result = S.client.get(path, **params) if method == "GET" else S.client.post(path, body)
     except HubRequestError as e:
         if e.code in ("fence_stale", "taken_over", "removed", "left"):
             S.dead = str(e)
         return {"error": str(e), **{k: v for k, v in e.body.items() if k != "error"}}
+    if not fresh or not isinstance(result, dict):
+        return result
+    S.seen_messages.update(m["id"] for m in fresh)
+    return {**result, "new_messages": {"note": "Messages to the team arrived while you worked. Read them with "
+                                               "get_inbox, then ack_messages.", "messages": fresh}}
+
+
+class HeldForMessages(Exception):
+    """Raised instead of running a tool call while a steer or a direct message is unread. The MCP reply is then an
+    error, which a code-mode helper's script cannot drop the way it drops an extra field of a result."""
+
+
+def unseen_messages():
+    """Messages that arrived since this helper last heard, not yet shown. The unread list is part of a prompt's
+    context, and a headless worker gets a single prompt: a person's steer sent mid-task never reached it."""
+    unread_notes = getattr(S.client, "unread_notes", None)  # a hub from before this existed has no inbox to peek at
+    if unread_notes is None or time.time() - S.inbox_checked < INBOX_CHECK_SECONDS:
+        return []
+    S.inbox_checked = time.time()
+    try:
+        return unread_notes(S.seen_messages)
+    except HubRequestError:
+        return []
 
 
 def my_name():
@@ -404,10 +454,205 @@ def run_part_script(code: str, name: str | None = None, label: str | None = None
     shapes and placements from it, but anything you change on doc is discarded and you cannot change other
     objects (use the op tools: set_props, set_placement, boolean, ...). A script can only return two things:
     assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
-    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
-    (use save_file), no subprocesses; limited time (~60 s) and memory. Errors: script_error (your traceback),
-    timeout, sandbox_limit (memory), sandbox_unavailable."""
+    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. To only measure, assign
+    `result` alone: a `shape` is a real part everyone sees and exports, so delete any probe or cutter solid you
+    made before you report a task done. No network, no files
+    (use save_file), no subprocesses; limited time (~60 s) and memory. Names starting with _ are refused
+    (write type(x).__name__, never x.__class__; Part.__sortEdges__ is allowed). To read where a skin is, use
+    the built-in probes, which slice once per station: surface_y(shape, x, z, side=1) is its outermost Y at
+    (x, z) (side=-1 for the min), surface_z(shape, x, y, top=True) its top Z at (x, y), and
+    section_points(shape, "x", x) every point of that section. Never call common()/cut() per sample point
+    (each is a boolean: a grid of them runs out of time). Errors: script_error (your traceback), timeout, sandbox_limit (memory),
+    sandbox_unavailable, not_allowed."""
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
+
+
+def _current_brief_text():
+    """The request of a brief that is still running, so the classifier sees the person's words."""
+    try:
+        rows = S.client.get("/briefs")
+    except HubRequestError:
+        return ""
+    for b in (rows.get("briefs") if isinstance(rows, dict) else None) or []:
+        if isinstance(b, dict) and b.get("status") not in ("ready", "failed", "cancelled"):
+            return str(b.get("text") or "")
+    return ""
+
+
+@mcp.tool()
+def surface_quality(names: list[str] | None = None, topic: str = "", intent: str | None = None) -> dict:
+    """Whether a part reads as smooth or as a block model, and what to do about it.
+
+    `topic` is what the person asked for in their words (pass the request, not a summary): it decides
+    whether the part is judged on form (car body, helmet, fairing, product exterior) or on function
+    (bracket, plate, table, enclosure). Boxy parts are allowed to be boxy and come back `not required`.
+    For an aesthetic part, `fails` means more than 60 % of the faces are flat or there are too few
+    curved faces: build the main surfaces as lofts/sweeps in run_part_script and fix it before
+    reporting done. `intent` ("aesthetic" or "mechanical") overrides the classifier for this call.
+    """
+    if intent not in (None, "aesthetic", "mechanical"):
+        return {"error": "intent must be aesthetic or mechanical", "code": "bad_args"}
+    r = call("POST", "/surface", {"names": names or []}, doing="checking surface quality", targets=names)
+    if "error" in r:
+        return r
+    from .shape_intent import assess, classify, part_intent
+    chosen = intent or classify(topic or _current_brief_text(), names or [])["intent"]
+    # The request decides the default; a part named for a machined component (a car's brake rotor) is
+    # still judged on function, unless the caller chose an intent for this call.
+    objects = [{**o, **assess(o, intent or part_intent(o["name"], chosen))} for o in r["objects"]]
+    return {"intent": chosen, "objects": objects,
+            "failing": [o["name"] for o in objects if o["verdict"] == "fails"],
+            "advisory": chosen == "aesthetic"}
+
+
+MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+MAX_REFERENCE_BASE64 = 1_500_000  # one websocket message, not a file store: keep references small
+IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+
+
+def _read_image(path):
+    """A local image as base64, refusing anything the project store should not hold."""
+    import base64
+    path = os.path.abspath(os.path.expanduser(str(path or "")))
+    if not os.path.isfile(path):
+        raise ValueError(f"There's no file {path}")
+    if os.path.getsize(path) > MAX_REFERENCE_BYTES:
+        raise ValueError("Images are limited to 20 MB")
+    with open(path, "rb") as f:
+        data = f.read()
+    if not data:
+        raise ValueError(f"{path} is empty")
+    encoded = base64.b64encode(data).decode()
+    if len(encoded) > MAX_REFERENCE_BASE64:
+        raise ValueError(f"{path} is {len(data) // 1024} KB; reference images must be under about 1 MB "
+                         f"so they fit in one team-server message. Resize or compress it.")
+    return encoded
+
+
+def _download_image(url):
+    """A reference image straight from the web, as (filename, base64). Refuses anything but an image."""
+    import base64
+    import urllib.parse
+    import urllib.request
+    req = urllib.request.Request(str(url), headers={"User-Agent": "CADSwarm/0.1 reference image"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        kind = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if kind not in IMAGE_TYPES:
+            raise ValueError(f"{url} is {kind or 'not an image'}; use a PNG, JPEG or WebP image URL")
+        data = r.read(MAX_REFERENCE_BYTES + 1)
+    if len(data) > MAX_REFERENCE_BYTES:
+        raise ValueError("Reference images are limited to 20 MB")
+    name = os.path.basename(urllib.parse.urlparse(str(url)).path) or "reference"
+    if not os.path.splitext(name)[1]:
+        name += IMAGE_TYPES[kind]
+    encoded = base64.b64encode(data).decode()
+    if len(encoded) > MAX_REFERENCE_BASE64:
+        raise ValueError(f"{url} is {len(data) // 1024} KB; reference images must be under about 1 MB. "
+                         f"Resize or compress it.")
+    return name, encoded
+
+
+def _save_images(paths, subject):
+    """Copy the person's photos into the project beside their verdict; return the project paths."""
+    out = []
+    for path in (paths or [])[:6]:
+        try:
+            body = {"subject": subject, "label": "feedback", "filename": os.path.basename(path),
+                    "image_base64": _read_image(path)}
+        except (OSError, ValueError):
+            continue
+        saved = call("POST", "/references", body)
+        if isinstance(saved, dict) and saved.get("image"):
+            out.append(saved["image"])
+    return out
+
+
+@mcp.tool()
+def render_views(names: list[str] | None = None, views: list[str] | None = None, size: int = 900,
+                 deviation: float | None = None) -> dict:
+    """Pictures of the model (or `names`) as orthographic clay PNGs you can open and look at.
+
+    Use it before calling a shape done and whenever someone says it looks wrong: front, rear, left, right,
+    top and three_quarter by default. A 1 m bar is drawn at the bottom, so a side view can be compared with
+    a reference photo at a known scale. Returns the file paths (under renders/ in the project folder on the
+    host computer) and the triangle count; `deviation` is the tessellation tolerance in mm (left out, it is
+    sized to the model so a whole car fits the triangle budget). Hidden parts are left out, as in FreeCAD,
+    and listed in `hidden`: a part you expected to see that shows up there is invisible to the person too;
+    name it to draw it anyway.
+    """
+    return call("POST", "/render", {"names": names or [], "views": views or None,
+                                    "size": int(size or 900), "deviation": float(deviation) if deviation else None},
+                doing="rendering the model", targets=names)
+
+
+@mcp.tool()
+def record_feedback(verdict: str, issues: list[str] | None = None, note: str | None = None,
+                    objects: list[str] | None = None, tags: list[str] | None = None,
+                    images: list[str] | None = None, subject: str | None = None,
+                    topic: str | None = None, by: str = "person") -> dict:
+    """Record how your person judged the model: their verdict, their exact words, and photos if they sent any.
+
+    Pass `by="person"` only when they actually said it ("the roof looks like a box", "this is fine now");
+    your own opinion is `by="helper"` and waits for a person to confirm it. `issues` are short phrases in
+    their words. `images` are local file paths they gave you (PNG/JPEG/WebP, 20 MB); each is copied into
+    the project under reference/<subject>/ and returned. Shape evidence is attached automatically.
+    """
+    verdict = str(verdict or "").lower()
+    if verdict not in ("bad", "mixed", "good"):
+        return {"error": "verdict must be bad, mixed or good", "code": "bad_args"}
+    if by not in ("person", "helper"):
+        return {"error": "by must be person or helper", "code": "bad_args"}
+    stats = surface_quality(objects, topic=topic or "") if objects else None
+    evidence = {"intent": (stats or {}).get("intent", "mechanical"),
+                "objects": (stats or {}).get("objects", [])}
+    body = {"verdict": verdict, "issues": issues or [], "note": note or "", "objects": objects or [],
+            "tags": tags or [], "subject": subject or "", "by": by, "evidence": evidence,
+            "images": _save_images(images, subject or "model")}
+    return call("POST", "/feedback", body, doing="recording feedback")
+
+
+@mcp.tool()
+def model_feedback(subject: str = "", limit: int = 10) -> dict:
+    """What this team said about a kind of model: recent verdicts in their words, and the lessons learned.
+
+    Call it before rebuilding something a person already judged; quote their words, not a paraphrase."""
+    return call("GET", "/feedback", subject=subject, limit=limit)
+
+
+@mcp.tool()
+def add_reference(subject: str, image_path: str = "", image_url: str = "", label: str = "", notes: str = "",
+                  dimensions: str = "", source_url: str = "", credit: str = "", license: str = "") -> dict:
+    """Save the look a design should match: a photo, render or blueprint, plus what it is and where it came from.
+
+    For a named, real object (a 2021 Lexus IS 350 F Sport, an iPhone, a NEMA 17 motor) look up reference
+    images and published dimensions before you model it, then save them here. `subject` is the kind of thing
+    ("car", "helmet"); `dimensions` free text like "4710 x 1840 x 1435 mm". Pass `image_path` for a local file
+    or a photo your person sent, or `image_url` for one on the web (the server downloads it; PNG/JPEG/WebP,
+    20 MB). `credit` and `license` keep an online image's attribution with it. It goes into the project so
+    every teammate can open it, and list_references gives the path back."""
+    if not image_path and not image_url:
+        return {"error": "image_path or image_url is required", "code": "bad_args"}
+    if image_url:
+        try:
+            name, image_base64 = _download_image(image_url)
+        except (OSError, ValueError) as e:
+            return {"error": str(e), "code": "bad_args"}
+        source_url = source_url or image_url
+    else:
+        try:
+            name, image_base64 = os.path.basename(image_path), _read_image(image_path)
+        except (OSError, ValueError) as e:
+            return {"error": str(e), "code": "bad_args"}
+    return call("POST", "/references", {"subject": subject, "label": label, "notes": notes,
+                                        "dimensions": dimensions, "source_url": source_url,
+                                        "credit": credit, "license": license,
+                                        "filename": name, "image_base64": image_base64})
+
+
+@mcp.tool()
+def list_references(subject: str = "") -> dict:
+    """The reference images the team saved, with notes and dimensions. Open the `image` path to look at it."""
+    return call("GET", "/references", subject=subject)
 
 
 @mcp.tool()

@@ -1,4 +1,5 @@
 """Worker layer: script guard, FreeCAD discovery, worker supervision, save/rollback, exec timeout."""
+import base64
 import importlib.util
 import os
 import sys
@@ -61,6 +62,11 @@ BYPASSES = [
     "m.write('x.stl')",
     "print(__builtins__)",
     "x = doc.__dict__",
+    # __class__ is let through only to read its __name__; walking on from the class still is not
+    "x = ().__class__.__bases__",
+    "x = ().__class__",
+    "c = [].__class__\nx = c.__name__",
+    "x = ().__class__.__base__.__subclasses__()",
     "FreeCAD.closeDocument(doc.Name)",
     "import functools\nfunctools.sys",
 ]
@@ -75,6 +81,13 @@ LEGIT = [
     "brep = Part.makeBox(1, 1, 1).exportBrepToString()",
     "import numpy as np\nresult = float(np.linspace(0, 1, 5).sum())",
     "shape = Part.makeBox(*[p for p in (1, 2, 3)])",
+    # FreeCAD's own edge sorter is a public function with a dunder name; lofts and wires need it.
+    "edges = Part.makeBox(1, 1, 1).Edges[:4]\nwires = [Part.Wire(e) for e in Part.__sortEdges__(edges)]",
+    "from Part import __sortEdges__\nresult = len(__sortEdges__(Part.makeBox(1, 1, 1).Edges))",
+    # what the refusal of f.Surface.__class__ tells helpers to write instead
+    "result = sum(1 for f in Part.makeBox(1, 1, 1).Faces if type(f.Surface).__name__ == 'Plane')",
+    # ...and the habit they keep writing, which reads the same string
+    "result = [f.Surface.__class__.__name__ for f in Part.makeBox(1, 1, 1).Faces]",
 ]
 
 
@@ -364,6 +377,172 @@ def test_brief_hold_is_waited_out(fc):
     threading.Timer(0.6, release).start()
     resp = c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10}})
     assert resp["created"] == ["Plate"]
+
+
+MEASURE_PLATE = "result = round(doc.getObject('Plate').Shape.Volume)"
+
+
+def test_a_measuring_script_leaves_the_saved_model_alone(fc):
+    # Re-saving an unchanged 18 MB model cost 9 s per measuring script, three times over with three helpers.
+    c, model = fc
+    c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10, "Width": 10, "Height": 10}})
+    before = os.stat(model).st_mtime_ns
+    r = c.call("run_part_script", {"code": MEASURE_PLATE})
+    assert r["result"]["result"] == 1000
+    assert os.stat(model).st_mtime_ns == before
+
+
+def test_a_script_sees_the_change_made_just_before_it(fc):
+    # Scripts read a copy of the saved model when it is current: it must never be an older one.
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "Plate", "props": {"Length": 10, "Width": 10, "Height": 10}})
+    assert c.call("run_part_script", {"code": MEASURE_PLATE})["result"]["result"] == 1000
+    c.call("set_props", {"name": "Plate", "props": {"Length": 20}})
+    assert c.call("run_part_script", {"code": MEASURE_PLATE})["result"]["result"] == 2000
+    c.call("run_part_script", {"name": "Plate2", "code": "import Part\nshape = Part.makeBox(5, 5, 5)"})
+    assert c.call("run_part_script", {"code": "result = round(doc.getObject('Plate2').Shape.Volume)"})[
+        "result"]["result"] == 125
+
+
+def test_a_script_shape_for_a_part_with_a_bound_placement_comes_back_with_a_warning(fc):
+    """Built at world coordinates, then placed again by Params: TrunkLid and both taillights landed metres
+    behind the car this way, and nothing said so."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Lens", "code": "import Part\nshape = Part.makeBox(10, 10, 10)"})
+    c.call("set_expression", {"name": "Lens", "prop": ".Placement.Base.x", "expr": "4000 mm"})
+    r = c.call("run_part_script", {"name": "Lens", "code": "import Part\nfrom FreeCAD import Vector\n"
+                                   "shape = Part.makeBox(10, 10, 10, Vector(4000, 0, 0))"})
+    w = r["result"]["warning"]
+    assert "Placement.Base.x" in w and "origin" in w
+    assert r["result"]["bbox"][0] == 8000, "the warning shows where the part really ended up"
+
+
+def test_moving_a_part_whose_placement_is_bound_is_refused_not_ignored(fc):
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "Lid", "props": {"Length": 10}})
+    c.call("set_expression", {"name": "Lid", "prop": ".Placement.Base.x", "expr": "40 mm"})
+    with pytest.raises(WorkerError) as e:
+        c.call("set_placement", {"name": "Lid", "placement": {"base": [0, 0, 0]}})
+    assert e.value.code == "bad_args" and "Placement.Base.x" in str(e.value)
+    c.call("set_expression", {"name": "Lid", "prop": ".Placement.Base.x", "expr": None})
+    c.call("set_placement", {"name": "Lid", "placement": {"base": [5, 0, 0]}})
+    assert c.call("get_object", {"name": "Lid"})["result"]["placement"]["base"][0] == 5
+
+
+def test_interference_finds_a_clash_and_says_it_checked_every_pair(fc):
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "A", "props": {"Length": 10, "Width": 10, "Height": 10}})
+    c.call("create_primitive", {"kind": "box", "name": "B", "props": {"Length": 10, "Width": 10, "Height": 10},
+                                "placement": {"base": [5, 0, 0]}})
+    c.call("create_primitive", {"kind": "box", "name": "Far", "props": {"Length": 1}, "placement": {"base": [500, 0, 0]}})
+    r = c.call("interference", {"names": ["A", "B", "Far"]})["result"]
+    assert [(x["a"], x["b"]) for x in r["clashes"]] == [("A", "B")] and abs(r["clashes"][0]["volume"] - 500) < 1
+    assert r["complete"] is True and "unchecked" not in r
+
+
+@pytest.mark.skipif(not HAVE_FREECAD, reason="FreeCAD not installed")
+def test_interference_past_its_budget_reports_pairs_unchecked_not_clear(tmp_path, monkeypatch):
+    """A boolean that never ends used to hold the worker until the host killed FreeCAD; now it is cut off."""
+    monkeypatch.setenv("CADSWARM_INTERFERENCE_SECONDS", "0.01")
+    c = WorkerClient(str(tmp_path / "model.FCStd"))
+    c.start()
+    try:
+        c.call("create_primitive", {"kind": "box", "name": "A", "props": {"Length": 10}})
+        c.call("create_primitive", {"kind": "box", "name": "B", "props": {"Length": 10},
+                                    "placement": {"base": [5, 0, 0]}})
+        r = c.call("interference", {"names": ["A", "B"]})["result"]
+        assert r["complete"] is False and r["clashes"] == []
+        assert [(u["a"], u["b"]) for u in r["unchecked"]] == [("A", "B")] and "not finished" in r["unchecked"][0]["why"]
+    finally:
+        c.stop()
+        c._kill()
+
+
+def test_a_bspline_part_reports_its_real_extent_not_its_control_points(fc):
+    """Shape.BoundBox follows BSpline control points (170 mm out on the Lexus steering wheel): a helper read a
+    correct boolean cut as leaking and blocked its task."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Tube", "code": textwrap.dedent("""
+        import math, Part
+        from FreeCAD import Vector
+        def ring(z):
+            bs = Part.BSplineCurve()
+            bs.interpolate([Vector(50 * math.cos(a), 50 * math.sin(a), z)
+                            for a in [2 * math.pi * k / 7 for k in range(7)]], True)
+            return Part.Wire(bs.toShape())
+        shape = Part.makeLoft([ring(0), ring(100)], True)
+    """)})
+    box = c.call("get_object", {"name": "Tube"})["result"]["bbox"]
+    assert max(abs(v) for v in box[:2] + box[3:5]) < 52, box  # the ring's radius, not its control polygon
+
+
+def test_scripts_get_slice_probes_for_reading_a_skin(fc):
+    """Helpers kept finding a skin with shape.common(line) per sample and timing out; the probes slice once."""
+    c, _ = fc
+    r = c.call("run_part_script", {"code": textwrap.dedent("""
+        s = Part.makeBox(100, 200, 50, Vector(0, -100, 0))
+        result = {"left": surface_y(s, 50, 25), "right": surface_y(s, 50, 25, side=-1),
+                  "top": surface_z(s, 50, 0), "bottom": surface_z(s, 50, 0, top=False),
+                  "outside": surface_y(s, 500, 25), "points": len(section_points(s, "x", 50)) > 10}
+    """)})["result"]["result"]
+    assert r["left"] == pytest.approx(100) and r["right"] == pytest.approx(-100)
+    assert r["top"] == pytest.approx(50) and r["bottom"] == pytest.approx(0)
+    assert r["outside"] is None and r["points"]
+
+
+def test_an_empty_part_reports_no_bbox_instead_of_infinity(fc):
+    c, _ = fc
+    # Two boxes that don't touch: their common part is a valid shape with nothing in it.
+    c.call("run_part_script", {"name": "Empty", "code": "import Part\nfrom FreeCAD import Vector\n"
+                               "shape = Part.makeBox(1, 1, 1).common(Part.makeBox(1, 1, 1, Vector(5, 0, 0)))"})
+    obj = c.call("get_object", {"name": "Empty"})["result"]
+    assert "bbox" not in obj
+
+
+def test_printability_skips_walls_of_a_part_too_big_for_the_bed(fc):
+    """Checking every face pair of a whole car ran past the worker's limit and got FreeCAD killed."""
+    c, _ = fc
+    c.call("create_primitive", {"kind": "box", "name": "Hood", "props": {"Length": 1800, "Width": 1600,
+                                                                         "Height": 0.5}})
+    c.call("create_primitive", {"kind": "box", "name": "Clip", "props": {"Length": 20, "Width": 20, "Height": 0.5}})
+    r = c.call("printability", {"bed": [180, 180, 180], "min_wall": 1.2})["result"]
+    parts = {o["name"]: o for o in r["objects"]}
+    assert not parts["Hood"]["fits_bed"] and not parts["Hood"]["walls_checked"]
+    assert parts["Clip"]["walls_checked"] and parts["Clip"]["thin_wall_suspects"], "a small part is still checked"
+    assert r["ok"] is False
+
+
+def test_a_coarser_render_is_really_coarser(fc):
+    """Coarsening is how a render that overshot (1.2 M triangles on the Lexus) now fits instead of failing."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Coil", "code": textwrap.dedent("""
+        import Part
+        from FreeCAD import Vector
+        helix = Part.makeHelix(4, 400, 30)
+        ring = Part.Wire(Part.makeCircle(3, Vector(30, 0, 0), Vector(0, 1, 0)))
+        shape = Part.Wire(helix).makePipeShell([ring], True, True)
+    """)})
+    c.call("mesh", {"names": ["Coil"], "tolerance": 0.01, "max_bytes": 50_000_000})  # cache a fine triangulation
+    fine = c.call("render_views", {"deviation": 0.05, "views": ["front"], "size": 200})["result"]
+    coarse = c.call("render_views", {"deviation": 5.0, "views": ["front"], "size": 200})["result"]
+    assert coarse["triangles"] < fine["triangles"], "a coarser render must not reuse the cached fine mesh"
+
+
+def test_previews_fit_their_budget_even_after_a_fine_mesh(fc):
+    """A shape keeps its first triangulation: coarsening must mesh a fresh copy, or the budget never holds."""
+    c, _ = fc
+    c.call("run_part_script", {"name": "Coil", "code": textwrap.dedent("""
+        import Part
+        from FreeCAD import Vector
+        helix = Part.makeHelix(4, 400, 30)
+        ring = Part.Wire(Part.makeCircle(3, Vector(30, 0, 0), Vector(0, 1, 0)))
+        shape = Part.Wire(helix).makePipeShell([ring], True, True)
+    """)})
+    fine = c.call("mesh", {"names": ["Coil"], "tolerance": 0.01, "max_bytes": 50_000_000})
+    budget = 120_000
+    coarse = c.call("mesh", {"names": ["Coil"], "max_bytes": budget})
+    assert len(fine["result"]["meshes"]["Coil"]) > len(coarse["result"]["meshes"]["Coil"])
+    assert len(base64.b64decode(coarse["result"]["meshes"]["Coil"])) <= budget
 
 
 def test_script_guard_end_to_end(fc, tmp_path):

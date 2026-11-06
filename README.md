@@ -87,7 +87,8 @@ opening one. Your sign-in for each team is kept, so you don't need a new invite 
   hides that release for a day. You can also check any time from **Tools ▸ Check for updates…**.
   A git checkout is never replaced (that's a developer's tree); `CADSWARM_UPDATE=0` turns checks off.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
-  FreeCAD.
+  FreeCAD. While a team is live it also keeps the computer awake and out of Windows' background
+  ("Efficiency mode") throttling, so minimising or hiding FreeCAD does not pause the build.
 - The first setup downloads about 70 MB of helper software into CADSwarm's app folder, plus the team
   server download above if you host. Nothing is installed into FreeCAD itself. On Linux, an official FreeCAD
   the installer fetched for you is unpacked there too (`FreeCAD-<version>`, about 3 GB).
@@ -124,7 +125,9 @@ more or less room) and scrolls when the window is short. It has three parts:
   - No `@` is chat between people. AI helpers never see it.
   Tasks only go to AI helpers: people pick their own work.
 - **Tasks** and **Activity** fold open underneath. Tasks lists everything that needs doing, whole-team
-  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. Activity is what
+  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. A task stuck on
+  a helper's question is marked **stuck**: answer it and press **Start it** again, and it reopens for any
+  helper (a finished or cancelled task keeps its outcome). Activity is what
   happened (parts added, tasks finished, files saved, renames) and 🤝 the messages helpers send each other.
 - **AI helpers work together.** A helper can see who is free (`list_helpers`), hand another helper part of
   a job (`delegate_task`, which wakes that helper) and ask the helper who holds a part to change it. When a
@@ -329,6 +332,13 @@ You can also type a rule yourself. It is confirmed at once. The reviewer flags p
 
 Rules live in the project database on the hosting computer; learning needs no account, keys or
 network. `python -m cadswarm.style_memory show --project <folder>` lists them.
+
+### Shapes judged on how they look
+
+A bracket is allowed to be a box; a car body is not. Before a helper finishes a shape that is judged on how
+it looks, `surface_quality` reports how much of it is flat and whether that reads as a block model, and the
+reviewer treats a fully faceted organic shape as a finding. The bar is inferred from the request and the
+part names, so tables, plates and enclosures are never punished for being boxy.
 
 ---
 

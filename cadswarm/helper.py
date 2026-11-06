@@ -283,6 +283,88 @@ def style_context(p, a):
     return p.style.context(a.get("query") or a.get("topic") or "", a.get("board") or "", int(a.get("limit") or 8))
 
 
+MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _image_bytes(image_base64):
+    """Decoded image bytes, refusing anything the project store should not hold."""
+    if len(str(image_base64 or "")) > 2_000_000:
+        raise HelperError("bad_args", "That reference image is too large for the team server "
+                                      "(2 MB encoded max); resize or compress it.")
+    try:
+        data = base64.b64decode(str(image_base64 or ""), validate=True)
+    except (ValueError, TypeError):
+        raise HelperError("bad_args", "image_base64 is not valid base64.")
+    if not data:
+        raise HelperError("bad_args", "The image is empty.")
+    if len(data) > MAX_REFERENCE_BYTES:
+        raise HelperError("bad_args", "Reference images are limited to 20 MB.")
+    return data
+
+
+def _save_image(p, subject, filename, image_base64, author):
+    from cadswarm.style_memory import _slug
+    name = os.path.basename(str(filename or "image.png")).lower()
+    ext = os.path.splitext(name)[1]
+    if ext not in IMAGE_EXT:
+        raise HelperError("bad_args", "Reference images must be PNG, JPEG or WebP.")
+    _image_bytes(image_base64)
+    stem = _slug(os.path.splitext(name)[0]) or "image"
+    saved = p.files.save(f"reference/{_slug(subject)}/{stem}{ext}", author, base64_data=image_base64,
+                         if_exists="new_name")
+    return saved["path"]
+
+
+def add_reference(p, a):
+    """A photo, sketch or render of what a design should look like, saved in the project with its notes."""
+    from cadswarm.style_memory import _slug
+    subject = str(a.get("subject") or "").strip()
+    if not subject:
+        raise HelperError("bad_args", "subject is required (e.g. 'car').")
+    image = (_save_image(p, subject, a.get("filename"), a.get("image_base64"), _author(a))
+             if a.get("image_base64") else None)
+    meta = {"subject": _slug(subject), "label": str(a.get("label") or ""),
+            "notes": str(a.get("notes") or ""), "dimensions": str(a.get("dimensions") or ""),
+            "source_url": str(a.get("source_url") or ""), "credit": str(a.get("credit") or ""),
+            "license": str(a.get("license") or ""), "image": image,
+            "added_by": _author(a), "at": p.clock()}
+    path = p.files.save(
+        f"reference/{_slug(subject)}/{_slug(meta['label'] or 'reference')}-{int(p.clock())}.json", _author(a),
+        text=json.dumps(meta, indent=2), if_exists="new_name")["path"]
+    return {**meta, "meta": path}
+
+
+def list_references(p, a):
+    """The references saved for a subject (or all of them), newest first."""
+    from cadswarm.style_memory import _slug
+    subject = _slug(a["subject"]) if a.get("subject") else ""
+    prefix = f"reference/{subject}/" if subject else "reference/"
+    out = []
+    for item in p.files.listing(prefix)["files"]:
+        if not str(item["path"]).endswith(".json"):
+            continue
+        try:
+            out.append(json.loads(p.files.read(item["path"])["text"]))
+        except (FileError, ValueError):
+            continue
+    out.sort(key=lambda m: m.get("at") or 0, reverse=True)
+    return {"references": out}
+
+
+def record_feedback(p, a):
+    """A person's verdict on how the model looks: their words become a lesson once repeated."""
+    out = p.style.observe_feedback(a)
+    if p.style.due():
+        learned = _learn(p)
+        out.update(distilled=learned["rules"], profile=learned["profile"])
+    return out
+
+
+def feedback_recent(p, a):
+    return p.style.feedback(a.get("subject") or "", int(a.get("limit") or 10))
+
+
 def teach_style(p, a):
     # A person's rule is the team's decision; an agent's is only a proposal until a person confirms it.
     proposed = _actor(a).get("kind") != "human"
@@ -336,6 +418,11 @@ HANDLERS = {
     "list_style": list_style,
     "teach_style": teach_style,
     "resolve_style": resolve_style,
+    # What a person said about how the model looks, and the look it should match.
+    "record_feedback": record_feedback,
+    "feedback_recent": feedback_recent,
+    "add_reference": add_reference,
+    "list_references": list_references,
     # FEA: solves run in the background on a copy of the model; results carry `_events` for the team.
     # Lighten without losing stiffness: stress-graded lattices, verified (lattice_jobs.py).
     "lattice_capabilities": lambda p, a: p.lattice.capabilities(),

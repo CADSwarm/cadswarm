@@ -25,10 +25,18 @@ pub struct HostConfig {
     /// Optional full command line for any other agent CLI; the element "{prompt}" is replaced with the prompt.
     #[serde(default)]
     pub agent_command: Vec<String>,
+    /// Keep the computer awake and the host out of Windows' background throttling while the team runs,
+    /// so minimising FreeCAD does not pause a build. On by default.
+    #[serde(default = "default_true")]
+    pub keep_awake: bool,
 }
 
 fn default_agent_client() -> String {
     "claude".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub const AGENT_CLIENTS: &[&str] = &["claude", "codex", "opencode"];
