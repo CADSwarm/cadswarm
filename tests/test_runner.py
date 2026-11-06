@@ -485,7 +485,7 @@ def test_an_unchanged_config_never_stops_a_running_helper(tmp_path, monkeypatch)
             killed.append("run")
 
     r.child = Busy()
-    r.child_started = clock[0]
+    r.child_started = r.child_active_at = clock[0]  # just started, as spawn_run sets both
     assert r.step() is True
     assert killed == [] and r.child is not None
 
