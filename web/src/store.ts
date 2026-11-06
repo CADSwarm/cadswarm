@@ -3,7 +3,11 @@ export interface Member { id: number; name: string; kind: string; client: string
 export interface Lock { object: string; holder: number }
 export interface Obj { name: string; label: string; typeId: string; rev: number; bbox: number[]; volume: number; visible: boolean; broken: boolean; usedBy: string[]; lastActor: number }
 export interface Param { alias: string; value: string; num: number }
-export interface Task { id: string; title: string; status: string; owner: number; assignee: string; brief: string; objects: string[]; createdBy: number }
+export interface Task {
+  id: string; title: string; status: string; owner: number; assignee: string; brief: string; objects: string[]; createdBy: number;
+  /** Epoch millis; optional so older fixtures still type-check. updatedMs is when it was claimed or reported. */
+  createdMs?: number; updatedMs?: number;
+}
 export interface Activity { id: number; member: number; kind: string; summary: string; atMs: number }
 export interface Pointer { member: number; object: string; point: number[]; mode: string; label: string; op: string; seq: number; atMs: number }
 export interface Brief { id: string; by: number; text: string; board: string; status: string; planJson: string; stlHash: string; updatedMs: number }
@@ -14,7 +18,11 @@ export interface Handoff { id: string; from: number; note: string; trigger: stri
 export interface Workspace { bedXMm: number; bedYMm: number; bedZMm: number }
 /** A short message for the person (a refused reducer, a failed download). `at` makes repeats distinct. */
 export interface Notice { text: string; at: number }
-export interface Op { id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string; resultJson: string }
+export interface Op {
+  id: string; by: number; kind: string; status: string; errorCode: string; error: string; argsJson: string; resultJson: string;
+  /** Epoch millis (0 = not yet): when it was queued, picked up by the host, and finished. */
+  createdMs?: number; startedMs?: number; finishedMs?: number;
+}
 /** A team message. `to` is "all", "member:<id>" or "@name" (not joined yet); a person's command is stored as kind "steer". */
 export interface Message { id: string; from: number; to: string; kind: string; body: string; taskId: string; createdMs: number }
 /** Who has read (delivered) or handled (consumed) a message. */

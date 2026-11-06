@@ -11,7 +11,7 @@ import { thumbnail } from './thumbs';
 
 const CATEGORIES = ['fastener', 'bearing', 'insert', 'board', 'electronics', 'enclosure', 'motion', 'structural', 'hardware', 'other'];
 const SOURCE: Record<string, string> = { upload: 'Team part', url: 'From a link', pack: 'From a pack' };
-const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+import { isDark as dark } from '../theme';
 
 export function mountLibrary(el: HTMLElement, store: Store, api: Api | null) {
   let catalog: Catalog = parseCatalog(null);

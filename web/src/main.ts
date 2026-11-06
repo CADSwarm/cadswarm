@@ -10,6 +10,11 @@ import { mountPanels } from './ui/panels';
 import { mountSheet, type SheetControl } from './ui/sheet-controller';
 import { mountJoin, type JoinScreen } from './ui/join';
 import { esc } from './ui/esc';
+import { mountWorkspace } from './ui/workspace';
+import { initTheme } from './theme';
+import { view } from './viewstate';
+
+initTheme();
 
 const store = new Store();
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -19,34 +24,48 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 let apiRef: Api | null = null;
 let sheet: SheetControl | null = null;
 let shellMounted = false;
-let picked = ''; // the part last tapped in 3D: quick instructions name it
 
 // Human pointers: at most 5 move_pointer calls a second, only when the pick changed.
 type Pick = { object: string; point: [number, number, number] | null };
 const gate = new PointerGate<Pick>(({ object, point }) =>
   apiRef?.movePointer(object, point ?? [], object ? 'inspecting' : 'pointing', object ? `looking at ${object}` : ''));
 
-/** The model, the top bar and the sheet. The app only shows this once a build is joined. */
+/** The workspace (desktop) and the sheet (phone) around the model. The app only shows this once a build is joined. */
 function showBuild(api: Api, project: string) {
   apiRef = api;
   if (!shellMounted) {
-    app.innerHTML = `<main class="layout">
-      <section id="viewer" class="viewer" aria-label="3D view"></section>
+    app.innerHTML = `<main class="layout ws">
+      <header id="titlebar" class="titlebar"></header>
+      <nav id="ribbon" class="ribbon" aria-label="Commands"></nav>
+      <aside id="leftpane" class="leftpane" aria-label="Feature tree and properties"></aside>
+      <section id="viewport" class="viewport">
+        <div id="viewer" class="viewer" aria-label="3D view"></div>
+        <div id="hud" class="hud" role="toolbar" aria-label="View"></div>
+        <div id="follow-pill" class="follow-host"></div>
+        <div id="ws-toast" class="ws-toast" role="status" aria-live="polite" hidden></div>
+      </section>
+      <aside id="taskpane" class="taskpane" aria-label="Task pane"></aside>
+      <footer id="statusbar" class="statusbar"></footer>
       <header id="topbar" class="topbar"></header>
+      <div id="phonecmds" class="phonecmds"></div>
       <aside id="panels" class="panels sheet" data-stop="peek"></aside>
     </main>`;
-    mountViewer(document.getElementById('viewer')!, store, (object, point) => {
-      picked = object;
+    mountViewer(document.getElementById('viewer')!, store, (object, point, add) => {
+      if (!view.get().measuring) {
+        const sel = view.get().selection;
+        view.select(add ? (sel.includes(object) ? sel.filter(n => n !== object) : [...sel, object]) : object ? [object] : []);
+      }
       if (!apiRef) return;
       gate.push(object + '|' + (point ?? []).map(v => v.toFixed(1)).join(','), { object, point });
     });
+    mountWorkspace(document.querySelector<HTMLElement>('.ws')!, store, api, project);
     sheet = mountSheet(document.getElementById('panels')!, px =>
       dispatchEvent(new CustomEvent('cadswarm:inset', { detail: px })));
     shellMounted = true;
   }
   const panels = document.getElementById('panels')!;
   const topbar = document.getElementById('topbar');
-  mountPanels(panels, store, api, () => (picked ? [picked] : []), topbar, project);
+  mountPanels(panels, store, api, () => view.get().selection, topbar, project);
   sheet?.setStop(sheet.stop()); // the sheet's height, expanded state and inset follow the new markup
 }
 
@@ -143,6 +162,12 @@ async function start(ticket: Ticket | null): Promise<void> {
 }
 
 async function boot() {
+  // `?mock`: a scripted team builds a rotor head, no server needed (demos, screenshots, UI work).
+  if (new URLSearchParams(location.search).has('mock')) {
+    const { startMockSwarm } = await import('./mock');
+    showBuild(startMockSwarm(store).api, 'rotor-head');
+    return;
+  }
   // A phone link carries `#t=`; read it once, then take it out of the address bar.
   const frag = new URLSearchParams(location.hash.slice(1)).get('t');
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);

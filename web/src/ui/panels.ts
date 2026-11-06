@@ -14,7 +14,7 @@ import { mountPrinter, mountReview } from './review';
 import { esc } from './esc';
 import { parseRefusal, isRefusal } from './refusal';
 
-const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+import { isDark as dark } from '../theme';
 // Seven tabs, one job each. Icons are inline SVG (no icon font), drawn at 1.8px like SF Symbols' regular weight.
 const ICON = {
   chat: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 4v-4h0A2.5 2.5 0 0 1 3 13.5"/>',

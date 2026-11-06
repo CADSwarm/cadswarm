@@ -10,7 +10,7 @@ import { helperNow, helpers } from './helpers';
 import { chatThread, routeChat, type ChatMessage, type CommandState } from './chat';
 import { filterCompletions, insertMention, mentionPrefix, parseMentions } from './mentions';
 
-const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+import { isDark as dark } from '../theme';
 const STEPS = ['new', 'planning', 'building', 'reviewing', 'ready'] as const;
 const STEP_LABEL: Record<string, string> = { new: 'Sent', planning: 'Plan', building: 'Build', reviewing: 'Review', ready: 'Ready' };
 /** The short label is for the row; this is what a title or screen reader says in full. */

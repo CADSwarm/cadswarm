@@ -4,7 +4,7 @@ import { datasheetLinks, parseMm } from '../src/ui/params';
 import { currentBrief, findingLines, latestReview, modelBrief } from '../src/ui/panels';
 import { bedError, printHeadline, printLines, reviewFindings, reviewHeadline, shownReview } from '../src/ui/review';
 import { toPrintability } from '../src/api';
-import { mergeStl, startMockSwarm } from '../src/mock';
+import { MOCK_STEPS, mergeStl, startMockSwarm } from '../src/mock';
 import { Store } from '../src/store';
 import { esc } from '../src/ui/esc';
 
@@ -126,11 +126,11 @@ describe('mock swarm', () => {
     const store = new Store();
     const { stop, api } = startMockSwarm(store);
     expect(store.state.briefs[0].status).toBe('building');
-    expect(store.state.tasks.length).toBe(5);
+    expect(store.state.tasks.length).toBe(MOCK_STEPS);
     // The demo shows a refused change as a card in the team log, not as an ordinary line.
     expect(store.state.activity.find(a => a.kind === 'refused')?.summary)
-      .toMatch(/Already locked: Base by worker1/);
-    vi.advanceTimersByTime(1800 * 6);
+      .toMatch(/Already locked: Mast by worker\d/);
+    vi.advanceTimersByTime(120_000);
     const b = store.state.briefs[0];
     expect(b.status).toBe('ready');
     expect(b.stlHash).toMatch(/^[0-9a-f]{64}$/);
@@ -147,7 +147,7 @@ describe('mock swarm', () => {
     expect(printed?.objects.every(o => o.fitsBed && o.closedSolid)).toBe(true);
     const id = api.submitBrief('a lid', 'rpi4');
     expect(store.state.briefs).toMatchObject([{ id, text: 'a lid', board: 'rpi4', status: 'new' }]);
-    vi.advanceTimersByTime(1800 * 2);
+    vi.advanceTimersByTime(6000);
     const held = store.state.locks.find(l => l.holder !== 1)!;
     await api.lock([held.object]);
     expect(store.state.notice?.text).toMatch(/Already locked/);
@@ -169,7 +169,8 @@ describe('mock swarm', () => {
     expect(store.state.briefs[0].status).toBe('cancelled');
     // Unstarted parts go with the request; the task already cancelled stays cancelled.
     expect(store.state.tasks.filter(t => t.brief === briefId)
-      .every(t => t.status === 'done' || t.status === 'cancelled')).toBe(true);
+      .every(t => t.status === 'done' || t.status === 'cancelled' || t.status === 'claimed')).toBe(true);
+    expect(store.state.tasks.some(t => t.brief === briefId && t.status === 'open')).toBe(false);
     // The scripted build does not resurrect a stopped request.
     vi.advanceTimersByTime(1800 * 10);
     expect(store.state.briefs[0].status).toBe('cancelled');

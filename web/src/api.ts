@@ -75,8 +75,48 @@ export function toPrintability(v: Record<string, unknown> | null): Printability 
   return { ok: v?.ok === true, objects };
 }
 
+/** A clash between two solids, as the host's interference query reports it (volume in mm³). */
+export interface Clash { a: string; b: string; volume: number }
+export interface Interference { checked: string[]; clashes: Clash[] }
+/** One library suggestion for a need ("M3 screw 12 mm long"). */
+export interface Recommendation {
+  id: string; name: string; category: string; why: string; family?: string; size?: string; length?: number; label?: string;
+}
+
+/** The host's interference answer, whatever fields arrive. */
+export function toInterference(v: Record<string, unknown> | null): Interference {
+  const clashes = Array.isArray(v?.clashes) ? v.clashes : [];
+  return {
+    checked: Array.isArray(v?.checked) ? v.checked.map(String) : [],
+    clashes: clashes.filter(c => c && typeof c === 'object').map(c => {
+      const r = c as Record<string, unknown>;
+      return { a: String(r.a ?? ''), b: String(r.b ?? ''), volume: Number(r.volume) || 0 };
+    }),
+  };
+}
+
+export function toRecommendations(v: Record<string, unknown> | null): Recommendation[] {
+  const list = Array.isArray(v?.recommendations) ? v.recommendations : [];
+  return list.filter(r => r && typeof r === 'object').map(x => {
+    const r = x as Record<string, unknown>;
+    return { id: String(r.id ?? ''), name: String(r.label ?? r.name ?? r.id ?? ''), category: String(r.category ?? ''),
+      why: String(r.why ?? ''), family: r.family ? String(r.family) : undefined, size: r.size ? String(r.size) : undefined,
+      length: Number(r.length) || undefined, label: r.label ? String(r.label) : undefined };
+  });
+}
+
 export interface Api {
   fence(): number;
+  /** Run one host op (a FreeCAD edit or query) and wait for it. `locks` are taken first and released after,
+   * for edits of existing objects (set_placement, boolean…). Resolves the parsed result, or null on failure
+   * (the failure is already shown as a notice). */
+  runOp(kind: string, args: Record<string, unknown>, locks?: string[]): Promise<Record<string, unknown> | null>;
+  /** Save a dated copy of the model in the host's snapshots folder. */
+  snapshot(label: string): Promise<boolean>;
+  /** Which visible solids overlap (all of them when `names` is empty). */
+  interference(names?: string[]): Promise<Interference | null>;
+  /** Library parts that fit a need, best first. */
+  recommend(need: string): Promise<Recommendation[] | null>;
   redeem(token: string, name: string): Promise<void>;
   submitBrief(text: string, board: string): string;
   lock(names: string[]): Promise<void>;
@@ -138,7 +178,7 @@ export const toObj = (r: Infer<typeof VObjectRow>): Obj => ({
 });
 export const toTask = (r: Infer<typeof VTaskRow>): Task => ({
   id: r.id, title: r.title, status: r.status, owner: num(r.owner), assignee: r.assignee, brief: r.brief, objects: [...r.objects],
-  createdBy: num(r.createdBy),
+  createdBy: num(r.createdBy), createdMs: num(r.createdMs), updatedMs: num(r.updatedMs),
 });
 export const toActivity = (r: Infer<typeof VActivityRow>): Activity => ({
   id: num(r.id), member: num(r.member), kind: r.kind, summary: r.summary, atMs: num(r.atMs),
@@ -162,6 +202,7 @@ export const toMessage = (r: Infer<typeof VMessageRow>): Message => ({
 export const toOp = (r: Infer<typeof VOpRow>): Op => ({
   id: r.id, by: num(r.by), kind: r.kind, status: r.status, errorCode: r.errorCode, error: r.error,
   argsJson: r.argsJson, resultJson: r.resultJson,
+  createdMs: num(r.createdMs), startedMs: num(r.startedMs), finishedMs: num(r.finishedMs),
 });
 
 export const toComponent = (r: Infer<typeof VComponentRow>): Component => ({
@@ -369,6 +410,23 @@ export function connect(store: Store, uri: string, db: string, token: string | n
 
     const api: Api = {
       fence,
+      runOp: async (kind, args, locks = []) => {
+        const need = locks.filter(n => !store.state.locks.some(l => l.object === n && l.holder === store.state.meId));
+        if (need.length) {
+          try { await r.lockObjects({ fence: fence(), names: need }); } catch (e) { report(e); return null; }
+        }
+        try { return await runOpResult(kind, args); }
+        finally { if (need.length) await r.releaseObjects({ fence: fence(), names: need, force: false }).catch(() => {}); }
+      },
+      snapshot: label => runOp('snapshot', { label }),
+      interference: async names => {
+        const v = await runOpResult('interference', names?.length ? { names } : {}, 120000);
+        return v === null ? null : toInterference(v);
+      },
+      recommend: async need => {
+        const v = await runOpResult('library_recommend', { need, limit: 6 });
+        return v === null ? null : toRecommendations(v);
+      },
       redeem: async (tok, name) => {
         try { await r.redeemInvite({ token: tok, name, client: 'phone', endpointId: '' }); }
         catch (e) { throw new Error(splitError(e).message); }

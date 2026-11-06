@@ -6,7 +6,7 @@ import { Spring3, acceptSeq } from './spring';
 import { beadAt, headingFor, restFor, speedStretch } from './arrow';
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const dark = () => matchMedia('(prefers-color-scheme: dark)').matches;
+import { isDark as dark } from '../theme';
 const GLYPH: Record<string, string> = { human: '➤', agent: '◆', reviewer: '⌕', host: '■' };
 const MODE_WORD: Record<string, string> = { pointing: 'looking', inspecting: 'inspecting', editing: 'editing' };
 const UP = new THREE.Vector3(0, 1, 0);
