@@ -20,3 +20,5 @@ demo/perch/runs/
 
 # Clay renders the worker writes beside a model (cadswarm/render.py).
 renders/
+# Subagent-driven-development scratch (progress ledger, task briefs, review packages).
+.superpowers/
