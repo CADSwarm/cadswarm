@@ -19,6 +19,15 @@ def test_a_car_body_is_aesthetic_and_a_table_is_mechanical():
     assert classify("a workbench table for the shop")["intent"] == "mechanical"
 
 
+def test_an_accessory_for_a_styled_product_is_judged_on_function():
+    """Live review sent a phone stand back twice for being flat: "phone" made the whole brief aesthetic."""
+    for text in ("a 60 by 40 mm phone stand with a lip", "a phone holder for the desk", "a camera cradle",
+                 "a watch dock", "a cable clip for the car", "a hook for a helmet"):
+        assert classify(text)["intent"] == "mechanical", text
+    assert part_intent("StandBase", "aesthetic") == "mechanical"
+    assert classify("a sleek phone case with smooth curved edges")["intent"] == "aesthetic"
+
+
 def test_a_part_name_is_evidence_and_a_tie_defaults_to_mechanical():
     assert classify("", names=["BodyShell", "Roof"])["intent"] == "aesthetic"
     assert classify("a frame")["intent"] == "mechanical"

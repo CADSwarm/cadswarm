@@ -23,7 +23,8 @@ MECHANICAL = frozenset("""
 adapter beam bearing board bolt boss box bracket bushing cabinet case chassis clamp coupler desk
 enclosure fastener fixture flange frame gusset heatsink hinge housing jig knob motor mount mounts
 nut pcb plate profile pulley rail rib shaft shelf spacer standoff table tube washer
-""".split())
+clip cradle dock holder hook stand
+""".split())  # last row: an accessory for a styled product ("phone stand") is a fixture, not the product
 # A vehicle's machined and structural parts: a car brief must not ask a brake rotor to be organic.
 COMPONENTS = frozenset("""
 arm axle brake caliper damper disc driveshaft exhaust floor hub knuckle muffler pan pin rotor spring
