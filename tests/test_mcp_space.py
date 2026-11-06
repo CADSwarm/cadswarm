@@ -112,6 +112,9 @@ def test_new_tools_reach_their_routes(session):
     assert session.client.activity[-1][2] == ["Lid"]
     mcp_server.set_brief_plan("b_1", {"parts": []})
     assert session.client.posts[-1][0] == "/briefs/b_1/plan"
+    assert mcp_server.next_step() == {"path": "/steps/next"}
+    assert mcp_server.next_step("b_1") == {"path": "/steps/next", "brief": "b_1"}
+    assert mcp_server.build_progress("b_1") == {"path": "/briefs/b_1/progress"}
     mcp_server.accept_handoff("h_1")
     assert session.client.posts[-1][0] == "/handoffs/h_1/accept"
     mcp_server.report_review("b_1", 1, True, [])

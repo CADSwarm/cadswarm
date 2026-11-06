@@ -52,6 +52,71 @@ pub struct BriefState {
     /// The brief is `reviewing` but this host holds no reviewer run for it: it restarted mid-review,
     /// or a round from a previous run already left a verdict. Either way the review must be asked again.
     pub review_orphaned: bool,
+    /// Open tasks a worker may claim now. `None` for a version-1 plan (or none yet): every open task is.
+    /// Under a version-2 step plan a step is ready once every step it depends on is done.
+    pub ready: Option<usize>,
+    /// Open steps that are not ready ("4. Check fit"), for the message when they can never become ready.
+    pub waiting_steps: Vec<String>,
+}
+
+impl BriefState {
+    /// How many workers' worth of work can start now.
+    pub fn buildable(&self) -> usize {
+        self.ready.unwrap_or(self.open)
+    }
+}
+
+/// What a version-2 step plan says about a brief's open tasks: how many are ready and which steps wait.
+#[derive(Debug, PartialEq, Default)]
+pub struct StepReadiness {
+    pub ready: usize,
+    pub waiting: Vec<String>,
+}
+
+/// Read `plan_json` as a step plan (cadswarm/step_plan.py, version 2). `None` for a version-1 plan (only
+/// `parts`), an empty or unreadable one: the host then treats every open task as ready, as before.
+/// An open task outside the plan (a reviewer's fix) is always ready.
+pub fn step_readiness(plan_json: &str, tasks: &[crate::space::TaskRow]) -> Option<StepReadiness> {
+    let plan: Value = serde_json::from_str(plan_json).ok()?;
+    let steps = plan.get("steps")?.as_array().filter(|s| !s.is_empty())?;
+    let status: HashMap<&str, &str> = tasks.iter().map(|t| (t.id.as_str(), t.status.as_str())).collect();
+    let task_of = |s: &Value| s.get("task").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut by_ref: HashMap<String, String> = HashMap::new();
+    for s in steps {
+        if let Some(id) = s.get("id").and_then(Value::as_str) {
+            by_ref.insert(id.to_string(), task_of(s));
+        }
+        if let Some(n) = s.get("n").and_then(Value::as_u64) {
+            by_ref.entry(n.to_string()).or_insert_with(|| task_of(s));
+        }
+    }
+    let dep_done = |d: &Value| {
+        let key = match d {
+            Value::String(x) => x.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => return false,
+        };
+        by_ref.get(&key).is_some_and(|t| status.get(t.as_str()) == Some(&"done"))
+    };
+    let mut planned: HashSet<String> = HashSet::new();
+    let mut out = StepReadiness::default();
+    for s in steps {
+        let task = task_of(s);
+        planned.insert(task.clone());
+        if status.get(task.as_str()) != Some(&"open") {
+            continue;
+        }
+        let deps = s.get("depends_on").and_then(Value::as_array).cloned().unwrap_or_default();
+        if deps.iter().all(dep_done) {
+            out.ready += 1;
+        } else {
+            let n = s.get("n").map(|n| n.to_string()).unwrap_or_default();
+            let name = s.get("name").and_then(Value::as_str).unwrap_or(&task);
+            out.waiting.push(format!("{n}. {name}"));
+        }
+    }
+    out.ready += tasks.iter().filter(|t| t.status == "open" && !planned.contains(&t.id)).count();
+    Some(out)
 }
 
 #[derive(Debug, PartialEq)]
@@ -71,7 +136,7 @@ pub fn next_action(s: &BriefState) -> Action {
         "new" => Action::Wait,
         "planning" if s.seeding || s.planner_alive => Action::Wait,
         "planning" if s.open + s.active + s.done == 0 => Action::Plan,
-        "planning" => Action::Build(s.open.min(MAX_WORKERS)),
+        "planning" => Action::Build(s.buildable().min(MAX_WORKERS)),
         "building" if s.open + s.active == 0 => {
             if s.exporting {
                 Action::Wait
@@ -97,7 +162,19 @@ pub fn next_action(s: &BriefState) -> Action {
         // `awaiting_takeover` for a few seconds until the host's sweep takes that member off the team
         // (which hands the task back), so it becomes `open` here rather than spawning a worker that
         // would find nothing to claim.
-        "building" if s.open > 0 && s.workers_alive == 0 => Action::Build(s.open.min(MAX_WORKERS)),
+        "building" if s.open > 0 && s.workers_alive == 0 && s.buildable() > 0 => Action::Build(s.buildable().min(MAX_WORKERS)),
+        // Open steps, none ready, nobody building: either a running or blocked step will finish and free
+        // them (wait), or what they depend on was stopped or removed and they never can (a dead end).
+        "building" if s.open > 0 && s.workers_alive == 0 => {
+            if s.active > 0 || s.blocked > 0 {
+                Action::Wait
+            } else {
+                Action::Fail(format!(
+                    "steps {} wait for steps that were stopped or removed; a person needs to steer",
+                    if s.waiting_steps.is_empty() { "of the plan".to_string() } else { s.waiting_steps.join(", ") }
+                ))
+            }
+        }
         "reviewing" if s.reviewer_alive || s.exporting => Action::Wait,
         // No reviewer of ours is running this round: a host restarted, or the only verdict is from a
         // previous run. Judge that verdict if it is final, otherwise run the round again. (Building
@@ -109,7 +186,7 @@ pub fn next_action(s: &BriefState) -> Action {
             }
             // The reviewer files its fix tasks before reporting a failed verdict. After a restart
             // those tasks are still open: build them before spending another review round.
-            Some((_, false)) if s.open > 0 => Action::Build(s.open.min(MAX_WORKERS)),
+            Some((_, false)) if s.buildable() > 0 => Action::Build(s.buildable().min(MAX_WORKERS)),
             // The same fix tasks, still claimed by the workers the restart killed. The sweep hands
             // them back as open once their member goes stale, so wait for that instead of reviewing
             // a model that has not changed yet.
@@ -121,7 +198,7 @@ pub fn next_action(s: &BriefState) -> Action {
             Some((round, false)) if round >= MAX_REVIEW_ROUNDS => {
                 Action::Fail(format!("review failed {round} times; a person needs to steer"))
             }
-            Some((round, false)) if round > s.reviewed_round => Action::Build(s.open.min(MAX_WORKERS).max(1)),
+            Some((round, false)) if round > s.reviewed_round => Action::Build(s.buildable().min(MAX_WORKERS).max(1)),
             _ => Action::Wait,
         },
         _ => Action::Wait,
@@ -653,6 +730,8 @@ impl Orchestrator {
             }
         }
 
+        let plan_json = space.brief_plan(&b.id);
+        let steps = step_readiness(&plan_json, &tasks);
         let state = BriefState {
             status: b.status.clone(),
             seeding: rt.seeding,
@@ -663,12 +742,14 @@ impl Orchestrator {
             done: tasks.iter().filter(|t| t.status == "done").count(),
             cancelled: tasks.iter().filter(|t| t.status == "cancelled").count(),
             blocked: tasks.iter().filter(|t| t.status == "blocked").count(),
-            planned: !space.brief_plan(&b.id).is_empty(),
+            planned: !plan_json.is_empty(),
             exporting: rt.export_op.is_some(),
             reviewer_alive,
             review,
             reviewed_round: rt.reviewed_round,
             review_orphaned: rt.review_round == 0 && rt.reviewer.is_none(),
+            ready: steps.as_ref().map(|r| r.ready),
+            waiting_steps: steps.map(|r| r.waiting).unwrap_or_default(),
         };
 
         // A generation that moved the brief forward (wrote the plan, opened or finished a task, took
@@ -1041,6 +1122,61 @@ mod tests {
         // Every task stopped: nothing to export.
         let stopped = vec![task("t2", "cancelled", &["Lid"])];
         assert_eq!(export_names(&stopped, &[]), Err("nothing to export: no part was built".into()));
+    }
+
+    const STEPS: &str = r#"{"version":2,"steps":[
+        {"n":1,"id":"s01","name":"Base","kind":"part","task":"t1","depends_on":[]},
+        {"n":2,"id":"s02","name":"Mast","kind":"part","task":"t2","depends_on":["s01"]},
+        {"n":3,"id":"s03","name":"Screws","kind":"library","task":"t3","depends_on":[1]},
+        {"n":4,"id":"s04","name":"Check fit","kind":"check","task":"t4","depends_on":["s02","s03"]}]}"#;
+
+    #[test]
+    fn a_step_plan_counts_only_steps_whose_dependencies_are_done() {
+        let open = |done: &[&str]| -> Vec<crate::space::TaskRow> {
+            ["t1", "t2", "t3", "t4"].iter().map(|id| task(id, if done.contains(id) { "done" } else { "open" }, &[])).collect()
+        };
+        let r = step_readiness(STEPS, &open(&[])).unwrap();
+        assert_eq!(r, StepReadiness { ready: 1, waiting: vec!["2. Mast".into(), "3. Screws".into(), "4. Check fit".into()] });
+        // A dependency by number counts the same as one by id.
+        assert_eq!(step_readiness(STEPS, &open(&["t1"])).unwrap().ready, 2);
+        assert_eq!(step_readiness(STEPS, &open(&["t1", "t2", "t3"])).unwrap().ready, 1);
+        // A reviewer's fix task outside the plan is always ready.
+        let mut tasks = open(&["t1", "t2", "t3", "t4"]);
+        tasks.push(task("t_fix", "open", &["Lid"]));
+        assert_eq!(step_readiness(STEPS, &tasks).unwrap().ready, 1);
+        // Version 1, a seeded plan with only datasheet links, or no plan: every open task is ready.
+        assert!(step_readiness(r#"{"parts":[{"name":"Base","task":"t1"}]}"#, &tasks).is_none());
+        assert!(step_readiness(r#"{"sources":{}}"#, &tasks).is_none());
+        assert!(step_readiness("", &tasks).is_none());
+        assert!(step_readiness("not json", &tasks).is_none());
+    }
+
+    #[test]
+    fn workers_start_for_ready_steps_not_for_every_open_one() {
+        let s = BriefState { open: 4, ready: Some(1), ..st("planning") };
+        assert_eq!(next_action(&s), Action::Build(1));
+        assert_eq!(next_action(&BriefState { open: 3, ready: Some(2), ..st("building") }), Action::Build(2));
+        // Version 1 plans keep counting open tasks.
+        assert_eq!(next_action(&BriefState { open: 3, ready: None, ..st("building") }), Action::Build(3));
+        // Nothing ready yet but a step is being built (or waits for a person): wait for it.
+        assert_eq!(next_action(&BriefState { open: 3, ready: Some(0), active: 1, ..st("building") }), Action::Wait);
+        assert_eq!(next_action(&BriefState { open: 3, ready: Some(0), blocked: 1, ..st("building") }), Action::Wait);
+        assert_eq!(next_action(&BriefState { open: 3, ready: Some(0), workers_alive: 1, ..st("building") }), Action::Wait);
+        // A fix round after a failed review only starts workers for ready work.
+        assert_eq!(next_action(&BriefState { review: Some((1, false)), open: 2, ready: Some(1), ..st("reviewing") }),
+                   Action::Build(1));
+    }
+
+    #[test]
+    fn steps_whose_dependency_was_stopped_fail_the_brief_by_name() {
+        let tasks = vec![task("t1", "done", &[]), task("t2", "cancelled", &[]), task("t3", "done", &[]), task("t4", "open", &[])];
+        let r = step_readiness(STEPS, &tasks).unwrap();
+        let s = BriefState { open: 1, done: 2, cancelled: 1, planned: true, ready: Some(r.ready), waiting_steps: r.waiting,
+                             ..st("building") };
+        match next_action(&s) {
+            Action::Fail(why) => assert!(why.contains("4. Check fit") && why.contains("stopped"), "{why}"),
+            other => panic!("a dead end must fail, not {other:?}"),
+        }
     }
 
     #[test]

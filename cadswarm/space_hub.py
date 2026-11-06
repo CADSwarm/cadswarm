@@ -16,7 +16,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlsplit
 
-from . import constraints, ticket
+from . import constraints, step_plan, ticket
 from .client import HubRequestError, load_json, state_dir
 from .space import SpaceClient, SpaceError
 from .space_library import LibraryRoutes
@@ -132,6 +132,8 @@ class SpaceHub(LibraryRoutes):
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
             ("GET", r"/events", self.events), ("GET", r"/context", self.context),
             ("POST", r"/briefs/(?P<bid>[^/]+)/plan", self.brief_plan), ("POST", r"/briefs", self.submit_brief), ("GET", r"/briefs", self.briefs),
+            # Step-by-step builds (plan_json v2, cadswarm/step_plan.py): who builds what next, and how far it is.
+            ("GET", r"/briefs/(?P<bid>[^/]+)/progress", self.build_progress), ("GET", r"/steps/next", self.next_step),
             ("POST", r"/reviews", self.report_review),
             ("POST", r"/briefs/(?P<bid>[^/]+)/cancel", self.cancel_brief),
             ("GET", r"/workspace", self.workspace), ("POST", r"/bed", self.set_bed),
@@ -706,11 +708,36 @@ class SpaceHub(LibraryRoutes):
         return t
 
     def claim(self, body, tid):
+        self._check_ready(tid)
         self._f("claim_task", tid, int(body.get("expected_rev") or 0))
         return self.task(tid)
 
+    def _brief_plan(self, bid):
+        b = next((b for b in self._rows("v_brief") if b["id"] == bid), None)
+        return b, step_plan.load((b or {}).get("plan_json") or "")
+
+    def _check_ready(self, tid):
+        """A plan step is built only once every step it depends on is done (people and helpers alike)."""
+        row = next((t for t in self._rows("v_task") if t["id"] == tid), None)
+        if not row or not row.get("brief"):
+            return
+        _, plan = self._brief_plan(row["brief"])
+        step = step_plan.step_for_task(plan, tid)
+        if not step:
+            return
+        waiting = step_plan.unfinished_deps(step, plan, self._rows("v_task"))
+        if waiting:
+            names = ", ".join(f"{w['n']}. {w['name']} ({w['status']})" if w["n"] else w["name"] for w in waiting)
+            raise HubRequestError(409, {
+                "error": f"Step {step['n']}. {step['name']} is not ready: it waits for {names}. "
+                         "Call next_step for a step you can build now.",
+                "code": "not_ready", "step": {"n": step["n"], "id": step["id"], "name": step["name"]},
+                "waiting_for": waiting})
+
     def pickup(self, body):
         """A free helper takes a task off a busy helper's queue; with no task_id the module picks one."""
+        if body.get("task_id"):
+            self._check_ready(body["task_id"])
         self._f("pick_up_task", body.get("task_id") or "")
         ev = [e for e in sorted(self._rows("v_event"), key=lambda e: e["seq"])
               if e["kind"] == "task_claimed" and e["actor"] == self.me_id]
@@ -941,9 +968,100 @@ class SpaceHub(LibraryRoutes):
     # ------------------------------------------------------------- briefs etc.
 
     def brief_plan(self, body, bid):
-        plan = body.get("plan_json")
-        self._f("set_brief", bid, "", plan if isinstance(plan, str) else json.dumps(plan))
-        return {"brief": bid, "ok": True}
+        """Record a brief's step plan. It is checked first (cadswarm/step_plan.py) and stored normalised as
+        version 2, with `parts` derived for older readers; a broken plan is refused with every problem named."""
+        b, _ = self._brief_plan(bid)
+        if b is None:
+            raise HubRequestError(404, {"error": f"No brief {bid}", "code": "not_found"})
+        task_ids = {t["id"] for t in self._rows("v_task") if t.get("brief") == bid}
+        try:
+            plan = step_plan.check(body.get("plan_json"), task_ids=task_ids)
+        except step_plan.PlanError as e:
+            raise HubRequestError(400, {
+                "error": f"The plan was not saved. Fix these and call set_brief_plan again: {'; '.join(e.problems)}",
+                "code": "bad_plan", "problems": e.problems})
+        old = _json(b.get("plan_json") or "", {})
+        if isinstance(old, dict) and old.get("sources") and "sources" not in plan:
+            plan["sources"] = old["sources"]  # the seeded datasheet links (the host also restores them)
+        self._f("set_brief", bid, "", json.dumps(plan))
+        return {"brief": bid, "ok": True, "steps": len(plan["steps"]),
+                "line": step_plan.progress(plan, self._rows("v_task"))["line"]}
+
+    def _task_windows(self):
+        """{task id: (owner, claimed at ms, reported at ms or None)} from the latest claim of each task."""
+        out = {}
+        for e in sorted(self._rows("v_event"), key=lambda e: e["seq"]):
+            if e["kind"] not in ("task_claimed", "task_reported"):
+                continue
+            tid = _json(e.get("data_json"), {}).get("task")
+            if not tid:
+                continue
+            if e["kind"] == "task_claimed":
+                out[tid] = (e["actor"], e["at_ms"], None)
+            elif tid in out:
+                out[tid] = (out[tid][0], out[tid][1], e["at_ms"])
+        return out
+
+    def build_progress(self, bid, ops=1):
+        """How far a brief's step build is, for every client: the `N of M done · now: X` line and each step
+        with its status, owner, what it waits for and (ops=1) the CAD ops it ran with their durations."""
+        b, plan = self._brief_plan(bid)
+        if b is None:
+            raise HubRequestError(404, {"error": f"No brief {bid}", "code": "not_found"})
+        tasks = [t for t in self.tasks() if t.get("brief") == bid]
+        out = step_plan.progress(plan, tasks)
+        if str(ops) not in ("0", "false", "False"):
+            windows, op_rows = self._task_windows(), self._rows("v_op")
+            by_id = {t["id"]: t for t in tasks}
+            for row in out["steps"]:
+                owner, start, end = windows.get(row["task"], (None, None, None))
+                t = by_id.get(row["task"]) or {}
+                if t.get("status") == "open":
+                    owner = None  # handed back: its old window is not this step's work any more
+                row["op_feed"] = step_plan.step_ops(row, op_rows, owner=owner, start_ms=start, end_ms=end)
+                row["started_at"] = start / 1000 if start else None
+                row["finished_at"] = end / 1000 if end and t.get("status") == "done" else None
+        return {"brief": bid, "status": b["status"], "title": plan.get("title") or b["text"],
+                "version": plan["version"], **out}
+
+    def next_step(self, brief=None, brief_id=None):
+        """The caller's next step (see step_plan.next_step): one it holds, else a ready step assigned to it,
+        else the lowest-numbered ready unassigned one. `wait`, `stuck` or `done` when there is none."""
+        bid = brief or brief_id
+        me = self._names().get(self.me_id, self.cfg.get("name", ""))
+        live = [m["name"] for m in self._rows("v_member") if m["status"] in ("active", "stale")]
+        all_tasks = self.tasks()
+        rows = sorted(self._rows("v_brief"), key=lambda b: b["created_ms"])
+        if bid:
+            briefs = [b for b in rows if b["id"] == bid]
+        else:
+            briefs = [b for b in rows if b["status"] in ("planning", "building", "reviewing")]
+        if bid and not briefs:
+            raise HubRequestError(404, {"error": f"No brief {bid}", "code": "not_found"})
+        waits = []
+        for b in briefs:
+            plan = step_plan.load(b.get("plan_json") or "")
+            tasks = [t for t in all_tasks if t.get("brief") == b["id"]]
+            planned = {s["task"] for s in plan["steps"]}
+            extra = [t for t in tasks if t["id"] not in planned]
+            r = step_plan.next_step(plan, tasks, me, me_id=self.me_id, live=live, extra_tasks=extra)
+            line = step_plan.progress(plan, tasks)["line"]
+            if "step" in r:
+                step = {k: v for k, v in r["step"].items() if not k.startswith("_")}
+                built = [s for s in plan["steps"] if step_plan.step_status(s, tasks) == "done"]
+                return {"brief": b["id"], "step": step, "task": r["task"], "claimed": bool(r.get("claimed")),
+                        "built": [{"n": s["n"], "name": s["name"], "objects": s["objects"]} for s in built],
+                        "built_objects": [o for s in built for o in s["objects"]], "progress": line,
+                        "note": ("You already hold this step: finish it and report_result." if r.get("claimed")
+                                 else "claim_task this step's task, then build it completely.")}
+            if not r.get("done"):
+                waits.append({"brief": b["id"], "progress": line, **r})
+        if any(w.get("wait") for w in waits):
+            w = next(w for w in waits if w.get("wait"))
+            return {**w, "note": "Steps remain but none is ready for you: call wait_for_changes, then next_step."}
+        if waits:
+            return waits[0]
+        return {"done": True, "brief": bid, "note": "Nothing left to build."}
 
     def briefs(self, limit=20):
         """Requests handed to the whole team (the host plans them into tasks and starts helpers), newest first,
@@ -953,11 +1071,14 @@ class SpaceHub(LibraryRoutes):
         out = []
         for b in sorted(self._rows("v_brief"), key=lambda b: b["created_ms"], reverse=True)[:int(limit)]:
             mine = [t for t in tasks if t.get("brief") == b["id"]]
+            plan = step_plan.load(b.get("plan_json") or "")
+            prog = step_plan.progress(plan, mine) if plan["steps"] else None
             out.append({"id": b["id"], "text": b["text"], "board": b["board"], "status": b["status"],
                         "by": names.get(b["by"], "?"),
                         "at": b["created_ms"] / 1000, "tasks": len(mine),
                         "done": sum(1 for t in mine if t["status"] == "done"),
-                        "stl": b["stl_hash"]})
+                        "stl": b["stl_hash"],
+                        "progress": {k: prog[k] for k in ("total", "done", "current", "line")} if prog else None})
         return {"briefs": out}
 
     def submit_brief(self, body):

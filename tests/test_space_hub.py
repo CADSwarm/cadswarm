@@ -693,3 +693,131 @@ def test_a_helper_can_ask_the_hub_for_one_fea_report(world):
     assert hub.get("/fea/reports", report="fea_1a2b") == {"id": "fea_1a2b"}  # the module's events stay inside
     hub.get("/fea/reports")
     assert seen == [("fea_reports", {"report": "fea_1a2b", "limit": 100}), ("fea_reports", {"limit": 100})]
+
+
+# ------------------------------------------------------------ step builds (plan_json v2)
+
+def _step_world(world, plan=None):
+    hub, fake = world
+    row = dict(fake.tables["v_task"][0], brief="b_s", assignee="")
+    fake.tables["v_task"] = [dict(row, id="t_base", title="1. Base"), dict(row, id="t_mast", title="2. Mast"),
+                             dict(row, id="t_screw", title="3. Screws"), dict(row, id="t_check", title="4. Check")]
+    fake.tables["v_brief"] = [{"id": "b_s", "by": 3, "text": "a rotor head", "board": "", "status": "building",
+                               "plan_json": json.dumps(plan) if plan else json.dumps({"sources": [{"u": 1}]}),
+                               "stl_hash": "", "created_ms": 1}]
+    return hub, fake
+
+
+STEPS = {"version": 2, "title": "Rotor head", "steps": [
+    {"n": 1, "id": "s01", "name": "Base", "kind": "part", "summary": "The base.", "task": "t_base",
+     "objects": ["Base"], "depends_on": []},
+    {"n": 2, "id": "s02", "name": "Mast", "kind": "part", "summary": "The mast.", "task": "t_mast",
+     "objects": ["Mast"], "depends_on": ["s01"]},
+    {"n": 3, "id": "s03", "name": "Screws", "kind": "library", "summary": "M3 screws.", "task": "t_screw",
+     "objects": ["Screw1"], "depends_on": ["s01"], "component": {"family": "iso4762", "size": "M3"}},
+    {"n": 4, "id": "s04", "name": "Check fit", "kind": "check", "summary": "Interference.", "task": "t_check",
+     "depends_on": ["s02", "s03"]}]}
+
+
+def test_a_step_plan_is_checked_normalised_and_keeps_the_datasheet_links(world):
+    hub, fake = _step_world(world)
+    r = hub.post("/briefs/b_s/plan", {"plan_json": STEPS})
+    assert r["ok"] and r["steps"] == 4 and r["line"] == "0 of 4 done"
+    reducer, args = fake.calls[-1]
+    saved = json.loads(args[3])
+    assert reducer == "set_brief" and args[1:3] == ("b_s", "")
+    assert saved["version"] == 2 and [p["name"] for p in saved["parts"]] == ["Base", "Mast", "Screws"]
+    assert saved["sources"] == [{"u": 1}]
+
+
+def test_a_broken_plan_is_refused_with_every_problem(world):
+    hub, fake = _step_world(world)
+    bad = json.loads(json.dumps(STEPS))
+    bad["steps"][2].pop("component")
+    bad["steps"][1]["depends_on"] = ["s04"]
+    bad["steps"][3]["task"] = "t_elsewhere"
+    before = len(fake.calls)
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/briefs/b_s/plan", {"plan_json": json.dumps(bad)})
+    assert e.value.status == 400 and e.value.code == "bad_plan"
+    problems = e.value.body["problems"]
+    assert len(problems) == 3 and "not saved" in str(e.value)
+    assert len(fake.calls) == before  # nothing written
+
+
+def test_claiming_a_step_before_its_dependencies_are_done_is_refused(world):
+    hub, fake = _step_world(world, STEPS)
+    with pytest.raises(HubRequestError) as e:
+        hub.post("/tasks/t_mast/claim")
+    assert e.value.code == "not_ready" and e.value.status == 409
+    assert [w["name"] for w in e.value.body["waiting_for"]] == ["Base"] and "1. Base" in str(e.value)
+    assert not any(c[0] == "claim_task" for c in fake.calls)
+    with pytest.raises(HubRequestError):
+        hub.post("/tasks/pickup", {"task_id": "t_check"})
+    fake.tables["v_task"][0]["status"] = "done"
+    hub.post("/tasks/t_mast/claim")
+    assert fake.calls[-1][0] == "claim_task"
+
+
+def test_tasks_outside_any_plan_claim_as_before(world):
+    hub, fake = world
+    hub.post("/tasks/t_1/claim")
+    assert fake.calls[-1] == ("claim_task", (2, "t_1", 0))
+
+
+def test_next_step_hands_out_ready_steps_in_order_then_waits_then_is_done(world):
+    hub, fake = _step_world(world, STEPS)
+    r = hub.get("/steps/next")
+    assert r["brief"] == "b_s" and r["step"]["id"] == "s01" and r["task"]["id"] == "t_base"
+    assert r["progress"] == "0 of 4 done" and r["built_objects"] == []
+    fake.tables["v_task"][0].update(status="done")
+    fake.tables["v_task"][2].update(assignee="alice-claude")  # pinned to me: first
+    r = hub.get("/steps/next", brief="b_s")
+    assert r["step"]["id"] == "s03" and r["built_objects"] == ["Base"]
+    # A step I hold comes back to me.
+    fake.tables["v_task"][1].update(status="claimed", owner=1)
+    assert hub.get("/steps/next")["step"]["id"] == "s02"
+    fake.tables["v_task"][1].update(owner=2)
+    fake.tables["v_task"][2].update(status="claimed", owner=2)
+    r = hub.get("/steps/next")
+    assert r["wait"] is True and "wait_for_changes" in r["note"]
+    assert {b["name"]: b["waiting_for"] for b in r["blocked"]}["Check fit"] == ["Mast", "Screws"]
+    for t in fake.tables["v_task"]:
+        t["status"] = "done"
+    assert hub.get("/steps/next")["done"] is True
+
+
+def test_next_step_says_stuck_when_a_dependency_was_stopped(world):
+    hub, fake = _step_world(world, STEPS)
+    fake.tables["v_task"][0].update(status="done")
+    fake.tables["v_task"][1].update(status="cancelled")
+    fake.tables["v_task"][2].update(status="done")
+    r = hub.get("/steps/next")
+    assert r["stuck"] is True and "Check fit" in r["message"]
+
+
+def test_build_progress_joins_steps_tasks_and_their_ops(world):
+    hub, fake = _step_world(world, STEPS)
+    fake.tables["v_task"][0].update(status="done")
+    fake.tables["v_task"][1].update(status="claimed", owner=2)
+    fake.tables["v_event"] += [
+        {"seq": 7, "kind": "task_claimed", "actor": 2, "at_ms": 5000, "data_json": json.dumps({"task": "t_mast"})}]
+    fake.tables["v_op"] = [
+        {"id": "o1", "by": 2, "kind": "create_extrusion", "args_json": json.dumps({"name": "Mast"}), "status": "done",
+         "started_ms": 6000, "finished_ms": 7900, "created_ms": 6000},
+        {"id": "o2", "by": 2, "kind": "set_props", "args_json": json.dumps({"name": "SK", "props": {"ShapeColor": 1}}),
+         "status": "running", "started_ms": 8000, "finished_ms": 0, "created_ms": 8000},
+        {"id": "o0", "by": 2, "kind": "create_primitive", "args_json": json.dumps({"name": "Old"}), "status": "done",
+         "started_ms": 100, "finished_ms": 200, "created_ms": 100}]
+    p = hub.get("/briefs/b_s/progress")
+    assert p["line"] == "1 of 4 done · now: Mast" and p["title"] == "Rotor head" and p["status"] == "building"
+    mast = p["steps"][1]
+    assert mast["status"] == "claimed" and mast["owner"] == "bob-codex" and mast["started_at"] == 5.0
+    assert [(o["label"], o["duration_s"], o["running"]) for o in mast["op_feed"]] == [
+        ("Extrude", 1.9, False), ("Set color", None, True)]
+    assert p["steps"][3]["waiting_for"] == ["Mast", "Screws"] and p["steps"][3]["ready"] is False
+    assert "op_feed" not in hub.get("/briefs/b_s/progress", ops=0)["steps"][0]
+    assert hub.get("/briefs")["briefs"][0]["progress"]["line"] == "1 of 4 done · now: Mast"
+    with pytest.raises(HubRequestError) as e:
+        hub.get("/briefs/b_nope/progress")
+    assert e.value.code == "not_found"

@@ -28,6 +28,8 @@ most three lines (part names and key sizes). Ask questions only when you truly n
 message.
 Work like a careful teammate:
 1. Start with model_status and list_tasks. Claim a task (claim_task) before working on it.
+   A brief built step by step: next_step gives the step you may build now (its dependencies are done);
+   claiming a step that is not ready is refused with not_ready. build_progress shows how far it is.
 2. Lock what you will change (lock_objects). Anything you create is locked to you automatically.
    Never try to edit someone else's part. Message them (send_message) instead.
 3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
@@ -912,8 +914,43 @@ def take_over(participant: str) -> dict:
 
 @mcp.tool()
 def set_brief_plan(brief_id: str, plan_json: dict | str) -> dict:
-    """Record the plan for a brief: {"parts": [{"name", "task", "summary"}]}. Planners call this last."""
+    """Record a brief's numbered step plan (version 2). Planners call this last, after create_task for every step.
+
+    plan_json = {"version": 2, "title": "...", "steps": [step, ...]}, steps in build order, each:
+      n: 1, 2, 3... (a topological order: every dependency has a lower n)
+      id: "s01"; name: "Mast"; kind: "part" (modelled) | "library" (bought/standard part placed from the
+        library) | "assembly" (placement/mates of built components) | "check" (interference, printability)
+      summary: one engineering sentence naming the function and key features
+      task: the id create_task returned for this step (one task per step, titled "<n>. <name>")
+      objects: exact FreeCAD object names the step creates; depends_on: ids of EARLIER steps
+      ops: expected CAD ops, each starting with one of: Create sketch, Extrude, Cut, Revolve, Fillet, Chamfer,
+        Hole, Pattern, Mirror, Shell, Insert component, Place standard part, Mate, Set color,
+        Check interference, Check printability, Render, Save part
+      assignee: "" or a teammate's name to pin the step to them
+      component (library steps, required): the library id, or {"family", "size", "length"?}
+      optional: params {name: mm}, targets {"bbox_mm": [x, y, z], "tol_mm", "holes", "min_wall_mm"},
+        ports [{"name", "type": axis|plane|point|face|edge}],
+        mates (assembly steps) [{"type": fixed|coincident|concentric|distance|angle|parallel|revolute|slider,
+        "a": "Part.port", "b": "Part.port", "value"?}] with exactly one fixed part and no loops.
+    `parts` for older readers is derived for you. A broken plan is refused with code `bad_plan` and a
+    `problems` list: fix each one and call again."""
     return call("POST", f"/briefs/{brief_id}/plan", {"plan_json": plan_json}, doing="writing the plan")
+
+
+@mcp.tool()
+def next_step(brief_id: str | None = None) -> dict:
+    """Your next build step: a step you already hold, else a ready step pinned to you, else the lowest-numbered
+    ready step nobody is pinned to. Returns {"step", "task", "built_objects", "progress"} (claim_task the
+    step's task, then build it), {"wait": true} when steps remain but none is ready (wait_for_changes, then
+    call again), {"stuck": true} when the remaining steps wait on stopped steps, or {"done": true}."""
+    return call("GET", "/steps/next", **({"brief": brief_id} if brief_id else {}))
+
+
+@mcp.tool()
+def build_progress(brief_id: str) -> dict:
+    """How far a brief's build is: "N of M done · now: X", and each step with its status, owner, what it
+    waits for and the CAD ops it ran (with durations)."""
+    return call("GET", f"/briefs/{brief_id}/progress")
 
 
 @mcp.tool()
