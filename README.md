@@ -629,8 +629,8 @@ cargo test --release --manifest-path rules\Cargo.toml
 cd web; npm test
 ```
 
-Current counts on a Windows checkout: Python 832 passed (16 skipped where FreeCAD or the platform
-sandbox is unavailable), host 53, rules 26, web 107.
+Current counts on a Windows checkout: Python 956 passed (18 skipped where FreeCAD or the platform
+sandbox is unavailable), host 64, rules 31, web 107.
 
 `tests\freecad_panel_live.py` is a manual live check, not part of pytest: it opens a real FreeCAD
 window, joins a running team as a person, sends `@team ...` through the panel, waits for the host to
