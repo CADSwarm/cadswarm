@@ -103,15 +103,21 @@ export function readInvite(text: string): Invite {
 }
 
 const LOOPBACK = /^(127\.\d+\.\d+\.\d+|localhost|\[::1\])$/i;
+/** A name only a local network hands out: a private or link-local IPv4 address, or a .local (mDNS) name. */
+const LAN_HOST = /^(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|169\.254\.\d+\.\d+|[\w-]+(\.[\w-]+)*\.local)$/i;
 
 /**
  * A code made on a computer that hosts its database itself points at 127.0.0.1, which only that computer can
  * reach. When this page was served by that same computer over the network, use its address instead.
+ *
+ * Only a local-network page can be that computer. The public site is not: rewriting 127.0.0.1 to
+ * www.cadswarm.design:3000 points at nothing, so a loopback code opened there keeps 127.0.0.1, which a
+ * browser still reaches from an https page on that same computer.
  */
 export function reachableUri(uri: string, pageHost: string): string {
   try {
     const u = new URL(uri);
-    if (LOOPBACK.test(u.hostname) && pageHost && !LOOPBACK.test(pageHost)) {
+    if (LOOPBACK.test(u.hostname) && LAN_HOST.test(pageHost)) {
       u.hostname = pageHost;
       return u.toString().replace(/\/$/, '');
     }

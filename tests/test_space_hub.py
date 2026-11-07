@@ -171,6 +171,16 @@ def test_inbox_puts_human_steering_first_skips_my_own_and_others_mail(world):
     assert ("mark_delivered", (2, ["m_b", "m_a"])) in fake.calls
 
 
+def test_unread_notes_list_each_new_message_once_without_marking_it_read(world):
+    """A headless helper gets no new prompt mid-task, so its tool results carry what arrived meanwhile."""
+    hub, fake = world
+    notes = hub.unread_notes(set())
+    assert [(n["id"], n["from"], n["kind"]) for n in notes] == [("m_b", "carol", "steer"), ("m_a", notes[1]["from"], notes[1]["kind"])]
+    assert [n["id"] for n in hub.unread_notes({"m_b"})] == ["m_a"]
+    assert hub.unread_notes({"m_a", "m_b"}) == []
+    assert not [c for c in fake.calls if c[0] == "mark_delivered"], "noticing is not reading: get_inbox still does that"
+
+
 def test_consumed_messages_leave_the_inbox(world):
     hub, fake = world
     fake.tables["v_receipt"] = [{"message_id": "m_b", "member": 1, "state": "consumed"}]
@@ -308,6 +318,20 @@ def test_large_results_are_read_from_the_blob_view(world):
     finish_ops_with(fake, {"blob": "ab" * 32})
     assert hub.post("/brep", {"names": ["Plate"]}) == {"objects": {"Plate": {"brep": "x" * 50, "locked_by": "alice-claude"}}}
     assert fake.calls[-1][1][2] == "brep"
+
+
+def test_a_whole_model_brep_is_read_back_one_part_blob_at_a_time(world):
+    # The host stores each part's BRep as its own blob: the whole model in one blob was over the server's
+    # 32 MB message limit and dropped the host every time the live view loaded it.
+    hub, fake = world
+    fake.tables["v_artifact_blob"] = [{"hash": "ab" * 32, "ws": 1, "bytes": b"PLATE".hex()},
+                                      {"hash": "cd" * 32, "ws": 1, "bytes": b"LID".hex()}]
+    finish_ops_with(fake, {"objects": {"Plate": {"visible": True, "brep_blob": "ab" * 32},
+                                       "Lid": {"visible": False, "brep_blob": "cd" * 32},
+                                       "Params": {"visible": True, "brep": None}}})
+    got = hub.post("/brep", {"names": ["Plate", "Lid", "Params"]})["objects"]
+    assert got["Plate"]["brep"] == "PLATE" and got["Lid"]["brep"] == "LID" and got["Params"]["brep"] is None
+    assert "brep_blob" not in got["Plate"] and got["Lid"]["visible"] is False
 
 
 def test_a_spilled_result_that_expired_says_so(world):
@@ -693,3 +717,29 @@ def test_a_helper_can_ask_the_hub_for_one_fea_report(world):
     assert hub.get("/fea/reports", report="fea_1a2b") == {"id": "fea_1a2b"}  # the module's events stay inside
     hub.get("/fea/reports")
     assert seen == [("fea_reports", {"report": "fea_1a2b", "limit": 100}), ("fea_reports", {"limit": 100})]
+
+
+def test_feedback_and_reference_routes_become_helper_ops(world):
+    hub, fake = world
+    finish_ops_with(fake, {"verdicts": [], "lessons": []})
+    hub.post("/feedback", {"verdict": "bad", "subject": "car", "issues": ["roof is a box"], "by": "person"})
+    assert fake.calls[-1][1][2] == "record_feedback"
+    assert json.loads(fake.calls[-1][1][3])["verdict"] == "bad"
+    hub.get("/feedback", subject="car", limit=5)
+    assert fake.calls[-1][1][2] == "feedback_recent"
+    assert json.loads(fake.calls[-1][1][3]) == {"subject": "car", "limit": 5}
+    hub.post("/references", {"subject": "car", "filename": "is350.png", "image_base64": "AA=="})
+    assert fake.calls[-1][1][2] == "add_reference"
+    hub.get("/references", subject="car")
+    assert fake.calls[-1][1][2] == "list_references"
+    assert json.loads(fake.calls[-1][1][3]) == {"subject": "car"}
+
+
+def test_reopening_a_blocked_task_is_its_own_route(world):
+    hub, fake = world
+    fake.tables["v_task"] = [{"id": "t_1", "ws": 1, "title": "Headlights", "status": "open", "owner": 0,
+                              "created_by": 2, "rev": 2, "detail": "", "objects": [],
+                              "assignee": "", "brief": "b_1", "result_json": "", "updated_ms": 0, "created_ms": 0}]
+    hub.post("/tasks/t_1/reopen", {"reason": "host is back"})
+    assert fake.calls[-1][0] == "reopen_task"
+    assert fake.calls[-1][1][1:] == ("t_1", "host is back")

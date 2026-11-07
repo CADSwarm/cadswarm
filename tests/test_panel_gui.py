@@ -130,5 +130,15 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert inbox["history"] == {"toggle": "Expired or dismissed · 1", "rows": 1, "shown": True}, inbox["history"]
     assert inbox["used"] == {"shown": True, "rows": 1}, inbox["used"]
     # Applying the ready block answers every rule behind the decision in one request.
+    assert inbox["loaded"] is True and inbox["answered"] is True, inbox
     assert inbox["posted"] == [["/style/resolve", {"rule_ids": ["r_wall1", "r_wall2"],
                                                   "decision": "confirm"}]], inbox["posted"]
+    # Opening the dialog and answering a decision never waits on the host inside the click: a busy host
+    # (every call takes 0.4 s here) must leave FreeCAD answering, say what it is doing, and take the
+    # answered decision off the inbox at once.
+    fast = r["style_fast"]
+    assert fast["opens_fast"] is True and fast["loaded"] is True, fast
+    assert fast["click_returns_fast"] is True and fast["says_saving"] is True, fast
+    assert fast["decision_left_at_once"] is True and fast["answer_sent"] is True, fast
+    # An answer the host refuses puts the decision back and says the team couldn't be reached.
+    assert r["style_failed"] == {"loaded": True, "restored": True, "told": True}, r["style_failed"]

@@ -127,6 +127,7 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/tasks/pickup", self.pickup), ("GET", r"/tasks/spare", self.spare_route),
             ("POST", r"/tasks/(?P<tid>[^/]+)/claim", self.claim), ("POST", r"/tasks/(?P<tid>[^/]+)/result", self.result),
             ("POST", r"/tasks/(?P<tid>[^/]+)/cancel", self.cancel_task),
+            ("POST", r"/tasks/(?P<tid>[^/]+)/reopen", self.reopen_task),
             ("POST", r"/tasks/(?P<tid>[^/]+)/delete", self.delete_task),
             ("POST", r"/messages", self.send), ("GET", r"/messages", self.chat), ("GET", r"/commands", self.commands),
             ("GET", r"/inbox", self.inbox), ("POST", r"/inbox/ack", self.ack),
@@ -164,6 +165,13 @@ class SpaceHub(LibraryRoutes):
             ("POST", r"/style/inbox", self.style_inbox),
             ("POST", r"/style/teach", self.style_teach), ("POST", r"/style/resolve", self.style_resolve),
             ("POST", r"/style/learn", self.style_learn),
+            # How flat vs curved a part is: an aesthetic shape may not be a pile of planes.
+            ("POST", r"/surface", self.surface_quality),
+            # Pictures of the model, so a text-only helper can see what it built.
+            ("POST", r"/render", self.render_views),
+            # A person's verdict on how the model looks, and the look it should match.
+            ("POST", r"/feedback", self.feedback_record), ("GET", r"/feedback", self.feedback_recent),
+            ("POST", r"/references", self.add_reference), ("GET", r"/references", self.list_references),
             # Components library and team precision settings (space_library.py).
             *self.library_routes(),
         ]
@@ -442,7 +450,21 @@ class SpaceHub(LibraryRoutes):
                 raise HubRequestError(410, {"error": "That result expired; run it again", "code": "expired"})
             b = rows[0]["bytes"]
             r = json.loads(bytes.fromhex(b) if isinstance(b, str) else bytes(b))
+        objects = r.get("objects") if isinstance(r, dict) else None
+        if isinstance(objects, dict):
+            # A large brep result keeps each part's BRep in its own blob (the whole model in one blob broke
+            # the server's 32 MB message limit): read them back so callers still see "brep".
+            for info in objects.values():
+                if isinstance(info, dict) and "brep_blob" in info:
+                    info["brep"] = self._blob_text(str(info.pop("brep_blob")))
         return r
+
+    def _blob_text(self, sha):
+        rows = self._rows("v_artifact_blob", f"hash = '{sha}'") if re.fullmatch(r"[0-9a-f]{64}", sha) else []
+        if not rows or not rows[0]["bytes"]:
+            raise HubRequestError(410, {"error": "That result expired; run it again", "code": "expired"})
+        b = rows[0]["bytes"]
+        return (bytes.fromhex(b) if isinstance(b, str) else bytes(b)).decode("utf-8")
 
     def ops(self, body):
         return self.run_op(body.get("op"), body.get("args"), body.get("expected_revs"))
@@ -745,6 +767,11 @@ class SpaceHub(LibraryRoutes):
         self._f("cancel_task", tid, body.get("reason") or "")
         return self.task(tid)
 
+    def reopen_task(self, body, tid):
+        """A person reopens a blocked task after answering its blocker; it becomes open for any helper."""
+        self._f("reopen_task", tid, body.get("reason") or "")
+        return self.task(tid)
+
     def delete_task(self, body, tid):
         """Remove a leftover open task. A claimed one is stopped instead, so no work disappears."""
         t = self.task(tid)  # 404 before the call, so a bad id reads as unknown_task
@@ -788,6 +815,17 @@ class SpaceHub(LibraryRoutes):
                 if m["to"] in ("all", f"member:{me}") and m["from"] != me and m["id"] not in consumed
                 and not (helper and m["kind"] == "chat")]
         return sorted(mine, key=lambda m: (rank.get(m["kind"], 2), m["created_ms"]))
+
+    def unread_notes(self, seen, limit=5):
+        """Unread messages whose id is not in `seen`, as {id, from, kind, body}, without marking them delivered.
+        A headless helper gets one prompt and never sees the unread list in a later one, so its MCP server
+        shows each of these once with a tool result."""
+        fresh = [m for m in self._unconsumed() if m["id"] not in seen][:int(limit)]
+        if not fresh:
+            return []
+        names = self._names()
+        return [{"id": m["id"], "from": names.get(m["from"], "?"), "kind": m["kind"],
+                 "to": "all" if m["to"] == "all" else "you", "body": m["body"][:1500]} for m in fresh]
 
     def inbox(self, limit=10):
         names = self._names()
@@ -1102,6 +1140,24 @@ class SpaceHub(LibraryRoutes):
 
     def style_learn(self, body):
         return self.run_op("learn_style", {})
+
+    def surface_quality(self, body):
+        return self.run_op("surface_quality", {"names": body.get("names") or []})
+
+    def render_views(self, body):
+        return self.run_op("render_views", {k: v for k, v in (body or {}).items() if v is not None})
+
+    def feedback_record(self, body):
+        return self.run_op("record_feedback", dict(body or {}))
+
+    def feedback_recent(self, subject="", limit=10):
+        return self.run_op("feedback_recent", {"subject": subject, "limit": int(limit or 10)})
+
+    def add_reference(self, body):
+        return self.run_op("add_reference", dict(body or {}))
+
+    def list_references(self, subject=""):
+        return self.run_op("list_references", {"subject": subject})
 
     def prune_storage(self, body):
         return self.run_op("prune_storage", dict(body or {}))

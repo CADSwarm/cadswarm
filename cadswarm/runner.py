@@ -42,7 +42,8 @@ POLL_SECONDS = 1            # one poll is now a single cheap read, so news is no
 FULL_CHECK_SECONDS = 5      # ...and every few seconds look properly for anything that raised no event
 HEARTBEAT_SECONDS = 10
 ALIVE_SECONDS = 30          # runner.json older than this means no runner is looking after the folder
-RUN_TIMEOUT = 20 * 60       # one wake-up may take this long before it is stopped
+RUN_IDLE = 15 * 60          # a run whose output has not grown for this long is stuck, and is stopped
+RUN_TIMEOUT = 2 * 60 * 60   # even a busy run stops here (a fixed 20 minutes cut helpers off mid-task)
 MAX_RUNS_PER_HOUR = 30
 MIN_GAP_SECONDS = 5
 RESUME_AFTER = 90           # a run can end with the helper's own task still claimed: nudge it again this soon
@@ -342,6 +343,9 @@ class Runner:
         self.started = self.clock()  # this process's claim on the folder (see other_runner)
         self.child = None
         self.child_started = 0.0
+        self.run_keys = set()  # the things the current run was woken for (see refresh_config)
+        self.child_active_at = 0.0  # when the run's output last grew (see child_running)
+        self.child_log_seen = 0
         self.child_log_at = 0  # where the current run's own output starts in helper.log (see child_said)
         self.state = load_json(os.path.join(state_dir(self.folder), "runner-state.json")) or {}
         self.seen = set(self.state.get("seen") or [])
@@ -554,15 +558,75 @@ class Runner:
         except (OSError, ProcessLookupError):
             pass
 
+    def kill_child(self):
+        """Stop the run's own process tree. On Windows its MCP server is a grandchild: killing only the
+        CLI would leave it holding the helper's seat, so a provider switch would look stalled."""
+        child, self.child = self.child, None
+        if child is None:
+            return
+        pid = getattr(child, "pid", 0) or 0
+        if os.name == "nt" and isinstance(child, subprocess.Popen) and pid:
+            try:
+                done = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                if done.returncode == 0:
+                    return
+            except OSError:
+                pass  # no taskkill: at least end the CLI itself below
+        try:
+            child.kill()
+        except OSError:
+            pass
+
     def stop_all(self):
         """End the current run and the warm server (the MCP server goes with it)."""
-        if self.child is not None:
-            try:
-                self.child.kill()
-            except OSError:
-                pass
-            self.child = None
+        self.kill_child()
         self.stop_server()
+
+    def refresh_config(self):
+        """Adopt a provider or model changed while this runner waits (FreeCAD: Change its AI).
+
+        The panel writes the helper folder's config.json; nothing restarts the runner. A running agent is
+        stopped, its claimed task is nudged straight away and the next wake uses the new AI, so the
+        handoff is clean instead of waiting for a run on an account that has just run out. Returns True
+        when it switched."""
+        cfg = load_json(os.path.join(state_dir(self.folder), "config.json")) or {}
+        if not cfg.get("db"):
+            return False  # half-written or moved away: keep the config this runner started with
+        old_client = self.cfg.get("client") or "claude"
+        new_client = cfg.get("client") or "claude"
+        if new_client == old_client and (cfg.get("model") or "") == (self.cfg.get("model") or ""):
+            return False
+        self.cfg = cfg
+        self.warm = bool(cfg.get("warm", new_client == "opencode"))
+        self.warm_error = ""
+        self.warm_retry_at = 0.0
+        self.greeted = True  # the runner already said hello; no second one for the same seat
+        self.present = False
+        was_running = self.child is not None
+        self.kill_child()
+        self.stop_server()  # a warm server belongs to the AI that started it
+        now = self.clock()
+        # Its task must not wait the usual minute and a half: the new AI can finish it now.
+        self.last_run_end = now - RESUME_AFTER
+        self.resume_check_at = now
+        self.resumes = {}
+        if was_running:
+            # Whatever the stopped run was woken for is still unanswered: a message it never acked stays
+            # pending, so wake the new AI for it (it raised no new event, hence the full look).
+            self.seen -= self.run_keys
+            self.seq = None
+        self.run_keys = set()
+        if new_client != old_client:
+            # The new CLI has no session with us: its first run must be fresh, not `--continue` (which
+            # would reopen a conversation the old AI had).
+            self.state.pop("started", None)
+        self.save_state()
+        self.log(f"switched to {new_client}" + (f" ({cfg['model']})" if cfg.get("model") else "")
+                 + (f"; stopped the run that was on {old_client}" if was_running else "")
+                 + " (changed in FreeCAD)")
+        self.write_status("starting", f"switching to {new_client}")
+        return True
 
     # -------------------------------------------------------------------- presence
 
@@ -644,10 +708,12 @@ class Runner:
             self.child = self.spawn(argv, stdin_text)
         finally:
             self.child_env = {}
-        self.child_started = self.clock()
+        self.child_started = self.child_active_at = self.clock()
+        self.child_log_seen = self.child_log_at
         self.present = False  # the agent's MCP server takes the seat (a newer fence)
         self.runs.append(self.clock())
-        self.seen |= {k for k, _ in work}
+        self.run_keys = {k for k, _ in work}
+        self.seen |= self.run_keys
         self.state["started"] = True
         self.save_state()
         self.write_status("working", work[0][1][2:120] if work else "introducing itself")
@@ -668,6 +734,15 @@ class Runner:
         except HubRequestError:
             return
         self.present, self.last_beat = True, self.clock()
+
+    def log_size(self):
+        """helper.log's size through an open handle: Windows updates the listed size lazily while the CLI
+        holds the file open, so a stat by path would make a busy run look quiet."""
+        try:
+            with open(os.path.join(state_dir(self.folder), "helper.log"), "rb") as f:
+                return os.fstat(f.fileno()).st_size
+        except OSError:
+            return self.child_log_seen
 
     def run_output(self):
         """What this run itself printed so far (the log after `child_log_at`), ANSI codes stripped."""
@@ -709,8 +784,12 @@ class Runner:
             self.save_state()
             self.mark_idle()
             return False
-        if self.clock() - self.child_started > RUN_TIMEOUT:
-            self.log("the helper ran too long and was stopped")
+        size = self.log_size()
+        if size != self.child_log_seen:
+            self.child_log_seen, self.child_active_at = size, self.clock()
+        quiet = self.clock() - self.child_active_at > RUN_IDLE
+        if quiet or self.clock() - self.child_started > RUN_TIMEOUT:
+            self.log("the helper went quiet and was stopped" if quiet else "the helper ran too long and was stopped")
             self.child.kill()
             self.child = None
             self.last_run_end = self.clock()
@@ -768,6 +847,7 @@ class Runner:
             self.stop_all()
             self.log("a newer runner took this folder; stopping")
             return False
+        self.refresh_config()
         if self.child_running():
             self.write_status()
             return True
@@ -803,7 +883,9 @@ class Runner:
             self.write_status("offline", "can't reach the team right now; retrying")
             return True
         first = not self.state.get("started")
-        if not work and not first and self.clock() >= self.resume_check_at and self.allowed()[0]:
+        # `first` is also true right after an AI switch (the new CLI needs a fresh session), so a task
+        # the stopped run still held is handed over in that same wake: nobody may leave it claimed.
+        if not work and self.clock() >= self.resume_check_at and self.allowed()[0]:
             # Nobody is watching: a run that ended with the helper's own task still claimed gets another go,
             # with a backoff, instead of the task sitting "claimed" until a person notices.
             work = self.resume_work(self.clock())
@@ -837,6 +919,8 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         raise SystemExit("usage: cadswarm_launch.py runner <helper folder> [project name]")
+    from cadswarm.power import keep_running_in_background
+    keep_running_in_background()  # a minimised/hidden helper runner must not be throttled to a crawl
     Runner(argv[0], argv[1] if len(argv) > 1 else "").run()
 
 

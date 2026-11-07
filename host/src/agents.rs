@@ -8,12 +8,40 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const AGENT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// An agent whose log has not grown for this long is stuck (a hung CLI, a model that stopped answering).
+pub const AGENT_IDLE: Duration = Duration::from_secs(15 * 60);
+/// Even a busy agent stops here; a fresh one picks up what it left.
+pub const AGENT_MAX_RUN: Duration = Duration::from_secs(2 * 60 * 60);
+/// The host looks at its agents every few seconds, and a slow op holds it up for a couple of minutes at
+/// most. A longer gap between two looks means the computer slept: that time is nobody's work.
+pub const SLEPT_AFTER: Duration = Duration::from_secs(5 * 60);
+/// After a sleep, agents need a moment to reconnect before their member row looks alive again.
+pub const WAKE_GRACE: Duration = Duration::from_secs(3 * 60);
+/// An agent that ran this long got going; if it then stops without finishing a task, its CLI works.
+pub const AGENT_STARTED: Duration = Duration::from_secs(10 * 60);
 
 pub struct Agent {
     pub name: String,
     child: Child,
     started: Instant,
+    log: PathBuf,
+    /// The log's size when it last grew, and when: every tool call the agent makes lands there.
+    log_len: u64,
+    last_activity: Instant,
+    /// When `alive` last looked, and when it last saw the computer wake from a sleep.
+    last_check: Instant,
+    woke: Option<Instant>,
+}
+
+/// How much of `since_check` the computer spent asleep (all of it past SLEPT_AFTER counts as sleep).
+pub fn slept(since_check: Duration) -> Option<Duration> {
+    (since_check > SLEPT_AFTER).then_some(since_check)
+}
+
+/// Whether to stop an agent that has run for `ran` and been quiet for `quiet`. A wall-clock limit alone
+/// killed workers in the middle of a lofted body panel, every time, and their task started over.
+pub fn agent_stalled(ran: Duration, quiet: Duration) -> bool {
+    ran > AGENT_MAX_RUN || quiet > AGENT_IDLE
 }
 
 /// Where `exe` might be: $CADSWARM_{EXE}, then PATH, then the usual install folders, then (for
@@ -175,6 +203,12 @@ pub fn forget_identity(cfg: &HostConfig, name: &str) {
     }
 }
 
+/// Run `cmd` in `dir`. PWD too: opencode takes its project folder from it, and a host started from a
+/// shell carries that shell's PWD, which would send the agent there without its .cadswarm config.
+fn run_in(cmd: &mut Command, dir: &Path) {
+    cmd.current_dir(dir).env("PWD", dir);
+}
+
 impl Agent {
     /// `ticket` is an agent invite minted by the host.
     pub fn spawn(cfg: &HostConfig, name: &str, ticket: &str, prompt: &str) -> Result<Agent> {
@@ -212,8 +246,8 @@ impl Agent {
         let (program, args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
         let exe = if cfg.agent_command.is_empty() { find_cli(&program)? } else { PathBuf::from(&program) };
         let mut cmd = Command::new(exe);
+        run_in(&mut cmd, &dir);
         cmd.args(&args)
-            .current_dir(&dir)
             .stdin(if cfg.agent_client == "opencode" && cfg.agent_command.is_empty() {
                 Stdio::piped()
             } else {
@@ -225,16 +259,47 @@ impl Agent {
         if let Some(mut stdin) = child.stdin.take() {
             stdin.write_all(prompt.as_bytes()).context("sending the prompt to the agent")?;
         }
-        Ok(Agent { name: name.into(), child, started: Instant::now() })
+        let now = Instant::now();
+        Ok(Agent { name: name.into(), child, started: now, log: dir.join("agent.log"), log_len: 0, last_activity: now,
+                   last_check: now, woke: None })
     }
 
-    /// False once it exited or was killed for running past the timeout.
+    /// False once it exited, or was stopped for going quiet or running past the hard limit.
     pub fn alive(&mut self) -> bool {
-        if self.started.elapsed() > AGENT_TIMEOUT {
+        // On a laptop that slept for a day, Instant still counts the day: without this every agent is
+        // "past the hard limit" the moment it wakes, mid-task, and the brief starts over.
+        if let Some(gap) = slept(self.last_check.elapsed()) {
+            eprintln!("[host] {}: the computer slept {} min; not counting it against the agent", self.name, gap.as_secs() / 60);
+            self.started += gap;
+            self.last_activity += gap;
+            self.woke = Some(Instant::now());
+        }
+        self.last_check = Instant::now();
+        // Through an open handle: Windows updates a file's listed size and time lazily while another
+        // process holds it open for writing.
+        if let Ok(len) = std::fs::File::open(&self.log).and_then(|f| f.metadata()).map(|m| m.len()) {
+            if len != self.log_len {
+                self.log_len = len;
+                self.last_activity = Instant::now();
+            }
+        }
+        if agent_stalled(self.started.elapsed(), self.last_activity.elapsed()) {
+            eprintln!("[host] stopping {}: ran {} min, quiet for {} min", self.name,
+                      self.started.elapsed().as_secs() / 60, self.last_activity.elapsed().as_secs() / 60);
             self.kill();
             return false;
         }
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// How long it has run, not counting time the computer slept.
+    pub fn ran(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    /// True for a few minutes after the computer woke, while the agent reconnects to the team.
+    pub fn just_woke(&self) -> bool {
+        self.woke.is_some_and(|t| t.elapsed() < WAKE_GRACE)
     }
 
     /// Stop it and everything it started. On Windows the MCP server is a grandchild process: killing
@@ -283,6 +348,9 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
          to Params with expressions (e.g. \"Params.pcb_l + 2 * Params.gap\"); place the parts the detail names \
          with add_standard_part or insert_component instead of modelling them; run check_interference \
          and fix clashes with your own parts; report_result done with evidence (object names, volumes). \
+         To measure, run a script that assigns only `result`: every `shape` you assign becomes a part in the \
+         shared model that everyone sees and exports. A solid you made only to probe or cut with (FBProbe, \
+         a cutter): delete it before report_result. \
          Read get_inbox between tasks and follow any steer messages. \
          When list_tasks shows no OPEN task for brief \"{brief_id}\", stop."
     )
@@ -294,7 +362,7 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
     let style_check = if style.trim().is_empty() {
         String::new()
     } else {
-        format!("\n5. Team design style: the rules below are how this team designs. Each part that breaks one is a \
+        format!("\n7. Team design style: the rules below are how this team designs. Each part that breaks one is a \
                  problem; write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n{style}\n")
     };
     format!(
@@ -307,7 +375,33 @@ pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], rou
          2. check_interference on all parts: any clash between separate parts is a problem.\n\
          3. Fit: the enclosure's inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs must sit at\n\
             hole_N_x/hole_N_y; each port cutout must be centred on its <port>_pos and <port>_z.\n\
-         4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n\
+         4. check_printability: every part must be a closed solid with no wall under 1.2 mm, and fit the bed\n\
+            when the design is meant to print at this size. A full-size object many times the bed (a real\n\
+            car at 1:1, furniture, a building) is not: never file a task to split or shrink its parts.\n\
+         5. Shape: if the brief is for an object judged on how it looks (car, vehicle, body, helmet, fairing,\n\
+            furniture or a product exterior), call surface_quality(topic=\"<the person's request>\") on the\n\
+            shell, the greenhouse and every other visible part, INCLUDING parts built before this brief: an\n\
+            old slab is still a defect. A `fails` verdict is a problem: write it as\n\
+            \"style: organic shape built from flat faces (<n> of <m> faces are flat)\" and file a fix task for\n\
+            it. A separate box roof or box pillars on a body are problems too. Boxy parts (brackets, plates,\n\
+            enclosures) are fine.\n\
+            Validity is separate and applies to EVERY part, boxy or not: a solid with open edges, an\n\
+            unorientable/self-intersecting shell, or `valid: false` is a problem (\"part is not a closed\n\
+            valid solid: <n> open edges\") even if the worker reported it done.\n\
+         6. Reference: a named, real product is googleable (a specific car model, phone, appliance, connector)\n\
+            and must be judged against the real thing. Call list_references(subject) first. If none exists,\n\
+            search the web yourself for a clear photo and save it with add_reference(subject=..., image_url=...\n\
+            , dimensions=...), then list_references and open the saved file. Call render_views\n\
+            (front, left, three_quarter at least) and open the PNGs too. Compare EVERY part against that\n\
+            photo: silhouette, proportions, feature placement and the panel breaks. A clear mismatch is a\n\
+            problem (\"style: <part> does not match the <product> reference: <what differs>\"), naming the\n\
+            reference. If opening an image gives an error, your model cannot see images: never describe\n\
+            or cite what a photo or render shows; judge from the reference's notes and dimensions and the\n\
+            team's spec files instead. If it is not a named real product (a custom bracket, a one-off\n\
+            housing, a generic part) do NOT search: there is nothing to compare it to.\n\
+         Corrections: when a team spec file in the project, or a message from the person or the team\n\
+         manager, corrects the brief (a feature the brief asked for that the real product does not have),\n\
+         judge against the correction, not the brief's original words.\n\
          {style_check}\
          For each problem: create_task assigned to the part's owner (see locked_by in model_status) with a\n\
          precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
@@ -341,6 +435,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_busy_agent_keeps_working_and_a_quiet_or_endless_one_is_stopped() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        assert!(!agent_stalled(min(46), min(0)), "still making tool calls after 46 minutes");
+        assert!(agent_stalled(min(20), min(16)), "nothing written for 16 minutes");
+        assert!(agent_stalled(min(121), min(0)), "past the hard limit");
+    }
+
+    #[test]
+    fn a_long_gap_between_looks_is_sleep_and_a_slow_op_is_not() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(slept(Duration::from_secs(2)), None, "an ordinary tick");
+        assert_eq!(slept(min(3)), None, "a slow op held the host up");
+        assert_eq!(slept(min(1850)), Some(min(1850)), "the laptop slept overnight");
+    }
+
+    #[test]
     fn the_env_override_comes_first_and_the_newest_vscode_binary_before_older_ones() {
         let dir = std::env::temp_dir().join(format!("cadswarm-claude-test-{}", std::process::id()));
         let ext = dir.join(".vscode").join("extensions");
@@ -371,12 +481,25 @@ mod tests {
         assert!(agent_command("gpt", &[], dir, "x").is_err());
     }
 
+    #[test]
+    fn an_agent_runs_in_its_own_folder_even_when_the_host_inherited_a_shells_pwd() {
+        // opencode takes its project folder from $PWD: a host started from a shell elsewhere sent every
+        // agent there, without its .cadswarm config, and each one exited without planning anything.
+        let dir = Path::new("D:/agents/planner-1");
+        let mut cmd = Command::new("opencode");
+        run_in(&mut cmd, dir);
+        assert_eq!(cmd.get_current_dir(), Some(dir));
+        let pwd = cmd.get_envs().find(|(k, _)| *k == "PWD").and_then(|(_, v)| v);
+        assert_eq!(pwd, Some(dir.as_os_str()));
+    }
+
     fn cfg(client: &str, command: Vec<String>, data: PathBuf) -> HostConfig {
         HostConfig {
             mode: "local".into(), uri: "http://127.0.0.1:3000".into(), db: "db".into(), token: "t".into(),
             data_dir: data, freecad_python: PathBuf::from("freecad"), worker_script: PathBuf::from("w.py"),
             web_url: String::new(), cadswarm_python: PathBuf::from("python"), agent_client: client.into(),
             agent_command: command,
+            keep_awake: true,
         }
     }
 
@@ -436,6 +559,24 @@ mod tests {
     }
 
     #[test]
+    fn a_worker_measures_without_making_parts_and_cleans_up_its_scratch_solids() {
+        // FBProbe/FBCut, built only to measure the Lexus bumper, stayed in the shared model and drew over it.
+        let p = worker_prompt("b_1", 1);
+        assert!(p.contains("only `result`"), "{p}");
+        assert!(p.contains("delete it before report_result"), "{p}");
+    }
+
+    #[test]
+    fn the_reviewer_prompt_scales_the_bed_check_trusts_spec_corrections_and_does_not_guess_images() {
+        // A Lexus review failed 560 mm fender panels of a 4710 mm car on a 180 mm bed, filed a task to rebuild
+        // DRLs the manager's spec had removed as wrong, and "compared" against photos its text-only model never saw.
+        let p = review_prompt("b_x", "a 1:1 car", "", [180.0, 180.0, 180.0], 2, "");
+        assert!(p.contains("full-size"), "bed fit only for designs meant to print at that size");
+        assert!(p.contains("corrects the brief"), "a newer team spec or the person's message overrides the brief");
+        assert!(p.contains("cannot see"), "a text-only reviewer must not describe images it could not open");
+    }
+
+    #[test]
     fn the_reviewer_prompt_checks_fit_and_reports_a_verdict() {
         let p = review_prompt("b_x", "a case for my board", "esp32", [220.0, 220.0, 250.0], 2, "");
         assert!(p.contains("check_interference") && p.contains("check_printability"));
@@ -443,6 +584,18 @@ mod tests {
         assert!(!p.contains("Team design style"), "no style rules learned yet");
         let with_style = review_prompt("b_x", "a case", "esp32", [220.0, 220.0, 250.0], 1, "- walls are 2.4 mm");
         assert!(with_style.contains("walls are 2.4 mm"));
+    }
+
+    #[test]
+    fn the_reviewer_prompt_checks_the_shape_of_an_aesthetic_brief() {
+        let p = review_prompt("b_x", "model a car body", "", [200.0, 200.0, 200.0], 1, "- Car bodies are lofted.");
+        assert!(p.contains("surface_quality"), "{p}");
+        assert!(p.contains("organic") && p.contains("flat faces"), "{p}");
+        assert!(p.contains("list_references") && p.contains("named, real product"), "{p}");
+        assert!(p.contains("googleable") && p.contains("search the web"), "{p}");
+        assert!(p.contains("render_views"), "{p}");
+        assert!(p.contains("EVERY part") && p.contains("do NOT search"), "{p}");
+        assert!(p.contains("7. Team design style"), "the style step still follows: {p}");
     }
 
     #[test]

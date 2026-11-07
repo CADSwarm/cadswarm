@@ -80,8 +80,15 @@ opening one. Your sign-in for each team is kept, so you don't need a new invite 
   up for, and teammates on the same network join by reaching this computer's network address (Windows
   may ask to allow access through its firewall). Choose **Maincloud** instead to let teammates join from
   anywhere; the guide's **Sign in to SpacetimeDB…** button opens your browser so you sign in once.
+- **CADSwarm updates itself.** When a new release is published, a small window says a new release is
+  here. **Update now** saves your open documents, leaves the team (releasing your part locks), stops
+  your AI helpers and, if you host, the team server, installs the release and reopens FreeCAD with
+  your documents back. If teammates are online, it asks once before the team goes quiet. **Later**
+  hides that release for a day. You can also check any time from **Tools ▸ Check for updates…**.
+  A git checkout is never replaced (that's a developer's tree); `CADSWARM_UPDATE=0` turns checks off.
 - Keep the hosting computer on while your team works. The host program keeps running even if you close
-  FreeCAD.
+  FreeCAD. While a team is live it also keeps the computer awake and out of Windows' background
+  ("Efficiency mode") throttling, so minimising or hiding FreeCAD does not pause the build.
 - The first setup downloads about 70 MB of helper software into CADSwarm's app folder, plus the team
   server download above if you host. Nothing is installed into FreeCAD itself. On Linux, an official FreeCAD
   the installer fetched for you is unpacked there too (`FreeCAD-<version>`, about 3 GB).
@@ -101,9 +108,12 @@ more or less room) and scrolls when the window is short. It has three parts:
   when one is waiting for it) and its status (**◐ Working**, **Ready**, or why it's away). **＋ New helper**
   starts another one on this computer: pick the AI (Claude Code, Codex or OpenCode) and, if you like, a name
   (otherwise it's called after you and its AI, like `carol-claude`). Have as many as you want. Right-click
-  one of yours to **Rename** it, **Restart** it or see its log; right-click any helper (even one running on a
-  teammate's computer) to **Remove from the team**. Removing releases its locks, returns the work it held and
-  stops it from rejoining on its own: only a fresh invite brings it back. People are listed underneath.
+  one of yours to **Rename** it, **Change its AI or model** (for example Claude Code → OpenCode when your
+  Claude plan runs out), **Restart** it or see its log; right-click any helper (even one running on a
+  teammate's computer) to **Remove from the team**. Switching keeps its name and its seat on the team: no
+  invite code, and a run in progress is stopped so the new AI picks its task back up. Removing releases its
+  locks, returns the work it held and stops it from rejoining on its own: only a fresh invite brings it back.
+  People are listed underneath.
 - **Chat**: one box for everything.
   - `@name what to do` gives that helper a task (with the parts you have selected) and wakes it; it answers in
     the chat with what it'll do, then what it did. Typing `@` lists the helpers to pick from. Your message
@@ -115,7 +125,9 @@ more or less room) and scrolls when the window is short. It has three parts:
   - No `@` is chat between people. AI helpers never see it.
   Tasks only go to AI helpers: people pick their own work.
 - **Tasks** and **Activity** fold open underneath. Tasks lists everything that needs doing, whole-team
-  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. Activity is what
+  requests with their parts underneath; use **Start it**, **I'll do it** or **Mark done**. A task stuck on
+  a helper's question is marked **stuck**: answer it and press **Start it** again, and it reopens for any
+  helper (a finished or cancelled task keeps its outcome). Activity is what
   happened (parts added, tasks finished, files saved, renames) and 🤝 the messages helpers send each other.
 - **AI helpers work together.** A helper can see who is free (`list_helpers`), hand another helper part of
   a job (`delegate_task`, which wakes that helper) and ask the helper who holds a part to change it. When a
@@ -321,6 +333,13 @@ You can also type a rule yourself. It is confirmed at once. The reviewer flags p
 Rules live in the project database on the hosting computer; learning needs no account, keys or
 network. `python -m cadswarm.style_memory show --project <folder>` lists them.
 
+### Shapes judged on how they look
+
+A bracket is allowed to be a box; a car body is not. Before a helper finishes a shape that is judged on how
+it looks, `surface_quality` reports how much of it is flat and whether that reads as a block model, and the
+reviewer treats a fully faceted organic shape as a finding. The bar is inferred from the request and the
+part names, so tables, plates and enclosures are never punished for being boxy.
+
 ---
 
 ## How it works
@@ -432,6 +451,13 @@ task prompt:
 A CLI that isn't on `PATH` can be pointed to with `CADSWARM_CLAUDE`, `CADSWARM_CODEX` or
 `CADSWARM_OPENCODE`. The same CLI runs the planners, the workers and the reviewer.
 
+Change it later without recreating the team: **Tools → AI helpers → Choose the AI for team workers**. The
+host re-reads `host.json` every couple of seconds. Workers already running on the old AI are stopped and
+taken off the team (their tasks go back), so the next tick starts them on the new one; a planner or
+reviewer in the middle of a brief finishes first. A host you run by hand can also be updated in
+`team-model\host.json` (`"agent_client": "opencode"`) while it runs. A custom `agent_command` there
+wins over `agent_client`, so picking an AI in FreeCAD removes it (pin a model on the helper instead).
+
 ## For developers: command line
 
 > **Updating the team database.** After any change to `module/` or `rules/` (new op kinds such as the
@@ -510,9 +536,12 @@ pwsh scripts\package-release.ps1 -ModuleOnly                 # cadswarm_module.w
 
 Push a `v*` tag (`git tag v0.1.0; git push origin v0.1.0`) and `.github/workflows/release.yml`
 builds all five host platforms plus the module on GitHub, writes `SHA256SUMS.txt`, and publishes the
-release the guide resolves as `releases/latest/download`. To test the download path without a
-release, point `CADSWARM_RELEASE_BASE` at a local folder (`file:///C:/path/to/dist`) holding the same
-files.
+release the guide resolves as `releases/latest/download`. The same release also carries
+`cadswarm-workbench.zip` (the add-on, stamped with the tag), which is what the app's update window
+downloads and checksums. To build that zip by hand: `pwsh scripts/package-workbench.ps1 -Version
+v0.1.18`. Bump `cadswarm/version.py` (and `package.xml`) when preparing a release so checkouts and
+installs made from `main` know what they are. To test the download path without a release, point
+`CADSWARM_RELEASE_BASE` at a local folder (`file:///C:/path/to/dist`) holding the same files.
 
 ## Where the team's data lives
 
@@ -600,8 +629,8 @@ cargo test --release --manifest-path rules\Cargo.toml
 cd web; npm test
 ```
 
-Current counts on a Windows checkout: Python 728 passed (16 skipped where FreeCAD or the platform
-sandbox is unavailable), host 53, rules 26, web 107.
+Current counts on a Windows checkout: Python 956 passed (18 skipped where FreeCAD or the platform
+sandbox is unavailable), host 64, rules 31, web 107.
 
 `tests\freecad_panel_live.py` is a manual live check, not part of pytest: it opens a real FreeCAD
 window, joins a running team as a person, sends `@team ...` through the panel, waits for the host to

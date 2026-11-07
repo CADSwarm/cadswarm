@@ -19,6 +19,7 @@ Every level has a wall-clock timeout; the child is killed, never the worker. Set
   CADSWARM_SCRIPT_TIMEOUT (seconds, 60)  CADSWARM_SCRIPT_MEMORY_MB (2048)  CADSWARM_SCRIPT_SANDBOX=off
   CADSWARM_SANDBOX_LEVEL (appcontainer|lowintegrity: restrict the levels tried; for tests)
 """
+import ast
 import json
 import logging
 import os
@@ -246,11 +247,50 @@ def _tail(data, n=600):
     return data.decode("utf-8", "replace").strip()[-n:]
 
 
-def _verdict(out, timeout, memory_mb, level):
+BOOLEANS = {"common", "cut", "fuse", "section"}
+PROBES = {"isInside", "distToShape"}  # fine by the hundred, not by the thousand
+
+
+def _looped_booleans(code):
+    """Slow calls the script repeats: booleans inside any loop, comprehension or helper function
+    ("line 14 (.common)"), and point probes nested two loops deep ("line 9 (.isInside in nested loops)")."""
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    found = []
+
+    def walk(node, depth):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if depth and node.func.attr in BOOLEANS:
+                found.append(f"line {node.lineno} (.{node.func.attr})")
+            elif depth >= 2 and node.func.attr in PROBES:
+                found.append(f"line {node.lineno} (.{node.func.attr} in nested loops)")
+        repeats = isinstance(node, (ast.For, ast.While, ast.FunctionDef, ast.Lambda, ast.ListComp,
+                                    ast.SetComp, ast.DictComp, ast.GeneratorExp))
+        for child in ast.iter_child_nodes(node):
+            walk(child, depth + repeats)
+
+    walk(tree, 0)
+    return sorted(set(found), key=lambda s: int(s.split()[1]))
+
+
+def _verdict(out, timeout, memory_mb, level, code=""):
     started, reply = _parse(out.stdout)
     if out.timed_out:
+        looped = _looped_booleans(code)
+        if looped:
+            raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. It runs "
+                               f"slow shape calls repeatedly at {', '.join(looped[:6])}; on a large skin a boolean "
+                               "can take seconds and thousands of probes add up. Do one boolean against a "
+                               "combined tool shape, and read a skin with the built-in surface_y(shape, x, z), "
+                               "surface_z(shape, x, y) or section_points(shape, 'x', x), which slice once per "
+                               "station, instead of common() or isInside() grids.")
         raise SandboxError("timeout", f"Script exceeded the {timeout:g}s time limit and was stopped. "
-                           "Simplify the geometry or split the work into smaller steps.")
+                           "Usual causes: a loft with dozens of sections or hundreds of points each (8-12 "
+                           "sections is enough for a smooth panel), fuse() or removeSplitter() on a whole skin "
+                           "(pieces that don't touch go in Part.makeCompound), and probing many stations in the "
+                           "same script as the build. Probe in one script, build in the next.")
     if reply is not None:
         if reply.get("code") == "sandbox_limit":
             reply["error"] = f"Script ran out of memory (limit {memory_mb} MB)"
@@ -276,6 +316,16 @@ def _remove(path):
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _temp_root():
+    """Where run folders go: the system temp, or CADSWARM_SANDBOX_TMP when a test or a second team on
+    the machine wants its own (otherwise two CADSwarm processes share the same folder names)."""
+    root = os.environ.get("CADSWARM_SANDBOX_TMP")
+    if not root:
+        return None
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
 def run_script(python, save_copy, request):
     """Run `request["code"]` in a confined child against a snapshot of the document.
 
@@ -291,7 +341,7 @@ def run_script(python, save_copy, request):
                            "unconfined (debugging only).")
     problems = []
     for level in levels:
-        run_dir = tempfile.mkdtemp(prefix="cadswarm-run-")
+        run_dir = tempfile.mkdtemp(prefix="cadswarm-run-", dir=_temp_root())
         in_dir, scratch = os.path.join(run_dir, "in"), os.path.join(run_dir, "scratch")
         try:
             os.mkdir(in_dir)
@@ -321,7 +371,7 @@ def run_script(python, save_copy, request):
             _remove(run_dir)
         if level != levels[0]:
             log.warning("part script ran at fallback level %s", level)
-        return _verdict(out, timeout, memory_mb, level)
+        return _verdict(out, timeout, memory_mb, level, request.get("code", ""))
     raise SandboxError("sandbox_unavailable", "Part scripts can't run: the sandbox could not start ("
                        + "; ".join(problems) + "). Set CADSWARM_SCRIPT_SANDBOX=off to run them unconfined "
                        "(debugging only).")

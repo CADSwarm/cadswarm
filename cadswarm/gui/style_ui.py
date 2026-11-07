@@ -10,14 +10,15 @@ recommended set in one visible action. Weak rules nothing supports for two weeks
 stay recoverable under "Expired or dismissed". A person can also teach a rule in their own words; it is
 confirmed straight away.
 
-Runs on FreeCAD's GUI thread with the same blocking client calls the other dialogs use.
+Every call to the team server runs on a background thread and the dialog says what it is doing: the host
+runs ops one at a time, so a read during a build can take seconds (or wait for a stopped host). Doing it
+inline froze all of FreeCAD on every click, including the click that opened this window.
 """
 import html
 
 import FreeCADGui as Gui
 from PySide import QtCore, QtGui
 
-from ..client import HubRequestError
 from . import theme
 
 BADGES = {"confirm": ("Ready", theme.OK), "look": ("Look", theme.WARN), "dismiss": ("Weak", theme.MUTED)}
@@ -108,6 +109,12 @@ class StyleDialog(QtGui.QDialog):
         theme.apply(self)
         self.setWindowTitle("CADSwarm: learned design style")
         self.resize(720, 680)
+        self.box = {}            # the inbox as last read, filtered locally when an answer lands
+        self._loading = False    # a read is in flight
+        self._again = False      # an answer changed the inbox while the read was in flight
+        self._saving = 0         # answers sent and not yet back
+        self._load_error = False
+        self._gone = False       # the window closed: a late answer must not read the team again
         lay = QtGui.QVBoxLayout(self)
         intro = QtGui.QLabel("CADSwarm watches how your team builds, the sizes you use and what you change "
                              "after an AI helper, and turns it into rules every helper follows. Rules that "
@@ -117,6 +124,17 @@ class StyleDialog(QtGui.QDialog):
         self.summary = QtGui.QLabel()
         self.summary.setWordWrap(True)
         lay.addWidget(self.summary)
+        # What the dialog is waiting for, so a slow host reads as work in progress, never as a frozen window.
+        self.note = QtGui.QLabel()
+        self.note.setWordWrap(True)
+        self.retry = QtGui.QPushButton("Try again")
+        self.retry.setObjectName("quiet")
+        self.retry.clicked.connect(self.load)
+        self.retry.hide()
+        status = QtGui.QHBoxLayout()
+        status.addWidget(self.note, 1)
+        status.addWidget(self.retry)
+        lay.addLayout(status)
         self.ready = BulkBlock("Review the ready rules", "Make these rules",
                                lambda ids: self.resolve(ids, "confirm"))
         self.weak = BulkBlock("Review the weak ones", "Dismiss these",
@@ -168,12 +186,12 @@ class StyleDialog(QtGui.QDialog):
         tl.addWidget(add)
         lay.addWidget(teach)
         row = QtGui.QHBoxLayout()
-        relearn = QtGui.QPushButton("Learn again now")
-        relearn.setToolTip("Re-read everything the team has done and update the rules")
-        relearn.clicked.connect(self.relearn)
+        self.relearn_button = QtGui.QPushButton("Learn again now")
+        self.relearn_button.setToolTip("Re-read everything the team has done and update the rules")
+        self.relearn_button.clicked.connect(self.relearn)
         close = QtGui.QPushButton("Close")
         close.clicked.connect(self.accept)
-        row.addWidget(relearn)
+        row.addWidget(self.relearn_button)
         row.addStretch(1)
         row.addWidget(close)
         lay.addLayout(row)
@@ -182,12 +200,49 @@ class StyleDialog(QtGui.QDialog):
     # ------------------------------------------------------------------ the inbox
 
     def load(self):
-        try:
-            box = _p().SESSION.client.post("/style/inbox", {})
-        except HubRequestError as e:
-            _p().hint(_p().friendly_error(e))
+        """Read the inbox off the GUI thread; the window opens at once and stays usable while it comes back."""
+        if self._gone:
             return
-        self.box = box
+        if self._loading:
+            self._again = True  # one read at a time; the last answer is the one shown
+            return
+        self._loading, self._load_error = True, False
+        self._status()
+        _p().SESSION.run_async(lambda c: c.post("/style/inbox", {}), done=self._loaded,
+                               failed=self._load_failed, purpose="read the team's learned style")
+
+    def _loaded(self, box):
+        self._loading = False
+        if self._gone:
+            return
+        self.box = box or {}
+        self._render()
+        self._status()
+        if self._again:
+            self._again = False
+            self.load()
+
+    def _load_failed(self):
+        self._loading, self._load_error = False, True
+        self._status()
+
+    def _status(self):
+        """One line on the work in flight: a slow team reads as "Reading…", not as a frozen window."""
+        if self._loading:
+            text = "Reading the team's learned style…"
+        elif self._saving:
+            text = ("Saving your answer…" if self._saving == 1 else f"Saving {self._saving} answers…")
+        else:
+            text = ""
+        self.note.setText(_muted(text) if text else "")
+        self.retry.setVisible(self._load_error and not self._loading)
+
+    def done(self, result):
+        self._gone = True  # a late answer must not start another read of the team
+        super().done(result)
+
+    def _render(self):
+        box = self.box
         decisions = [d for s in box.get("sections") or [] for d in s["decisions"]]
         self.summary.setText(self._summary(box))
         self.ready.load([d for d in decisions if d["recommendation"] == "confirm"])
@@ -283,11 +338,11 @@ class StyleDialog(QtGui.QDialog):
             if d["status"] == "active":
                 pin = QtGui.QPushButton("Keep")
                 pin.setToolTip("Pin this rule: confirmed rules are never demoted")
-                pin.clicked.connect(lambda _=False, i=list(d["ids"]): self.resolve(i, "confirm"))
+                pin.clicked.connect(lambda _=False, i=list(d["ids"]): self.resolve(i, "confirm", keep=True))
                 rl.addWidget(pin)
             remove = QtGui.QPushButton("Remove")
             remove.setToolTip("Stop using this rule; it stays under Expired or dismissed")
-            remove.clicked.connect(lambda _=False, i=list(d["ids"]): self.resolve(i, "dismiss"))
+            remove.clicked.connect(lambda _=False, i=list(d["ids"]): self.resolve(i, "dismiss", keep=True))
             rl.addWidget(remove)
             self.used_lay.addWidget(row)
         self.used_lay.addStretch(1)
@@ -309,32 +364,101 @@ class StyleDialog(QtGui.QDialog):
             rl.addWidget(text, 1)
             back = QtGui.QPushButton("Make it a rule")
             back.setObjectName("quiet")
-            back.clicked.connect(lambda _=False, i=list(d["ids"]): self.resolve(i, "confirm"))
+            back.clicked.connect(lambda _=False, i=list(d["ids"]): self.resolve(i, "confirm", keep=True))
             rl.addWidget(back)
             self.history_lay.addWidget(row)
 
-    def resolve(self, ids, decision):
+    def resolve(self, ids, decision, keep=False):
+        """Answer a decision now and wait for the host behind it: the card leaves at once, and a failed answer
+        puts the inbox back the way the team still has it.
+
+        `keep` is for the rows that do not leave whatever the answer is (in use, expired): they wait for the
+        read that follows, so a wrong click there is never hidden."""
+        ids = [str(i) for i in ids]
         n = len(ids)
         message = (f"Confirmed {n} style rule{'s' if n != 1 else ''}" if decision == "confirm"
                    else f"Dismissed {n} style rule{'s' if n != 1 else ''}")
-        if _p().SESSION.act("POST", "/style/resolve", {"rule_ids": list(ids), "decision": decision},
-                            message, purpose="answer a style rule") is not None:
-            self.load()
+        before = None
+        if not keep:
+            before = dict(self.box)  # what the inbox showed before this answer, to put back if it fails
+            self._forget(ids)
+        self._saving += 1
+        self._status()
+
+        def done(_r):
+            self._saving = max(0, self._saving - 1)
+            self._status()
+            _p().say(message)
+            if keep:
+                self.load()
+
+        def failed():
+            self._saving = max(0, self._saving - 1)
+            if before is not None:
+                self.box = before
+                self._render()
+            self._status()
+            self.load()  # the answer never landed: show the rules the team still waits on
+
+        _p().SESSION.act_async("POST", "/style/resolve", {"rule_ids": ids, "decision": decision},
+                               done=done, failed=failed, purpose="answer a style rule")
+
+    def _forget(self, ids):
+        """Take a decision off the inbox the moment it is answered: that is what the team will show next."""
+        gone = {str(i) for i in ids}
+        box = self.box
+        sections = []
+        for section in box.get("sections") or []:
+            decisions = [d for d in section["decisions"] if not gone & {str(i) for i in d["ids"]}]
+            if decisions:
+                sections.append({**section, "decisions": decisions, "count": len(decisions)})
+        box["sections"] = sections
+        pending = [d for s in sections for d in s["decisions"]]
+        box["decisions"], box["rules"] = len(pending), sum(len(d["ids"]) for d in pending)
+        box["ready"] = sum(1 for d in pending if d["recommendation"] == "confirm")
+        box["weak"] = sum(1 for d in pending if d["recommendation"] == "dismiss")
+        box["history"] = [d for d in box.get("history") or [] if not gone & {str(i) for i in d["ids"]}]
+        self._render()
 
     def teach(self):
         text = self.teach_text.text().strip()
         if not text:
             _p().hint("Write the rule first.")
             return
-        if _p().SESSION.act("POST", "/style/teach", {"statement": text}, "Saved a team style rule",
-                            purpose="teach a style rule") is not None:
+        self._saving += 1
+        self._status()
+
+        def done(_r):
+            self._saving = max(0, self._saving - 1)
             self.teach_text.clear()
+            _p().say("Saved a team style rule")
             self.load()
 
+        def failed():
+            self._saving = max(0, self._saving - 1)
+            self._status()
+
+        _p().SESSION.act_async("POST", "/style/teach", {"statement": text}, done=done,
+                               failed=failed, purpose="teach a style rule")
+
     def relearn(self):
-        if _p().SESSION.act("POST", "/style/learn", {}, "Updated the learned style",
-                            purpose="re-learn the team style") is not None:
+        self.relearn_button.setEnabled(False)
+        self._saving += 1
+        self._status()
+
+        def done(_r):
+            self._saving = max(0, self._saving - 1)
+            self.relearn_button.setEnabled(True)
+            _p().say("Updated the learned style")
             self.load()
+
+        def failed():
+            self._saving = max(0, self._saving - 1)
+            self.relearn_button.setEnabled(True)
+            self._status()
+
+        _p().SESSION.act_async("POST", "/style/learn", {}, done=done, failed=failed,
+                               purpose="re-learn the team style")
 
 
 def show_style():

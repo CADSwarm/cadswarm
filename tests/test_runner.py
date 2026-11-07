@@ -273,6 +273,47 @@ def test_a_failed_run_says_what_the_cli_printed(tmp_path):
     assert "> build" not in r.last_error and "\x1b" not in r.last_error
 
 
+def test_a_busy_run_keeps_going_and_a_quiet_or_endless_one_is_stopped(tmp_path):
+    """A 20-minute wall-clock limit stopped a helper in the middle of its third fix of the night."""
+    r, clock, _spawned = make_runner(tmp_path)
+    log = os.path.join(r.folder, ".cadswarm", "helper.log")
+    open(log, "w", encoding="utf-8").close()
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append(1)
+
+    def start():
+        r.child, r.child_started = Busy(), clock[0]
+        r.child_log_at = r.child_log_seen = os.path.getsize(log)
+        r.child_active_at = clock[0]
+
+    def work(minutes):
+        for _ in range(minutes):
+            clock[0] += 60
+            with open(log, "a", encoding="utf-8") as f:
+                f.write("> build · a tool call\n")
+            assert r.child_running() is True
+
+    start()
+    work(45)  # writing all the time: well past the old 20 minutes
+    clock[0] += runner.RUN_IDLE + 1  # then silence
+    assert r.child_running() is False and killed == [1]
+
+    start()
+    work(int(runner.RUN_TIMEOUT // 60) - 1)
+    clock[0] += 120
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("still going\n")
+    assert r.child_running() is False and killed == [1, 1], "even a busy run stops at the hard limit"
+
+
 def test_a_codex_wake_repairs_an_old_helpers_missing_mcp_approval(tmp_path, monkeypatch):
     """Helpers set up before this fix have the server but no approval default: every call was refused."""
     monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
@@ -333,6 +374,120 @@ def test_the_runner_wakes_opencode_with_the_folders_model(tmp_path, monkeypatch)
     assert r.wake([("m:x", "- hi")], first=True)
     argv = spawned[-1][0]
     assert argv[argv.index("--model") + 1] == "openai/gpt-5.1"
+
+
+def test_switching_the_ai_mid_run_stops_it_and_wakes_the_new_one(tmp_path, monkeypatch):
+    """FreeCAD's "Change its AI" only rewrites the folder's config. A run already on the old AI is
+    stopped (its whole tree), the new CLI gets a fresh session, and its first wake carries the task
+    the stopped run still held."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    t = tables()
+    t["v_message"] = []
+    t["v_task"] = [task("t_mine", "lid", assignee="ann-claude", owner=1, status="claimed")]
+    r, clock, spawned = make_runner(tmp_path, t=t)
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append("claude run")
+
+    r.child = Busy()
+    r.child_started = clock[0]
+    r.state["started"] = True
+    r.save_state()
+    cfg_path = tmp_path / "helper" / ".cadswarm" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.update({"client": "opencode", "model": "openai/gpt-5.1", "warm": False})
+    cfg_path.write_text(json.dumps(cfg))
+
+    assert r.step() is True
+    assert killed == ["claude run"]
+    assert r.cfg["client"] == "opencode" and r.warm is False
+    argv, prompt = spawned[-1]
+    assert argv[:4] == ["/bin/opencode", "run", "--standalone", "--auto"]
+    assert argv[argv.index("--model") + 1] == "openai/gpt-5.1" and "--continue" not in argv
+    assert "You still hold task t_mine" in prompt  # handed straight back, no minute-and-a-half wait
+
+
+def test_a_message_the_stopped_run_never_answered_wakes_the_new_ai(tmp_path, monkeypatch):
+    """Seen live: a switch mid-answer stopped the run, and the person's question was never answered,
+    because the runner had already marked it seen when it woke the old AI."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    t = tables()
+    t["v_task"], t["v_receipt"] = [], []
+    t["v_message"] = [msg("m_steer", 3, "member:1", "steer", "make the lid 20 mm")]
+    r, clock, spawned = make_runner(tmp_path, t=t)
+    r.state["started"] = True
+    r.save_state()
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append("claude run")
+
+    r.spawn = lambda argv, stdin: spawned.append((argv, stdin)) or Busy()
+    assert r.step() is True and "make the lid 20 mm" in spawned[-1][1]  # the old AI starts answering
+    cfg_path = tmp_path / "helper" / ".cadswarm" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.update({"client": "opencode", "model": "openai/gpt-5.1", "warm": False})
+    cfg_path.write_text(json.dumps(cfg))
+    clock[0] += runner.MIN_GAP_SECONDS + 1
+
+    assert r.step() is True
+    assert killed == ["claude run"]
+    argv, prompt = spawned[-1]
+    assert argv[0] == "/bin/opencode" and "make the lid 20 mm" in prompt
+
+
+def test_a_model_change_keeps_the_same_ais_conversation(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    monkeypatch.delenv("CADSWARM_HELPER_MODEL", raising=False)
+    r, _clock, spawned = make_runner(tmp_path, client="opencode")
+    r.warm = False
+    r.state["started"] = True
+    r.save_state()
+    cfg_path = tmp_path / "helper" / ".cadswarm" / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg.update({"model": "openai/gpt-5.1", "warm": False})
+    cfg_path.write_text(json.dumps(cfg))
+
+    assert r.step() is True
+    assert "started" in r.state  # same CLI: carry on with its own session
+    argv, _prompt = spawned[-1]
+    assert argv[argv.index("--model") + 1] == "openai/gpt-5.1" and "--continue" in argv
+
+
+def test_an_unchanged_config_never_stops_a_running_helper(tmp_path, monkeypatch):
+    """The runner re-reads the folder every poll; only a real change may kill the run."""
+    monkeypatch.setattr(runner, "find_agent_cli", lambda c: f"/bin/{c}")
+    r, clock, _spawned = make_runner(tmp_path)
+    killed = []
+
+    class Busy:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append("run")
+
+    r.child = Busy()
+    r.child_started = r.child_active_at = clock[0]  # just started, as spawn_run sets both
+    assert r.step() is True
+    assert killed == [] and r.child is not None
 
 
 def test_a_newer_runner_takes_the_folder_so_the_old_one_stops(tmp_path, monkeypatch):

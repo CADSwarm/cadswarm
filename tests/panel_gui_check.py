@@ -4,6 +4,7 @@
 
 Writes panel-<w>x<h>.png screenshots and panel-verified.json. Run by test_panel_gui.py.
 """
+import copy
 import json
 import sys
 import time
@@ -93,6 +94,12 @@ class FakeClient:
     cfg = {"db": "team-db"}
     hub = "http://x"
 
+    def __init__(self):
+        self.style_posts = []  # every style answer a dialog sent, in order
+
+    def request(self, method, path, body=None, params=None, timeout=None, raw=False):
+        return self.post(path, body) if method == "POST" else self.get(path)
+
     def get(self, path):
         if path == "/project/files":
             return {"files": [
@@ -104,13 +111,15 @@ class FakeClient:
         raise panel.HubRequestError(404, {"code": "not_found", "error": path})
 
     def post(self, path, body=None):
+        if path in ("/style/resolve", "/style/teach", "/style/learn"):
+            self.style_posts.append([path, body])  # the answers a dialog sent, not its reads
         if path == "/project/files/history":
             return {"path": body["path"], "current": {"path": body["path"], "version": 2, "size": 1840,
                                                       "author": "ann-claude", "updated_at": now - 600},
                     "older_versions": [{"version": 1, "size": 1500, "author": "bob-codex",
                                         "saved_at": now - 9000, "reason": "replaced"}]}
         if path == "/style/inbox":
-            return STYLE_INBOX
+            return copy.deepcopy(STYLE_INBOX)  # a dialog prunes the inbox it was given; keep the fixture
         if path == "/style/resolve":
             return {"rules": []}
         raise panel.HubRequestError(404, {"code": "not_found", "error": path})
@@ -383,10 +392,23 @@ fix_request = {"to": sent_fix[0][1]["to"], "kind": sent_fix[0][1]["kind"],
                "reads_report": "fea_report('fea_1a2b3c4d')" in sent_fix[0][1]["body"]} if sent_fix else None
 # The Learned design style dialog is the triage inbox: one decision per subject, grouped in sections,
 # a bulk "ready" block that lists every rule it would make, and an expired history you can restore.
-style_posts = []
-real_act = s.act
-s.act = lambda method, path, body=None, done=None, purpose="do that": (style_posts.append((path, body)), {})[1]
+def pump(session, until, seconds=10.0):
+    """Run FreeCAD's event loop until `until()`: the dialog's answers come back through the session's queue."""
+    deadline = time.time() + seconds
+    while not until() and time.time() < deadline:
+        QtGui.QApplication.processEvents()
+        session.drain()
+        time.sleep(0.01)
+    return until()
+
+
+# The chat checks above answer inline to keep that part headless; this dialog's whole point is that its
+# calls are real background work, so put the session's own methods back.
+s.run_async = panel.Session.run_async.__get__(s, panel.Session)
+s.act_async = panel.Session.act_async.__get__(s, panel.Session)
+fast_client = s.client
 dlg_style = style_ui.StyleDialog()
+style_loaded = pump(s, lambda: bool(dlg_style.summary.text()))
 style_summary = dlg_style.summary.text()
 style_sections = [dlg_style.pending_lay.itemAt(i).widget().title()
                   for i in range(dlg_style.pending_lay.count())
@@ -399,10 +421,74 @@ style_history = {"toggle": dlg_style.history_toggle.text(), "rows": dlg_style.hi
                  "shown": not dlg_style.history_toggle.isHidden()}
 style_used = {"shown": not dlg_style.used.isHidden(), "rows": dlg_style.used_lay.count() - 1}
 dlg_style.ready.apply_button.click()
-s.act = real_act
+style_answered = pump(s, lambda: bool(s.client.style_posts))
+style_posts = list(s.client.style_posts)
 dlg_style.close()
 style_inbox = {"summary": style_summary, "sections": style_sections, "ready": style_ready, "weak": style_weak,
-               "history": style_history, "used": style_used, "posted": style_posts}
+               "history": style_history, "used": style_used, "posted": style_posts, "loaded": style_loaded,
+               "answered": style_answered}
+
+
+# Opening the dialog and answering a decision must not wait on the host inside the click. The host runs ops
+# one at a time, so a busy one can take seconds (a stopped one, up to the hub's whole timeout): doing that
+# on FreeCAD's GUI thread froze the entire window, every click, until the answer came back.
+class SlowStyleClient(FakeClient):
+    """A host that is busy: every style call takes a moment."""
+
+    def post(self, path, body=None):
+        time.sleep(0.4)
+        return super().post(path, body)
+
+
+s.client = SlowStyleClient()
+t0 = time.time()
+dlg_slow = style_ui.StyleDialog()
+opened_in = time.time() - t0
+slow_loaded = pump(s, lambda: bool(dlg_slow.summary.text()))
+decisions_before = sum(len(sec["decisions"]) for sec in dlg_slow.box["sections"])
+actions = [b for b in dlg_slow.findChildren(QtGui.QPushButton) if b.text() == "Make it a rule"]
+t0 = time.time()
+actions[0].click()
+clicked_in = time.time() - t0
+says_saving = "Saving your answer" in dlg_slow.note.text()
+left_at_once = sum(len(sec["decisions"]) for sec in dlg_slow.box["sections"]) == decisions_before - 1
+slow_sent = pump(s, lambda: len(s.client.style_posts) == 1 and not dlg_slow.note.text())
+slow_posts = list(s.client.style_posts)
+dlg_slow.close()
+
+
+# An answer the host refuses must come back rather than quietly vanish: the inbox is put back as the
+# team still has it, and the dialog says the team couldn't be reached.
+class FailingStyleClient(FakeClient):
+    """A host that refuses the answer (a stopped one, or a rule someone else already removed)."""
+
+    def post(self, path, body=None):
+        if path == "/style/resolve":
+            raise panel.HubRequestError(422, {"code": "op_error", "error": "the host refused it"})
+        return super().post(path, body)
+
+
+s.client = FailingStyleClient()
+warnings, real_warning = [], QtGui.QMessageBox.warning
+QtGui.QMessageBox.warning = staticmethod(lambda *a, **k: warnings.append(a[-1]))
+dlg_fail = style_ui.StyleDialog()
+fail_loaded = pump(s, lambda: bool(dlg_fail.summary.text()))
+decisions_before = sum(len(sec["decisions"]) for sec in dlg_fail.box["sections"])
+[b for b in dlg_fail.findChildren(QtGui.QPushButton) if b.text() == "Make it a rule"][0].click()
+restored = pump(s, lambda: not dlg_fail._saving and not dlg_fail._loading
+                and sum(len(sec["decisions"]) for sec in dlg_fail.box["sections"]) == decisions_before)
+dlg_fail.close()
+QtGui.QMessageBox.warning = real_warning
+style_failed = {"loaded": fail_loaded, "restored": restored, "told": bool(warnings)}
+
+s.client = fast_client
+s.run_async = lambda work, done=None, purpose="", failed=None: work(Recorder())
+s.act_async = fake_act
+style_fast = {"opened_in": round(opened_in, 3), "opens_fast": opened_in < 0.3,
+              "loaded": slow_loaded, "clicked_in": round(clicked_in, 3), "click_returns_fast": clicked_in < 0.3,
+              "says_saving": says_saving, "decision_left_at_once": left_at_once,
+              "answer_sent": slow_sent and slow_posts == [["/style/resolve", {"rule_ids": ["r_wall1", "r_wall2"],
+                                                                              "decision": "confirm"}]]}
 
 # Opening the workbench must not freeze FreeCAD. A busy team takes tens of seconds to answer (the live
 # model alone can be 10 MB), so the rejoin runs on a background thread and the window keeps painting;
@@ -672,6 +758,8 @@ result = {
     "suggestions_cleared": suggestions_cleared,
     "style_opened": style_opened,
     "style_inbox": style_inbox,
+    "style_fast": style_fast,
+    "style_failed": style_failed,
     "helpers_listed": [p.team.topLevelItem(i).data(0, QtCore.Qt.UserRole) for i in range(p.team.topLevelItemCount())],
     "helper_rows": [[p.team.topLevelItem(i).text(c).lstrip("◐◓◑◒ ") for c in range(3)]
                     for i in range(p.team.topLevelItemCount())],

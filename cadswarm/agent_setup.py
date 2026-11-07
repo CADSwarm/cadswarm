@@ -57,6 +57,15 @@ changed in at most three lines. A person's COMMAND from FreeCAD or the web app g
   already repeat a size, `auto_constrain` previews the shared sizes, equal-spacing patterns and
   shaft/hole fits it can infer; apply the ones you mean.
 - After changes run `check_interference`; coordinate clashes with the other part's owner.
+- A shape judged on how it looks (car body, fairing, helmet, product exterior) must be lofted, not
+  extruded: call `surface_quality` before finishing it. A bracket, plate or enclosure is allowed to be a box.
+- When your person says it looks wrong, record their exact words with `record_feedback` (`by="person"`)
+  and attach their photos with `add_reference`; before rebuilding, read `model_feedback` and open the references.
+- For a real, named thing (a car model, a phone, a connector) find reference images and published
+  dimensions first: `add_reference` (an `image_url` or a photo your person sent), then `list_references`
+  and open them. Never invent proportions for a named product.
+- `render_views` gives you PNGs of the model (front, side, top, three-quarter). Open them before calling
+  a shape done: the numbers cannot show a hole, a floating part or a wrong silhouette.
 - Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
   from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
   you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you
@@ -391,6 +400,20 @@ def helper_model(project):
     return (load_json(os.path.join(state_dir(project), "config.json")) or {}).get("model") or ""
 
 
+def _write_opencode_model(project, model):
+    """Keep OpenCode's own opencode.json on the same model, so the helper opened in a terminal uses it."""
+    oc_path = os.path.join(project, "opencode.json")
+    if not os.path.isfile(oc_path):
+        return
+    oc = _read_config(oc_path)
+    if model:
+        oc["model"] = model
+    else:
+        oc.pop("model", None)
+    with open(oc_path, "w", encoding="utf-8") as f:
+        json.dump(oc, f, indent=2)
+
+
 def save_helper_model(project, model):
     """Pin (or with "" unpin) the model this helper runs on. It sticks: the runner prefers it over
     CADSWARM_HELPER_MODEL, and OpenCode's own opencode.json gets it too, so the helper opened in a
@@ -404,15 +427,52 @@ def save_helper_model(project, model):
         cfg.pop("model", None)
     os.makedirs(state_dir(project), exist_ok=True)
     save_json(path, cfg)
-    oc_path = os.path.join(project, "opencode.json")
-    if cfg.get("client") == "opencode" and os.path.isfile(oc_path):
-        oc = _read_config(oc_path)
+    if cfg.get("client") == "opencode":
+        _write_opencode_model(project, model)
+
+
+def switch_helper_client(project, client, python=None, model=None, project_name=""):
+    """Move an existing helper folder to another AI (claude, codex or opencode) without a new invite.
+
+    It keeps its seat on the team: the identity, name and database in `.cadswarm/` are untouched. The
+    new CLI's own config (MCP server, instructions, prompt hook) is written first, so a file we refuse
+    to touch leaves the helper exactly as it was. `model` pins the new AI's model (OpenCode only; None
+    keeps the folder's pick, and "" follows the person's configured provider/model like a new helper).
+    Returns the files written.
+
+    A runner watching the folder notices the change on its next poll and stops whatever was running
+    (see runner.Runner.refresh_config), so the next wake uses the new AI and the task it held is
+    picked back up. Nothing here needs the helper to be online."""
+    if client not in CLIENTS:
+        raise ValueError(f"client must be one of {sorted(CLIENTS)}")
+    project = os.path.abspath(project)
+    cfg_path = os.path.join(state_dir(project), "config.json")
+    cfg = load_json(cfg_path) or {}
+    if not cfg.get("db") or not cfg.get("name"):
+        raise ValueError("This folder isn't an AI helper connected to a team, so there's nothing to switch.")
+    if not os.path.isfile(os.path.join(state_dir(project), "identity.json")):
+        raise ValueError("This helper has no team sign-in any more; set it up again with a fresh invite.")
+    python = python or sys.executable
+    written = {"claude": setup_claude, "codex": setup_codex, "opencode": setup_opencode}[client](project, python)
+    cfg["client"] = client
+    if project_name:
+        cfg["project"] = project_name
+    if client == "opencode":
+        # An unpinned OpenCode helper follows the person's own provider/model: its built-in default can
+        # be one this computer never signed in to (see default_model).
+        model = (cfg.get("model") if model is None else (model or "").strip()) or default_model(client)
         if model:
-            oc["model"] = model
+            cfg["model"] = model
         else:
-            oc.pop("model", None)
-        with open(oc_path, "w", encoding="utf-8") as f:
-            json.dump(oc, f, indent=2)
+            cfg.pop("model", None)
+    # One write: a runner watching the folder must never see the client change before its model.
+    save_json(cfg_path, cfg)
+    if client == "opencode":
+        _write_opencode_model(project, model)
+    if client == "codex":
+        trust_in_codex(project)
+    written.append(write_launcher(project, client, project_name or cfg.get("project") or "your team's project"))
+    return written
 
 
 def list_models(client):

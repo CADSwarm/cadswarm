@@ -207,7 +207,7 @@ else
     # Start from an empty staging folder: a failed earlier run must not leave old files in the copy.
     rm -rf "$DEST.new" && mkdir -p "$DEST.new" || die "Couldn't create $DEST"
     (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
-        --exclude=cadswarm-data --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
+        --exclude=cadswarm-data --exclude=cadswarm/training --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
         --exclude=node_modules --exclude=target .) | (cd "$DEST.new" && tar -xf -) || die "Copying CADSwarm into FreeCAD failed."
     WASM="$HERE/module/target/wasm32-unknown-unknown/release/cadswarm_module.wasm"
     # A local build wins; otherwise use the module the installer put beside the code, so a fresh

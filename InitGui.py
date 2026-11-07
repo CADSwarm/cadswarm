@@ -20,6 +20,29 @@ def open_on_start():
     except Exception as e:  # noqa: BLE001 - never break FreeCAD's startup over this
         import FreeCAD
         FreeCAD.Console.PrintWarning(f"[CADSwarm] could not open the team panel: {e}\n")
+    # Left-drag moves the view, right-drag turns it, in every workbench (off in the CADSwarm menu).
+    try:
+        from cadswarm.gui import navigation
+        navigation.install()
+    except Exception as e:  # noqa: BLE001
+        import FreeCAD
+        FreeCAD.Console.PrintWarning(f"[CADSwarm] could not add the mouse controls: {e}\n")
+    # Finish the cleanup an earlier update left (Windows often holds the old folder), reopen the
+    # documents an update saved, then ask GitHub for a newer release in the background; the little
+    # update window does the rest.
+    try:
+        import FreeCAD
+        from cadswarm import update
+        for path in update.take_reopen():  # empty unless an update just restarted FreeCAD
+            try:
+                FreeCAD.openDocument(path)
+            except Exception as e:  # one missing file must not stop the others
+                FreeCAD.Console.PrintWarning(f"[CADSwarm] couldn't reopen {path}: {e}\n")
+        from cadswarm.gui import updates
+        updates.on_start()
+    except Exception as e:  # noqa: BLE001
+        import FreeCAD
+        FreeCAD.Console.PrintWarning(f"[CADSwarm] could not check for updates: {e}\n")
 
 
 QtCore.QTimer.singleShot(2000, open_on_start)
@@ -48,6 +71,8 @@ static char * icon_xpm[] = {
         register_command()
         from cadswarm.gui import lighten_ui
         lighten_ui.register_command()
+        from cadswarm.gui import navigation
+        navigation.register_command()
         # Everything else lives in the team panel's tabs; the toolbar only opens it (and the setup guide).
         self.appendToolbar("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel"])
         self.appendMenu("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
@@ -55,8 +80,9 @@ static char * icon_xpm[] = {
                                      "CadSwarm_Constrain", "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator", "CadSwarm_Interference",
                                      "CadSwarm_Export", "CadSwarm_Lighten", "CadSwarm_OptimizePart", "CadSwarm_RunFea",
                                      "CadSwarm_FeaReports",
-                                     "CadSwarm_Pointers", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
-                                     "Separator", "CadSwarm_Disconnect", "CadSwarm_StopHosting"])
+                                     "CadSwarm_Pointers", "CadSwarm_MouseControls", "Separator", "CadSwarm_Lock", "CadSwarm_Release",
+                                     "Separator", "CadSwarm_CheckUpdates", "CadSwarm_Disconnect",
+                                     "CadSwarm_StopHosting"])
 
     def Activated(self):
         from cadswarm.gui import panel

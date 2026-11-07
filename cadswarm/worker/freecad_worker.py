@@ -23,14 +23,24 @@ import base64
 import json
 import math
 import os
+import queue
 import re
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 import time
 import threading
 import traceback
 
 import sandbox  # noqa: E402  (next to this file; the worker runs as a plain script)
+
+# The package root, so `cadswarm.render` (the clay renderer) is importable even when the worker is
+# started outside the host (tests, a direct run) and PYTHONPATH does not already include it.
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PACKAGE_ROOT not in sys.path:
+    sys.path.insert(0, PACKAGE_ROOT)
 
 FREECAD_BIN = os.environ.get("CADSWARM_FREECAD_BIN")
 
@@ -89,6 +99,9 @@ class OpError(Exception):
 
 DOC_PATH = None
 doc = None
+# The model file's (size, mtime) while it holds exactly what is in memory, else None. Set by a save and by
+# opening the file; cleared by every mutation until its save.
+ON_DISK = None
 
 
 def open_document(path):
@@ -96,6 +109,7 @@ def open_document(path):
     DOC_PATH = os.path.abspath(path)
     if os.path.exists(DOC_PATH):
         doc = FreeCAD.openDocument(DOC_PATH)
+        mark_on_disk()
     else:
         doc = FreeCAD.newDocument("CadSwarm")
     doc.UndoMode = 1  # required: without it abortTransaction() silently keeps changes
@@ -115,6 +129,27 @@ def params_sheet():
     return sheet
 
 
+def mark_on_disk():
+    global ON_DISK
+    st = os.stat(DOC_PATH)
+    ON_DISK = (st.st_size, st.st_mtime_ns)
+
+
+def snapshot_copy(path):
+    """Write the document to `path` for a child process (a part script, a clash check). The saved model
+    file, when it is current, is copied in milliseconds; saveCopy re-serialises every shape, which took
+    9 s on the 18 MB IS350 model before every script and every interference check."""
+    try:
+        st = os.stat(DOC_PATH)
+        current = ON_DISK == (st.st_size, st.st_mtime_ns)
+    except OSError:
+        current = False
+    if current:
+        shutil.copyfile(DOC_PATH, path)
+    else:
+        doc.saveCopy(path)
+
+
 SAVE_ATTEMPTS = 6
 SAVE_BACKOFF = 0.15  # seconds, growing: ~2s in all before giving up
 
@@ -128,6 +163,7 @@ def save():
     for attempt in range(SAVE_ATTEMPTS):
         try:
             os.replace(tmp, DOC_PATH)
+            mark_on_disk()
             return
         except PermissionError as e:
             if attempt == SAVE_ATTEMPTS - 1:
@@ -150,13 +186,52 @@ def mesh_sig(mesh):
             tuple(round(v, 4) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)))
 
 
+# Volume and Area per shape, keyed by the OCC shape handle plus cheap facts about it. Every mutating op
+# fingerprints every object twice; integrating a 2000-face grille took 5 s, the whole Lexus 15 s a time.
+_MASS_CACHE = {}
+_BOX_CACHE = {}
+
+
+def sub_counts(shape):
+    """(faces, edges, vertices). len(shape.Edges) builds a Python object per edge: 2 s across the Lexus
+    for the three counts, and every mutating op fingerprints every object twice."""
+    try:
+        return tuple(shape.countSubElements(k) for k in ("Face", "Edge", "Vertex"))
+    except Exception:  # an older FreeCAD without countSubElements
+        return len(shape.Faces), len(shape.Edges), len(shape.Vertexes)
+
+
+def tight_box(shape):
+    """The shape's real extent. Shape.BoundBox is built from BSpline control points and ran up to 170 mm
+    outside the Lexus parts: a helper read a correct boolean cut as leaking 68 mm and gave up on the bumper.
+    Cached per shape handle, since the exact box is ~30 ms a part."""
+    key = (shape.hashCode(), *sub_counts(shape))
+    box = _BOX_CACHE.get(key)
+    if box is None:
+        if len(_BOX_CACHE) > 20_000:
+            _BOX_CACHE.clear()
+        try:
+            box = shape.optimalBoundingBox()
+        except Exception:  # an older FreeCAD, or a shape OCC can't bound exactly
+            box = shape.BoundBox
+        _BOX_CACHE[key] = box
+    return box
+
+
 def shape_sig(shape):
     if shape is None or shape.isNull():
         return None
     bb = shape.BoundBox
-    vol = shape.Volume if shape.Solids else 0.0
-    return (round(vol, 6), round(shape.Area, 6), tuple(round(v, 6) for v in
-            (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)), len(shape.Faces))
+    box = tuple(round(v, 6) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax))
+    # The handle alone could be reused by a new shape once the old one is freed: the counts and box guard it.
+    counts = sub_counts(shape)
+    key = (shape.hashCode(), *counts, box)
+    mass = _MASS_CACHE.get(key)
+    if mass is None:
+        if len(_MASS_CACHE) > 20_000:
+            _MASS_CACHE.clear()
+        mass = _MASS_CACHE[key] = (round(shape.Volume if shape.Solids else 0.0, 6), round(shape.Area, 6))
+    return (mass[0], mass[1], box, counts[0])
 
 
 def value_repr(v):
@@ -355,6 +430,12 @@ def op_set_expression(a):
 
 def op_set_placement(a):
     obj = get_obj(a.get("name"))
+    bound = {path: expr for path, expr in (obj.ExpressionEngine or []) if path.lstrip(".").startswith("Placement")}
+    if bound:
+        # The next recompute puts the bound values back, so the move would report success and change
+        # nothing (a helper moved TrunkLid three times this way while it sat 3.5 m behind the car).
+        raise OpError("bad_args", f"{obj.Name}'s placement is driven by expressions {bound}; change those Params, "
+                                  "or clear the expressions first (set_props with expressions set to null)")
     obj.Placement = to_placement(a.get("placement"))
     return {"name": obj.Name, "placement": placement_json(obj.Placement)}
 
@@ -404,7 +485,7 @@ def op_run_part_script(a):
     Part::Feature `name` here. The child can't touch the live doc: only the BREP and `result` come back."""
     code = a.get("code", "")
     try:
-        reply = sandbox.run_script(sys.executable, doc.saveCopy, {
+        reply = sandbox.run_script(sys.executable, snapshot_copy, {
             "code": code, "params": params_dict(),
             # test hook: prove the OS boundary on its own, with the in-script guards off
             "guards": not os.environ.get("CADSWARM_TEST_NO_AST_GUARD")})
@@ -428,6 +509,16 @@ def op_run_part_script(a):
         if a.get("label"):
             obj.Label = a["label"]
         out = {"name": obj.Name, "volume": shape.Volume if shape.Solids else 0.0}
+        bound = {p: e for p, e in (obj.ExpressionEngine or []) if p.lstrip(".").startswith("Placement")}
+        if bound:
+            # The bound placement is applied on top of the shape's own coordinates, so a shape built where it
+            # belongs lands twice as far out (TrunkLid and both taillights ended up metres behind the car).
+            doc.recompute()
+            bb = tight_box(obj.Shape)
+            out["bbox"] = [round(v, 1) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
+            out["warning"] = (f"{obj.Name}'s placement is driven by expressions {bound}, which move your shape "
+                              f"on top of its own coordinates: it now spans {out['bbox']}. Build the shape at the "
+                              "origin, or clear those expressions and build it where it belongs.")
     if reply.get("result") is not None:
         out["result"] = reply["result"]
     return out
@@ -713,10 +804,13 @@ MUTATIONS = {
 
 
 def mutate(op, args, allowed):
+    global ON_DISK
     before = snapshot()
     doc.openTransaction(f"cadswarm:{op}")
     try:
         result = MUTATIONS[op](args)
+        # Only now: a part script takes its snapshot inside the op, while memory still matches the file.
+        was_on_disk, ON_DISK = ON_DISK, None
         doc.recompute()
         after = snapshot()
         created = sorted(set(after) - set(before))
@@ -735,7 +829,12 @@ def mutate(op, args, allowed):
             raise OpError("recompute_error", f"Objects failed to recompute: {broken}")
         # Persist while the transaction is still open: if the file can't be written the abort below
         # puts memory back to match the disk (and the hub, which records nothing for a failed op).
-        save()
+        # A script that only measured (no `shape`) changed nothing: the file on disk is still the model.
+        if op == "run_part_script" and "name" not in (result or {}) and not (created or deleted or modified
+                                                                            or recomputed):
+            ON_DISK = was_on_disk
+        else:
+            save()
         doc.commitTransaction()
     except Exception:
         doc.abortTransaction()
@@ -807,8 +906,9 @@ def obj_summary(o):
         info["component"] = o.CadSwarmComponent  # placed from the components library
     shape = getattr(o, "Shape", None)
     if shape is not None and not shape.isNull():
-        bb = shape.BoundBox
-        info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
+        bb = tight_box(shape)
+        if bb.isValid():  # an empty shape's box spans +-1.8e308, which read as a part outside the car
+            info["bbox"] = [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)]
         info["volume"] = round(shape.Volume, 3) if shape.Solids else 0.0
         anchor = anchor_of(shape)
         if anchor:
@@ -857,22 +957,68 @@ def q_brep(a):
     return {"objects": out}
 
 
+# Inside the host's 120 s per op, with room for the snapshot; CADSWARM_INTERFERENCE_SECONDS for tests.
+INTERFERENCE_SECONDS = float(os.environ.get("CADSWARM_INTERFERENCE_SECONDS") or 90)
+
+
 def q_interference(a):
     names = a.get("names") or [o.Name for o in doc.Objects
                                if getattr(o, "Visibility", False) and hasattr(o, "Shape")
                                and not o.Shape.isNull() and o.Shape.Solids]
-    shapes = [(n, get_obj(n).Shape) for n in names]
+    shapes = [(n, get_obj(n).Shape) for n in names]  # unknown names fail here, as before
     tol = float(a.get("min_volume") or setting(a, "interference_min_vol", 1e-3))
-    clashes = []
+    # Pairs whose (loose, cheap) boxes overlap, cheapest boolean first so one slow pair costs the least.
+    candidates = []
     for i in range(len(shapes)):
         for j in range(i + 1, len(shapes)):
             (na, sa), (nb, sb) = shapes[i], shapes[j]
-            if not sa.BoundBox.intersect(sb.BoundBox):
+            if sa.BoundBox.intersect(sb.BoundBox):
+                candidates.append((len(sa.Faces) * len(sb.Faces), na, nb))
+    pairs = [(na, nb) for _, na, nb in sorted(candidates)]
+    if not pairs:
+        return {"checked": names, "clashes": [], "complete": True}
+    # One boolean of the new Lexus skin against an old roof panel ran past the host's 120 s limit, which
+    # kills FreeCAD and stalls every helper; an OCC boolean can't be interrupted, so the pairs run in a
+    # child that is stopped at the budget. What it didn't finish is reported unchecked, never as clear.
+    run_dir = tempfile.mkdtemp(prefix="cadswarm-clash-")
+    try:
+        snap = os.path.join(run_dir, "model.FCStd")
+        snapshot_copy(snap)
+        child = subprocess.Popen(
+            [sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "clash_child.py"),
+             snap, json.dumps(pairs), repr(tol)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            creationflags=0x08000000 if os.name == "nt" else 0)  # CREATE_NO_WINDOW
+        lines = queue.Queue()
+        threading.Thread(target=lambda: [lines.put(l) for l in child.stdout] and None, daemon=True).start()
+        deadline = time.time() + INTERFERENCE_SECONDS
+        answered, clashes, failed, done = set(), [], [], False
+        while not done and time.time() < deadline:
+            try:
+                msg = json.loads(lines.get(timeout=max(0.1, deadline - time.time())))
+            except (queue.Empty, ValueError):
+                if child.poll() is not None and lines.empty():
+                    break
                 continue
-            vol = sa.common(sb).Volume
-            if vol > tol:
-                clashes.append({"a": na, "b": nb, "volume": round(vol, 4)})
-    return {"checked": names, "clashes": clashes}
+            if msg.get("done"):
+                done = True
+            elif "a" in msg:
+                answered.add((msg["a"], msg["b"]))
+                if "error" in msg:
+                    failed.append({"a": msg["a"], "b": msg["b"], "why": msg["error"]})
+                elif msg.get("clash"):
+                    clashes.append({"a": msg["a"], "b": msg["b"], "volume": msg["volume"]})
+        if child.poll() is None:
+            child.kill()
+        child.wait()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+    why = f"not finished within {INTERFERENCE_SECONDS:g} s; check this pair on its own"
+    unchecked = failed + [{"a": p[0], "b": p[1], "why": why} for p in pairs if p not in answered]
+    out = {"checked": names, "clashes": clashes, "complete": done and not failed}
+    if unchecked:
+        out["unchecked"] = unchecked
+    return out
 
 
 def q_export(a):
@@ -928,7 +1074,7 @@ def q_faces(a):
     import fea_runner
     names = a.get("names") or []
     shape, warnings = fea_target(names)
-    bb = shape.BoundBox
+    bb = tight_box(shape)
     out = {"names": names, "bbox": [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)],
            "faces": fea_runner.face_table(shape)[:300], "face_count": len(shape.Faces), "warnings": warnings}
     if a.get("select"):
@@ -993,14 +1139,46 @@ def q_mesh(a):
         shape = _solid_shape(obj)
         if shape is None:
             continue
-        t, data = tol, stl_bytes(shape, tol)
-        for _ in range(6):  # coarsen until it fits the preview budget
-            if len(data) <= budget:
-                break
-            t *= 2
-            data = stl_bytes(shape, t)
-        out[name] = base64.b64encode(data).decode()
+        out[name] = base64.b64encode(budget_stl(shape, tol, budget)).decode()
     return {"meshes": out}
+
+
+def budget_stl(shape, tol, budget):
+    """Binary STL of `shape` that fits `budget` bytes, as fine as that allows.
+
+    Each try meshes a fresh copy: a shape keeps its first triangulation, and asking the same shape for a
+    coarser one returns that finer mesh again (a car's suspension stayed 15 MB at any tolerance). The
+    angular limit matters as much as the linear one for small curved detail like springs and spokes;
+    the start is sized to the part, since 0.2 mm on a 4 m body is a scan, not a preview.
+
+    Few, big steps: every op waits for this, and eight fine tries on a 32-station car skin took 43 s while
+    no try fit anyway. Three tries at most, each four times coarser, keeping the smallest."""
+    lin = max(tol, shape.BoundBox.DiagonalLength / 1000)
+    ang = 0.5
+    best = None
+    for _ in range(3):
+        data = mesh_stl(shape.copy(True, False), lin, ang)
+        if best is None or len(data) < len(best):
+            best = data
+        if len(data) <= budget:
+            break
+        lin, ang = lin * 4, min(ang * 2, 1.2)
+    return best
+
+
+def mesh_stl(shape, linear, angular):
+    """Binary STL from MeshPart (linear and angular deflection); plain tessellation if MeshPart is missing."""
+    try:
+        import MeshPart
+    except ImportError:
+        return stl_bytes(shape, linear)
+    m = MeshPart.meshFromShape(Shape=shape, LinearDeflection=linear, AngularDeflection=angular, Relative=False)
+    out = bytearray(b"cadswarm preview".ljust(80, b"\0"))
+    out += struct.pack("<I", m.CountFacets)
+    for f in m.Facets:
+        n, (p, q, r) = f.Normal, f.Points
+        out += struct.pack("<12fH", n.x, n.y, n.z, *p, *q, *r, 0)
+    return bytes(out)
 
 
 def face_normal(face):
@@ -1008,11 +1186,16 @@ def face_normal(face):
     return face.normalAt((u0 + u1) / 2, (v0 + v1) / 2)
 
 
-def thin_walls(shape, min_wall, limit=20):
-    """Best effort: pairs of opposite-facing planar faces closer than `min_wall`."""
+PRINTABILITY_SECONDS = 60  # wall checks stop here, well inside the host's 120 s per op
+
+
+def thin_walls(shape, min_wall, limit=20, deadline=None):
+    """Best effort: pairs of opposite-facing planar faces closer than `min_wall` (stops at `deadline`)."""
     planar = [(i, f) for i, f in enumerate(shape.Faces) if type(f.Surface).__name__ == "Plane"]
     out = []
     for x in range(len(planar)):
+        if deadline and time.time() > deadline:
+            break
         i, fi = planar[x]
         ni = face_normal(fi)
         for y in range(x + 1, len(planar)):
@@ -1033,24 +1216,145 @@ def q_printability(a):
     min_wall = float(a.get("min_wall") or setting(a, "min_wall", 1.2))
     names = a.get("names") or [o.Name for o in doc.Objects if getattr(o, "Visibility", False)
                                and _solid_shape(o) is not None and o.Shape.Solids]
+    # The wall check compares every pair of flat faces. On a whole car it ran past the worker's 120 s limit,
+    # which kills and reloads FreeCAD while every other op waits: stop checking walls at this budget.
+    deadline = time.time() + PRINTABILITY_SECONDS
     objects = []
     for n in names:
         s = get_obj(n).Shape
-        bb = s.BoundBox
+        bb = tight_box(s)
         size = [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]
         # The footprint may be rotated on the bed, so compare the sorted XY extents.
         fits = all(x <= b for x, b in zip(sorted(size[:2]), sorted(bed[:2]))) and size[2] <= bed[2]
         closed = bool(s.Solids) and all(sol.isClosed() for sol in s.Solids) and s.isValid()
+        # A part too big for the bed fails already; its walls can't change that.
+        check = fits and bool(s.Solids) and time.time() < deadline
         objects.append({"name": n, "size": size, "fits_bed": fits, "closed_solid": closed,
-                        "thin_wall_suspects": thin_walls(s, min_wall) if s.Solids else []})
-    ok = all(o["fits_bed"] and o["closed_solid"] and not o["thin_wall_suspects"] for o in objects)
+                        "thin_wall_suspects": thin_walls(s, min_wall, deadline=deadline) if check else [],
+                        "walls_checked": check or not s.Solids})
+    ok = all(o["fits_bed"] and o["closed_solid"] and o["walls_checked"] and not o["thin_wall_suspects"]
+             for o in objects)
     return {"ok": ok, "objects": objects}
+
+
+def q_surface_quality(a):
+    """How much of each part's surface is flat, and how much is real curvature.
+
+    The reviewer and the MCP tool use this to tell a boxy part (allowed) from a blocky attempt at
+    an organic one (not allowed). Numbers only: the judgement lives in cadswarm/shape_intent.py.
+    """
+    want = set(a.get("names") or [])
+    out = []
+    for o in doc.Objects:
+        sh = getattr(o, "Shape", None)
+        if sh is None or sh.isNull():
+            continue
+        if want and o.Name not in want and o.Label not in want:
+            continue
+        kinds = {}
+        for f in sh.Faces:
+            k = f.Surface.__class__.__name__
+            kinds[k] = kinds.get(k, 0) + 1
+        faces = len(sh.Faces)
+        planar = kinds.get("Plane", 0)
+        bb = tight_box(sh)
+        out.append({
+            "name": o.Name, "label": o.Label, "faces": faces, "planar": planar,
+            "curved": faces - planar, "bspline": kinds.get("BSplineSurface", 0),
+            "cylindrical": kinds.get("Cylinder", 0), "conical": kinds.get("Cone", 0),
+            "spherical": kinds.get("Sphere", 0), "toroidal": kinds.get("Toroid", 0),
+            "extruded": kinds.get("SurfaceOfExtrusion", 0),
+            "revolved": kinds.get("SurfaceOfRevolution", 0),
+            "edges": len(sh.Edges), "vertices": len(sh.Vertexes), "solids": len(sh.Solids),
+            "valid": bool(sh.isValid()), "volume_mm3": round(sh.Volume, 3),
+            "bbox": [round(v, 3) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)],
+        })
+    if not out:
+        raise OpError("not_found", f"No solid geometry in {sorted(want) or 'the model'}")
+    return {"objects": out}
+
+
+def _render_module():
+    """The clay renderer, loaded by path: an editable install can otherwise shadow `cadswarm`."""
+    import importlib.util
+    path = os.path.join(PACKAGE_ROOT, "cadswarm", "render.py")
+    spec = importlib.util.spec_from_file_location("cadswarm_render", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _auto_deviation():
+    """A tessellation tolerance sized to the model, so the default render fits the triangle budget.
+
+    FreeCAD caches a shape's triangulation, so re-tessellating coarser in the same process does not
+    help: pick the tolerance before the first call instead.
+    """
+    box = None
+    for o in doc.Objects:
+        sh = getattr(o, "Shape", None)
+        if sh is not None and not sh.isNull() and sh.Faces:
+            box = sh.BoundBox if box is None else box.united(sh.BoundBox)
+    if box is None:
+        return 2.0
+    diagonal = math.sqrt(box.XLength ** 2 + box.YLength ** 2 + box.ZLength ** 2)
+    return max(1.0, min(50.0, diagonal / 700.0))
+
+
+def render_mesh(shape, deviation):
+    """(points, triangles) for a render, from a fresh copy: a shape keeps its first triangulation, so a coarser
+    retry on the same shape returns the fine one again. The angular limit keeps small curved detail in check."""
+    try:
+        import MeshPart
+    except ImportError:
+        return shape.copy(True, False).tessellate(deviation)
+    return MeshPart.meshFromShape(Shape=shape.copy(True, False), LinearDeflection=deviation,
+                                  AngularDeflection=0.5, Relative=False).Topology
+
+
+def q_render_views(a):
+    """Orthographic clay renders (PNG) so a helper or person can see the model, not just its numbers."""
+    render_meshes = _render_module().render_meshes
+    want = set(a.get("names") or [])
+    chosen = a.get("deviation")
+    deviation = float(chosen or _auto_deviation())
+    solid = [o for o in doc.Objects if getattr(o, "Shape", None) is not None and not o.Shape.isNull()
+             and o.Shape.Faces and (not want or o.Name in want or o.Label in want)]
+    # Draw what FreeCAD shows: a hidden part rendered as if it were there (a hidden FrontBumper made the nose look
+    # closed while the person saw a hole), and a boolean's hidden inputs drew over its result. Named parts always draw.
+    hidden = [] if want else [o.Name for o in solid if not getattr(o, "Visibility", True)]
+    shapes = [(o.Name, o.Shape) for o in solid if o.Name not in hidden]
+    if not shapes:
+        raise OpError("not_found", f"No solid geometry in {sorted(want) or 'the model'}")
+    # A size-based deviation still overshot on a car (grille mesh, spoked wheels): unless the caller chose
+    # one, coarsen until the render fits.
+    for _ in range(1 if chosen else 4):
+        meshes = [(name, *render_mesh(sh, deviation)) for name, sh in shapes]
+        total = sum(len(m[2]) for m in meshes)
+        if total <= 950_000:
+            break
+        deviation *= 2
+    if total > 950_000:
+        raise OpError("bad_args", f"{total} triangles at deviation {deviation:.1f} mm is too many for a "
+                                 f"render (950000 max); pass a coarser deviation, e.g. {deviation * 2:.1f}")
+    # DOC_PATH, not doc.FileName: a document not saved yet has no FileName, and the worker's cwd
+    # (a checkout, in tests) is no place for renders.
+    root = os.path.dirname(DOC_PATH)
+    out_dir = os.path.join(root, "renders", time.strftime("%Y-%m-%d %H%M%S"))
+    try:
+        files = render_meshes(meshes, a.get("views") or None, int(a.get("size") or 900), out_dir)
+    except ValueError as e:
+        raise OpError("bad_args", str(e))
+    return {"files": files, "dir": out_dir, "objects": [m[0] for m in meshes], "hidden": hidden,
+            "triangles": total, "deviation": round(deviation, 2)}
 
 
 QUERIES = {"status": q_status, "get_object": q_get_object, "brep": q_brep,
            "interference": q_interference, "export": q_export,
            "param_users": q_param_users, "dependents": q_dependents,
            "faces": q_faces,
+           "surface_quality": q_surface_quality,
+           "render_views": q_render_views,
            "mesh": q_mesh, "printability": q_printability,
            "analyze_component": q_analyze_component,
            "ping": lambda a: {"pong": True, "freecad": FreeCAD.Version()[:3],

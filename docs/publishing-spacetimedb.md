@@ -129,5 +129,5 @@ $env:CADSWARM_LIVE = "1"; $env:CADSWARM_DB = "cadswarm-e2e"; .venv\Scripts\pytho
 | `not authorized` / publish refused for ownership | You are not the owner: step 1. |
 | Publish refused: a table can't be migrated | A schema change needs a manual migration; do not fall back to deleting data. Ask whoever changed `module/src/tables.rs`. |
 | The host crashes at start with a bindings or deserialization error | Bindings and module are out of step: step 3, then rebuild the host. |
-| Teammates don't see new buttons | They need the updated add-on (reinstall) and a FreeCAD restart. |
+| Teammates don't see new buttons | They need the updated add-on: the update window (or a reinstall), then the FreeCAD restart it does for them. |
 | A helper stops at once with "Incorrect API key" | The CLI it runs was never signed in: open `claude`, `codex` or `opencode` once on the host's computer and sign in. No key or env file belongs in the repo. |

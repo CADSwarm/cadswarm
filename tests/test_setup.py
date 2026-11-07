@@ -144,3 +144,24 @@ def test_the_guides_cli_choice_is_written_to_the_hosts_settings(tmp_path):
     assert hosting.set_agent_client(str(tmp_path), "") is False      # "just watch" clears the choice in the GUI only
     assert hosting.set_agent_client("", "codex") is False            # no folder yet: never write ./host.json
 
+
+def test_picking_an_ai_drops_a_custom_agent_command(tmp_path):
+    """A custom command wins over agent_client in the host, so a pick must clear it to take effect."""
+    from cadswarm import hosting
+    (tmp_path / "host.json").write_text(json.dumps({
+        "db": "team", "agent_client": "opencode",
+        "agent_command": ["opencode-cli", "run", "--model", "x/y"]}), encoding="utf-8")
+    assert hosting.set_agent_client(str(tmp_path), "opencode") is True  # same AI, but now the plain one
+    data = json.loads((tmp_path / "host.json").read_text(encoding="utf-8"))
+    assert data["agent_client"] == "opencode" and "agent_command" not in data
+
+
+def test_every_agents_doc_carries_the_shape_rule():
+    """OpenCode has no prompt hook, so the rule must be in the generated AGENTS.md itself."""
+    from cadswarm.agent_setup import AGENT_DOC
+    assert "surface_quality" in AGENT_DOC
+
+
+def test_agents_are_told_to_relay_what_the_person_said():
+    from cadswarm.agent_setup import AGENT_DOC
+    assert "record_feedback" in AGENT_DOC and 'by="person"' in AGENT_DOC

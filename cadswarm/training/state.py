@@ -1,0 +1,159 @@
+"""The object table after every step, reconstructed from the op log alone.
+
+A value the worker never reported stays `known: False` and `None`: the replay is useful precisely
+because it does not guess. A failed op is a no-op, because the worker rolls it back. The shared
+`Params` sheet is seeded because the worker creates it before the first op is logged.
+"""
+import re
+
+PARAMS = "Params"
+PARAMS_TYPE = "Spreadsheet::Sheet"
+MESH_TYPE = "Mesh::Feature"
+PRIMITIVE_TYPE = {"box": "Part::Box", "cylinder": "Part::Cylinder", "sphere": "Part::Sphere",
+                  "cone": "Part::Cone", "torus": "Part::Torus"}
+BOOLEAN_TYPE = {"cut": "Part::Cut", "fuse": "Part::Fuse", "common": "Part::Common"}
+FEATURE_OPS = {"create_extrusion", "run_part_script", "insert_component", "insert_standard_part"}
+FIELDS = ("created", "modified", "deleted", "recomputed", "broken")
+
+
+def empty():
+    return {"objects": {PARAMS: {"type": PARAMS_TYPE, "rev": 1, "known": True, "volume": None}},
+            "params": {}}
+
+
+def clone(state):
+    return {"objects": {k: dict(v) for k, v in state["objects"].items()},
+            "params": {k: dict(v) for k, v in state["params"].items()}}
+
+
+def number(value):
+    """The number in "2.4 mm" or 2.4, or None (the same idea as style_memory.number)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
+    return float(match.group(0)) if match else None
+
+
+def type_of(op, args):
+    """The type this op creates, or None when the log does not say. Never a guess."""
+    kind = str(args.get("kind") or "").lower()
+    if op == "create_primitive":
+        return PRIMITIVE_TYPE.get(kind)
+    if op == "boolean":
+        return BOOLEAN_TYPE.get(kind)
+    if op == "insert_mesh":
+        return MESH_TYPE
+    if op in FEATURE_OPS:
+        return "Part::Feature"
+    return None
+
+
+def touched(step):
+    result = step.get("result") or {}
+    return [name for field in FIELDS for name in (result.get(field) or []) if isinstance(name, str)]
+
+
+def apply(state, step):
+    """Apply one op in place. Returns the names this op touched but the replay never created."""
+    if step.get("status") != "done":
+        return []
+    result = step.get("result") or {}
+    args = step.get("args") or {}
+    created = result.get("created") or []
+    payload = result.get("result") or {}
+    named = payload.get("name")
+    volume = None
+    if len(created) == 1 and named in (None, created[0]):
+        # insert_mesh reports volume_mm3; a payload naming another object describes that object.
+        volume = payload.get("volume", payload.get("volume_mm3"))
+    unknown = []
+
+    for name in result.get("deleted") or []:
+        if state["objects"].pop(name, None) is None:
+            unknown.append(name)
+
+    for name in created:
+        created_type = PARAMS_TYPE if name == PARAMS else type_of(step.get("op"), args)
+        state["objects"][name] = {
+            "type": created_type, "rev": 0,
+            # A script or a component's shape is only described by a snapshot the worker never took.
+            "known": created_type is not None and step.get("op") != "run_part_script",
+            "volume": volume if name != PARAMS else None,
+        }
+
+    changed = list(dict.fromkeys((result.get("modified") or []) + (result.get("recomputed") or [])))
+    reported = payload.get("name")
+    for name in changed:
+        if name not in state["objects"]:
+            unknown.append(name)
+            continue
+        obj = state["objects"][name]
+        obj["rev"] = obj.get("rev", 0) + 1
+        # The payload describes one object. A recomputed dependent gets a new rev, not this volume.
+        if name == reported and isinstance(payload.get("volume"), (int, float)):
+            obj["volume"] = payload["volume"]
+            obj["known"] = True
+
+    if step.get("op") == "set_param" and args.get("alias"):
+        state["params"][args["alias"]] = {"value": args.get("value"), "num": number(args.get("value"))}
+    return unknown
+
+
+def _swept(step):
+    """A done step whose result payload was spilled: the change happened, its detail is gone.
+
+    The dataset build stores the worker payload under `result.result`, so the blob is one level
+    down on the real path; a swept row can also appear with the blob at the top level.
+    """
+    result = step.get("result") or {}
+    inner = result.get("result") if isinstance(result.get("result"), dict) else {}
+    return step.get("status") == "done" and ("blob" in result or "blob" in inner)
+
+
+def replay(steps):
+    state = empty()
+    before, degraded = [], []
+    for index, step in enumerate(steps):
+        before.append(clone(state))
+        if apply(state, step) or _swept(step):
+            degraded.append(index)
+    return before, state, degraded
+
+
+def summary(state, max_objects=120):
+    """The compact, deterministic view a policy sees: sorted, bounded, no unknown values faked."""
+    objects = state["objects"]
+    names = sorted(objects)[:max_objects]
+    return {"objects": [{"name": n, "type": objects[n]["type"], "rev": objects[n]["rev"],
+                         "known": objects[n]["known"], "volume": objects[n].get("volume")}
+                        for n in names],
+            "objects_total": len(objects),
+            "params": {k: state["params"][k]["value"] for k in sorted(state["params"])}}
+
+
+def conformance(state, cad_objects, params):
+    """How far the replay's final table is from the live object table. The pipeline's oracle."""
+    live = {row["name"]: row for row in cad_objects if row.get("name")}
+    mine = state["objects"]
+    missing = sorted(set(live) - set(mine))
+    extra = sorted(set(mine) - set(live))
+    type_bad = sorted(name for name, row in live.items()
+                      if name in mine and mine[name]["type"] is not None
+                      and row.get("type_id") != mine[name]["type"])
+    unknown_type = sorted(name for name in mine if name in live and mine[name].get("type") is None)
+    volume_bad = []
+    for name in sorted(live):
+        row, got = live[name], mine.get(name) or {}
+        live_volume = row.get("volume") or 0
+        # A script's shape is unknown; its reported volume is still a claim worth checking.
+        if not got.get("volume") or not live_volume:
+            continue
+        if abs(got["volume"] - live_volume) > 0.01 * live_volume:
+            volume_bad.append(name)
+    total = len(live) + len(extra)
+    matched = total - len(missing) - len(extra) - len(type_bad)
+    return {"fraction": round(matched / total, 4) if total else 1.0, "missing": missing,
+            "extra": extra, "type_mismatch": type_bad, "volume_mismatch": volume_bad,
+            "unknown_type": unknown_type}
