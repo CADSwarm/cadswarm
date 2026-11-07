@@ -87,6 +87,8 @@ def find_freecad(env=None, platform=None):
 
 
 def engine_home():
+    if os.environ.get("CADSWARM_ENGINE_HOME"):  # tests and parallel runs keep their own engine settings
+        return os.environ["CADSWARM_ENGINE_HOME"]
     from cadswarm.paths import app_dir
     return os.path.join(app_dir(), "engine")
 
