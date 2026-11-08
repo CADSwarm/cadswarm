@@ -330,3 +330,14 @@ def test_view_key_changes_with_the_feed():
     b = build_view.from_snapshot({"id": "b1", "text": "x"}, tasks)
     assert build_view.view_key(a) != build_view.view_key(b)
     assert build_view.view_key(a) == build_view.view_key(build_view.from_snapshot({"id": "b1", "text": "x"}, _tasks()))
+
+
+def test_theme_set_mode_switches_and_back():
+    start = theme.MODE
+    try:
+        theme.set_mode("dark")
+        assert theme.BG == pro_style.tokens("dark")["BG"] and theme.BG in theme.PANEL and theme.BG in theme.DIALOG
+        theme.set_mode("light")
+        assert theme.BG == pro_style.tokens("light")["BG"] and theme.panel_sheet({}) == theme.PANEL
+    finally:
+        theme.set_mode(start)

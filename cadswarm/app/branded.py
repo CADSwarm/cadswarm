@@ -49,6 +49,28 @@ FREECAD_LINK_COMMANDS = {
 
 _WORD = re.compile(r"\bFreeCAD\b")
 
+THEME_NAMES = (f"{APP_NAME} Light", f"{APP_NAME} Dark")
+
+
+def theme_name(mode):
+    return THEME_NAMES[1] if mode == "dark" else THEME_NAMES[0]
+
+
+def mode_of_theme(name):
+    """"light" / "dark" for a CADSwarm theme name, "" for anything else (the engine's own themes)."""
+    return {n: m for n, m in zip(THEME_NAMES, ("light", "dark"))}.get(name or "", "")
+
+
+def current_mode():
+    """The running app's mode from MainWindow/Theme (light when unknown or outside FreeCAD)."""
+    try:
+        import FreeCAD
+        name = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/MainWindow").GetString("Theme", "")
+    except Exception:  # noqa: BLE001
+        name = ""
+    return mode_of_theme(name) or "light"
+
+
 ENGINE_LINE = ("CADSwarm runs on the open-source FreeCAD engine (LGPL&nbsp;2.1+), used unmodified, "
                "with Open CASCADE Technology underneath.")
 
@@ -315,7 +337,7 @@ def brand_params(theme_file, mode="light"):
         ("BaseApp/Preferences/Units", "Int", "Decimals", 2),
         ("BaseApp/Preferences/Document", "Bool", "CreateBackupFiles", True),
         (mw, "Bool", "StatusBar", True),
-        (mw, "String", "Theme", f"CADSwarm {mode.title()}"),
+        (mw, "String", "Theme", theme_name(mode)),
         (mw, "String", "ThemeStyleParametersFile", theme_file),
         (mw, "String", "StyleSheet", qss if os.path.exists(qss) else "FreeCAD.qss"),
         (mw, "String", "QtStyle", "FreeCAD"),

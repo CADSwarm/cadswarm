@@ -126,7 +126,7 @@ PANEL = PANEL_TEMPLATE.substitute(_TOKENS)
 
 # A CadSwarm dialog (the setup guide, the library, the optimization dialogs). Unscoped, because the
 # sheet is set on the dialog itself and only reaches that dialog's own widgets.
-DIALOG = Template("""
+DIALOG_TEMPLATE = Template("""
 QDialog { background: $BG; color: $TEXT; font-size: 11pt; }
 QLabel { color: $TEXT; background: transparent; }
 QLabel#title { font-size: 17pt; font-weight: 600; color: $TEXT; }
@@ -197,7 +197,8 @@ QScrollBar:horizontal { background: $BG; height: 12px; margin: 0; }
 QScrollBar::handle:horizontal { background: $LINE; border-radius: 0; min-width: 24px; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-""").substitute(_TOKENS)
+""")
+DIALOG = DIALOG_TEMPLATE.substitute(_TOKENS)
 
 
 def panel_sheet(tokens):
@@ -208,7 +209,20 @@ def panel_sheet(tokens):
     return PANEL_TEMPLATE.substitute(values)
 
 
-def apply(widget, style=DIALOG):
-    """Give a CadSwarm window its own surface. Returns the widget for one-line use."""
-    widget.setStyleSheet(style)
+def apply(widget, style=None):
+    """Give a CadSwarm window its own surface (the current mode's dialog sheet by default). Returns the widget."""
+    widget.setStyleSheet(DIALOG if style is None else style)
     return widget
+
+
+def set_mode(mode):
+    """Switch every colour constant and sheet here to "light" or "dark" (the app's theme changed while running).
+    Windows opened afterwards use the new colours; restyle open ones with their sheet again."""
+    global MODE, _T, _TOKENS, PANEL, DIALOG
+    MODE = "dark" if mode == "dark" else "light"
+    _T = pro_style.panel_tokens(pro_style.tokens(MODE))
+    _TOKENS = {k: _T[k] for k in _TOKENS}
+    globals().update(_TOKENS)
+    PANEL = PANEL_TEMPLATE.substitute(_TOKENS)
+    DIALOG = DIALOG_TEMPLATE.substitute(_TOKENS)
+    return MODE
