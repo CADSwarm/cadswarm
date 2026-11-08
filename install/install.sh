@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # CADSwarm installer for macOS and Linux. Run via "Install CadSwarm.command" (macOS, double-click),
 # "Install CadSwarm.sh" (Linux), or the one-line quick install (install/quick-install.sh).
-# Finds FreeCAD, copies this folder into FreeCAD's add-on folder, optionally adds a shortcut, then opens
+# Finds FreeCAD, copies this folder into FreeCAD's add-on folder and adds a CADSwarm launcher: with a FreeCAD
+# that has its own Python (the official download) that is the CADSwarm app (CADSwarm.app on macOS, a .desktop
+# entry that also opens .FCStd files on Linux); otherwise it opens
 # FreeCAD in CADSwarm, where a step-by-step guide takes over.
 #
 #   --no-launch     install only (don't open FreeCAD)
@@ -57,15 +59,18 @@ say ""
 
 # ---------------------------------------------------------------- 1. find FreeCAD
 # KIND: app (macOS bundle) | appimage (unpacked official AppImage) | system | snap | flatpak
-# Only "app" and "appimage" bring their own Python, which hosting a team and connecting AI helpers need.
-KIND="" LAUNCH=() CMD=()
+# Only "app" and "appimage" bring their own Python, which hosting a team and connecting AI helpers need,
+# and which runs the CADSwarm desktop app (PY: FreeCAD's python, as a command).
+KIND="" LAUNCH=() CMD=() PY=()
 
 use_app() {  # $1 = FreeCAD.app
-    KIND=app LAUNCH=(open -a "$1" --args) CMD=("$1/Contents/Resources/bin/freecadcmd")
+    KIND=app LAUNCH=(open -a "$1" --args) CMD=("$1/Contents/Resources/bin/freecadcmd") PY=()
+    [ -x "$1/Contents/Resources/bin/python" ] && PY=("$1/Contents/Resources/bin/python")
     [ -x "${CMD[0]}" ] || CMD=("$1/Contents/MacOS/FreeCADCmd")
 }
 use_unpacked() {  # $1 = squashfs-root of an unpacked AppImage
-    KIND=appimage LAUNCH=("$1/AppRun") CMD=("$1/AppRun" freecadcmd)
+    KIND=appimage LAUNCH=("$1/AppRun") CMD=("$1/AppRun" freecadcmd) PY=()
+    [ -x "$1/usr/bin/python" ] && PY=("$1/AppRun" python)  # AppRun sets up the bundle, then runs usr/bin/python
 }
 
 find_freecad() {
@@ -77,7 +82,7 @@ find_freecad() {
             *.AppImage) unpack_appimage "$c" && return ;;
             */squashfs-root|*/squashfs-root/) use_unpacked "${c%/}"; return ;;
         esac
-        KIND=system LAUNCH=("$c") CMD=("$(dirname "$c")/freecadcmd"); return
+        KIND=system LAUNCH=("$c") CMD=("$(dirname "$c")/freecadcmd") PY=(); return
     fi
     if [ "$OS" = Darwin ]; then
         for c in /Applications/FreeCAD*.app "$HOME"/Applications/FreeCAD*.app; do
@@ -219,34 +224,87 @@ else
 fi
 OPENER="$DEST/cadswarm/gui/open_cadswarm.py"
 
-# ---------------------------------------------------------------- 4. shortcut that opens FreeCAD in CADSwarm
+# ---------------------------------------------------------------- 4. the CADSwarm app and its shortcut
+# With a FreeCAD that has its own Python, CADSwarm is a desktop app of its own: FreeCAD's Python runs
+# cadswarm/app/__main__.py from the installed folder (FreeCAD's whole application, branded CADSwarm).
+# Otherwise the shortcut opens FreeCAD in the CADSwarm workbench, as before.
+MAIN="$DEST/cadswarm/app/__main__.py"
+if [ "${#PY[@]}" -gt 0 ] && [ -f "$MAIN" ]; then RUN=("${PY[@]}" "$MAIN"); else RUN=(); fi
+ICON_SVG="$DEST/cadswarm/gui/cadswarm.svg"
 quote_args() { local out="" a; for a in "$@"; do out+="\"${a//\"/\\\"}\" "; done; printf '%s' "${out% }"; }
+xml_escape() { local t="${1//&/&amp;}"; t="${t//</&lt;}"; printf '%s' "${t//>/&gt;}"; }
+
+make_mac_app() {  # $1 = path of the .app bundle; a real bundle around FreeCAD's python
+    local app="$1" icns=""
+    rm -rf "$app" && mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" || return 1
+    for icns in "$DEST/design/cadswarm.icns" "$DEST/cadswarm/gui/cadswarm.icns" ""; do [ -z "$icns" ] || [ -f "$icns" ] && break; done
+    [ -n "$icns" ] && cp "$icns" "$app/Contents/Resources/cadswarm.icns"
+    {
+        echo '#!/bin/bash'
+        echo '# CADSwarm: FreeCAD (unmodified) running the CADSwarm app. Written by the CADSwarm installer.'
+        echo "cd \"\$HOME\" && exec $(quote_args "${RUN[@]}") \"\$@\""
+    } > "$app/Contents/MacOS/CADSwarm"
+    chmod +x "$app/Contents/MacOS/CADSwarm"
+    cat > "$app/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>CADSwarm</string>
+    <key>CFBundleDisplayName</key><string>CADSwarm</string>
+    <key>CFBundleIdentifier</key><string>org.cadswarm.desktop</string>
+    <key>CFBundleExecutable</key><string>CADSwarm</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleIconFile</key><string>cadswarm</string>
+    <key>LSMinimumSystemVersion</key><string>11.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
+    <key>CADSwarmInstallDir</key><string>$(xml_escape "$DEST")</string>
+</dict>
+</plist>
+PLIST
+}
+
 if [ "$SHORTCUT" = 1 ] && ask "Add a CADSwarm shortcut?" y; then
     if [ "$OS" = Darwin ]; then
-        APP="$HOME/Applications/CadSwarm.app"
+        APP="$HOME/Applications/CADSwarm.app"
         mkdir -p "$HOME/Applications"
-        SCRIPT="do shell script \"$(quote_args "${LAUNCH[@]}" "$OPENER" | sed 's/\\/\\\\/g; s/"/\\"/g') > /dev/null 2>&1 &\""
-        if command -v osacompile >/dev/null && rm -rf "$APP" && osacompile -o "$APP" -e "$SCRIPT" 2>/dev/null; then
-            ln -sfn "$APP" "$HOME/Desktop/CadSwarm.app" 2>/dev/null
-            ok "Added CADSwarm to ~/Applications and your desktop"
+        rm -rf "$HOME/Applications/CadSwarm.app" 2>/dev/null  # the old installer's launcher (same name on APFS)
+        if [ "${#RUN[@]}" -gt 0 ] && make_mac_app "$APP"; then
+            ln -sfn "$APP" "$HOME/Desktop/CADSwarm.app" 2>/dev/null
+            ok "Added the CADSwarm app to ~/Applications and your desktop"
         else
-            warn "  Couldn't make the shortcut; open FreeCAD and pick CADSwarm instead."
+            SCRIPT="do shell script \"$(quote_args "${LAUNCH[@]}" "$OPENER" | sed 's/\\/\\\\/g; s/"/\\"/g') > /dev/null 2>&1 &\""
+            if command -v osacompile >/dev/null && rm -rf "$APP" && osacompile -o "$APP" -e "$SCRIPT" 2>/dev/null; then
+                ln -sfn "$APP" "$HOME/Desktop/CADSwarm.app" 2>/dev/null
+                ok "Added CADSwarm to ~/Applications and your desktop"
+            else
+                warn "  Couldn't make the shortcut; open FreeCAD and pick CADSwarm instead."
+            fi
         fi
     else
         APPS="$DATA_HOME/applications"
         mkdir -p "$APPS"
-        ICON="$DEST/cadswarm/gui/cadswarm.svg"
         {
             echo "[Desktop Entry]"
             echo "Type=Application"
             echo "Name=CADSwarm"
             echo "Comment=Build 3D designs with your team's AI helpers"
-            echo "Exec=$(quote_args "${LAUNCH[@]}" "$OPENER")"
-            [ -f "$ICON" ] && echo "Icon=$ICON" || echo "Icon=org.freecad.FreeCAD"
+            if [ "${#RUN[@]}" -gt 0 ]; then
+                # %F: "Open with CADSwarm" for FreeCAD documents; they open in the running window.
+                echo "Exec=$(quote_args "${RUN[@]}") %F"
+                echo "MimeType=application/x-extension-fcstd;"
+            else
+                echo "Exec=$(quote_args "${LAUNCH[@]}" "$OPENER")"
+            fi
+            [ -f "$ICON_SVG" ] && echo "Icon=$ICON_SVG" || echo "Icon=org.freecad.FreeCAD"
             echo "Terminal=false"
+            echo "StartupNotify=true"
             echo "Categories=Graphics;Engineering;"
         } > "$APPS/cadswarm.desktop"
         chmod +x "$APPS/cadswarm.desktop"
+        command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" >/dev/null 2>&1
         DESK="$(command -v xdg-user-dir >/dev/null && xdg-user-dir DESKTOP || echo "$HOME/Desktop")"
         if [ -d "$DESK" ]; then
             cp "$APPS/cadswarm.desktop" "$DESK/CadSwarm.desktop" && chmod +x "$DESK/CadSwarm.desktop"
@@ -257,11 +315,18 @@ if [ "$SHORTCUT" = 1 ] && ask "Add a CADSwarm shortcut?" y; then
 fi
 
 say ""
-if [ "$NO_LAUNCH" = 1 ]; then say "${C_HEAD}All set! Open FreeCAD and pick CADSwarm to see the guide.${C_END}"
-else say "${C_HEAD}All set! FreeCAD will open now and show you the CADSwarm guide.${C_END}"; fi
-say "${C_DIM}(The first time FreeCAD starts it may ask about language and theme; any choice is fine.)${C_END}"
+if [ "${#RUN[@]}" -gt 0 ]; then
+    if [ "$NO_LAUNCH" = 1 ]; then say "${C_HEAD}All set! Start CADSwarm from your applications.${C_END}"
+    else say "${C_HEAD}All set! CADSwarm will open now.${C_END}"; fi
+else
+    if [ "$NO_LAUNCH" = 1 ]; then say "${C_HEAD}All set! Open FreeCAD and pick CADSwarm to see the guide.${C_END}"
+    else say "${C_HEAD}All set! FreeCAD will open now and show you the CADSwarm guide.${C_END}"; fi
+    say "${C_DIM}(The first time FreeCAD starts it may ask about language and theme; any choice is fine.)${C_END}"
+fi
 if [ "$NO_LAUNCH" = 0 ]; then
-    nohup "${LAUNCH[@]}" "$OPENER" >/dev/null 2>&1 &
+    if [ "${#RUN[@]}" -gt 0 ]; then (cd "$HOME" && nohup "${RUN[@]}" >/dev/null 2>&1 &)
+    else nohup "${LAUNCH[@]}" "$OPENER" >/dev/null 2>&1 &
+    fi
     sleep 2
 fi
 exit 0

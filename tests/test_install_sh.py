@@ -52,3 +52,18 @@ def test_no_freecad_is_a_clear_failure_and_downloads_nothing(tmp_path):
     r = run(tmp_path, tmp_path / "share")
     assert r.returncode == 1 and "FreeCAD isn't installed" in r.stdout
     assert not (tmp_path / "share" / "CadSwarm").exists()
+
+
+def test_with_freecads_python_the_launcher_runs_the_cadswarm_app(tmp_path):
+    share = tmp_path / "share"
+    root, user = fake_appimage(share)
+    (root / "usr" / "bin").mkdir(parents=True)
+    (root / "usr" / "bin" / "python").write_text("#!/bin/sh\n")
+    os.chmod(root / "usr" / "bin" / "python", 0o755)
+    r = run(tmp_path, share)
+    assert r.returncode == 0, r.stdout + r.stderr
+    desktop = (share / "applications" / "cadswarm.desktop").read_text()
+    main = user / "Mod" / "CadSwarm" / "cadswarm" / "app" / "__main__.py"
+    assert f'Exec="{root / "AppRun"}" "python" "{main}" %F' in desktop
+    assert "MimeType=application/x-extension-fcstd;" in desktop and "Name=CADSwarm" in desktop
+    assert "Start CADSwarm" in r.stdout
