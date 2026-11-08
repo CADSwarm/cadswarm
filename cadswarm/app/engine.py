@@ -58,7 +58,11 @@ def candidate_roots(env=None, platform=None):
         out += ["/Applications/FreeCAD.app", os.path.expanduser("~/Applications/FreeCAD.app")]
     else:
         from cadswarm.paths import app_dir
-        out += sorted(glob.glob(os.path.join(app_dir(), "FreeCAD-*", "usr")), key=_version_key, reverse=True)
+        # The installer unpacks the official AppImage to <app folder>/FreeCAD-<version>/squashfs-root.
+        managed = glob.glob(os.path.join(app_dir(), "FreeCAD-*", "squashfs-root", "usr"))
+        managed += glob.glob(os.path.join(app_dir(), "FreeCAD-*", "usr"))
+        out += sorted(managed, key=lambda p: _version_key(p.split(os.sep + "FreeCAD-")[-1].split(os.sep)[0]),
+                      reverse=True)
         out += ["/usr/lib/freecad", "/usr/local/lib/freecad"]
     return out
 
