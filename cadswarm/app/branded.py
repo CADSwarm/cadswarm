@@ -106,10 +106,19 @@ def about_html(version="", engine=""):
 
 def rebrand_text(text):
     """Window titles and menu labels: 'FreeCAD' becomes 'CADSwarm' (version numbers dropped with it)."""
-    if not text or "FreeCAD" not in text:
+    if not text:
         return text
-    text = re.sub(r"\bFreeCAD\s+\d+(?:\.\d+)*(?:\s*\([^)]*\))?", APP_NAME, text)
-    return _WORD.sub(APP_NAME, text)
+    if "FreeCAD" in text:
+        text = re.sub(r"\bFreeCAD\s+\d+(?:\.\d+)*(?:\s*\([^)]*\))?", APP_NAME, text)
+        text = _WORD.sub(APP_NAME, text)
+    return text.replace(f"{APP_NAME} - {APP_NAME}", APP_NAME)  # the title with no document open
+
+
+def main_title(text):
+    """The main window's title: rebranded, and never ending in the interpreter's name (FreeCAD falls back to
+    the process name, "python", when no document is active)."""
+    text = re.sub(r"\s+-\s+pythonw?(?:\.exe)?$", f" - {APP_NAME}", text or "", flags=re.I)
+    return rebrand_text(text) or APP_NAME
 
 
 def rgba_uint(hex_colour, alpha=255):

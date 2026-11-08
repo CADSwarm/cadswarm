@@ -50,6 +50,7 @@ class Rebrander(QtCore.QObject):
         self.theme_watcher = ThemeWatcher.attach()
         self.fix_title(self.mw)
         self.fix_menus()
+        QtCore.QTimer.singleShot(0, self.show_home)
         return self
 
     # --- titles -----------------------------------------------------------------------------------------
@@ -57,9 +58,7 @@ class Rebrander(QtCore.QObject):
         if self._busy:
             return
         t = w.windowTitle()
-        nt = branded.rebrand_text(t)
-        if w is self.mw and not nt:
-            nt = branded.APP_NAME
+        nt = branded.main_title(t) if w is self.mw else branded.rebrand_text(t)
         if nt != t:
             self._busy = True
             try:
@@ -87,7 +86,21 @@ class Rebrander(QtCore.QObject):
                     except (RuntimeError, TypeError):
                         pass
                     act.triggered.connect(self.show_about)
+            if name == "Start_Start" and not act.property("cadswarm_home"):
+                act.setProperty("cadswarm_home", True)
+                try:
+                    act.triggered.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                act.triggered.connect(self.show_home)
+                act.setText("&Home")
+                act.setToolTip("CADSwarm's home page: new part, open, recent files, team projects")
+                act.setStatusTip(act.toolTip())
             self.fix_action(act)
+
+    def show_home(self, *_):
+        from cadswarm.app import home
+        return home.show_home(self.mw)
 
     @staticmethod
     def fix_action(act):
