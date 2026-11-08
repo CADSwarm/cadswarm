@@ -1,7 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- Same mark as the workbench icon in InitGui.py: two teammates' parts and the shared model. -->
-  <rect x="4" y="4" width="56" height="56" rx="12" fill="#ffffff"/>
-  <circle cx="22" cy="20" r="10" fill="#2E86DE"/>
-  <circle cx="43" cy="20" r="10" fill="#F39C12"/>
-  <rect x="17" y="34" width="30" height="20" rx="6" fill="#2E86DE"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- CADSwarm app icon (original). An ink tile; one signal-orange part (an isometric block) that three
+       teammates (the paper squares) build together. Colours: design/tokens.json. Square corners, no gradients. -->
+  <rect x="0" y="0" width="256" height="256" fill="#111111"/>
+  <polygon points="128,58 196,97 128,136 60,97" fill="#FF8A4C"/>
+  <polygon points="60,97 128,136 128,214 60,175" fill="#FF5F00"/>
+  <polygon points="128,136 196,97 196,175 128,214" fill="#B83F00"/>
+  <rect x="26" y="26" width="26" height="26" fill="#F7F7F4"/>
+  <rect x="204" y="26" width="26" height="26" fill="#F7F7F4"/>
+  <rect x="204" y="204" width="26" height="26" fill="#FF5F00"/>
 </svg>

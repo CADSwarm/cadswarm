@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- 16-32 px variant of cadswarm.svg: the block alone, pixel-aligned. -->
+  <rect x="0" y="0" width="16" height="16" fill="#111111"/>
+  <polygon points="8,2 14,5 8,8 2,5" fill="#FF8A4C"/>
+  <polygon points="2,5 8,8 8,15 2,12" fill="#FF5F00"/>
+  <polygon points="8,8 14,5 14,12 8,15" fill="#B83F00"/>
+</svg>

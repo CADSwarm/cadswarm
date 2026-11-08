@@ -1,18 +1,15 @@
 """Runtime rebranding of FreeCAD's main window: titles, menus, Help links, About box, icon. Needs Qt."""
-import os
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from cadswarm.app import branded
-
-ABOUT_HTML = """<h2 style="margin:0">CADSwarm</h2>
-<p>Parametric 3D CAD where your team and its AI helpers build one model together.</p>
-<p>CADSwarm runs on the open-source FreeCAD geometry and modelling engine (LGPL&nbsp;2.1+),
-used unmodified, with OpenCASCADE Technology underneath.</p>"""
-
+from cadswarm.app import app_icon as icon_files, branded
 
 def app_icon():
-    return QtGui.QIcon(branded.LOGO) if os.path.exists(branded.LOGO) else QtGui.QIcon()
+    """CADSwarm's icon at every size it was built in (window, taskbar, Alt+Tab, About box)."""
+    icon = QtGui.QIcon()
+    for size, path in icon_files.icon_files():
+        icon.addFile(path, QtCore.QSize(size, size))
+    return icon
 
 
 class Rebrander(QtCore.QObject):
@@ -82,12 +79,28 @@ class Rebrander(QtCore.QObject):
                 act.setStatusTip(branded.rebrand_text(st))
 
     def show_about(self, *_):
+        engine = ""
+        try:
+            import FreeCAD
+            engine = branded.engine_version(FreeCAD.Version())
+        except Exception:  # noqa: BLE001
+            pass
         box = QtWidgets.QMessageBox(self.mw)
+        box.setObjectName("CADSwarmAbout")
         box.setWindowTitle("About CADSwarm")
-        box.setIconPixmap(app_icon().pixmap(64, 64))
+        box.setIconPixmap(app_icon().pixmap(96, 96))
         box.setTextFormat(QtCore.Qt.TextFormat.RichText)
-        box.setText(ABOUT_HTML)
+        box.setText(branded.about_html(branded.cadswarm_version(), engine))
         box.exec()
+
+    def replace_about(self, dlg):
+        """FreeCAD's own About dialog (opened by its command, not our menu entry) gives way to CADSwarm's."""
+        if dlg.property("cadswarm_replaced"):
+            return
+        dlg.setProperty("cadswarm_replaced", True)
+        dlg.setWindowOpacity(0.0)
+        QtCore.QTimer.singleShot(0, dlg.reject)
+        QtCore.QTimer.singleShot(0, self.show_about)
 
     def eventFilter(self, obj, ev):
         et = ev.type()
@@ -98,7 +111,11 @@ class Rebrander(QtCore.QObject):
             if isinstance(obj, QtWidgets.QMenu):
                 self.fix_menu(obj)
             elif isinstance(obj, QtWidgets.QWidget) and obj.isWindow():
+                if obj.metaObject().className().endswith("AboutDialog") and isinstance(obj, QtWidgets.QDialog):
+                    self.replace_about(obj)
+                    return False
                 self.fix_title(obj)
-                if isinstance(obj, QtWidgets.QMessageBox) and "FreeCAD" in obj.text():
+                if (isinstance(obj, QtWidgets.QMessageBox) and obj.objectName() != "CADSwarmAbout"
+                        and "FreeCAD" in obj.text()):
                     obj.setText(branded.rebrand_text(obj.text()))
         return False
