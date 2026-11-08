@@ -18,32 +18,85 @@ from string import Template
 # ---------------------------------------------------------------------------------------------- colours
 
 # The single source is design/tokens.json (shared with the web app and the branded desktop app): signal orange,
-# ink, paper and panel greys, brutalist square corners. This copy is only the fallback for an add-on folder that
+# warm neutrals, a restrained orange accent and softly rounded controls. This copy is only the fallback for an add-on folder that
 # lost the design/ directory; tests keep it equal to the file.
 _TOKENS_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                             "design", "tokens.json")
-_FALLBACK = {
-    "light": {"ink": "#111111", "paper": "#FFFFFF", "panel": "#F7F7F4", "chrome": "#EBEBE6", "hairline": "#C9C9C2",
-              "structure": "#111111", "muted": "#5A5A55", "signal": "#FF5F00", "signal-ink": "#B83F00",
-              "signal-tint": "#FFE3D1", "on-signal": "#111111", "warn": "#FFD000", "error": "#D21F1F",
-              "ok": "#0E7A3E", "preselect": "#FF9A55", "select": "#FF5F00", "vp-top": "#D9D9D4",
-              "vp-bottom": "#EFEFEA", "vp-edge": "#111111", "vp-face": "#C8C8C2"},
-    "dark": {"ink": "#E8E8E3", "paper": "#0C0C0C", "panel": "#161616", "chrome": "#1F1F1F", "hairline": "#3A3A37",
-             "structure": "#4A4A46", "muted": "#A3A39C", "signal": "#FF6A1A", "signal-ink": "#FF8A4C",
-             "signal-tint": "#3A1E0C", "on-signal": "#111111", "warn": "#FFD000", "error": "#FF4B42",
-             "ok": "#3CCB7F", "preselect": "#FF9A55", "select": "#FF6A1A", "vp-top": "#232321",
-             "vp-bottom": "#33332F", "vp-edge": "#0C0C0C", "vp-face": "#8E8E88"},
-    "team": ["#7C3AED", "#0891B2", "#16A34A", "#DB2777", "#65A30D", "#0D9488", "#9333EA", "#A16207"],
-}
+_FALLBACK = {'light': {'ink': '#1D1D1F',
+           'paper': '#FFFFFF',
+           'panel': '#F5F5F7',
+           'chrome': '#F5F5F7',
+           'hairline': '#D2D2D7',
+           'structure': '#C7C7CC',
+           'muted': '#6E6E73',
+           'signal': '#FF6B2C',
+           'signal-ink': '#C2410C',
+           'signal-tint': '#FFF0E8',
+           'on-signal': '#FFFFFF',
+           'warn': '#FF9F0A',
+           'error': '#FF3B30',
+           'error-tint': '#FFE5E3',
+           'ok': '#34C759',
+           'sk-under': '#0A84FF',
+           'sk-full': '#1D1D1F',
+           'sk-over': '#FF3B30',
+           'sk-driven': '#8E8E93',
+           'sk-construction': '#8E8E93',
+           'preselect': '#FFB18A',
+           'select': '#FF6B2C',
+           'vp-top': '#E8EAF0',
+           'vp-bottom': '#F6F7F9',
+           'vp-edge': '#3A3A3C',
+           'vp-face': '#C8CBD2',
+           'axis-x': '#FF453A',
+           'axis-y': '#30D158',
+           'axis-z': '#0A84FF',
+           'signal-hover': '#A8380D'},
+ 'dark': {'ink': '#F5F5F7',
+          'paper': '#1C1C1E',
+          'panel': '#2C2C2E',
+          'chrome': '#1C1C1E',
+          'hairline': '#38383A',
+          'structure': '#48484A',
+          'muted': '#AEAEB2',
+          'signal': '#FF7A36',
+          'signal-ink': '#FF9A62',
+          'signal-tint': '#3B261B',
+          'on-signal': '#1D1D1F',
+          'warn': '#FFD60A',
+          'error': '#FF453A',
+          'error-tint': '#44211F',
+          'ok': '#30D158',
+          'sk-under': '#64D2FF',
+          'sk-full': '#F5F5F7',
+          'sk-over': '#FF453A',
+          'sk-driven': '#8E8E93',
+          'sk-construction': '#8E8E93',
+          'preselect': '#FFAD80',
+          'select': '#FF7A36',
+          'vp-top': '#252527',
+          'vp-bottom': '#353539',
+          'vp-edge': '#E5E5EA',
+          'vp-face': '#73737A',
+          'axis-x': '#FF6961',
+          'axis-y': '#30D158',
+          'axis-z': '#64D2FF',
+          'signal-hover': '#FFB07B'},
+ 'team': ['#7C3AED', '#0891B2', '#16A34A', '#DB2777', '#65A30D', '#0D9488', '#9333EA', '#A16207']}
+
+
+def design_tokens():
+    """The shared design specification, or its compact built-in fallback."""
+    try:
+        with open(_TOKENS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError, KeyError):
+        return {"color": _FALLBACK, "border": {"radius": 8}}
 
 
 def design_colours():
     """{"light": {...}, "dark": {...}, "team": [...]} from design/tokens.json (or the fallback copy)."""
-    try:
-        with open(_TOKENS_FILE, encoding="utf-8") as f:
-            return json.load(f)["color"]
-    except (OSError, ValueError, KeyError):
-        return _FALLBACK
+    return design_tokens().get("color", _FALLBACK)
 
 
 def mix(a, b, t):
@@ -55,9 +108,11 @@ def mix(a, b, t):
 
 def _palette(mode):
     c = {k: v.lower() for k, v in design_colours()[mode].items()}
+    radius = int(design_tokens().get("border", {}).get("radius", 8))
     dark = mode == "dark"
     surface = c["chrome"] if dark else c["paper"]
     return {
+        "RADIUS": f"{radius}px",
         "BG": c["panel"],               # main window, docks, the team panel
         "CHROME": c["chrome"],          # menu bar, title strips, tab bars
         "SURFACE": surface,             # lists, editors, cards
@@ -71,8 +126,8 @@ def _palette(mode):
         "BODY": c["ink"],
         "MUTED": c["muted"],
         "DISABLED_TEXT": mix(c["ink"], c["panel"], 0.55),
-        "ACCENT": c["signal"],
-        "ACCENT_HOVER": c["signal-ink"],
+        "ACCENT": c["signal-ink"],
+        "ACCENT_HOVER": c["signal-hover"],
         "ACCENT_DISABLED": mix(c["signal"], c["panel"], 0.6),
         "ON_ACCENT": c["on-signal"],
         "OK": c["ok"],
@@ -171,7 +226,7 @@ QMainWindow::separator:hover { background: $ACCENT; }
 QToolTip { background: $SURFACE; color: $TEXT; border: 1px solid $LINE_STRONG; padding: 4px 6px; }
 
 QMenuBar { background: $CHROME; color: $TEXT; border-bottom: 1px solid $LINE; padding: 1px 4px; }
-QMenuBar::item { background: transparent; padding: 4px 9px; border-radius: 0; }
+QMenuBar::item { background: transparent; padding: 4px 9px; border-radius: $RADIUS; }
 QMenuBar::item:selected { background: $HOVER; color: $TEXT; }
 QMenuBar::item:pressed { background: $ACCENT_SOFT; }
 QMenu { background: $SURFACE; color: $TEXT; border: 1px solid $LINE_STRONG; padding: 4px 0; }
@@ -182,7 +237,7 @@ QMenu::separator { height: 1px; background: $LINE; margin: 4px 8px; }
 
 QToolBar { background: $CHROME; border: none; border-bottom: 1px solid $LINE; spacing: 2px; padding: 2px; }
 QToolBar::separator { background: $LINE; width: 1px; margin: 4px 3px; }
-QToolBar QToolButton { background: transparent; color: $TEXT; border: 1px solid transparent; border-radius: 0;
+QToolBar QToolButton { background: transparent; color: $TEXT; border: 1px solid transparent; border-radius: $RADIUS;
     padding: 3px; }
 QToolBar QToolButton:hover { background: $HOVER; border-color: $LINE; }
 QToolBar QToolButton:pressed, QToolBar QToolButton:checked { background: $ACCENT_SOFT; border-color: $ACCENT; }
@@ -207,16 +262,16 @@ QTableCornerButton::section { background: $SURFACE_2; border: none; }
 QTabWidget::pane { border: 1px solid $LINE; background: $SURFACE; top: -1px; }
 QTabBar { background: transparent; }
 QTabBar::tab { background: $CHROME; color: $MUTED; border: 1px solid $LINE; border-bottom: none;
-    padding: 5px 12px; margin-right: 1px; border-top-left-radius: 0; border-top-right-radius: 0; }
+    padding: 5px 12px; margin-right: 1px; border-top-left-radius: $RADIUS; border-top-right-radius: $RADIUS; }
 QTabBar::tab:hover { color: $TEXT; background: $HOVER; }
 QTabBar::tab:selected { background: $SURFACE; color: $TEXT; border-top: 2px solid $ACCENT; }
-QTabBar::tab:bottom { border-top: none; border-bottom: 1px solid $LINE; border-top-left-radius: 0;
-    border-top-right-radius: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+QTabBar::tab:bottom { border-top: none; border-bottom: 1px solid $LINE; border-top-left-radius: $RADIUS;
+    border-top-right-radius: $RADIUS; border-bottom-left-radius: $RADIUS; border-bottom-right-radius: $RADIUS; }
 QTabBar::tab:bottom:selected { border-bottom: 2px solid $ACCENT; }
 QMdiArea { background: $BG; }
 
 QLineEdit, QAbstractSpinBox, QComboBox, QPlainTextEdit, QTextEdit {
-    background: $SURFACE; color: $TEXT; border: 1px solid $LINE_STRONG; border-radius: 0;
+    background: $SURFACE; color: $TEXT; border: 1px solid $LINE_STRONG; border-radius: $RADIUS;
     selection-background-color: $ACCENT; selection-color: $ON_ACCENT; }
 QLineEdit, QAbstractSpinBox, QComboBox { min-height: 20px; padding: 1px 6px; }
 QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus, QTextEdit:focus {
@@ -226,24 +281,24 @@ QComboBox::drop-down { border: none; width: 18px; }
 QComboBox QAbstractItemView { background: $SURFACE; color: $TEXT; border: 1px solid $LINE_STRONG;
     selection-background-color: $ACCENT; selection-color: $ON_ACCENT; }
 
-QPushButton { background: $SURFACE_2; color: $TEXT; border: 1px solid $LINE_STRONG; border-radius: 0;
+QPushButton { background: $SURFACE_2; color: $TEXT; border: 1px solid $LINE_STRONG; border-radius: $RADIUS;
     padding: 4px 12px; min-height: 18px; }
 QPushButton:hover { background: $HOVER; border-color: $ACCENT; }
 QPushButton:pressed { background: $ACCENT_SOFT; }
 QPushButton:default { border-color: $ACCENT; }
 QPushButton:disabled { color: $DISABLED_TEXT; border-color: $LINE; }
 QCheckBox, QRadioButton { color: $TEXT; spacing: 6px; }
-QGroupBox { border: 1px solid $LINE; border-radius: 0; margin-top: 10px; padding-top: 6px; }
+QGroupBox { border: 1px solid $LINE; border-radius: $RADIUS; margin-top: 10px; padding-top: 6px; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; color: $MUTED; }
-QProgressBar { background: $SURFACE_2; border: 1px solid $LINE; border-radius: 0; text-align: center;
+QProgressBar { background: $SURFACE_2; border: 1px solid $LINE; border-radius: $RADIUS; text-align: center;
     color: $TEXT; max-height: 14px; }
-QProgressBar::chunk { background: $ACCENT; border-radius: 0; }
+QProgressBar::chunk { background: $ACCENT; border-radius: $RADIUS; }
 
 QScrollBar:vertical { background: transparent; width: 11px; margin: 0; }
-QScrollBar::handle:vertical { background: $LINE; border-radius: 0; min-height: 24px; margin: 2px; }
+QScrollBar::handle:vertical { background: $LINE; border-radius: $RADIUS; min-height: 24px; margin: 2px; }
 QScrollBar::handle:vertical:hover { background: $HANDLE_HOVER; }
 QScrollBar:horizontal { background: transparent; height: 11px; margin: 0; }
-QScrollBar::handle:horizontal { background: $LINE; border-radius: 0; min-width: 24px; margin: 2px; }
+QScrollBar::handle:horizontal { background: $LINE; border-radius: $RADIUS; min-width: 24px; margin: 2px; }
 QScrollBar::handle:horizontal:hover { background: $HANDLE_HOVER; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
@@ -253,8 +308,8 @@ QStatusBar { background: $CHROME; color: $BODY; border-top: 1px solid $LINE; min
 QStatusBar::item { border: none; }
 QStatusBar QLabel { color: $BODY; padding: 0 6px; font-size: ${PX_SMALL}px; }
 QSplitter::handle { background: $LINE; }
-QSlider::groove:horizontal { background: $LINE; height: 4px; border-radius: 0; }
-QSlider::handle:horizontal { background: $ACCENT; width: 12px; margin: -5px 0; border-radius: 0; }
+QSlider::groove:horizontal { background: $LINE; height: 4px; border-radius: $RADIUS; }
+QSlider::handle:horizontal { background: $ACCENT; width: 12px; margin: -5px 0; border-radius: $RADIUS; }
 """)
 
 RIBBON = Template("""
@@ -262,16 +317,16 @@ RIBBON = Template("""
 #csRibbon { background: $CHROME; font-size: ${PX}px; }
 #csRibbon QWidget#csRibbonBar { background: $CHROME; }
 #csRibbon QLabel#csMark { color: $ACCENT; font-weight: 700; padding: 0 10px 0 8px; letter-spacing: 1px; }
-#csRibbon QToolButton#csQuick { background: transparent; border: 1px solid transparent; border-radius: 0;
+#csRibbon QToolButton#csQuick { background: transparent; border: 1px solid transparent; border-radius: $RADIUS;
     padding: 2px; }
 #csRibbon QToolButton#csQuick:hover { background: $HOVER; border-color: $LINE; }
-#csRibbon QLineEdit#csSearch { background: $SURFACE; border: 1px solid $LINE_STRONG; border-radius: 0;
+#csRibbon QLineEdit#csSearch { background: $SURFACE; border: 1px solid $LINE_STRONG; border-radius: $RADIUS;
     padding: 0 10px; min-height: 22px; color: $TEXT; }
 #csRibbon QLineEdit#csSearch:focus { border-color: $ACCENT; }
 #csRibbon QTabBar#csTabs { background: transparent; }
 #csRibbon QTabBar#csTabs::tab { background: transparent; color: $BODY; border: none;
     border-bottom: 2px solid transparent; padding: 6px 14px 5px 14px; margin: 0; font-weight: 600;
-    border-radius: 0; }
+    border-radius: $RADIUS; }
 #csRibbon QTabBar#csTabs::tab:hover { color: $TEXT; background: $HOVER; }
 #csRibbon QTabBar#csTabs::tab:selected { color: $ACCENT; border-bottom: 2px solid $ACCENT; background: $SURFACE; }
 #csRibbon QStackedWidget#csPages { background: $SURFACE; border-top: 1px solid $LINE; }
@@ -279,7 +334,7 @@ RIBBON = Template("""
 #csRibbon QFrame#csGroup { background: transparent; border: none; border-right: 1px solid $LINE; }
 #csRibbon QLabel#csGroupLabel { color: $MUTED; font-size: ${PX_SMALL}px; padding: 0 0 2px 0; }
 #csRibbon QToolButton#csCommand { background: transparent; color: $TEXT; border: 1px solid transparent;
-    border-radius: 0; padding: 2px 4px 4px 4px; font-size: ${PX_SMALL}px; }
+    border-radius: $RADIUS; padding: 2px 4px 4px 4px; font-size: ${PX_SMALL}px; }
 #csRibbon QToolButton#csCommand:hover { background: $HOVER; border-color: $LINE; }
 #csRibbon QToolButton#csCommand:pressed, #csRibbon QToolButton#csCommand:checked { background: $ACCENT_SOFT;
     border-color: $ACCENT; }
@@ -307,7 +362,7 @@ def ribbon_stylesheet(t, family=""):
 def panel_tokens(t):
     """The CadSwarm panel's tokens (theme.PANEL_TEMPLATE) in the pro look's colours."""
     return {"BG": t["BG"], "SURFACE": t["SURFACE"], "SURFACE_2": t["SURFACE_2"], "LINE": t["LINE"],
-            "LINE_STRONG": t["LINE_STRONG"], "TEXT": t["TEXT"], "BODY": t["BODY"], "MUTED": t["MUTED"],
+            "RADIUS": t["RADIUS"], "LINE_STRONG": t["LINE_STRONG"], "TEXT": t["TEXT"], "BODY": t["BODY"], "MUTED": t["MUTED"],
             "ACCENT": t["ACCENT"], "ACCENT_HOVER": t["ACCENT_HOVER"], "OK": t["OK"], "ERR": t["ERR"],
             "WARN": t["WARN"], "DISABLED_TEXT": t["DISABLED_TEXT"], "ACCENT_DISABLED": t["ACCENT_DISABLED"],
             "HANDLE_HOVER": t["HANDLE_HOVER"], "HOVER": t["HOVER"], "ACCENT_SOFT": t["ACCENT_SOFT"],

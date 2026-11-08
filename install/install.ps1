@@ -124,38 +124,61 @@ if (SamePath $Here $InstallDir) {
         Say "Pick another folder with -InstallDir." "Red"
         Finish 1
     }
-    $Stage = "$InstallDir.new"
-    if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
-    New-Item -ItemType Directory -Force -Path $Stage | Out-Null
-    robocopy $Here $Stage /E /NFL /NDL /NJH /NJS /NP `
-        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target `
-            upstream .claude `
-        /XF *.pyc .git | Out-Null  # .git is a file in a git worktree
-    if ($LASTEXITCODE -ge 8) { Say "Copying CADSwarm failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
-    # The team server's database module: a local build if there is one, else the module the installer
-    # downloaded beside the code (build folders aren't copied). Never leave a freshly installed
-    # app to a stale download in the app folder.
-    $Wasm = Join-Path $Here "module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm"
-    if (-not (Test-Path $Wasm)) { $Wasm = Join-Path $Here "module\cadswarm_module.wasm" }
-    if (Test-Path $Wasm) { Copy-Item $Wasm (Join-Path $Stage "module\cadswarm_module.wasm") }
-    if (Test-Path $InstallDir) {
-        # Python files aren't kept open, so this works even while CADSwarm runs; anything still in use
-        # stays in the .old folder until the next update.
-        $Old = "$InstallDir.old"
-        if (Test-Path $Old) { Remove-Item -Recurse -Force $Old -ErrorAction SilentlyContinue }
-        try { Rename-Item -LiteralPath $InstallDir -NewName (Split-Path -Leaf $Old) }
-        catch { Remove-Item -Recurse -Force $Stage; Say "Couldn't replace $InstallDir. Close CADSwarm and try again." "Red"; Finish 1 }
-        Remove-Item -Recurse -Force $Old -ErrorAction SilentlyContinue
+    $Parent = Split-Path -Parent $InstallDir
+    New-Item -ItemType Directory -Force -Path $Parent | Out-Null
+    $Stage = Join-Path $Parent (".cadswarm-stage-" + [guid]::NewGuid().ToString("N"))
+    $Backup = $null
+    try {
+        New-Item -ItemType Directory -Path $Stage | Out-Null
+        robocopy $Here $Stage /E /NFL /NDL /NJH /NJS /NP `
+            /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target `
+                upstream .claude `
+            /XF *.pyc .git | Out-Null
+        $CopyCode = $LASTEXITCODE
+        if ($CopyCode -ge 8) { throw "Copying CADSwarm failed (robocopy code $CopyCode)." }
+        $Wasm = Join-Path $Here "module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm"
+        if (-not (Test-Path $Wasm)) { $Wasm = Join-Path $Here "module\cadswarm_module.wasm" }
+        if (Test-Path $Wasm) { Copy-Item $Wasm (Join-Path $Stage "module\cadswarm_module.wasm") }
+        if (Test-Path $InstallDir) {
+            if ((IsLink $InstallDir) -or -not (LooksInstalled $InstallDir)) {
+                throw "$InstallDir is not a regular CADSwarm install; it was left untouched."
+            }
+            $Backup = Join-Path $Parent (".cadswarm-backup-" + [guid]::NewGuid().ToString("N"))
+            Rename-Item -LiteralPath $InstallDir -NewName (Split-Path -Leaf $Backup)
+        }
+        try {
+            Rename-Item -LiteralPath $Stage -NewName (Split-Path -Leaf $InstallDir)
+            $Stage = $null
+        } catch {
+            if ($Backup -and (Test-Path $Backup) -and -not (Test-Path $InstallDir)) {
+                Rename-Item -LiteralPath $Backup -NewName (Split-Path -Leaf $InstallDir)
+                $Backup = $null
+            }
+            throw
+        }
+        if ($Backup -and (Test-Path $Backup)) {
+            try { Remove-Item -LiteralPath $Backup -Recurse -Force }
+            catch { Say "The new app is installed; the previous copy remains at $Backup." "Yellow" }
+            $Backup = $null
+        }
+        Ok "Installed CADSwarm into $InstallDir"
+    } catch {
+        if ($Backup -and (Test-Path $Backup) -and -not (Test-Path $InstallDir)) {
+            try { Rename-Item -LiteralPath $Backup -NewName (Split-Path -Leaf $InstallDir) } catch {}
+        }
+        if ($Stage -and (Test-Path $Stage)) { Remove-Item -LiteralPath $Stage -Recurse -Force -ErrorAction SilentlyContinue }
+        Say "CADSwarm install failed: $_" "Red"
+        Finish 1
     }
-    New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) | Out-Null
-    Rename-Item -LiteralPath $Stage -NewName (Split-Path -Leaf $InstallDir)
-    Ok "Installed CADSwarm into $InstallDir"
 }
+# A `cadswarm` command in the installed folder: the setup CLI, run by the same FreeCAD Python as the app.
+$SetupWrapper = "@echo off`r`n`"$Python`" `"%~dp0cadswarm_launch.py`" %*`r`n"
+[IO.File]::WriteAllText((Join-Path $InstallDir "cadswarm.cmd"), $SetupWrapper, [Text.Encoding]::ASCII)
 
 # ---------------------------------------------------------------- 3. Start menu and desktop shortcuts
-# The CADSwarm icon, once the brand assets include one; FreeCAD's until then.
+# The CADSwarm icon (design/icon/cadswarm.ico from the brand assets); FreeCAD's if a build lacks it.
 $Icon = "$FreeCADExe"
-foreach ($rel in @("cadswarm\gui\cadswarm.ico", "design\cadswarm.ico", "design\icons\cadswarm.ico")) {
+foreach ($rel in @("design\icon\cadswarm.ico", "cadswarm\gui\cadswarm.ico", "design\cadswarm.ico")) {
     if (Test-Path (Join-Path $InstallDir $rel)) { $Icon = Join-Path $InstallDir $rel; break }
 }
 Add-Type -Path (Join-Path $InstallDir "install\shortcut.cs")

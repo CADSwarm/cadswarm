@@ -14,6 +14,7 @@ import multiprocessing
 import os
 import queue
 import sys
+import socket
 import tempfile
 import threading
 from multiprocessing.connection import Client, Listener
@@ -91,10 +92,25 @@ class Server:
         addr, family = address(self.home)
         key = authkey(self.home, create=True)
         if family == "AF_UNIX" and os.path.exists(addr):
-            try:  # forward() failed to reach it, so it's left over from a crashed run
-                os.unlink(addr)
+            # A failed authenticated handoff can still mean a live listener. Probe its socket
+            # before unlinking so a temporary connection issue cannot split one profile in two.
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.settimeout(0.25)
+                probe.connect(addr)
+            except ConnectionRefusedError:  # stale path left by a crashed process
+                try:
+                    os.unlink(addr)
+                except OSError:
+                    return False
+            except FileNotFoundError:  # another process already removed the stale path
+                pass
             except OSError:
                 return False
+            else:  # a live listener owns the channel
+                return False
+            finally:
+                probe.close()
         try:
             self._listener = Listener(addr, family, authkey=key)
         except OSError:

@@ -1,50 +1,47 @@
 /* CADSwarm web: a professional CAD workspace on desktop, the model + bottom sheet on phones.
-   Light by default (neutral greys, one blue accent), dark as an option. Every colour is a token so the
+   Light by default (soft neutral greys, one orange accent), dark as an option. Every colour is a token so the
    two themes flip cleanly; the older sheet styles below read the same tokens through the aliases. */
 :root {
-  --chrome-bg: #EEF0F3; --panel-bg: #FFFFFF; --panel-alt: #F5F6F8; --border: #D3D7DD; --border-strong: #BCC2CB;
-  --text: #1F2329; --text-muted: #5E6773; --text-faint: #8A929C;
-  --accent: #2B6CD9; --accent-hover: #2560C4; --accent-tint: #E4EDFB; --accent-line: #9DBBEE;
-  --hover-hl: #F2A93B; --select-hl: #1F7AE0;
-  --ok: #2E9D5B; --warn: #D99A00; --err: #D23F3F; --suppressed: #A0A7B0;
-  --vp-top: #C5CFDA; --vp-bottom: #F3F5F7;
-  --axis-x: #E5484D; --axis-y: #2FA567; --axis-z: #3D7BF7;
-  --hover-row: #EEF1F5; --field-bg: #FFFFFF; --rb-hover: #E2E6EB;
-  --shadow-sm: 0 1px 2px rgb(16 24 40 / .08); --shadow: 0 8px 28px rgb(16 24 40 / .14), 0 1px 3px rgb(16 24 40 / .10);
-
-  /* aliases the sheet, chat and library styles read */
+  --chrome-bg: #F5F5F7; --panel-bg: #FFFFFF; --panel-alt: #F5F5F7; --border: #D2D2D7; --border-strong: #C7C7CC;
+  --text: #1D1D1F; --text-muted: #6E6E73; --text-faint: #8E8E93;
+  --accent: #FF6B2C; --accent-hover: #FF7A36; --accent-ink: #C2410C; --accent-tint: #FFF0E8; --accent-line: #FFC09D;
+  --hover-hl: #F2F2F7; --select-hl: #FF6B2C;
+  --ok: #34C759; --warn: #FF9F0A; --err: #FF3B30; --suppressed: #AEAEB2;
+  --vp-top: #E8EAF0; --vp-bottom: #F6F7F9;
+  --axis-x: #FF453A; --axis-y: #30D158; --axis-z: #0A84FF;
+  --hover-row: #F2F2F7; --field-bg: #FFFFFF; --rb-hover: #EAEAED;
+  --shadow-sm: 0 1px 2px rgb(29 29 31 / .08); --shadow: 0 8px 28px rgb(29 29 31 / .12), 0 1px 3px rgb(29 29 31 / .08);
   --bg: var(--panel-bg); --surface: var(--panel-bg); --surface-2: var(--panel-alt);
-  --line: var(--border); --line-strong: var(--border-strong); --body: #3A414B; --muted: var(--text-muted);
-  --bone: var(--accent); --ink-on-light: #FFFFFF; --refused: #B83232;
-  --own-1: #2B6CD9; --own-2: #E5484D; --own-3: #2FA567; --own-4: #D97706;
+  --line: var(--border); --line-strong: var(--border-strong); --body: #3A3A3C; --muted: var(--text-muted);
+  --bone: var(--accent); --ink-on-light: #1D1D1F; --refused: #B83232;
+  --own-1: #FF6B2C; --own-2: #C2410C; --own-3: #C7C7CC; --own-4: #6E6E73;
   --fg: var(--text); --panel: var(--panel-bg); --solid: var(--panel-bg); --group: var(--panel-alt); --soft: var(--panel-alt);
-  --fill: rgb(31 35 41 / .06); --accent-fg: #FFFFFF;
+  --fill: rgb(29 29 31 / .06); --accent-fg: #1D1D1F;
   --bubble-mine: var(--accent); --bubble-theirs: var(--panel-alt);
-
   --font-body: Inter, system-ui, "Segoe UI", -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
-  --font: var(--font-body);
-  font-family: var(--font-body);
-  color: var(--text); background: var(--panel-bg); color-scheme: light;
-  -webkit-font-smoothing: antialiased;
+  --font: var(--font-body); font-family: var(--font-body); color: var(--text); background: var(--panel-bg);
+  color-scheme: light; -webkit-font-smoothing: antialiased;
 }
 :root[data-theme="dark"] {
-  --chrome-bg: #1B1F24; --panel-bg: #22272E; --panel-alt: #2A3038; --border: #363D47; --border-strong: #4A525E;
-  --text: #E6E8EB; --text-muted: #9AA3AE; --text-faint: #6F7883;
-  --accent: #4C8DF0; --accent-hover: #6A9FF2; --accent-tint: #24364F; --accent-line: #35598F;
-  --select-hl: #4C9AFF;
-  --ok: #3FB871; --warn: #E8B024; --err: #EF5B5B; --suppressed: #6B737D;
-  --vp-top: #2A3038; --vp-bottom: #474F59;
-  --hover-row: #2D343D; --field-bg: #1B1F24; --rb-hover: #2D343D;
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / .4); --shadow: 0 12px 32px rgb(0 0 0 / .5), 0 1px 3px rgb(0 0 0 / .5);
-  --body: #C9CED5; --refused: #F0A29D; --fill: rgb(230 232 235 / .07);
+  --chrome-bg: #1C1C1E; --panel-bg: #2C2C2E; --panel-alt: #38383A; --border: #38383A; --border-strong: #48484A;
+  --text: #F5F5F7; --text-muted: #AEAEB2; --text-faint: #8E8E93;
+  --accent: #FF9A62; --accent-hover: #FFB07B; --accent-ink: #FFB07B; --accent-tint: #3B261B; --accent-line: #8E5437;
+  --select-hl: #FF7A36;
+  --ok: #30D158; --warn: #FFD60A; --err: #FF453A; --suppressed: #8E8E93;
+  --vp-top: #252527; --vp-bottom: #353539;
+  --hover-row: #3A3A3D; --field-bg: #1C1C1E; --rb-hover: #3A3A3D;
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .4); --shadow: 0 12px 32px rgb(0 0 0 / .42), 0 1px 3px rgb(0 0 0 / .4);
+  --body: #D1D1D6; --refused: #FF8A84; --fill: rgb(245 245 247 / .07);
+  --ink-on-light: #1D1D1F; --accent-fg: #1D1D1F;
+  --own-1: #FF7A36; --own-2: #FF9A62; --own-3: #AEAEB2; --own-4: #6E6E73;
   color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #app { margin: 0; height: 100%; background: var(--panel-bg); }
 body { font-size: 13px; line-height: 1.4; -webkit-text-size-adjust: 100%; }
-a { color: var(--accent); }
+a { color: var(--accent-ink); }
 [hidden] { display: none !important; }
 .err { color: var(--err); }
 .small { font-size: 12px; }

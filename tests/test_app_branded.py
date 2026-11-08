@@ -22,7 +22,7 @@ def test_theme_overrides_use_tokens():
     dark = branded.theme_overrides("dark")
     assert light["AccentColor"] == branded.colours("light")["signal"]
     assert dark["AccentColor"] == branded.colours("dark")["signal"]
-    assert light["InputFieldBorderRadius"] == "0px"
+    assert light["InputFieldBorderRadius"] == "8px"
 
 
 def test_write_theme_overrides_existing_keys(tmp_path):
@@ -159,3 +159,11 @@ def test_cadswarm_version_reads_pyproject(tmp_path):
     p.write_text('[project]\nname = "x"\nversion = "2.3.4"\n', encoding="utf-8")
     assert branded.cadswarm_version(str(p)) == "2.3.4"
     assert branded.cadswarm_version(str(tmp_path / "missing.toml")) == ""
+
+
+def test_theme_names_round_trip():
+    assert branded.theme_name("dark") == "CADSwarm Dark" and branded.theme_name("light") == "CADSwarm Light"
+    for mode in ("light", "dark"):
+        assert branded.mode_of_theme(branded.theme_name(mode)) == mode
+    assert branded.mode_of_theme("FreeCAD Dark") == "" and branded.mode_of_theme(None) == ""
+    assert branded.current_mode() in ("light", "dark")

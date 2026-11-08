@@ -148,8 +148,18 @@ for w, h in ((340, 640), (520, 900)):
     scroll = p.widget()
     inner = scroll.widget()
     checks[f"{w}x{h}"] = {
+        "inner_width": inner.width(),
+        "viewport_width": scroll.viewport().width(),
+        "inner_minimum_hint_width": inner.minimumSizeHint().width(),
+        "inner_height": inner.height(),
+        "viewport_height": scroll.viewport().height(),
+        "inner_minimum_hint_height": inner.minimumSizeHint().height(),
         "no_horizontal_overflow": inner.width() <= scroll.viewport().width() + 1,
-        "scrolls_when_short": scroll.verticalScrollBar().maximum() > 0 if h < 800 else True,
+        "scroll_range": scroll.verticalScrollBar().maximum(),
+        "scrolls_when_short": (
+            scroll.verticalScrollBar().maximum() > 0
+            or inner.minimumSizeHint().height() <= scroll.viewport().height() + 1
+        ) if h < 800 else True,
     }
     p.grab().save(str(out / f"panel-{w}x{h}.png"))
     for name, page in (("tasks", p.tasks_page), ("tools", p.tools_page)):
@@ -164,6 +174,7 @@ p.show()
 for _ in range(5):
     QtGui.QApplication.processEvents()
 tabs = [p.tabs.tabText(i) for i in range(p.tabs.count())]
+more_tabs = [p.more.tabText(i) for i in range(p.more.count())]
 p.show_tab(p.sizes_page)
 QtGui.QApplication.processEvents()
 p.grab().save(str(out / "panel-520x900-sizes.png"))
@@ -273,6 +284,30 @@ p.send()
 team_outbox = [o["body"] for o in p.outbox]
 team_notice = [n["text"] for n in s.notices]
 team_chat = p.chat.toPlainText()
+# The prompt bar: the AI build by default (a brief), a picked helper gets a task with the selection attached.
+from cadswarm.gui import prompt_bar  # noqa: E402
+prompt_bar.current_selection = lambda: ["Base"]
+pb = p.prompt_bar
+p.show()
+QtGui.QApplication.processEvents()
+pb.refresh()
+before = len(sent)
+pb.edit.setText("thicker walls")
+pb.completed_at = 0
+pb.submit()
+pb.choose("ann-claude")
+pb.edit.setText("round the lid corners")
+pb.submit()
+prompt_sent = [(path, body) for path, body in sent[before:]]
+del sent[before:]  # the checks below count from the chat's own sends
+prompt_cleared = pb.edit.text() == ""
+prompt_context = pb.context.text()
+# The Build tab opened for the brief; its next-step box names a ready step.
+on_build = p.current_page() is p.build_page
+# Agents tab: one row per agent CLI plus a custom command row.
+p.show_tab(p.agents_page)
+QtGui.QApplication.processEvents()
+agent_rows = p.agents_page.rows_lay.count()
 # Handing the brief over moved the panel to Tasks (that is where the request now lives); suggestions
 # stay on the Team tab, so go back to read them.
 p.show_tab(p.team_page)
@@ -299,7 +334,7 @@ brief = p.task_list.topLevelItem(0)
 # A long chat follows the newest message; scrolling up stops that, keeps the place as messages arrive and shows
 # a "new" button that jumps back down.
 p.show()
-p.show_tab(p.team_page)
+p.show_tab(p.chat_page)  # the chat has its own tab
 long_chat = [{"id": f"m_l{i}", "from": "ann-claude", "to": "carol", "kind": "chat",
               "body": f"Progress note {i}: the base walls and the lid lip are still lined up.", "at": now + i}
              for i in range(40)]
@@ -684,6 +719,9 @@ result = {
                   "unseen_text": unseen_text, "back_down": back_down},
     "toast": toast,
     "tabs": tabs,
+    "more_tabs": more_tabs,
+    "prompt": {"sent": prompt_sent, "cleared": prompt_cleared, "context": prompt_context, "on_build": on_build,
+               "agent_rows": agent_rows},
     "sizes": sizes,
     "sizes_editable": sizes_editable,
     "sizes_inline": sizes_inline,

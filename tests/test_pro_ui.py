@@ -16,7 +16,7 @@ def test_tokens_come_from_the_design_tokens():
     design = json.load(open(pro_style._TOKENS_FILE, encoding="utf-8"))["color"]
     for mode, t in (("light", light), ("dark", dark)):
         c = {k: v.lower() for k, v in design[mode].items()}
-        assert t["ACCENT"] == c["signal"] and t["TEXT"] == c["ink"] and t["BG"] == c["panel"]
+        assert t["ACCENT"] == c["signal-ink"] and t["TEXT"] == c["ink"] and t["BG"] == c["panel"]
         assert t["ON_ACCENT"] == c["on-signal"] and t["SELECT"] == c["select"] and t["LINE"] == c["hairline"]
     assert set(light) == set(dark)
     assert pro_style.tokens("anything") == light
@@ -52,7 +52,7 @@ def test_panel_text_is_readable(mode):
 def test_panel_is_square_and_uses_on_accent():
     for sheet in (theme.PANEL, theme.DIALOG):
         assert "color: white" not in sheet
-        assert all(v.strip().startswith("0") for v in __import__("re").findall(r"radius:([^;]*);", sheet))
+        assert all(v.strip().startswith("8px") for v in __import__("re").findall(r"radius:([^;]*);", sheet))
 
 
 def test_pick_mode_follows_the_setting_or_freecads_window_colour():
@@ -330,3 +330,14 @@ def test_view_key_changes_with_the_feed():
     b = build_view.from_snapshot({"id": "b1", "text": "x"}, tasks)
     assert build_view.view_key(a) != build_view.view_key(b)
     assert build_view.view_key(a) == build_view.view_key(build_view.from_snapshot({"id": "b1", "text": "x"}, _tasks()))
+
+
+def test_theme_set_mode_switches_and_back():
+    start = theme.MODE
+    try:
+        theme.set_mode("dark")
+        assert theme.BG == pro_style.tokens("dark")["BG"] and theme.BG in theme.PANEL and theme.BG in theme.DIALOG
+        theme.set_mode("light")
+        assert theme.BG == pro_style.tokens("light")["BG"] and theme.panel_sheet({}) == theme.PANEL
+    finally:
+        theme.set_mode(start)

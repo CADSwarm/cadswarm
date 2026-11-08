@@ -44,11 +44,28 @@ def test_fresh_forgets_the_identity_and_redeems_again(tmp_path, monkeypatch):
 @pytest.mark.parametrize("code", [lambda: make_invite(T, "Lid"), lambda: ticket.encode(T),
                                   lambda: "https://cadswarm.app/#t=" + ticket.encode(T)])
 def test_cli_setup_takes_any_invite_form(tmp_path, monkeypatch, capsys, code):
+    from cadswarm import hosting
+    monkeypatch.setattr(hosting, "deps_ready", lambda _python: True)
     calls = []
     monkeypatch.setattr(agent_setup, "redeem", fake_redeem(calls))
     cli.main(["setup", "--client", "claude", "--invite", code(), "--name", "carol-claude", "--dir", str(tmp_path)])
     assert calls == [("ab" * 32, "carol-claude", "claude")]
     assert "carol-claude" in capsys.readouterr().out
+
+
+def test_custom_mcp_setup_prints_server_entry_without_editing_another_clients_config(tmp_path, monkeypatch, capsys):
+    from cadswarm import hosting
+    monkeypatch.setattr(hosting, "deps_ready", lambda _python: True)
+    calls = []
+    monkeypatch.setattr(agent_setup, "redeem", fake_redeem(calls))
+    cli.main(["setup", "--client", "custom", "--invite", ticket.encode(T), "--name", "rover-mcp",
+              "--dir", str(tmp_path)])
+    output = capsys.readouterr().out
+    assert calls == [("ab" * 32, "rover-mcp", "custom")]
+    assert "MCP server entry" in output and '"CADSWARM_PROJECT"' in output
+    cfg = json.load(open(tmp_path / ".cadswarm" / "config.json", encoding="utf-8"))
+    assert cfg["client"] == "custom" and cfg["name"] == "rover-mcp"
+    assert not (tmp_path / ".mcp.json").exists()
 
 
 def test_cli_setup_explains_a_bad_invite(tmp_path):

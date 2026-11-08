@@ -2,9 +2,9 @@
 
 On activation (``WORKSPACE.activate()``, from InitGui's ``Activated``):
 
-* the whole application gets the pro look (pro_style.py: light greys, one blue accent, or the dark variant),
+* the whole application gets the pro look (pro_style.py: warm neutrals and the orange accent, or the dark variant),
   with a matching palette, so menus, docks, trees, tabs, fields, scroll bars and the status bar all agree;
-* the 3D view gets a neutral grey gradient and blue selection / amber preselection (FreeCAD parameters; the
+* the 3D view gets a neutral grey gradient and orange selection / soft-orange preselection (FreeCAD parameters; the
   user's own values are saved first, in CADSwarm's preferences, and put back on deactivation, at quit, and on
   the next start if FreeCAD closed while CADSwarm was active);
 * FreeCAD's stock toolbars are hidden and a tabbed command ribbon docks at the top

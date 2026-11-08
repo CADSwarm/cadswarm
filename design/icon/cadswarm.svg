@@ -1,11 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- CADSwarm app icon (original). An ink tile; one signal-orange part (an isometric block) that three
-       teammates (the paper squares) build together. Colours: design/tokens.json. Square corners, no gradients. -->
-  <rect x="0" y="0" width="256" height="256" fill="#111111"/>
-  <polygon points="128,58 196,97 128,136 60,97" fill="#FF8A4C"/>
-  <polygon points="60,97 128,136 128,214 60,175" fill="#FF5F00"/>
-  <polygon points="128,136 196,97 196,175 128,214" fill="#B83F00"/>
-  <rect x="26" y="26" width="26" height="26" fill="#F7F7F4"/>
-  <rect x="204" y="26" width="26" height="26" fill="#F7F7F4"/>
-  <rect x="204" y="204" width="26" height="26" fill="#FF5F00"/>
+  <rect x="12" y="12" width="232" height="232" rx="56" fill="#1D1D1F"/>
+  <g fill="none" stroke="#F5F5F7" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 48 198 88v80l-70 40-70-40V88z"/>
+    <path d="m58 88 70 40 70-40M128 128v80"/>
+  </g>
+  <g fill="#FF6B2C" stroke="#1D1D1F" stroke-width="5">
+    <circle cx="128" cy="48" r="11"/>
+    <circle cx="58" cy="88" r="11"/>
+    <circle cx="198" cy="168" r="11"/>
+  </g>
 </svg>

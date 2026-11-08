@@ -326,8 +326,8 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False, 
     folder has no identity yet (invites work once), and only after the agent CLI's own config
     files were validated and written, so a config file we refuse to touch never burns the invite.
     `model` pins the helper's model (see save_helper_model); None keeps the folder's earlier pick."""
-    if client not in CLIENTS:
-        raise ValueError(f"client must be one of {sorted(CLIENTS)}")
+    if client not in CLIENTS and client != "custom":
+        raise ValueError(f"client must be one of {sorted(CLIENTS)} or 'custom'")
     python = python or sys.executable
     project = os.path.abspath(project)
     os.makedirs(state_dir(project), exist_ok=True)
@@ -337,7 +337,9 @@ def write_agent_config(project, client, invite, name, python=None, fresh=False, 
     with open(os.path.join(state_dir(project), ".gitignore"), "w") as f:
         f.write("*\n")  # identity.json holds a SpacetimeDB token
     writers = {"claude": setup_claude, "codex": setup_codex, "opencode": setup_opencode}
-    written = writers[client](project, python)
+    # A generic MCP client has no standard config-file format. Redeem its invite and print
+    # the server entry from the CLI so the user can add it to that client's settings.
+    written = writers[client](project, python) if client in writers else []
     if not identity_matches(project, invite):
         if not invite.get("token"):
             raise ValueError("This helper folder isn't signed in to this team yet; it needs a fresh invite code.")

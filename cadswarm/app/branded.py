@@ -49,6 +49,28 @@ FREECAD_LINK_COMMANDS = {
 
 _WORD = re.compile(r"\bFreeCAD\b")
 
+THEME_NAMES = (f"{APP_NAME} Light", f"{APP_NAME} Dark")
+
+
+def theme_name(mode):
+    return THEME_NAMES[1] if mode == "dark" else THEME_NAMES[0]
+
+
+def mode_of_theme(name):
+    """"light" / "dark" for a CADSwarm theme name, "" for anything else (the engine's own themes)."""
+    return {n: m for n, m in zip(THEME_NAMES, ("light", "dark"))}.get(name or "", "")
+
+
+def current_mode():
+    """The running app's mode from MainWindow/Theme (light when unknown or outside FreeCAD)."""
+    try:
+        import FreeCAD
+        name = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/MainWindow").GetString("Theme", "")
+    except Exception:  # noqa: BLE001
+        name = ""
+    return mode_of_theme(name) or "light"
+
+
 ENGINE_LINE = ("CADSwarm runs on the open-source FreeCAD engine (LGPL&nbsp;2.1+), used unmodified, "
                "with Open CASCADE Technology underneath.")
 
@@ -129,6 +151,15 @@ def contrast(fg, bg):
     return (a + 0.05) / (b + 0.05)
 
 
+def design_radius():
+    """Radius in px from the shared CADSwarm token file (8 px when unavailable)."""
+    try:
+        with open(TOKENS, encoding="utf-8") as f:
+            return int(json.load(f).get("border", {}).get("radius", 8))
+    except (OSError, ValueError, KeyError, TypeError):
+        return 8
+
+
 def theme_overrides(mode="light"):
     """CADSwarm values for every colour FreeCAD.qss reads through its theme engine.
 
@@ -183,7 +214,7 @@ def theme_overrides(mode="light"):
         "AccentHoverColor": c["signal-tint"],
         "TextSelectBackgroundColor": c["signal-tint"],
         "TextUrlColor": c["signal-ink"],
-        "InputFieldBorderRadius": "0px",
+        "InputFieldBorderRadius": f"{design_radius()}px",
         "SketcherFullyConstrainedColor": c["ok"],
         "SketcherUnderConstrainedColor": c["sk-under"],
         "SketcherConflictingConstraintsColor": c["error"],
@@ -215,7 +246,7 @@ TEXT_PAIRS = [
 
 
 def write_theme(freecad_root, home, mode="light"):
-    """Copy FreeCAD's own light/dark theme parameters and apply CADSwarm's tokens; also write the square-cornered
+    """Copy FreeCAD's own light/dark theme parameters and apply CADSwarm's tokens; also write the softly rounded
     CADSwarm stylesheet next to it (``write_stylesheet``). Returns the parameters file's path."""
     base_name = "FreeCAD Dark.yaml" if mode == "dark" else "FreeCAD Light.yaml"
     base = os.path.join(freecad_root, "data", "Gui", "Stylesheets", "parameters", base_name)
@@ -315,7 +346,7 @@ def brand_params(theme_file, mode="light"):
         ("BaseApp/Preferences/Units", "Int", "Decimals", 2),
         ("BaseApp/Preferences/Document", "Bool", "CreateBackupFiles", True),
         (mw, "Bool", "StatusBar", True),
-        (mw, "String", "Theme", f"CADSwarm {mode.title()}"),
+        (mw, "String", "Theme", theme_name(mode)),
         (mw, "String", "ThemeStyleParametersFile", theme_file),
         (mw, "String", "StyleSheet", qss if os.path.exists(qss) else "FreeCAD.qss"),
         (mw, "String", "QtStyle", "FreeCAD"),

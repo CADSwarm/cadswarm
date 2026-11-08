@@ -306,11 +306,12 @@ pub fn planner_prompt(brief_id: &str, text: &str, board: &str, params: &[(String
             types fixed, coincident, concentric, distance, angle, parallel, revolute, slider (distance and angle \
             need a `value`). Exactly one part is fixed in the whole plan and the mates form a tree (no loops).\n\
          7. `ops` lists the CAD operations the step will run, each starting with one of: {OP_VOCABULARY} \
-            (e.g. \"Create sketch SK_Mast\", \"Revolve Mast\", \"Set color\", \"Save part\").\n\
+            (e.g. \"Create sketch SK_Mast\", \"Revolve Mast\", \"Save part\"). Parts have no colour property in the \
+            shared model (every client colours a part by who holds it), so plan no \"Set color\" op.\n\
          WHAT TO CALL\n\
          a. For each step, in order, call create_task with title \"<n>. <name>\" (e.g. \"3. Pitch link\"), \
             brief = \"{brief_id}\", objects = the exact FreeCAD object names the step creates, and a detail with the \
-            full build instructions: the sketch and features in order, every dimension bound to Params, the colour, \
+            full build instructions: the sketch and features in order, every dimension bound to Params, \
             the library component and the hole it needs (hole_size), or for an assembly step which parts it places \
             and how. Pass assignee only if the person asked for a named teammate to build that step.\n\
          b. Then call set_brief_plan with brief_id \"{brief_id}\" and plan_json = \
@@ -337,7 +338,8 @@ pub fn worker_prompt(brief_id: &str, n: usize) -> String {
          3. Build that ONE step completely before anything else, following its task detail and summary. \
             point_at the part as you go so the team sees where you are.\n\
             - kind \"part\": build it the way a CAD engineer would, one feature at a time: sketch or primitive, the \
-              main feature (extrude, revolve, cut), then refinements (holes, fillets, patterns), then set its colour. \
+              main feature (extrude, revolve, cut), then refinements (holes, fillets, patterns). Don't try to colour \
+              it: the shared model has no colour property (clients colour parts by who holds them). \
               Bind every dimension to Params with expressions (e.g. \"Params.pcb_l + 2 * Params.gap\").\n\
             - kind \"library\": never model it. recommend_components or search_components for the step's \
               `component`, then insert_component or add_standard_part, placed where the detail says.\n\

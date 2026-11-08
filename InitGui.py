@@ -18,14 +18,27 @@ def open_on_start():
     except Exception as e:  # noqa: BLE001
         import FreeCAD
         FreeCAD.Console.PrintLog(f"[CADSwarm] workspace recovery: {e}\n")
+    import os
     try:
         from cadswarm.gui import panel
         if panel.SESSION.panel is None:
             panel.show_panel()
-        panel.SESSION.try_auto_rejoin()
+        if os.environ.get("CADSWARM_UX_DEMO") == "1":  # a sample team, no server (screenshots, trying it out)
+            from cadswarm.gui import demo_team
+            demo_team.seed(panel.SESSION)
+            if os.environ.get("CADSWARM_UX_TOUR"):
+                demo_team.tour(panel.SESSION, os.environ["CADSWARM_UX_TOUR"])
+        else:
+            panel.SESSION.try_auto_rejoin()
     except Exception as e:  # noqa: BLE001 - never break FreeCAD's startup over this
         import FreeCAD
         FreeCAD.Console.PrintWarning(f"[CADSwarm] could not open the team panel: {e}\n")
+    try:  # the prompt bar over the 3D view and Ctrl+K, in every workbench
+        from cadswarm.gui import panel, prompt_bar
+        prompt_bar.install(panel.SESSION)
+    except Exception as e:  # noqa: BLE001
+        import FreeCAD
+        FreeCAD.Console.PrintWarning(f"[CADSwarm] could not add the prompt bar: {e}\n")
 
 
 QtCore.QTimer.singleShot(2000, open_on_start)

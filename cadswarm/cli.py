@@ -21,7 +21,7 @@ import sys
 
 from .agent_setup import write_agent_config
 from .config import LINUX_FREECAD_LIBS, find_freecad_python
-from .paths import ROOT
+from .paths import LAUNCHER, ROOT
 
 
 def cmd_setup(a):
@@ -29,6 +29,10 @@ def cmd_setup(a):
     project = os.path.abspath(a.dir)
     try:
         t = read_invite(a.invite)
+        from .hosting import deps_ready, install_deps
+        if not deps_ready(sys.executable):
+            print("Installing the CADSwarm agent runtime…", flush=True)
+            install_deps(sys.executable)
         written = write_agent_config(project, a.client, t, a.name, sys.executable, a.fresh, ephemeral=a.ephemeral,
                                      model=a.model)
     except (InviteError, ValueError) as e:
@@ -38,7 +42,12 @@ def cmd_setup(a):
     print(f"CADSwarm set up for {a.client} as '{a.name}' in {project}")
     for p in written:
         print(f"  wrote {p}")
-    if a.client == "claude":
+    if a.client == "custom":
+        print("Next: add this MCP server entry to your agent's settings, then start it in this project folder:")
+        print(json.dumps({"mcpServers": {"cadswarm": {
+            "command": sys.executable, "args": [LAUNCHER, "mcp"], "env": {"CADSWARM_PROJECT": project}}}},
+            indent=2))
+    elif a.client == "claude":
         print("Next: open this folder and run `claude`; the cadswarm MCP server joins the team on start.")
     elif a.client == "opencode":
         print("Next: run `opencode` here; it loads opencode.json and joins the team on start.")
@@ -101,7 +110,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="cadswarm")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("setup", help="join with an invite and connect an agent CLI in a folder")
-    s.add_argument("--client", choices=["claude", "codex", "opencode"], required=True)
+    s.add_argument("--client", choices=["claude", "codex", "opencode", "custom"], required=True)
     s.add_argument("--invite", required=True, help="a cadswarm-2: code, a ticket, or a phone link")
     s.add_argument("--name", required=True)
     s.add_argument("--dir", default=".")

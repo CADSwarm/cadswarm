@@ -268,23 +268,29 @@ def mcp_server_entry(python, launcher, folder):
 
 
 def remote_instructions(client, code, name, python="python", launcher="cadswarm_launch.py",
-                        folder="~/cadswarm-helper"):
-    """The exact steps to connect an agent on another computer: install, join with the invite, run it.
-
-    Returns {"setup": the one command that joins (it writes the agent's MCP config), "run": how to start the agent,
-    "mcp": the MCP server entry as JSON for agents configured by hand, "steps": the numbered steps as text}."""
-    cli_client = client if client in ("claude", "codex", "opencode") else "opencode"
-    setup = (f"cadswarm setup --client {cli_client} --invite {code} --name {name} --dir {folder}")
-    run = {"claude": "claude", "codex": "codex", "opencode": "opencode"}.get(client, "<your agent's command>")
+                        folder=None, platform="linux"):
+    """Commands for joining another device. The installers place a small wrapper beside the app copy, so
+    helpers do not need a separately installed `cadswarm` command. `platform` is windows, macos, or linux."""
+    cli_client = client if client in ("claude", "codex", "opencode", "custom") else "opencode"
+    windows = platform.lower() in ("windows", "win", "win32")
+    folder = folder or f"$HOME/CadSwarm/{name}"
+    setup_exe = r".\cadswarm.cmd" if windows else "./cadswarm"
+    setup = (f'{setup_exe} setup --client {cli_client} --invite {code} --name {name} --dir "{folder}"')
+    agent = {"claude": "claude", "codex": "codex", "opencode": "opencode"}.get(client, "<your agent command>")
+    run = f'Set-Location "{folder}"; {agent}' if windows else f'cd "{folder}" && {agent}'
     mcp = json.dumps({"mcpServers": {"cadswarm": mcp_server_entry(python, launcher, folder)}}, indent=2)
+    install_dir = "the CADSwarm install folder (the one containing cadswarm.cmd)" if windows else \
+        "the CADSwarm install folder (the one containing cadswarm)"
     steps = [
-        "Install CADSwarm on that computer (Install CadSwarm.cmd / .command / .sh from the download).",
-        f"In a terminal there, run:\n{setup}",
-        f"Start the agent in that folder: cd {folder} && {run}",
+        "Install CADSwarm on that computer, then open PowerShell/a terminal in " + install_dir + ".",
+        f"Run this one-time setup command:\n{setup}",
     ]
-    if client not in ("claude", "codex", "opencode"):
-        steps.append("For any other MCP agent, add this server to its MCP settings (after step 2):\n" + mcp)
-    return {"setup": setup, "run": f"cd {folder} && {run}", "mcp": mcp,
+    if client == "custom":
+        steps.append("The setup command prints the exact cadswarm MCP server entry. Add it to your agent's MCP "
+                     "settings, then start that agent in the project folder.")
+    else:
+        steps.append(f"Start the agent in that project folder:\n{run}")
+    return {"setup": setup, "run": run, "mcp": mcp,
             "steps": "\n\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))}
 
 

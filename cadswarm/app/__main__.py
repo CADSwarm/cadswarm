@@ -181,6 +181,7 @@ def demo_part():
     pad = body.newObject("PartDesign::Pad", "Pad")
     pad.Profile = sk
     pad.Length = 12
+    doc.recompute()  # Build Face6 before the next sketch attaches to it.
     hole_sk = body.newObject("Sketcher::SketchObject", "HoleSketch")
     hole_sk.AttachmentSupport = (pad, ["Face6"])
     hole_sk.MapMode = "FlatFace"
