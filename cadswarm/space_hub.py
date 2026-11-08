@@ -44,6 +44,12 @@ def _err(e):
     return HubRequestError(STATUS.get(e.code, 409), {"error": e.message, "code": e.code})
 
 
+def _brief_error(b):
+    """Why a failed brief failed: the host writes `error` into its plan JSON, beside the steps."""
+    plan = _json(b.get("plan_json") or "", {}) if b.get("status") == "failed" else {}
+    return plan.get("error") if isinstance(plan, dict) else None
+
+
 def _json(text, default):
     try:
         return json.loads(text) if text else default
@@ -1078,6 +1084,8 @@ class SpaceHub(LibraryRoutes):
                         "at": b["created_ms"] / 1000, "tasks": len(mine),
                         "done": sum(1 for t in mine if t["status"] == "done"),
                         "stl": b["stl_hash"],
+                        # Why a failed brief failed (the host writes it beside the step plan).
+                        "error": _brief_error(b),
                         "progress": {k: prog[k] for k in ("total", "done", "current", "line")} if prog else None})
         return {"briefs": out}
 

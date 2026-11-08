@@ -205,10 +205,25 @@ pub fn next_action(s: &BriefState) -> Action {
     }
 }
 
+/// The brief's plan with `error` set: a failure keeps the step plan (the step list and its progress stay on
+/// screen) and says why next to it. Writing `{"error": ...}` alone used to replace the whole plan.
+pub fn plan_with_error(plan_json: &str, why: &str) -> String {
+    let mut plan: Value = serde_json::from_str(plan_json).ok().filter(Value::is_object).unwrap_or_else(|| json!({}));
+    plan["error"] = json!(why);
+    plan.to_string()
+}
+
 /// The names an export should use, or why it must not run. Parts from stopped or blocked tasks may
 /// be absent on purpose; a part a done task promised but the model does not have is a broken model.
-pub fn export_names(tasks: &[crate::space::TaskRow], present: &[String]) -> Result<Vec<String>, String> {
-    let mut missing: Vec<String> = tasks.iter().filter(|t| t.status == "done")
+/// Assembly and check steps (from a version-2 `plan_json`) place or inspect parts that already exist: the name
+/// a plan gives such a step ("PenHolderAssembly") need not become an object, so it is never "missing".
+pub fn export_names(tasks: &[crate::space::TaskRow], present: &[String], plan_json: &str) -> Result<Vec<String>, String> {
+    let plan: Value = serde_json::from_str(plan_json).unwrap_or_default();
+    let optional: HashSet<&str> = plan.get("steps").and_then(Value::as_array).into_iter().flatten()
+        .filter(|s| matches!(s.get("kind").and_then(Value::as_str), Some("assembly" | "check")))
+        .filter_map(|s| s.get("task").and_then(Value::as_str))
+        .collect();
+    let mut missing: Vec<String> = tasks.iter().filter(|t| t.status == "done" && !optional.contains(t.id.as_str()))
         .flat_map(|t| t.objects.clone())
         .filter(|n| !present.contains(n))
         .collect();
@@ -601,7 +616,7 @@ impl Orchestrator {
             crate::agents::log_tail(cfg, &name, 12)
         );
         eprintln!("[host] brief {} failed: {why}", b.id);
-        space.set_brief(&b.id, "failed", &json!({"error": why}).to_string())?;
+        space.set_brief(&b.id, "failed", &plan_with_error(&space.brief_plan(&b.id), &why))?;
         rt.retry_at = None;
         Ok(())
     }
@@ -721,7 +736,9 @@ impl Orchestrator {
                         return Ok(());
                     }
                     "failed" | "rejected" => {
-                        space.set_brief(&b.id, "failed", "")?;
+                        let why = format!("exporting the STL failed: {}", if op.error.is_empty() { &op.status } else { &op.error });
+                        eprintln!("[host] brief {} failed: {why}", b.id);
+                        space.set_brief(&b.id, "failed", &plan_with_error(&space.brief_plan(&b.id), &why))?;
                         rt.export_op = None;
                         return Ok(());
                     }
@@ -794,7 +811,7 @@ impl Orchestrator {
             && rt.reviewer_exited.get_or_insert_with(Instant::now).elapsed() >= VERDICT_GRACE
         {
             eprintln!("[host] brief {}: reviewer round {} exited without a verdict", b.id, rt.review_round);
-            space.set_brief(&b.id, "failed", &json!({"error": "the reviewer exited without a verdict"}).to_string())?;
+            space.set_brief(&b.id, "failed", &plan_with_error(&space.brief_plan(&b.id), "the reviewer exited without a verdict"))?;
             return Ok(());
         }
 
@@ -919,20 +936,20 @@ impl Orchestrator {
                 // and fails the whole op on one missing part, so export only what exists.
                 let wanted: Vec<String> = tasks.iter().flat_map(|t| t.objects.clone()).collect();
                 let objects = space.objects_present(&wanted);
-                match export_names(&tasks, &objects) {
+                match export_names(&tasks, &objects, &plan_json) {
                     Ok(objects) => {
                         let id = op_id();
                         space.submit_op(&id, "export", json!({"format": "stl", "names": objects, "brief": b.id}).to_string())?;
                         rt.export_op = Some(id);
                     }
                     Err(why) => {
-                        space.set_brief(&b.id, "failed", &json!({"error": why}).to_string())?;
+                        space.set_brief(&b.id, "failed", &plan_with_error(&space.brief_plan(&b.id), &why))?;
                     }
                 }
             }
             Action::Fail(why) => {
                 eprintln!("[host] brief {} failed: {why}", b.id);
-                space.set_brief(&b.id, "failed", &json!({"error": why}).to_string())?;
+                space.set_brief(&b.id, "failed", &plan_with_error(&space.brief_plan(&b.id), &why))?;
             }
         }
         Ok(())
@@ -1115,13 +1132,28 @@ mod tests {
             task("t2", "cancelled", &["Lid"]),
             task("t3", "blocked", &["Clip"]),
         ];
-        assert_eq!(export_names(&tasks, &present), Ok(vec!["Base".to_string()]));
+        assert_eq!(export_names(&tasks, &present, ""), Ok(vec!["Base".to_string()]));
         // A done task's part must exist, or the brief fails with the names.
         let broken = vec![task("t1", "done", &["Base", "Lid"])];
-        assert_eq!(export_names(&broken, &present), Err("the model is missing Lid".into()));
+        assert_eq!(export_names(&broken, &present, ""), Err("the model is missing Lid".into()));
         // Every task stopped: nothing to export.
         let stopped = vec![task("t2", "cancelled", &["Lid"])];
-        assert_eq!(export_names(&stopped, &[]), Err("nothing to export: no part was built".into()));
+        assert_eq!(export_names(&stopped, &[], ""), Err("nothing to export: no part was built".into()));
+        // An assembly step's name need not exist as an object: it places parts that do.
+        let assembled = vec![task("t1", "done", &["Base"]), task("t4", "done", &["BaseAssembly"])];
+        let plan = r#"{"version":2,"steps":[{"n":1,"kind":"part","task":"t1"},{"n":2,"kind":"assembly","task":"t4"}]}"#;
+        assert_eq!(export_names(&assembled, &present, plan), Ok(vec!["Base".to_string()]));
+        assert_eq!(export_names(&assembled, &present, ""), Err("the model is missing BaseAssembly".into()));
+    }
+
+    #[test]
+    fn a_failure_keeps_the_step_plan_and_says_why() {
+        let plan = plan_with_error(r#"{"version":2,"steps":[{"n":1}]}"#, "the model is missing Lid");
+        let v: Value = serde_json::from_str(&plan).unwrap();
+        assert_eq!(v["steps"][0]["n"], 1);
+        assert_eq!(v["error"], "the model is missing Lid");
+        assert_eq!(plan_with_error("", "x"), r#"{"error":"x"}"#);
+        assert_eq!(plan_with_error("not json", "x"), r#"{"error":"x"}"#);
     }
 
     const STEPS: &str = r#"{"version":2,"steps":[

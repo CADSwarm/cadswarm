@@ -821,3 +821,12 @@ def test_build_progress_joins_steps_tasks_and_their_ops(world):
     with pytest.raises(HubRequestError) as e:
         hub.get("/briefs/b_nope/progress")
     assert e.value.code == "not_found"
+
+
+def test_a_failed_briefs_reason_is_read_from_beside_its_steps():
+    from cadswarm.space_hub import _brief_error
+    plan = '{"version": 2, "steps": [{"n": 1}], "error": "the model is missing Lid"}'
+    assert _brief_error({"status": "failed", "plan_json": plan}) == "the model is missing Lid"
+    assert _brief_error({"status": "ready", "plan_json": plan}) is None
+    assert _brief_error({"status": "failed", "plan_json": "[1]"}) is None
+    assert _brief_error({"status": "failed", "plan_json": ""}) is None
