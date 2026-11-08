@@ -69,36 +69,121 @@ def colours(mode="light"):
         return json.load(f)["color"][mode]
 
 
+def blend(a, b, t):
+    """Mix two #rrggbb colours: t=0 gives a, t=1 gives b."""
+    ah, bh = a.lstrip("#"), b.lstrip("#")
+    out = []
+    for i in (0, 2, 4):
+        x, y = int(ah[i:i + 2], 16), int(bh[i:i + 2], 16)
+        out.append(round(x + (y - x) * t))
+    return "#%02X%02X%02X" % tuple(out)
+
+
+def luminance(hex_colour):
+    """WCAG relative luminance of a #rrggbb colour."""
+    h = hex_colour.lstrip("#")
+
+    def chan(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = (chan(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(fg, bg):
+    """WCAG contrast ratio between two #rrggbb colours (1 to 21)."""
+    a, b = sorted((luminance(fg), luminance(bg)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
 def theme_overrides(mode="light"):
-    """CADSwarm values for FreeCAD's theme tokens (FreeCAD.qss reads these through its theme engine)."""
+    """CADSwarm values for every colour FreeCAD.qss reads through its theme engine.
+
+    Every key the stylesheet uses is set to a concrete colour from design/tokens.json, so none falls back to
+    FreeCAD's derived values (its active tab follows the 3D view's plain background colour, black by default,
+    which made the selected Model, Data and document tabs black-on-black)."""
     c = colours(mode)
     dark = mode == "dark"
+    paper, panel, chrome, ink = c["paper"], c["panel"], c["chrome"], c["ink"]
+    button = chrome if dark else paper
     return {
-        "PrimaryColor": c["chrome"],
-        "TextForegroundColor": c["ink"],
+        "PrimaryColor": chrome,
+        "TextForegroundColor": ink,
+        "TextDisabledColor": blend(ink, panel, 0.55),
         "StylesheetIconsColor": "white" if dark else "black",
-        "GeneralBorderColor": c["structure"] if not dark else c["hairline"],
-        "GeneralBackgroundColor": c["panel"],
-        "GeneralAlternateBackgroundColor": c["chrome"],
-        "DialogBackgroundColor": c["panel"],
-        "TextEditFieldBackgroundColor": c["paper"],
-        "MenuBackgroundColor": c["paper"],
-        "GroupboxBackgroundColor": c["panel"],
+        "GeneralBorderColor": c["structure"] if dark else c["hairline"],
+        "GeneralBorderHoverColor": c["signal"],
+        "GeneralBackgroundColor": panel,
+        "GeneralAlternateBackgroundColor": blend(panel, chrome, 0.5),
+        "GeneralBackgroundHoverColor": c["signal-tint"],
+        "GeneralDisabledBackgroundColor": chrome,
+        "GeneralGridLinesColor": c["hairline"],
+        "GeneralHeaderBackgroundColor": chrome,
+        "DialogBackgroundColor": panel,
+        "TextEditFieldBackgroundColor": paper,
+        "MenuBackgroundColor": paper,
+        "GroupboxBackgroundColor": panel,
+        "GroupboxBorderColor": c["hairline"],
+        "ButtonTopBackgroundColor": button,
+        "ButtonBottomBackgroundColor": button,  # same top and bottom: flat buttons, no gradient
+        "ButtonBackgroundHooverColor": c["signal-tint"],
+        "ButtonBorderColor": c["structure"],
+        "ButtonBorderHooverColor": c["signal"],
+        "CheckedButtonTopBackgroundColor": c["signal-tint"],
+        "CheckedButtonBottomBackgroundColor": c["signal-tint"],
+        "DefaultButtonTopBackgroundColor": button,
+        "DefaultButtonBottomBackgroundColor": button,
+        "DefaultButtonBorderColor": c["signal"],
+        "ToolButtonCheckedBorderColor": c["signal"],
+        "ToolButtonCheckedBackground": c["signal-tint"],
+        "CheckBoxBackgroundColor": paper,
+        "CheckBoxBorderColor": c["structure"],
+        "RadioButtonBackgroundColor": paper,
+        "RadioButtonBorderColor": c["structure"],
+        "ScrollbarBackgroundColor": chrome,
+        "TabbarBackgroundColor": chrome,
+        "InActiveTabBackgroundColor": chrome,
+        "ActiveTabBackgroundColor": panel,
+        "3DViewBackgroundRefColor": panel,
         "AccentColor": c["signal"],
         "AccentBackgroundColor": c["signal-tint"],
         "AccentHoverColor": c["signal-tint"],
-        "TextSelectBackgroundColor": c["signal"],
+        "TextSelectBackgroundColor": c["signal-tint"],
         "TextUrlColor": c["signal-ink"],
         "InputFieldBorderRadius": "0px",
         "SketcherFullyConstrainedColor": c["ok"],
         "SketcherUnderConstrainedColor": c["sk-under"],
         "SketcherConflictingConstraintsColor": c["error"],
+        "SketcherMalformedConstraintsColor": c["error"],
         "SketcherSolverFailedColor": c["error"],
+        "SketcherRedundantConstraintsColor": c["signal-ink"],
+        "SketcherPartiallyRedundantConstraintsColor": c["sk-under"],
+        "SketcherEmptySketchColor": ink,
     }
 
 
+# (foreground key, background key) pairs of theme_overrides that FreeCAD.qss draws text with; tests check them.
+TEXT_PAIRS = [
+    ("TextForegroundColor", "ActiveTabBackgroundColor"),
+    ("TextForegroundColor", "InActiveTabBackgroundColor"),
+    ("TextForegroundColor", "GeneralBackgroundColor"),
+    ("TextForegroundColor", "GeneralAlternateBackgroundColor"),
+    ("TextForegroundColor", "GeneralBackgroundHoverColor"),
+    ("TextForegroundColor", "AccentBackgroundColor"),
+    ("TextForegroundColor", "TextSelectBackgroundColor"),
+    ("TextForegroundColor", "MenuBackgroundColor"),
+    ("TextForegroundColor", "TextEditFieldBackgroundColor"),
+    ("TextForegroundColor", "ButtonTopBackgroundColor"),
+    ("TextForegroundColor", "CheckedButtonTopBackgroundColor"),
+    ("TextForegroundColor", "GeneralHeaderBackgroundColor"),
+    ("TextForegroundColor", "DialogBackgroundColor"),
+    ("TextUrlColor", "GeneralBackgroundColor"),
+]
+
+
 def write_theme(freecad_root, home, mode="light"):
-    """Copy FreeCAD's own light/dark theme parameters and apply CADSwarm's tokens. Returns the file path."""
+    """Copy FreeCAD's own light/dark theme parameters and apply CADSwarm's tokens; also write the square-cornered
+    CADSwarm stylesheet next to it (``write_stylesheet``). Returns the parameters file's path."""
     base_name = "FreeCAD Dark.yaml" if mode == "dark" else "FreeCAD Light.yaml"
     base = os.path.join(freecad_root, "data", "Gui", "Stylesheets", "parameters", base_name)
     lines = []
@@ -119,12 +204,71 @@ def write_theme(freecad_root, home, mode="light"):
     path = os.path.join(home, "Themes", f"CADSwarm {mode.title()}.yaml")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(out) + "\n")
+    write_stylesheet(freecad_root, home, mode)
+    return path
+
+
+_BLOCK = re.compile(r"([^{}]*)\{([^{}]*)\}")
+_RADIUS = re.compile(r"(radius\s*:\s*)[0-9.]+px")
+
+
+def square_corners(qss):
+    """Every rounded corner in a Qt stylesheet made square, except radio-button dots (a round radio button is
+    how people tell it from a checkbox)."""
+    def fix(m):
+        sel, body = m.group(1), m.group(2)
+        if "QRadioButton::indicator" in sel:
+            return m.group(0)
+        return sel + "{" + _RADIUS.sub(r"\g<1>0px", body) + "}"
+    return _BLOCK.sub(fix, qss)
+
+
+def brand_qss(mode="light"):
+    """CADSwarm's additions on top of FreeCAD's stylesheet: a signal-orange bar on the active tab, 2px
+    structure lines between the main window's regions, readable tab text in every state."""
+    c = colours(mode)
+    sig, ink, struct = c["signal"], c["ink"], c["structure"]
+    off = blend(ink, c["panel"], 0.55)
+    return f"""
+/* ---- CADSwarm (generated by cadswarm/app/branded.py) ---- */
+QTabBar::tab, QDockWidget QTabBar::tab {{ color: {ink}; }}
+QTabBar::tab:disabled, QDockWidget QTabBar::tab:disabled {{ color: {off}; }}
+QTabBar::tab:top:selected, QDockWidget QTabBar::tab:top:selected {{ color: {ink}; border-top: 3px solid {sig}; }}
+QTabBar::tab:bottom:selected, QDockWidget QTabBar::tab:bottom:selected {{
+  color: {ink}; border-bottom: 3px solid {sig}; }}
+QTabBar::tab:left:selected, QDockWidget QTabBar::tab:left:selected {{ color: {ink}; border-left: 3px solid {sig}; }}
+QTabBar::tab:right:selected, QDockWidget QTabBar::tab:right:selected {{
+  color: {ink}; border-right: 3px solid {sig}; }}
+QMainWindow::separator {{ background-color: {c["hairline"]}; width: 4px; height: 4px; }}
+QMainWindow::separator:hover {{ background-color: {sig}; }}
+QMenuBar {{ border-bottom: 2px solid {struct}; }}
+QStatusBar {{ border-top: 2px solid {struct}; }}
+"""
+
+
+def stylesheet_path(home, mode="light"):
+    return os.path.join(home, "Themes", f"CADSwarm {mode.title()}.qss")
+
+
+def write_stylesheet(freecad_root, home, mode="light"):
+    """FreeCAD's own stylesheet with square corners plus CADSwarm's additions, written into CADSwarm's profile
+    (FreeCAD's install folder is never touched). Returns its path, or "" when FreeCAD's stylesheet is missing."""
+    base = os.path.join(freecad_root, "data", "Gui", "Stylesheets", "FreeCAD.qss")
+    if not os.path.exists(base):
+        return ""
+    with open(base, encoding="utf-8") as f:
+        qss = f.read()
+    os.makedirs(os.path.join(home, "Themes"), exist_ok=True)
+    path = stylesheet_path(home, mode)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(square_corners(qss) + brand_qss(mode))
     return path
 
 
 def brand_params(theme_file, mode="light"):
     """(group, type, key, value) parameters for a CADSwarm-branded FreeCAD profile."""
     c = colours(mode)
+    qss = stylesheet_path(os.path.dirname(os.path.dirname(theme_file)), mode)
     view = "BaseApp/Preferences/View"
     mw = "BaseApp/Preferences/MainWindow"
     return [
@@ -140,7 +284,7 @@ def brand_params(theme_file, mode="light"):
         (mw, "Bool", "StatusBar", True),
         (mw, "String", "Theme", f"CADSwarm {mode.title()}"),
         (mw, "String", "ThemeStyleParametersFile", theme_file),
-        (mw, "String", "StyleSheet", "FreeCAD.qss"),
+        (mw, "String", "StyleSheet", qss if os.path.exists(qss) else "FreeCAD.qss"),
         (mw, "String", "QtStyle", "FreeCAD"),
         (mw, "String", "OverlayActiveStyleSheet", "Freecad Overlay.qss"),
         ("BaseApp/Preferences/Themes", "Unsigned", "ThemeAccentColor1", rgba_uint(c["signal"])),
@@ -162,6 +306,7 @@ def brand_params(theme_file, mode="light"):
 
 def link_addon(home, repo=REPO):
     """Make the CADSwarm add-on (this repo) a Mod in the engine profile. Junction on Windows, symlink elsewhere."""
+    home, repo = os.path.normpath(home), os.path.normpath(repo)  # mklink rejects forward slashes
     mod = os.path.join(home, "Mod")
     os.makedirs(mod, exist_ok=True)
     dest = os.path.join(mod, "CadSwarm")
