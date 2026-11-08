@@ -44,7 +44,7 @@ def test_brand_params_switch_off_start_page_and_point_at_theme(tmp_path):
     assert as_dict[("BaseApp/Preferences/Mod/Start", "ShowOnStartup")] is False
     assert as_dict[("BaseApp/Preferences/MainWindow", "ThemeStyleParametersFile")] == str(tmp_path / "t.yaml")
     kinds = {t for _, t, _, _ in params}
-    assert kinds <= {"Bool", "String", "Int", "Unsigned"}
+    assert kinds <= {"Bool", "String", "Int", "Unsigned", "Float"}
 
 
 def test_link_addon_keeps_real_copy(tmp_path):
@@ -167,3 +167,51 @@ def test_theme_names_round_trip():
         assert branded.mode_of_theme(branded.theme_name(mode)) == mode
     assert branded.mode_of_theme("FreeCAD Dark") == "" and branded.mode_of_theme(None) == ""
     assert branded.current_mode() in ("light", "dark")
+
+
+def test_title_with_no_document_is_just_the_name():
+    assert branded.rebrand_text("CADSwarm - CADSwarm") == "CADSwarm"
+    assert branded.rebrand_text("FreeCAD - FreeCAD") == "CADSwarm"
+    assert branded.rebrand_text("Bracket - CADSwarm") == "Bracket - CADSwarm"
+
+
+def test_home_recent_files_skip_missing_and_duplicates(tmp_path):
+    from cadswarm.app import home
+    a, b = tmp_path / "a.FCStd", tmp_path / "b.FCStd"
+    a.write_text("x")
+    b.write_text("x")
+    mru = {"MRU0": str(b), "MRU1": str(tmp_path / "gone.FCStd"), "MRU2": str(a), "MRU3": str(b)}
+    files = home.recent_files(lambda k, d: 4, lambda k, d: mru.get(k, d))
+    assert files == [str(b), str(a)]
+    assert home.recent_files(lambda k, d: 0, lambda k, d: d) == []
+    assert len(home.recent_files(lambda k, d: 20, lambda k, d: str(a) if k == "MRU0" else d, limit=1)) == 1
+
+
+def test_home_stylesheet_uses_tokens():
+    from cadswarm.app import home
+    from cadswarm.gui import pro_style
+    t = pro_style.tokens("dark")
+    sheet = home.home_stylesheet(t)
+    assert t["ACCENT"] in sheet and t["BG"] in sheet and "border-radius: 0" in sheet
+
+
+def test_main_title_never_shows_python():
+    assert branded.main_title("[*] CADSwarm - python") == "[*] CADSwarm"
+    assert branded.main_title("Bracket - pythonw.exe") == "Bracket - CADSwarm"
+    assert branded.main_title("") == "CADSwarm"
+    assert branded.main_title("[*] Bracket : 1 - FreeCAD 1.1.4") == "[*] Bracket : 1 - CADSwarm"
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_view_colours_follow_tokens(mode):
+    c = branded.colours(mode)
+    p = {k: v for _, _, k, v in branded.view_colour_params(mode)}
+    assert p["HiliteColor"] == branded.rgba_uint(c["signal"])
+    assert p["EditedEdgeColor"] == branded.rgba_uint(c["sk-under"])
+    assert p["SketchEdgeColor"] == branded.rgba_uint(c["sk-full"])
+    assert p["AxisXColor"] == branded.rgba_uint(c["axis-x"])
+    # Sketch geometry stays readable on the 3D view's background.
+    for key in ("SketchEdgeColor", "EditedEdgeColor", "ConstrainedDimColor"):
+        rgb = "#%06X" % (p[key] >> 8)
+        assert branded.contrast(rgb, c["vp-bottom"]) >= 3, (mode, key)
+    assert all(k in {"Bool", "String", "Int", "Unsigned", "Float"} for _, k, _, _ in branded.brand_params("x", mode))
