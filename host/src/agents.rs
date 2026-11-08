@@ -104,13 +104,25 @@ pub fn agent_command(client: &str, override_cmd: &[String], dir: &Path, prompt: 
                      "mcp__cadswarm".into(), "--mcp-config".into(), dir.join(".mcp.json").display().to_string()]),
         // Codex dropped --full-auto (it exits 2 with "unexpected argument"); -s workspace-write is the
         // sandbox that alias meant, and every version from 0.20 on takes it.
+        // The prompt goes in on stdin (`-`): on Windows `codex` is an npm .cmd shim, and Rust refuses to pass a
+        // multi-line, quoted argument to a batch file ("batch file arguments are invalid"), so no codex agent
+        // could ever start there.
         "codex" => ("codex".into(), vec!["exec".into(), "--sandbox".into(), "workspace-write".into(),
-                                          "--skip-git-repo-check".into(), p]),
+                                          "--skip-git-repo-check".into(), "-".into()]),
         // --standalone: a private server per run, not whatever the person's desktop app is running.
         // The prompt goes in on stdin (see spawn): an npm .cmd shim would split a multi-line argument.
         "opencode" => ("opencode".into(), vec!["run".into(), "--standalone".into(), "--auto".into()]),
         other => bail!("unknown agent client {other:?}; use claude, codex or opencode, or set agent_command"),
     })
+}
+
+/// Whether the prompt goes in on stdin instead of as an argument. OpenCode and Codex always take it there; Claude
+/// does when it is installed as a batch-file shim (npm's `claude.cmd`): Windows batch files cannot receive a
+/// multi-line, quoted argument safely, and Rust refuses to start them with one.
+pub fn prompt_on_stdin(client: &str, exe: &Path) -> bool {
+    let batch = exe.extension().and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat"));
+    client == "opencode" || client == "codex" || (client == "claude" && batch)
 }
 
 /// Find the CLI this host would run, before an invite is minted for an agent that cannot start.
@@ -209,16 +221,16 @@ impl Agent {
             );
         }
         let log = std::fs::File::create(dir.join("agent.log"))?;
-        let (program, args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
+        let (program, mut args) = agent_command(&cfg.agent_client, &cfg.agent_command, &dir, prompt)?;
         let exe = if cfg.agent_command.is_empty() { find_cli(&program)? } else { PathBuf::from(&program) };
+        let on_stdin = cfg.agent_command.is_empty() && prompt_on_stdin(&cfg.agent_client, &exe);
+        if on_stdin && cfg.agent_client == "claude" {
+            args.retain(|a| a != prompt);  // `claude -p` reads the prompt from stdin when none is given
+        }
         let mut cmd = Command::new(exe);
         cmd.args(&args)
             .current_dir(&dir)
-            .stdin(if cfg.agent_client == "opencode" && cfg.agent_command.is_empty() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
+            .stdin(if on_stdin { Stdio::piped() } else { Stdio::null() })
             .stdout(log.try_clone()?)
             .stderr(log);
         let mut child = cmd.spawn().with_context(|| format!("starting {program} for {name}"))?;
@@ -435,7 +447,8 @@ mod tests {
         assert_eq!(p, "claude");
         assert!(a.contains(&"build it".to_string()) && a.contains(&"--mcp-config".to_string()));
         let (p, a) = agent_command("codex", &[], dir, "build it").unwrap();
-        assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("codex", "exec", "build it"));
+        assert_eq!((p.as_str(), a[0].as_str(), a.last().unwrap().as_str()), ("codex", "exec", "-"));
+        assert!(!a.contains(&"build it".to_string()), "the prompt goes in on stdin (npm's codex.cmd): {a:?}");
         // --full-auto was removed from the CLI: a fresh Codex answers it with exit 2, "unexpected argument".
         assert!(!a.contains(&"--full-auto".to_string()), "the removed flag would kill every agent: {a:?}");
         assert_eq!(&a[1..3], ["--sandbox", "workspace-write"], "{a:?}");
@@ -443,6 +456,14 @@ mod tests {
         assert_eq!((p.as_str(), a[0].as_str(), a[1].as_str()), ("opencode", "run", "--standalone"));
         assert!(!a.contains(&"build it".to_string()), "the prompt goes in on stdin: {a:?}");
         assert!(agent_command("gpt", &[], dir, "x").is_err());
+    }
+
+    #[test]
+    fn a_batch_file_shim_gets_its_prompt_on_stdin() {
+        assert!(prompt_on_stdin("codex", Path::new("C:/npm/codex.cmd")));
+        assert!(prompt_on_stdin("opencode", Path::new("/usr/bin/opencode")));
+        assert!(prompt_on_stdin("claude", Path::new("C:/npm/claude.CMD")));
+        assert!(!prompt_on_stdin("claude", Path::new("C:/Users/me/.local/bin/claude.exe")));
     }
 
     fn cfg(client: &str, command: Vec<String>, data: PathBuf) -> HostConfig {

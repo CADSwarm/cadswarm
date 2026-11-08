@@ -261,6 +261,8 @@ class Script:
 
 
 sys.argv = [sys.argv[0]]
-code = app_main.main([])
+# --quit-after: a long safety net, and it keeps a second window its own app (cadswarm/app/instance.py
+# forwards a plain second launch to the running one; test hooks opt out).
+code = app_main.main(["--quit-after", "3600000"])
 flush()
 os._exit(code or 0)
