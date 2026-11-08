@@ -735,6 +735,8 @@ def show_lighten():
     dlg = LightenDialog(sel[0])
     _dialogs.append(dlg)
     dlg.finished.connect(lambda *_: _dialogs.remove(dlg) if dlg in _dialogs else None)
+    # Freed when closed: a closed-but-alive Lighten dialog made CADSwarm crash (access violation) on exit.
+    dlg.setAttribute(QtCore.Qt.WA_DeleteOnClose)
     dlg.show()
     return dlg
 
