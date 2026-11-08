@@ -96,7 +96,7 @@ def step_row(step):
             "kind": step.get("kind") or "part", "kind_word": KIND_WORDS.get(step.get("kind"), "Part"),
             "summary": step.get("summary") or "", "state": state, "status": status, "who": who,
             "task": step.get("task") or "", "note": note, "feed": feed, "planned": planned,
-            "ready": bool(step.get("ready"))}
+            "ready": bool(step.get("ready")), "objects": [str(o) for o in step.get("objects") or [] if o]}
 
 
 def view(progress, title=""):
