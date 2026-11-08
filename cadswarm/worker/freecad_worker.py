@@ -284,7 +284,14 @@ def require_allowed(names, allowed):
     """Check that the caller holds locks for every existing feature this op consumes or edits."""
     if allowed is None:
         return
-    missing = sorted({name for name in names if name} - set(allowed))
+    required = set()
+    for name in names:
+        if not name:
+            continue
+        obj = doc.getObject(name)
+        owner = getattr(obj, "CadSwarmInternalOwner", "") if obj is not None and is_internal(obj) else ""
+        required.add(owner or name)
+    missing = sorted(required - set(allowed))
     if missing:
         raise OpError("lock_violation", f"This operation needs locks on {missing}. Lock them first or ask their owner.")
 
@@ -342,8 +349,11 @@ def add_meta(obj, type_name, name, value, description="", hidden=True):
         obj.setEditorMode(name, 2)
 
 
-def add_internal(obj):
+def add_internal(obj, owner=""):
     add_meta(obj, "App::PropertyBool", "CadSwarmInternal", True, "Internal helper used by a CADSwarm feature")
+    if owner:
+        add_meta(obj, "App::PropertyString", "CadSwarmInternalOwner", owner,
+                 "Feature that owns this internal helper")
 
 
 def sketch_plane(plane):
@@ -504,6 +514,21 @@ def _sketch_definition(sketch):
         constraints = json.loads(sketch.CadSwarmConstraints or "[]")
     except Exception:
         entities, constraints = [], []
+    for index, entity in enumerate(entities):
+        if index >= sketch.GeometryCount:
+            break
+        geometry = sketch.Geometry[index]
+        if entity.get("type") == "line":
+            entity["start"] = [float(geometry.StartPoint.x), float(geometry.StartPoint.y)]
+            entity["end"] = [float(geometry.EndPoint.x), float(geometry.EndPoint.y)]
+        elif entity.get("type") == "circle":
+            entity["center"] = [float(geometry.Center.x), float(geometry.Center.y)]
+            entity["radius"] = float(geometry.Radius)
+        elif entity.get("type") == "arc":
+            entity["center"] = [float(geometry.Center.x), float(geometry.Center.y)]
+            entity["radius"] = float(geometry.Radius)
+            entity["start_angle"] = float(geometry.FirstParameter)
+            entity["end_angle"] = float(geometry.LastParameter)
     return {"name": sketch.Name, "kind": "sketch", "plane": getattr(sketch, "CadSwarmPlane", "XY"),
             "entities": entities, "constraints": constraints, "solver": _sketch_solver(sketch)}
 
@@ -533,11 +558,14 @@ def _put_sketch_definition(sketch, entities, constraints):
             constraint_ids.add(constraint_id)
         specs.extend(_constraint_specs(constraint, index_by_id, kind_by_id))
     try:
-        sketch.delConstraints(list(range(sketch.ConstraintCount)))
-        sketch.delGeometry(list(reversed(range(sketch.GeometryCount))))
-        sketch.addGeometry(geometries, False)
-        if specs:
-            sketch.addConstraint(specs)
+        for index in reversed(range(sketch.ConstraintCount)):
+            sketch.delConstraint(index)
+        for index in reversed(range(sketch.GeometryCount)):
+            sketch.delGeometry(index)
+        for geometry in geometries:
+            sketch.addGeometry(geometry, False)
+        for constraint in specs:
+            sketch.addConstraint(constraint)
         sketch.CadSwarmEntities = json.dumps(entities, separators=(",", ":"))
         sketch.CadSwarmConstraints = json.dumps(constraints, separators=(",", ":"))
     except Exception as exc:
@@ -566,7 +594,11 @@ def _feature_args(kind, params):
         out.update(angle=angle, axis=axis)
     elif kind == "linear_pattern":
         count = out.get("count", 2)
-        if isinstance(count, bool) or int(count) != count or not 2 <= int(count) <= 1000:
+        try:
+            parsed_count = int(count)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise OpError("bad_args", "Pattern count must be an integer between 2 and 1000") from exc
+        if isinstance(count, bool) or parsed_count != count or not 2 <= parsed_count <= 1000:
             raise OpError("bad_args", "Pattern count must be an integer between 2 and 1000")
         direction = out.get("direction", [1, 0, 0])
         if not isinstance(direction, (list, tuple)) or len(direction) != 3:
@@ -575,10 +607,14 @@ def _feature_args(kind, params):
         if sum(x * x for x in direction) <= 1e-24:
             raise OpError("bad_args", "Linear pattern direction cannot be zero")
         spacing = _finite(out.get("spacing", 10), "spacing")
-        out.update(count=int(count), direction=direction, spacing=spacing)
+        out.update(count=parsed_count, direction=direction, spacing=spacing)
     elif kind == "circular_pattern":
         count = out.get("count", 2)
-        if isinstance(count, bool) or int(count) != count or not 2 <= int(count) <= 1000:
+        try:
+            parsed_count = int(count)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise OpError("bad_args", "Pattern count must be an integer between 2 and 1000") from exc
+        if isinstance(count, bool) or parsed_count != count or not 2 <= parsed_count <= 1000:
             raise OpError("bad_args", "Pattern count must be an integer between 2 and 1000")
         axis = out.get("axis", [0, 0, 1])
         if not isinstance(axis, (list, tuple)) or len(axis) != 3:
@@ -587,7 +623,7 @@ def _feature_args(kind, params):
         if sum(x * x for x in axis) <= 1e-24:
             raise OpError("bad_args", "Circular pattern axis cannot be zero")
         angle = _finite(out.get("angle", 360), "angle")
-        out.update(count=int(count), axis=axis, angle=angle)
+        out.update(count=parsed_count, axis=axis, angle=angle)
     return out
 
 
@@ -611,41 +647,43 @@ def _make_cadswarm_feature(obj, kind, source=None, sketch=None, auxiliary=None):
 
 
 def _rebuild_cadswarm_features():
-    """Rebuild the CADSwarm pattern features from their persisted links and parameters."""
-    pending = [o for o in doc.Objects if getattr(o, "CadSwarmKind", "") in ("linear_pattern", "circular_pattern")]
-    done = set()
-    while pending:
-        progress = False
-        for obj in list(pending):
-            source = getattr(obj, "CadSwarmSource", None)
-            if source is None or (getattr(source, "CadSwarmKind", "") in ("linear_pattern", "circular_pattern")
-                                  and source.Name not in done):
-                continue
-            shape = getattr(source, "Shape", None)
-            if shape is None or shape.isNull() or not shape.isValid():
-                raise OpError("recompute_error", f"Pattern source {source.Name} has no valid shape")
-            count = int(obj.CadSwarmCount)
-            copies = []
-            if obj.CadSwarmKind == "linear_pattern":
-                direction = obj.CadSwarmDirection
-                if direction.Length <= 1e-12:
-                    raise OpError("bad_args", "Linear pattern direction cannot be zero")
-                direction = direction.normalize()
-                spacing = float(obj.CadSwarmSpacing)
-                copies = [shape.copy().translated(direction * spacing * index) for index in range(count)]
-            else:
-                axis = obj.CadSwarmAxis
-                if axis.Length <= 1e-12:
-                    raise OpError("bad_args", "Circular pattern axis cannot be zero")
-                angle = float(obj.CadSwarmAngle)
-                copies = [shape.copy().rotate(Vector(0, 0, 0), axis, angle * index / count)
-                          for index in range(count)]
-            obj.Shape = Part.makeCompound(copies)
-            pending.remove(obj)
-            done.add(obj.Name)
-            progress = True
-        if not progress:
-            raise OpError("recompute_error", "Pattern features contain a missing source or dependency cycle")
+    """Update persisted App::Link instances inside native Part::Compound pattern features."""
+    for obj in [o for o in doc.Objects if getattr(o, "CadSwarmKind", "") in ("linear_pattern", "circular_pattern")]:
+        source = getattr(obj, "CadSwarmSource", None)
+        if source is None or not hasattr(source, "Shape") or source.Shape.isNull():
+            raise OpError("recompute_error", f"Pattern {obj.Name} has a missing or empty source")
+        count = int(obj.CadSwarmCount)
+        links = list(getattr(obj, "CadSwarmInstances", []) or [])
+        while len(links) > count:
+            extra = links.pop()
+            doc.removeObject(extra.Name)
+        while len(links) < count:
+            index = len(links)
+            link = doc.addObject("App::Link", _internal_name(obj.Name, f"instance{index + 1}"))
+            add_internal(link, obj.Name)
+            add_meta(link, "App::PropertyInteger", "CadSwarmPatternIndex", index, "Zero-based instance index")
+            link.setLink(source)
+            link.Visibility = False
+            links.append(link)
+        if obj.CadSwarmKind == "linear_pattern":
+            direction = obj.CadSwarmDirection
+            if direction.Length <= 1e-12:
+                raise OpError("bad_args", "Linear pattern direction cannot be zero")
+            direction = direction.normalize()
+            spacing = float(obj.CadSwarmSpacing)
+            for index, link in enumerate(links):
+                link.setLink(source)
+                link.LinkPlacement = Placement(direction * spacing * index, Rotation())
+        else:
+            axis = obj.CadSwarmAxis
+            if axis.Length <= 1e-12:
+                raise OpError("bad_args", "Circular pattern axis cannot be zero")
+            angle = float(obj.CadSwarmAngle)
+            for index, link in enumerate(links):
+                link.setLink(source)
+                link.LinkPlacement = Placement(Vector(0, 0, 0), Rotation(axis, angle * index / count))
+        obj.CadSwarmInstances = links
+        obj.Links = links
 
 
 def _rebuild_native_dimensions():
@@ -797,6 +835,12 @@ def op_delete(a, allowed=None):
     names = _dependent_delete_order(obj) if a.get("force") else [obj.Name]
     require_allowed(names, allowed)
     for name in names:
+        if doc.getObject(name) is None:
+            continue
+        owned_helpers = [o.Name for o in doc.Objects
+                         if is_internal(o) and getattr(o, "CadSwarmInternalOwner", "") == name]
+        for helper in owned_helpers:
+            doc.removeObject(helper)
         doc.removeObject(name)
     return {"name": a["name"]}
 
@@ -830,7 +874,7 @@ def op_set_param(a, allowed=None):
 
 def op_create_sketch(a, allowed=None):
     name = new_name(a.get("name"))
-    plane, rotation = sketch_plane(a.get("plane"))
+    plane, rotation = sketch_plane(a.get("plane") or "XY")
     sketch = doc.addObject("Sketcher::SketchObject", name)
     sketch.Placement = Placement(Vector(0, 0, 0), rotation)
     add_meta(sketch, "App::PropertyString", "CadSwarmPlane", plane, "Sketch coordinate plane")
@@ -905,7 +949,7 @@ def op_create_sketch_feature(a, allowed=None):
         add_meta(feature, "App::PropertyString", "CadSwarmAxisName", params["axis"], "Revolution axis")
     elif kind in ("pocket", "hole"):
         tool = doc.addObject("Part::Extrusion", _internal_name(name, "cutter"))
-        add_internal(tool)
+        add_internal(tool, name)
         tool.Base = sketch
         tool.Solid = True
         tool.Dir = sketch_normal(sketch) * -params["depth"]
@@ -920,8 +964,9 @@ def op_create_sketch_feature(a, allowed=None):
         add_meta(feature, "App::PropertyLength", "CadSwarmRadius", params["radius"], "Dress-up size")
         add_meta(feature, "App::PropertyString", "CadSwarmSelection", json.dumps(selection), "Zero-based source edge indices")
     else:
-        feature = doc.addObject("Part::Feature", name)
+        feature = doc.addObject("Part::Compound", name)
         _make_cadswarm_feature(feature, kind, source=source)
+        add_meta(feature, "App::PropertyLinkList", "CadSwarmInstances", [], "Pattern instances")
         add_meta(feature, "App::PropertyInteger", "CadSwarmCount", params["count"], "Pattern occurrence count")
         if kind == "linear_pattern":
             add_meta(feature, "App::PropertyLength", "CadSwarmSpacing", params["spacing"], "Pattern spacing")
@@ -1130,7 +1175,7 @@ def op_insert_component(a):
     if a.get("placement"):
         obj.Placement = to_placement(a["placement"])
     bb = shape.BoundBox
-    return {"name": obj.Name, "component": a["component"],
+    return {"name": obj.Name, "component": a.get("component"),
             "size": [round(bb.XLength, 3), round(bb.YLength, 3), round(bb.ZLength, 3)]}
 
 
@@ -1239,8 +1284,6 @@ def op_insert_mesh(a):
     mesh = Mesh.Mesh(path)
     if mesh.CountFacets == 0:
         raise OpError("bad_args", f"{a.get('file')} has no triangles")
-    if not mesh.isSolid():
-        raise OpError("not_solid", f"{a.get('file')} is not a closed mesh; it was not added")
     obj = doc.addObject("Mesh::Feature", name)
     obj.Mesh = mesh
     obj.Label = str(a.get("label") or name)
@@ -1299,6 +1342,8 @@ def _shape_error(obj):
 def mutate(op, args, allowed):
     before = snapshot()
     before_internal = {o.Name: is_internal(o) for o in doc.Objects}
+    before_internal_owner = {o.Name: getattr(o, "CadSwarmInternalOwner", "") if is_internal(o) else ""
+                             for o in doc.Objects}
     doc.openTransaction(f"cadswarm:{op}")
     try:
         mutator = MUTATIONS[op]
@@ -1319,7 +1364,12 @@ def mutate(op, args, allowed):
         all_modified = sorted(n for n in common if after[n][0] != before[n][0])
         all_recomputed = sorted(n for n in common if n not in all_modified and after[n][1] != before[n][1])
         if allowed is not None:
-            violations = sorted((set(all_modified) | set(all_deleted)) - set(allowed))
+            def owner_allowed(name):
+                obj = doc.getObject(name)
+                owner = (getattr(obj, "CadSwarmInternalOwner", "") if obj is not None and is_internal(obj)
+                         else before_internal_owner.get(name, ""))
+                return name in allowed or bool(owner and owner in allowed)
+            violations = sorted(name for name in set(all_modified) | set(all_deleted) if not owner_allowed(name))
             if violations:
                 raise OpError("lock_violation",
                               f"This op would change objects you have not locked: {violations}. "
@@ -1459,6 +1509,9 @@ def q_brep(a):
     out = {}
     for name in a.get("names") or [o.Name for o in doc.Objects if not is_internal(o)]:
         o = doc.getObject(name)
+        if is_internal(o):
+            out[name] = None
+            continue
         shape = getattr(o, "Shape", None) if o else None
         if o is None:
             out[name] = None
@@ -1470,9 +1523,10 @@ def q_brep(a):
 
 
 def q_interference(a):
-    names = a.get("names") or [o.Name for o in doc.Objects
-                               if getattr(o, "Visibility", False) and hasattr(o, "Shape")
-                               and not o.Shape.isNull() and o.Shape.Solids]
+    requested = set(a.get("names") or [])
+    names = [o.Name for o in doc.Objects if not is_internal(o) and getattr(o, "Visibility", False)
+             and (not requested or o.Name in requested) and hasattr(o, "Shape")
+             and not o.Shape.isNull() and o.Shape.Solids]
     shapes = [(n, get_obj(n).Shape) for n in names]
     tol = float(a.get("min_volume") or setting(a, "interference_min_vol", 1e-3))
     clashes = []
@@ -1516,7 +1570,7 @@ def q_dependents(a):
             if user.Name not in seen:
                 seen.add(user.Name)
                 stack.append(user.Name)
-    return {"dependents": sorted(seen)}
+    return {"dependents": sorted(n for n in seen if not is_internal(doc.getObject(n)))}
 
 
 def fea_target(names):
@@ -1597,7 +1651,7 @@ def q_mesh(a):
     tol = float(a.get("tolerance") or setting(a, "mesh_deviation", 0.2))
     budget = int(a.get("max_bytes") or 200_000)
     out = {}
-    for name in a.get("names") or [o.Name for o in doc.Objects]:
+    for name in a.get("names") or [o.Name for o in doc.Objects if not is_internal(o)]:
         obj = doc.getObject(name)
         if obj is not None and not is_internal(obj) and obj.TypeId.startswith("Mesh::") and hasattr(obj, "Mesh"):
             out[name] = base64.b64encode(_mesh_stl(obj, budget)).decode()

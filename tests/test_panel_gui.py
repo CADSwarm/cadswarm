@@ -110,7 +110,7 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     # hang in the chat forever (and the next send would post the brief again). A local notice says where
     # the request went and that it is not a message.
     assert "a stand for a 7 mm phone" not in r["team_outbox"], r["team_outbox"]
-    assert r["team_notice"] == ["Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."]
+    assert r["team_notice"] == ["Handed to the team: it plans the work and starts AI agents. Watch the Tasks tab."]
     assert "Handed to the team: it plans the work" in r["team_chat"]
     # Suggestions sit on the Team tab; answering a setting sends it and takes it off the card. The learned
     # style backlog is one summary row whose button opens the triage dialog (it does not answer rules itself).

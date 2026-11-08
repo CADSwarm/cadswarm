@@ -1,0 +1,103 @@
+diff --git a/cadswarm/app/instance.py b/cadswarm/app/instance.py
+index 13cbe44..5f17f16 100644
+--- a/cadswarm/app/instance.py
++++ b/cadswarm/app/instance.py
+@@ -12,6 +12,7 @@ import multiprocessing
+ import os
+ import queue
+ import sys
++import socket
+ import tempfile
+ import threading
+ from multiprocessing.connection import Client, Listener
+@@ -85,12 +86,26 @@ class Server:
+     def start(self):
+         addr, family = address(self.home)
+         key = authkey(self.home, create=True)
+         if family == "AF_UNIX" and os.path.exists(addr):
+-            try:  # forward() failed to reach it, so it's left over from a crashed run
+-                os.unlink(addr)
+-            except OSError:
++            # Probe the filesystem socket before removing it. A failed authenticated handoff can
++            # also be a temporary connection problem with a live server; unlinking its path would
++            # strand that server and let a second CADSwarm start on the same profile.
++            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
++            try:
++                probe.settimeout(0.25)
++                probe.connect(addr)
++            except ConnectionRefusedError:  # stale path left by a crashed process
++                try:
++                    os.unlink(addr)
++                except OSError:
++                    return False
++            except FileNotFoundError:  # another process already removed the stale path
++                pass
++            except OSError:
+                 return False
++            else:  # a live listener owns the channel
++                return False
++            finally:
++                probe.close()
++        try:
++            self._listener = Listener(addr, family, authkey=key)
++        except OSError:
+                 return False
+-        try:
+-            self._listener = Listener(addr, family, authkey=key)
+-        except OSError:
+-            return False  # another instance owns the channel; run without hand-offs
+         threading.Thread(target=self._serve, name="cadswarm-instance", daemon=True).start()
+         return True
+diff --git a/tests/test_pro_ui.py b/tests/test_pro_ui.py
+index b4be710..7de1189 100644
+--- a/tests/test_pro_ui.py
++++ b/tests/test_pro_ui.py
+@@ -96,10 +96,11 @@ def test_colours_pack_the_way_freecad_stores_them():
+     params = {name: value for _g, _k, name, value in pro_style.view_params(pro_style.tokens("light"))}
+     assert params["Gradient"] is True and params["Simple"] is False
+-    assert pro_style.unpacked(params["BackgroundColor2"]) == "#c5cfda"   # top
+-    assert pro_style.unpacked(params["BackgroundColor3"]) == "#f3f5f7"   # bottom
+-    assert pro_style.unpacked(params["SelectionColor"]) == "#1f7ae0"
+-    assert pro_style.unpacked(params["HighlightColor"]) == "#f2a93b"
++    light = pro_style.tokens("light")
++    assert pro_style.unpacked(params["BackgroundColor2"]) == light["VIEW_TOP"]
++    assert pro_style.unpacked(params["BackgroundColor3"]) == light["VIEW_BOTTOM"]
++    assert pro_style.unpacked(params["SelectionColor"]) == light["SELECT"]
++    assert pro_style.unpacked(params["HighlightColor"]) == light["PRESELECT"]
+@@ -139,7 +140,7 @@ def test_stash_saves_then_restores_existing_and_missing_values():
+     view.SetBool("Gradient", False)
+     stash = pro_style.ParamStash(params, store)
+     assert stash.apply(pro_style.view_params(pro_style.tokens("light"))) == []
+-    assert view.GetUnsigned("BackgroundColor2") == pro_style.packed("#c5cfda")
++    assert view.GetUnsigned("BackgroundColor2") == pro_style.packed(pro_style.tokens("light")["VIEW_TOP"])
+     assert view.GetBool("Gradient") is True and stash.pending
+     assert json.loads(store.GetString("ProUiStash"))  # kept in CADSwarm's preferences until restored
+     assert stash.restore() == []
+diff --git a/tests/e2e/team_e2e.py b/tests/e2e/team_e2e.py
+index 0000000..0000000 100644
+--- a/tests/e2e/team_e2e.py
++++ b/tests/e2e/team_e2e.py
+@@ -1,16 +1,14 @@
+ """End-to-end check of CADSwarm's multiplayer on a real local team. Documented in tests/e2e/README.md.
+ 
+-    python tests/e2e/team_e2e.py [--out DIR] [--scenario team|build|remote|all] [--runs N] [--agent claude|codex|opencode|fake]
++    python tests/e2e/team_e2e.py [--out DIR] [--scenario team|build|all] [--runs N] [--agent claude|codex|opencode|fake]
+@@
+-  * remote: drives the web app's remote view and remote control (tests/e2e/web_remote.mjs) against the team.
++The web/phone remote view is not exercised by this runner yet; do not treat a `team` or `build` pass as
++evidence for remote control.
+@@
+-            self.procs.append(subprocess.Popen([st, "start", "--listen-addr", f"0.0.0.0:{PORT}", "--data-dir", stdb],
++            self.procs.append(subprocess.Popen([st, "start", "--listen-addr", f"127.0.0.1:{PORT}", "--data-dir", stdb],
+                                                stdout=logf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL))
+@@
+     def stop(self):
+         if self.info:
+             hosting.stop_team(self.info)
+         for p in self.procs:
+             p.terminate()
++            try:
++                p.wait(timeout=10)
++            except subprocess.TimeoutExpired:
++                p.kill()
++                p.wait(timeout=5)
