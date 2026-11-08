@@ -1,16 +1,20 @@
-"""The AI Build tab of the CADSwarm task pane: one prompt becomes a numbered plan, built one step at a time.
+"""The Build tab of the CADSwarm panel: one prompt (the prompt bar above the tabs) becomes a numbered plan, built
+one step at a time.
 
-    [ Describe what to build…                       ]  [Build it]
     Four-blade rotor head                     [request ▾]
     ████████░░░░░░░░░░░░  3 of 20 done · now: Pitch link
-    (1) ✓ Mast                       Part   · ann-claude
-    (2) ✓ Base                       Part
-    (3) ● Pitch link                 Part   · bob-codex is building it
+    NEXT  Step 4 · Servo screws        [▶ Run next step] [Run all ready] [⋯]
+    (1) ✓ Mast              Done      ● ann-claude · AI
+    (2) ✓ Base              Done      ● ann-claude · AI
+    (3) ● Pitch link        Running   ● bob-codex · AI
          The pitch link: a short rod with ball ends…
          Create sketch  SK_PitchLink       1.9 s
          Extrude        PitchLink          Running
          Set color                         (planned)
-    (4) ○ Servo screws               Library · Waiting for Base
+    (4) ○ Servo screws      Ready     Unassigned                  [Assign]
+    (5) ○ Lid               Waiting   ● dave · person             [Assign]
+
+Click a step to select its parts in the model tree (and open its op feed); Assign hands it to a person or helper.
 
 The view-model is build_view.py (pure). Data: the panel's snapshot (briefs and tasks) right away, then the
 hub's ``GET /briefs/<id>/progress?ops=1`` answer (MCP: build_progress), read off the GUI thread.
@@ -21,7 +25,7 @@ import time
 
 from PySide import QtCore, QtGui
 
-from . import build_view
+from . import build_view, team_view
 
 FETCH_SECONDS = 2.5        # at most this often while the pane is showing
 RETRY_ROUTE_SECONDS = 60   # a hub without build_progress is asked again this rarely
@@ -86,14 +90,19 @@ class Badge(QtGui.QWidget):
             self.update()
 
 
-class StepRow(QtGui.QFrame):
-    """One step: badge, name, kind chip, who; the summary and the op feed when expanded."""
+STATE_TONES = {"Done": "OK", "Running": "ACCENT", "Ready": "TEXT", "Waiting": "MUTED", "Stuck": "ERR",
+               "Cancelled": "DISABLED_TEXT"}
 
-    def __init__(self, step, colours, expanded, toggled, parent=None):
+
+class StepRow(QtGui.QFrame):
+    """One step: badge, name, state chip, who builds it, Assign; the summary and the op feed when expanded."""
+
+    def __init__(self, step, colours, expanded, toggled, parent=None, assignee=("", ""), assign=None):
         super().__init__(parent)
         self.step, self.c = step, colours
         self.setObjectName("stepCurrent" if step["state"] == build_view.STATE_CURRENT else "step")
         self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setToolTip("Click to select this step's parts in the model")
         self.toggled = toggled
         lay = QtGui.QHBoxLayout(self)
         lay.setContentsMargins(8, 6, 8, 6)
@@ -114,13 +123,40 @@ class StepRow(QtGui.QFrame):
             name.setStyleSheet(f"color: {colours['BODY']};")
         name.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         head.addWidget(name, 1)
-        chip = QtGui.QLabel(step["kind_word"])
+        word = team_view.step_state_word(step)
+        tone = colours[STATE_TONES.get(word, "MUTED")]
+        chip = QtGui.QLabel(word)
         chip.setObjectName("chip")
-        chip.setStyleSheet(f"color: {colours['MUTED']}; border: 1px solid {colours['LINE']}; border-radius: 8px;"
-                           f"padding: 0 6px; font-size: 10px; background: {colours['SURFACE_2']};")
+        chip.setToolTip(f"{step['kind_word']} step · {word}")
+        chip.setStyleSheet(f"color: {tone}; border: 1px solid {tone}; border-radius: 8px;"
+                           f"padding: 0 7px; font-size: 10px; font-weight: 600; background: transparent;")
         head.addWidget(chip)
         col.addLayout(head)
-        sub = step["note"] or (step["who"] if step["state"] == build_view.STATE_DONE else "")
+        who, kind = assignee
+        line = QtGui.QHBoxLayout()
+        line.setSpacing(6)
+        if who:
+            words = {"ai": "AI helper", "person": "person"}.get(kind, "")
+            owner = QtGui.QLabel(f"<span style='color:{colours['ACCENT'] if kind == 'ai' else colours['OK']}'>"
+                                 f"{'◆' if kind == 'ai' else '●'}</span> {html.escape(who)}"
+                                 + (f" <span style='color:{colours['MUTED']}'>· {words}</span>" if words else ""))
+        else:
+            owner = QtGui.QLabel(f"<span style='color:{colours['MUTED']}'>Unassigned · the next free helper "
+                                 "takes it</span>" if step["state"] == build_view.STATE_PENDING else "")
+        owner.setStyleSheet(f"color: {colours['BODY']}; font-size: 11px;")
+        owner.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        line.addWidget(owner, 1)
+        if assign and step["state"] in (build_view.STATE_PENDING, build_view.STATE_BLOCKED):
+            b = QtGui.QPushButton("Reassign" if who else "Assign")
+            b.setObjectName("stepAssign")
+            b.setCursor(QtCore.Qt.PointingHandCursor)
+            b.setToolTip("Hand this step to a person or an AI helper")
+            b.clicked.connect(lambda: assign(step))
+            line.addWidget(b)
+        col.addLayout(line)
+        # The state chip and the owner line say the rest; only "Waiting for Hub" and "Stuck" need words.
+        waiting = step["state"] == build_view.STATE_PENDING and step["note"].startswith("Waiting for")
+        sub = step["note"] if waiting or step["state"] == build_view.STATE_BLOCKED else ""
         if sub:
             note = QtGui.QLabel(html.escape(sub))
             colour = colours["ACCENT"] if step["state"] == build_view.STATE_CURRENT else \
@@ -172,6 +208,9 @@ class StepRow(QtGui.QFrame):
 class BuildPage(QtGui.QWidget):
     """The AI Build tab (lives in the TeamPanel's tabs)."""
 
+    def heightForWidth(self, width):  # a hidden tab must not set the panel's scroll height (panel.TabPage)
+        return super().heightForWidth(width) if self.isVisible() else -1
+
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self.session = session
@@ -189,28 +228,14 @@ class BuildPage(QtGui.QWidget):
         lay.setContentsMargins(0, 10, 0, 0)
         lay.setSpacing(8)
 
-        cap = QtGui.QLabel("DESCRIBE WHAT TO BUILD")
-        cap.setObjectName("caption")
-        lay.addWidget(cap)
-        self.caption_labels = [cap]
-        self.prompt = QtGui.QPlainTextEdit()
-        self.prompt.setObjectName("prompt")
-        self.prompt.setPlaceholderText("A four-blade rotor head: 6 mm steel mast, a hub with four blade grips, "
-                                       "pitch links and a swashplate. Printable, M3 hardware.")
-        self.prompt.setFixedHeight(72)
-        lay.addWidget(self.prompt)
-        row = QtGui.QHBoxLayout()
-        self.hint = QtGui.QLabel("The team plans it as numbered steps, one component each, then builds them in order.")
-        self.hint.setWordWrap(True)
-        self.hint.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
-        self.hint.setStyleSheet("font-size: 11px;")
-        row.addWidget(self.hint, 1)
+        self.prompt = QtGui.QPlainTextEdit()   # kept for submit(); the prompt bar above the tabs is what people use
+        self.prompt.hide()
+        self.hint = QtGui.QLabel("")
+        self.hint.hide()
         self.build_button = QtGui.QPushButton("Build it")
-        self.build_button.setObjectName("primary")
-        self.build_button.setToolTip("Hand the request to the team: it plans the steps and starts AI helpers")
         self.build_button.clicked.connect(self.submit)
-        row.addWidget(self.build_button)
-        lay.addLayout(row)
+        self.build_button.hide()
+        self.prompt_bar = None  # the panel's PromptBar (set by the panel)
 
         self.card = QtGui.QFrame()
         self.card.setObjectName("card")
@@ -241,6 +266,49 @@ class BuildPage(QtGui.QWidget):
         cl.addWidget(self.line)
         lay.addWidget(self.card)
 
+        # What happens next, and the button that makes it happen.
+        self.next_box = QtGui.QFrame()
+        self.next_box.setObjectName("nextBox")
+        nl = QtGui.QVBoxLayout(self.next_box)
+        nl.setContentsMargins(12, 8, 12, 8)
+        nl.setSpacing(6)
+        self.next_line = QtGui.QLabel("")
+        self.next_line.setObjectName("nextLine")
+        self.next_line.setWordWrap(True)
+        self.next_line.setTextFormat(QtCore.Qt.RichText)
+        self.next_line.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
+        nl.addWidget(self.next_line)
+        buttons = QtGui.QHBoxLayout()
+        buttons.setSpacing(6)
+        self.next_button = QtGui.QPushButton("▶  Run next step")
+        self.next_button.setObjectName("primary")
+        self.next_button.setToolTip("Ask a free AI helper (or the step's assignee) to build the next ready step now")
+        self.next_button.clicked.connect(self.run_next)
+        buttons.addWidget(self.next_button)
+        self.all_button = QtGui.QPushButton("Run all ready")
+        self.all_button.setObjectName("quiet")
+        self.all_button.setToolTip("Every free helper takes a ready step, then the next, until the plan is built")
+        self.all_button.clicked.connect(self.run_all)
+        buttons.addWidget(self.all_button)
+        buttons.addStretch(1)
+        self.more_button = QtGui.QToolButton()
+        self.more_button.setText("More ▾")
+        self.more_button.setObjectName("quietTool")
+        self.more_button.setPopupMode(QtGui.QToolButton.InstantPopup)
+        menu = QtGui.QMenu(self.more_button)
+        menu.addAction("Assign a step…", self.assign)
+        menu.addAction("Re-plan from a step…", self.replan)
+        menu.addAction("Pause the build", self.pause)
+        menu.addAction("Ask for a review", self.review)
+        self.more_button.setMenu(menu)
+        buttons.addWidget(self.more_button)
+        nl.addLayout(buttons)
+        lay.addWidget(self.next_box)
+        steps_cap = QtGui.QLabel("STEPS")
+        steps_cap.setObjectName("caption")
+        lay.addWidget(steps_cap)
+        self.caption_labels = [steps_cap]
+
         self.list_box = QtGui.QWidget()
         self.list_lay = QtGui.QVBoxLayout(self.list_box)
         self.list_lay.setContentsMargins(0, 0, 0, 0)
@@ -255,12 +323,8 @@ class BuildPage(QtGui.QWidget):
     # ------------------------------------------------------------------ look
 
     def colours(self):
-        try:
-            from . import workspace
-            return workspace.WORKSPACE.tokens()
-        except Exception:  # noqa: BLE001
-            from . import pro_style
-            return pro_style.tokens("light")
+        from .prompt_bar import colours
+        return colours()
 
     def restyle(self):
         c = self.colours()
@@ -274,8 +338,16 @@ class BuildPage(QtGui.QWidget):
             f"QLabel#progressLine {{ color: {c['TEXT']}; font-weight: 600; }}"
             f"QLabel#caption {{ color: {c['MUTED']}; font-size: 10px; font-weight: 700; letter-spacing: 1px; }}"
             f"QProgressBar {{ background: {c['LINE']}; border: none; border-radius: 3px; }}"
-            f"QProgressBar::chunk {{ background: {c['ACCENT']}; border-radius: 3px; }}")
-        self.hint.setStyleSheet(f"color: {c['MUTED']}; font-size: 11px;")
+            f"QProgressBar::chunk {{ background: {c['ACCENT']}; border-radius: 3px; }}"
+            f"QFrame#nextBox {{ background: {c['SURFACE']}; border: 1px solid {c['LINE']};"
+            f" border-left: 3px solid {c['ACCENT']}; border-radius: 6px; }}"
+            f"QLabel#nextLine {{ color: {c['TEXT']}; }}"
+            f"QPushButton#stepAssign {{ color: {c['ACCENT']}; background: transparent; border: 1px solid {c['LINE']};"
+            f" border-radius: 4px; padding: 1px 8px; font-size: 11px; }}"
+            f"QPushButton#stepAssign:hover {{ border-color: {c['ACCENT']}; }}"
+            f"QToolButton#quietTool {{ color: {c['BODY']}; background: transparent; border: 1px solid {c['LINE']};"
+            f" border-radius: 4px; padding: 3px 8px; }}"
+            f"QToolButton#quietTool::menu-indicator {{ image: none; }}")
         self.key = None
         self.draw(self.model)
 
@@ -372,6 +444,12 @@ class BuildPage(QtGui.QWidget):
                               else html.escape(build_view.view({"steps": []})["line"]))
         else:
             self.line.setText("Steps appear here once the team has planned the request.")
+        self.card.setVisible(bool(brief or model["total"]))  # no request yet: the next-step box explains
+        for cap in self.caption_labels:
+            cap.setVisible(bool(model["total"]))
+        self.show_next(model, brief)
+        participants = (getattr(self.session, "model", None) or {}).get("participants") or []
+        key = key + (tuple((p.get("name"), p.get("kind")) for p in participants),)
         if key == self.key:
             return
         self.key = key
@@ -386,11 +464,72 @@ class BuildPage(QtGui.QWidget):
         for step in model["steps"]:
             sid = step["id"]
             expanded = sid in self.expanded or (step["state"] == build_view.STATE_CURRENT and sid not in self.collapsed)
-            row = StepRow(step, c, expanded, self.toggle)
+            row = StepRow(step, c, expanded, self.toggle, assignee=team_view.step_assignee(step, participants),
+                          assign=self.assign)
             self.list_lay.addWidget(row)
             self.rows.append(row)
 
+    def show_next(self, model, brief):
+        """The "what happens next" box: the next ready step and its button, or what the build waits on."""
+        step, sentence = team_view.next_step(model)
+        c = self.colours()
+        if step is not None:
+            who, kind = team_view.step_assignee(step, (self.session.model or {}).get("participants") or [])
+            by = (f" <span style='color:{c['MUTED']}'>· {html.escape(who)} builds it</span>" if who else
+                  f" <span style='color:{c['MUTED']}'>· the next free helper builds it</span>")
+            self.next_line.setText(f"<span style='color:{c['ACCENT']}; font-weight:700; letter-spacing:1px; "
+                                   f"font-size:10px'>NEXT</span>&nbsp; <b>Step {step['n']} · "
+                                   f"{html.escape(step['name'])}</b>{by}")
+        elif model["total"] or brief:
+            self.next_line.setText(html.escape(sentence) if model["total"] else
+                                   "The team is planning the steps. They appear below in a moment.")
+        else:
+            self.next_line.setText("<b>No build yet.</b> Type what to build in <b>Ask the AI</b> above (or press "
+                                   "Ctrl+K anywhere): the team plans it as numbered steps, one part each, then "
+                                   "builds them in order.")
+        self.next_button.setEnabled(step is not None)
+        person = step is not None and team_view.step_assignee(
+            step, (self.session.model or {}).get("participants") or [])[1] == "person"
+        self.next_button.setText(("✉  Tell " + step["who"] + " it's ready") if person else
+                                 f"▶  Run step {step['n']}" if step is not None else "▶  Run next step")
+        has_steps = bool(model["total"])
+        self.all_button.setVisible(has_steps)
+        self.more_button.setVisible(has_steps)
+        self.next_button.setVisible(has_steps)
+
+    def select_parts(self, step):
+        """Select the step's parts in the model tree and the 3D view (the live model first, else the open file)."""
+        import FreeCAD as App
+        import FreeCADGui as Gui
+        from ..naming import is_mirror_doc
+        names = team_view.step_objects(step, getattr(self.session, "tasks", []),
+                                       (getattr(self.session, "model", None) or {}).get("objects") or [])
+        if not names:
+            return 0
+        docs = [d for n, d in App.listDocuments().items() if is_mirror_doc(n)]
+        if App.ActiveDocument is not None and App.ActiveDocument not in docs:
+            docs.append(App.ActiveDocument)
+        found = []
+        for name in names:
+            for doc in docs:
+                obj = doc.getObject(name) or next((o for o in doc.Objects if o.Label.split(" [")[0] == name), None)
+                if obj is not None:
+                    found.append((doc.Name, obj.Name))
+                    break
+        if not found:
+            return 0
+        Gui.Selection.clearSelection()
+        for doc_name, obj_name in found:
+            Gui.Selection.addSelection(doc_name, obj_name)
+        return len(found)
+
     def toggle(self, step):
+        try:
+            n = self.select_parts(step)
+            if n:
+                _p().say(f"Selected step {step['n']}'s part{'s' if n != 1 else ''} in the model")
+        except Exception as e:  # noqa: BLE001 - selecting is a nicety; the step still opens
+            _p().warn(f"couldn't select the step's parts: {e}")
         sid = step["id"]
         if step["state"] == build_view.STATE_CURRENT:
             self.collapsed.symmetric_difference_update({sid})
@@ -405,7 +544,14 @@ class BuildPage(QtGui.QWidget):
     # ------------------------------------------------------------------ actions (the AI Build ribbon tab)
 
     def focus_prompt(self):
-        self.prompt.setFocus()
+        """The ribbon's Plan button: the prompt bar, set to the AI build."""
+        bar = self.prompt_bar
+        if bar is None:
+            panel = getattr(self.session, "panel", None)
+            bar = getattr(panel, "prompt_bar", None)
+        if bar is not None:
+            bar.choose(team_view.TARGET_BUILD)
+            bar.focus()
 
     def submit(self):
         text = self.prompt.toPlainText().strip()
@@ -447,15 +593,20 @@ class BuildPage(QtGui.QWidget):
     def run_next(self):
         if not self.session.ensure_connected("run the next step"):
             return
-        ready = [s for s in self.steps((build_view.STATE_PENDING,)) if s["ready"] or s["note"] == "Ready"]
-        if not ready:
-            _p().hint("No step is ready right now: each waiting step needs the steps it depends on first."
-                      if self.model["total"] else "There is no plan yet. Describe what to build and click Build it.")
+        step, sentence = team_view.next_step(self.model)
+        if step is None:
+            _p().hint(sentence if self.model["total"] else
+                      "There is no plan yet. Type what to build in Ask the AI above and press Send.")
             return
-        step = ready[0]
+        who, kind = team_view.step_assignee(step, (self.session.model or {}).get("participants") or [])
+        if kind == "person":  # a person's step: tell them it's their turn instead of handing it to an AI
+            msg = f"@{who} step {step['n']} “{step['name']}” is ready for you."
+            self.session.act_async("POST", "/messages", {"to": who, "kind": "chat", "body": msg},
+                                   purpose="tell your teammate", done=f"Told {who} that step {step['n']} is ready")
+            return
         helpers = self._helpers(free_only=True) or self._helpers()
         if not helpers:
-            _p().hint("No AI helper has joined yet. Add one from the AI Build tab (New Helper).")
+            _p().hint("No AI helper has joined yet. Connect one on the Agents tab.")
             return
         who = step["who"] if step["who"] in helpers else helpers[0]
         self._command(who, f"Build step {step['n']} now: “{step['name']}” (task {step['task']}). Claim it with "
@@ -499,10 +650,10 @@ class BuildPage(QtGui.QWidget):
                              "update the plan (version 2, numbered steps with depends_on) and its tasks.",
                       done=f"Asked the team to re-plan from step {step['n']}")
 
-    def assign(self):
+    def assign(self, step=None):
         if not self.session.ensure_connected("assign a step"):
             return
-        step = self._pick_step("Assign a step", (build_view.STATE_PENDING, build_view.STATE_BLOCKED))
+        step = step or self._pick_step("Assign a step", (build_view.STATE_PENDING, build_view.STATE_BLOCKED))
         if not step:
             return
         people = [p["name"] for p in self.session.model.get("participants") or []

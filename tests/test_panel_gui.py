@@ -63,8 +63,17 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     assert retry["tries"] == 4, retry  # the auto-start join + the 3 tries of the failing one
     assert retry["after_retry"] == "connected" and retry["button_after"] == "Leave", retry
     # The panes the site shows are real tabs: shared sizes, the project folder with history, refusals as cards.
-    assert [t.split(" ")[0] for t in r["tabs"]] == ["AI", "Team", "Tasks", "Activity", "Sizes", "Files", "Library",
-                                                     "Remote", "Tools"], r["tabs"]
+    # Five main tabs and More; More holds the rest (a CAD side panel, not a row of nine tabs).
+    assert [t.split(" ")[0] for t in r["tabs"]] == ["Build", "Chat", "Team", "Agents", "Library", "More"], r["tabs"]
+    assert [t.split(" ")[0] for t in r["more_tabs"]] == ["Tasks", "Activity", "Sizes", "Files", "Phone", "Tools"],         r["more_tabs"]
+    # The prompt bar: plain text goes to the AI build with the selection as context; a picked helper gets a
+    # task about the selected parts and the message that starts it.
+    pr = r["prompt"]
+    assert pr["sent"][0] == ["/briefs", {"text": "thicker walls\n\nSelected in the model: Base"}], pr
+    assert pr["sent"][1][0] == "/tasks" and pr["sent"][1][1]["assignee"] == "ann-claude", pr
+    assert pr["sent"][1][1]["objects"] == ["Base"] and pr["sent"][2][0] == "/messages", pr
+    assert pr["cleared"] and pr["on_build"] and pr["context"].startswith("◆ 1 selected: Base"), pr
+    assert pr["agent_rows"] == 4, pr
     assert r["sizes"] == [["Pcb l", "65 mm"], ["Wall", "3 mm"]], r["sizes"]
     # Values edit in place, like the site's size fields; files show their size like the site's rows.
     assert r["sizes_editable"] is True, r["sizes_editable"]
@@ -110,8 +119,8 @@ def test_real_freecad_panel_layout_and_chat(tmp_path):
     # hang in the chat forever (and the next send would post the brief again). A local notice says where
     # the request went and that it is not a message.
     assert "a stand for a 7 mm phone" not in r["team_outbox"], r["team_outbox"]
-    assert r["team_notice"] == ["Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."]
-    assert "Handed to the team: it plans the work" in r["team_chat"]
+    assert r["team_notice"] == ["Handed to the team: it plans numbered steps and starts AI helpers. Follow them on the Build tab."]
+    assert "Handed to the team: it plans numbered steps" in r["team_chat"]
     # Suggestions sit on the Team tab; answering a setting sends it and takes it off the card. The learned
     # style backlog is one summary row whose button opens the triage dialog (it does not answer rules itself).
     assert r["suggestions_shown"] and r["suggestions_cleared"]

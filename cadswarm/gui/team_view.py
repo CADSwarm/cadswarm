@@ -30,9 +30,9 @@ def selection_context(names, limit=SELECTION_MAX):
 
 def targets(helper_names):
     """The prompt bar's "Send to" choices, as (key, label): the AI build first, then each helper."""
-    out = [(TARGET_BUILD, "AI Build · whole team")]
+    out = [(TARGET_BUILD, "AI Build")]
     out += [(n, f"@{n}") for n in helper_names]
-    out += [(TARGET_ALL, "Every AI helper"), (TARGET_CHAT, "Team chat (people)")]
+    out += [(TARGET_ALL, "All helpers"), (TARGET_CHAT, "Team chat")]
     return out
 
 
