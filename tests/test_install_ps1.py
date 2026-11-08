@@ -70,6 +70,7 @@ def test_installs_the_app_with_shortcuts_and_open_with(tmp_path, classes):
     assert r.returncode == 0, r.stdout + r.stderr
     app = tmp_path / "Programs" / "CADSwarm"
     assert (app / "cadswarm" / "app" / "__main__.py").is_file() and (app / "InitGui.py").is_file()
+    assert "cadswarm_launch.py" in (app / "cadswarm.cmd").read_text()
     for skipped in (".git", ".venv", "__pycache__", "upstream"):
         assert not list(app.rglob(skipped)), skipped
     pythonw = str(fc / "bin" / "pythonw.exe")

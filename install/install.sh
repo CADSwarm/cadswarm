@@ -209,37 +209,37 @@ fi
 if [ "$(cd "$HERE" && pwd -P)" = "$( (cd "$DEST" 2>/dev/null && pwd -P) || echo none)" ]; then
     ok "CADSwarm is already installed in FreeCAD"
 else
-    # Stage a complete replacement, preserving unknown folders and rolling back on a failed rename.
+    # Never erase an unknown add-on, and keep the previous install until a complete copy is ready.
     is_cadswarm_install() {
         local path="$1" real
         if [ -L "$path" ]; then real="$(readlink -f "$path" 2>/dev/null || true)"; path="${real:-$path}"; fi
-        [ -f "$path/InitGui.py" ] && [ -f "$path/cadswarm/gui/panel.py" ]
+        [ -f "$path/InitGui.py" ] && [ -d "$path/cadswarm" ]
     }
     if { [ -e "$DEST" ] || [ -L "$DEST" ]; } && ! is_cadswarm_install "$DEST"; then
         die "$DEST already exists and isn't a CADSwarm install; it was left untouched."
     fi
     mkdir -p "$(dirname "$DEST")" || die "Couldn't create FreeCAD's add-on folder."
-    STAGE="$(mktemp -d "${DEST}.stage.XXXXXX")" || die "Couldn't create a private staging folder."
+    rm -rf "$DEST.new" && mkdir -p "$DEST.new" || die "Couldn't create $DEST"
     if ! (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
         --exclude=cadswarm-data --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
-        --exclude=node_modules --exclude=target --exclude=upstream --exclude=.claude .) | (cd "$STAGE" && tar -xf -); then
-        rm -rf "$STAGE"; die "Copying CADSwarm into FreeCAD failed."
+        --exclude=node_modules --exclude=target --exclude=upstream --exclude=.claude .) | (cd "$DEST.new" && tar -xf -); then
+        rm -rf "$DEST.new"; die "Copying CADSwarm into FreeCAD failed."
     fi
     WASM="$HERE/module/target/wasm32-unknown-unknown/release/cadswarm_module.wasm"
+    # A local build wins; otherwise use the module the installer put beside the code, so a fresh
+    # workbench never falls back to a stale download in the app folder.
     [ -f "$WASM" ] || WASM="$HERE/module/cadswarm_module.wasm"
-    [ ! -f "$WASM" ] || cp "$WASM" "$STAGE/module/cadswarm_module.wasm" || { rm -rf "$STAGE"; die "Copying the team module failed."; }
+    [ -f "$WASM" ] && cp "$WASM" "$DEST.new/module/cadswarm_module.wasm"  # the team server's database module
     BACKUP=""
     if [ -e "$DEST" ] || [ -L "$DEST" ]; then
-        BACKUP="${DEST}.old.$$"
-        if [ -e "$BACKUP" ] || [ -L "$BACKUP" ] || ! mv "$DEST" "$BACKUP"; then
-            rm -rf "$STAGE"; die "Couldn't safely move the previous CADSwarm install aside."
-        fi
+        BACKUP="$DEST.old.$$"
+        mv "$DEST" "$BACKUP" || { rm -rf "$DEST.new"; die "Couldn't move the old CADSwarm in $DEST aside."; }
     fi
-    if mv "$STAGE" "$DEST"; then
+    if mv "$DEST.new" "$DEST"; then
         [ -z "$BACKUP" ] || rm -rf "$BACKUP"
     else
         [ -z "$BACKUP" ] || mv "$BACKUP" "$DEST"
-        rm -rf "$STAGE"; die "Couldn't replace the old CADSwarm in $DEST; the previous install was restored."
+        rm -rf "$DEST.new"; die "Couldn't replace the old CADSwarm in $DEST; the previous install was restored."
     fi
     ok "Installed CADSwarm into FreeCAD ($DEST)"
 fi
@@ -252,81 +252,29 @@ OPENER="$DEST/cadswarm/gui/open_cadswarm.py"
 MAIN="$DEST/cadswarm/app/__main__.py"
 if [ "${#PY[@]}" -gt 0 ] && [ -f "$MAIN" ]; then RUN=("${PY[@]}" "$MAIN"); else RUN=(); fi
 ICON_SVG="$DEST/cadswarm/gui/cadswarm.svg"
-[ "${#RUN[@]}" -eq 0 ] || write_app_wrapper
 quote_args() { local out="" a; for a in "$@"; do out+="\"${a//\"/\\\"}\" "; done; printf '%s' "${out% }"; }
 xml_escape() { local t="${1//&/&amp;}"; t="${t//</&lt;}"; printf '%s' "${t//>/&gt;}"; }
 shell_quote() { local q=${1//\'/\'\\\'\'}; printf "'%s'" "$q"; }
-desktop_quote() { local q=${1//\\/\\\\}; q=${q//\"/\\\"}; q=${q//%/%%}; printf '\"%s\"' "$q"; }
-write_app_wrapper() {
-    local arg
-    {
-        printf '#!/bin/sh\nexec'
-        for arg in "${PY[@]}"; do printf ' %s' "$(shell_quote "$arg")"; done
-        printf ' %s "$@"\n' "$(shell_quote "$MAIN")"
-    } > "$DEST/cadswarm-app" || die "Couldn't write the CADSwarm desktop launcher."
-    chmod 755 "$DEST/cadswarm-app"
-}
 
-# A `cadswarm` command in the installed folder: the setup CLI, run by the same FreeCAD Python as the app.
-if [ "${#PY[@]}" -gt 0 ]; then
+# A `cadswarm` command (bin/cadswarm in the installed folder; the folder already has a cadswarm/ package):
+# the setup CLI, run by the same FreeCAD Python as the app.
+if [ "${#PY[@]}" -gt 0 ] && mkdir -p "$DEST/bin"; then
     {
         printf '#!/bin/sh\nexec'
         for arg in "${PY[@]}"; do printf ' %s' "$(shell_quote "$arg")"; done
         printf ' %s "$@"\n' "$(shell_quote "$DEST/cadswarm_launch.py")"
-    } > "$DEST/cadswarm" && chmod 755 "$DEST/cadswarm" || warn "  Couldn't write $DEST/cadswarm."
+    } > "$DEST/bin/cadswarm" && chmod 755 "$DEST/bin/cadswarm" || warn "  Couldn't write $DEST/bin/cadswarm."
 fi
 
-mac_bundle_id() {
-    /usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null || true
-}
-
-replace_mac_app() {  # an existing destination must be a CADSwarm bundle
-    local stage="$1" app="$2" backup="" ident=""
-    if [ -e "$app" ]; then
-        ident="$(mac_bundle_id "$app")"
-        if [ "$ident" != "org.cadswarm.desktop" ]; then
-            warn "  $app already exists and isn't CADSwarm; it was left untouched."
-            return 1
-        fi
-        backup="${app}.cadswarm-backup.$$"
-        [ ! -e "$backup" ] || return 1
-        mv "$app" "$backup" || return 1
-    fi
-    if mv "$stage" "$app"; then
-        [ -z "$backup" ] || rm -rf "$backup"
-        return 0
-    fi
-    [ -z "$backup" ] || mv "$backup" "$app"
-    return 1
-}
-
-link_mac_desktop() {
-    local app="$1" link="$HOME/Desktop/CADSwarm.app"
-    if [ -e "$link" ] || [ -L "$link" ]; then
-        if [ -L "$link" ] && [ "$(readlink "$link")" = "$app" ]; then return 0; fi
-        warn "  $link already exists; it was left untouched."
-        return 1
-    fi
-    mkdir -p "$HOME/Desktop" && ln -s "$app" "$link"
-}
-
-make_mac_app() {  # $1 is a unique, newly-created staging path
-    local app="$1" icns="" candidate="" arg icon_key=""
-    [ ! -e "$app" ] && [ ! -L "$app" ] || return 1
-    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" || return 1
-    for candidate in "$DEST/design/cadswarm.icns" "$DEST/cadswarm/gui/cadswarm.icns"; do
-        if [ -f "$candidate" ]; then icns="$candidate"; break; fi
-    done
-    if [ -n "$icns" ]; then
-        cp "$icns" "$app/Contents/Resources/cadswarm.icns" || return 1
-        icon_key='    <key>CFBundleIconFile</key><string>cadswarm</string>'
-    fi
+make_mac_app() {  # $1 = path of the .app bundle; a real bundle around FreeCAD's python
+    local app="$1" icns=""
+    rm -rf "$app" && mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" || return 1
+    for icns in "$DEST/design/cadswarm.icns" "$DEST/cadswarm/gui/cadswarm.icns" ""; do [ -z "$icns" ] || [ -f "$icns" ] && break; done
+    [ -n "$icns" ] && cp "$icns" "$app/Contents/Resources/cadswarm.icns"
     {
         echo '#!/bin/bash'
-        echo '# CADSwarm desktop launcher.'
-        printf 'cd "$HOME" && exec'
-        for arg in "${RUN[@]}"; do printf ' %s' "$(shell_quote "$arg")"; done
-        printf ' "$@"\n'
+        echo '# CADSwarm: FreeCAD (unmodified) running the CADSwarm app. Written by the CADSwarm installer.'
+        echo "cd \"\$HOME\" && exec $(quote_args "${RUN[@]}") \"\$@\""
     } > "$app/Contents/MacOS/CADSwarm"
     chmod +x "$app/Contents/MacOS/CADSwarm"
     cat > "$app/Contents/Info.plist" <<PLIST
@@ -340,17 +288,10 @@ make_mac_app() {  # $1 is a unique, newly-created staging path
     <key>CFBundleExecutable</key><string>CADSwarm</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
-${icon_key}
+    <key>CFBundleIconFile</key><string>cadswarm</string>
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.graphics-design</string>
-    <key>CFBundleDocumentTypes</key>
-    <array><dict>
-        <key>CFBundleTypeName</key><string>CADSwarm design</string>
-        <key>CFBundleTypeExtensions</key><array><string>FCStd</string><string>fcstd</string></array>
-        <key>CFBundleTypeRole</key><string>Editor</string>
-        <key>LSHandlerRank</key><string>Alternate</string>
-    </dict></array>
     <key>CADSwarmInstallDir</key><string>$(xml_escape "$DEST")</string>
 </dict>
 </plist>
@@ -361,14 +302,18 @@ if [ "$SHORTCUT" = 1 ] && ask "Add a CADSwarm shortcut?" y; then
     if [ "$OS" = Darwin ]; then
         APP="$HOME/Applications/CADSwarm.app"
         mkdir -p "$HOME/Applications"
-        APP_STAGE="$HOME/Applications/.cadswarm-stage-$$.app"
-        if [ "${#RUN[@]}" -gt 0 ] && [ ! -e "$APP_STAGE" ] && make_mac_app "$APP_STAGE" \
-                && replace_mac_app "$APP_STAGE" "$APP"; then
-            link_mac_desktop "$APP" || true
-            ok "Added the CADSwarm app to ~/Applications"
+        rm -rf "$HOME/Applications/CadSwarm.app" 2>/dev/null  # the old installer's launcher (same name on APFS)
+        if [ "${#RUN[@]}" -gt 0 ] && make_mac_app "$APP"; then
+            ln -sfn "$APP" "$HOME/Desktop/CADSwarm.app" 2>/dev/null
+            ok "Added the CADSwarm app to ~/Applications and your desktop"
         else
-            [ ! -e "$APP_STAGE" ] || rm -rf "$APP_STAGE"
-            warn "  Couldn't safely replace the CADSwarm app bundle."
+            SCRIPT="do shell script \"$(quote_args "${LAUNCH[@]}" "$OPENER" | sed 's/\\/\\\\/g; s/"/\\"/g') > /dev/null 2>&1 &\""
+            if command -v osacompile >/dev/null && rm -rf "$APP" && osacompile -o "$APP" -e "$SCRIPT" 2>/dev/null; then
+                ln -sfn "$APP" "$HOME/Desktop/CADSwarm.app" 2>/dev/null
+                ok "Added CADSwarm to ~/Applications and your desktop"
+            else
+                warn "  Couldn't make the shortcut; open FreeCAD and pick CADSwarm instead."
+            fi
         fi
     else
         APPS="$DATA_HOME/applications"
@@ -380,7 +325,7 @@ if [ "$SHORTCUT" = 1 ] && ask "Add a CADSwarm shortcut?" y; then
             echo "Comment=Build 3D designs with your team's AI helpers"
             if [ "${#RUN[@]}" -gt 0 ]; then
                 # %F: "Open with CADSwarm" for FreeCAD documents; they open in the running window.
-                echo "Exec=$(desktop_quote "$DEST/cadswarm-app") %F"
+                echo "Exec=$(quote_args "${RUN[@]}") %F"
                 echo "MimeType=application/x-extension-fcstd;"
             else
                 echo "Exec=$(quote_args "${LAUNCH[@]}" "$OPENER")"
