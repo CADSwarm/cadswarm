@@ -11,14 +11,48 @@ from cadswarm.gui import build_view, icons, pro_style, ribbon_spec, theme
 
 # ------------------------------------------------------------------------------------------- theme
 
-def test_tokens_match_the_web_palette():
+def test_tokens_come_from_the_design_tokens():
     light, dark = pro_style.tokens("light"), pro_style.tokens("dark")
-    assert light["CHROME"] == "#eef0f3" and light["SURFACE"] == "#ffffff" and light["LINE"] == "#d3d7dd"
-    assert light["TEXT"] == "#1f2329" and light["ACCENT"] == "#2b6cd9" and light["ACCENT_SOFT"] == "#e4edfb"
-    assert light["PRESELECT"] == "#f2a93b" and light["SELECT"] == "#1f7ae0"
-    assert (light["OK"], light["WARN"], light["ERR"]) == ("#2e9d5b", "#d99a00", "#d23f3f")
+    design = json.load(open(pro_style._TOKENS_FILE, encoding="utf-8"))["color"]
+    for mode, t in (("light", light), ("dark", dark)):
+        c = {k: v.lower() for k, v in design[mode].items()}
+        assert t["ACCENT"] == c["signal"] and t["TEXT"] == c["ink"] and t["BG"] == c["panel"]
+        assert t["ON_ACCENT"] == c["on-signal"] and t["SELECT"] == c["select"] and t["LINE"] == c["hairline"]
     assert set(light) == set(dark)
     assert pro_style.tokens("anything") == light
+    assert pro_style.TEAMMATES == tuple(c.lower() for c in design["team"])
+
+
+def test_fallback_palette_matches_the_design_tokens():
+    design = json.load(open(pro_style._TOKENS_FILE, encoding="utf-8"))["color"]
+    for mode in ("light", "dark"):
+        for key, value in pro_style._FALLBACK[mode].items():
+            assert design[mode][key] == value, (mode, key)
+    assert pro_style._FALLBACK["team"] == design["team"]
+
+
+def test_mode_from_theme():
+    assert pro_style.mode_from_theme("CADSwarm Dark") == "dark"
+    assert pro_style.mode_from_theme("CADSwarm Light") == "light"
+    assert pro_style.mode_from_theme("FreeCAD Dark") == "dark"
+    assert pro_style.mode_from_theme("") == "light"
+    assert pro_style.mode_from_theme("CADSwarm Light", "dark") == "dark"
+    assert pro_style.mode_from_theme("CADSwarm Dark", "nonsense") == "dark"
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_panel_text_is_readable(mode):
+    from cadswarm.app import branded
+    t = pro_style.tokens(mode)
+    for fg, bg in (("TEXT", "BG"), ("TEXT", "SURFACE"), ("TEXT", "SURFACE_2"), ("TEXT", "CHROME"),
+                   ("TEXT", "ACCENT_SOFT"), ("MUTED", "BG"), ("MUTED", "SURFACE"), ("ON_ACCENT", "ACCENT")):
+        assert branded.contrast(t[fg], t[bg]) >= 4.5, (mode, fg, bg)
+
+
+def test_panel_is_square_and_uses_on_accent():
+    for sheet in (theme.PANEL, theme.DIALOG):
+        assert "color: white" not in sheet
+        assert all(v.strip().startswith("0") for v in __import__("re").findall(r"radius:([^;]*);", sheet))
 
 
 def test_pick_mode_follows_the_setting_or_freecads_window_colour():
@@ -63,10 +97,11 @@ def test_colours_pack_the_way_freecad_stores_them():
     assert pro_style.unpacked(0x1F7AE0FF) == "#1f7ae0"
     params = {name: value for _g, _k, name, value in pro_style.view_params(pro_style.tokens("light"))}
     assert params["Gradient"] is True and params["Simple"] is False
-    assert pro_style.unpacked(params["BackgroundColor2"]) == "#c5cfda"   # top
-    assert pro_style.unpacked(params["BackgroundColor3"]) == "#f3f5f7"   # bottom
-    assert pro_style.unpacked(params["SelectionColor"]) == "#1f7ae0"
-    assert pro_style.unpacked(params["HighlightColor"]) == "#f2a93b"
+    light = pro_style.tokens("light")
+    assert pro_style.unpacked(params["BackgroundColor2"]) == light["VIEW_TOP"]
+    assert pro_style.unpacked(params["BackgroundColor3"]) == light["VIEW_BOTTOM"]
+    assert pro_style.unpacked(params["SelectionColor"]) == light["SELECT"]
+    assert pro_style.unpacked(params["HighlightColor"]) == light["PRESELECT"]
 
 
 # ------------------------------------------------------------------------------ parameter save/restore
@@ -107,7 +142,7 @@ def test_stash_saves_then_restores_existing_and_missing_values():
     view.SetBool("Gradient", False)
     stash = pro_style.ParamStash(params, store)
     assert stash.apply(pro_style.view_params(pro_style.tokens("light"))) == []
-    assert view.GetUnsigned("BackgroundColor2") == pro_style.packed("#c5cfda")
+    assert view.GetUnsigned("BackgroundColor2") == pro_style.packed(pro_style.tokens("light")["VIEW_TOP"])
     assert view.GetBool("Gradient") is True and stash.pending
     assert json.loads(store.GetString("ProUiStash"))  # kept in CADSwarm's preferences until restored
     assert stash.restore() == []
