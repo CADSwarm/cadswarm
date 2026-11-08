@@ -209,17 +209,38 @@ fi
 if [ "$(cd "$HERE" && pwd -P)" = "$( (cd "$DEST" 2>/dev/null && pwd -P) || echo none)" ]; then
     ok "CADSwarm is already installed in FreeCAD"
 else
-    # Start from an empty staging folder: a failed earlier run must not leave old files in the copy.
+    # Never erase an unknown add-on, and keep the previous install until a complete copy is ready.
+    is_cadswarm_install() {
+        local path="$1" real
+        if [ -L "$path" ]; then real="$(readlink -f "$path" 2>/dev/null || true)"; path="${real:-$path}"; fi
+        [ -f "$path/InitGui.py" ] && [ -d "$path/cadswarm" ]
+    }
+    if { [ -e "$DEST" ] || [ -L "$DEST" ]; } && ! is_cadswarm_install "$DEST"; then
+        die "$DEST already exists and isn't a CADSwarm install; it was left untouched."
+    fi
+    mkdir -p "$(dirname "$DEST")" || die "Couldn't create FreeCAD's add-on folder."
     rm -rf "$DEST.new" && mkdir -p "$DEST.new" || die "Couldn't create $DEST"
-    (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
+    if ! (cd "$HERE" && tar -cf - --exclude=.git --exclude=.venv --exclude=__pycache__ --exclude=.pytest_cache \
         --exclude=cadswarm-data --exclude=exports --exclude=.cadswarm --exclude='*.egg-info' --exclude='*.pyc' \
-        --exclude=node_modules --exclude=target .) | (cd "$DEST.new" && tar -xf -) || die "Copying CADSwarm into FreeCAD failed."
+        --exclude=node_modules --exclude=target --exclude=upstream --exclude=.claude .) | (cd "$DEST.new" && tar -xf -); then
+        rm -rf "$DEST.new"; die "Copying CADSwarm into FreeCAD failed."
+    fi
     WASM="$HERE/module/target/wasm32-unknown-unknown/release/cadswarm_module.wasm"
     # A local build wins; otherwise use the module the installer put beside the code, so a fresh
     # workbench never falls back to a stale download in the app folder.
     [ -f "$WASM" ] || WASM="$HERE/module/cadswarm_module.wasm"
     [ -f "$WASM" ] && cp "$WASM" "$DEST.new/module/cadswarm_module.wasm"  # the team server's database module
-    rm -rf "$DEST" && mv "$DEST.new" "$DEST" || die "Couldn't replace the old CADSwarm in $DEST"
+    BACKUP=""
+    if [ -e "$DEST" ] || [ -L "$DEST" ]; then
+        BACKUP="$DEST.old.$$"
+        mv "$DEST" "$BACKUP" || { rm -rf "$DEST.new"; die "Couldn't move the old CADSwarm in $DEST aside."; }
+    fi
+    if mv "$DEST.new" "$DEST"; then
+        [ -z "$BACKUP" ] || rm -rf "$BACKUP"
+    else
+        [ -z "$BACKUP" ] || mv "$BACKUP" "$DEST"
+        rm -rf "$DEST.new"; die "Couldn't replace the old CADSwarm in $DEST; the previous install was restored."
+    fi
     ok "Installed CADSwarm into FreeCAD ($DEST)"
 fi
 OPENER="$DEST/cadswarm/gui/open_cadswarm.py"
@@ -233,6 +254,17 @@ if [ "${#PY[@]}" -gt 0 ] && [ -f "$MAIN" ]; then RUN=("${PY[@]}" "$MAIN"); else 
 ICON_SVG="$DEST/cadswarm/gui/cadswarm.svg"
 quote_args() { local out="" a; for a in "$@"; do out+="\"${a//\"/\\\"}\" "; done; printf '%s' "${out% }"; }
 xml_escape() { local t="${1//&/&amp;}"; t="${t//</&lt;}"; printf '%s' "${t//>/&gt;}"; }
+shell_quote() { local q=${1//\'/\'\\\'\'}; printf "'%s'" "$q"; }
+
+# A `cadswarm` command (bin/cadswarm in the installed folder; the folder already has a cadswarm/ package):
+# the setup CLI, run by the same FreeCAD Python as the app.
+if [ "${#PY[@]}" -gt 0 ] && mkdir -p "$DEST/bin"; then
+    {
+        printf '#!/bin/sh\nexec'
+        for arg in "${PY[@]}"; do printf ' %s' "$(shell_quote "$arg")"; done
+        printf ' %s "$@"\n' "$(shell_quote "$DEST/cadswarm_launch.py")"
+    } > "$DEST/bin/cadswarm" && chmod 755 "$DEST/bin/cadswarm" || warn "  Couldn't write $DEST/bin/cadswarm."
+fi
 
 make_mac_app() {  # $1 = path of the .app bundle; a real bundle around FreeCAD's python
     local app="$1" icns=""
@@ -304,6 +336,20 @@ if [ "$SHORTCUT" = 1 ] && ask "Add a CADSwarm shortcut?" y; then
             echo "Categories=Graphics;Engineering;"
         } > "$APPS/cadswarm.desktop"
         chmod +x "$APPS/cadswarm.desktop"
+        if [ "${#RUN[@]}" -gt 0 ]; then  # so .FCStd files have the type the entry's MimeType names
+            mkdir -p "$DATA_HOME/mime/packages"
+            cat > "$DATA_HOME/mime/packages/cadswarm-fcstd.xml" <<'MIME'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-extension-fcstd">
+    <comment>FreeCAD / CADSwarm design</comment>
+    <glob pattern="*.FCStd"/>
+    <glob pattern="*.fcstd"/>
+  </mime-type>
+</mime-info>
+MIME
+            command -v update-mime-database >/dev/null && update-mime-database "$DATA_HOME/mime" >/dev/null 2>&1
+        fi
         command -v update-desktop-database >/dev/null && update-desktop-database "$APPS" >/dev/null 2>&1
         DESK="$(command -v xdg-user-dir >/dev/null && xdg-user-dir DESKTOP || echo "$HOME/Desktop")"
         if [ -d "$DESK" ]; then

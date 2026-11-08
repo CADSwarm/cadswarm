@@ -67,3 +67,16 @@ def test_with_freecads_python_the_launcher_runs_the_cadswarm_app(tmp_path):
     assert f'Exec="{root / "AppRun"}" "python" "{main}" %F' in desktop
     assert "MimeType=application/x-extension-fcstd;" in desktop and "Name=CADSwarm" in desktop
     assert "Start CADSwarm" in r.stdout
+    assert (user / "Mod" / "CadSwarm" / "bin" / "cadswarm").read_text().startswith("#!/bin/sh")
+    assert (share / "mime" / "packages" / "cadswarm-fcstd.xml").is_file()
+
+
+def test_never_replaces_an_add_on_that_is_not_cadswarm(tmp_path):
+    share = tmp_path / "share"
+    _, user = fake_appimage(share)
+    other = user / "Mod" / "CadSwarm"
+    other.mkdir(parents=True)
+    (other / "mine.txt").write_text("keep")
+    r = run(tmp_path, share)
+    assert r.returncode == 1 and "left untouched" in r.stdout
+    assert (other / "mine.txt").read_text() == "keep"

@@ -151,11 +151,14 @@ if (SamePath $Here $InstallDir) {
     Rename-Item -LiteralPath $Stage -NewName (Split-Path -Leaf $InstallDir)
     Ok "Installed CADSwarm into $InstallDir"
 }
+# A `cadswarm` command in the installed folder: the setup CLI, run by the same FreeCAD Python as the app.
+$SetupWrapper = "@echo off`r`n`"$Python`" `"%~dp0cadswarm_launch.py`" %*`r`n"
+[IO.File]::WriteAllText((Join-Path $InstallDir "cadswarm.cmd"), $SetupWrapper, [Text.Encoding]::ASCII)
 
 # ---------------------------------------------------------------- 3. Start menu and desktop shortcuts
-# The CADSwarm icon, once the brand assets include one; FreeCAD's until then.
+# The CADSwarm icon (design/icon/cadswarm.ico from the brand assets); FreeCAD's if a build lacks it.
 $Icon = "$FreeCADExe"
-foreach ($rel in @("cadswarm\gui\cadswarm.ico", "design\cadswarm.ico", "design\icons\cadswarm.ico")) {
+foreach ($rel in @("design\icon\cadswarm.ico", "cadswarm\gui\cadswarm.ico", "design\cadswarm.ico")) {
     if (Test-Path (Join-Path $InstallDir $rel)) { $Icon = Join-Path $InstallDir $rel; break }
 }
 Add-Type -Path (Join-Path $InstallDir "install\shortcut.cs")
