@@ -363,7 +363,7 @@ class Workspace:
     def __init__(self):
         self.active = False
         self.switching = False      # loading another workbench's commands (switch there and back)
-        self.mode = "light"
+        self.mode = pro_style.app_mode()  # the app's light/dark until the workbench picks its own
         self.family = ""
         self.ribbon_bar = None      # the QToolBar holding the ribbon
         self.ribbon = None
