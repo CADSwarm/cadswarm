@@ -44,7 +44,7 @@ def test_brand_params_switch_off_start_page_and_point_at_theme(tmp_path):
     assert as_dict[("BaseApp/Preferences/Mod/Start", "ShowOnStartup")] is False
     assert as_dict[("BaseApp/Preferences/MainWindow", "ThemeStyleParametersFile")] == str(tmp_path / "t.yaml")
     kinds = {t for _, t, _, _ in params}
-    assert kinds <= {"Bool", "String", "Int", "Unsigned"}
+    assert kinds <= {"Bool", "String", "Int", "Unsigned", "Float"}
 
 
 def test_link_addon_keeps_real_copy(tmp_path):
@@ -200,3 +200,18 @@ def test_main_title_never_shows_python():
     assert branded.main_title("Bracket - pythonw.exe") == "Bracket - CADSwarm"
     assert branded.main_title("") == "CADSwarm"
     assert branded.main_title("[*] Bracket : 1 - FreeCAD 1.1.4") == "[*] Bracket : 1 - CADSwarm"
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_view_colours_follow_tokens(mode):
+    c = branded.colours(mode)
+    p = {k: v for _, _, k, v in branded.view_colour_params(mode)}
+    assert p["HiliteColor"] == branded.rgba_uint(c["signal"])
+    assert p["EditedEdgeColor"] == branded.rgba_uint(c["sk-under"])
+    assert p["SketchEdgeColor"] == branded.rgba_uint(c["sk-full"])
+    assert p["AxisXColor"] == branded.rgba_uint(c["axis-x"])
+    # Sketch geometry stays readable on the 3D view's background.
+    for key in ("SketchEdgeColor", "EditedEdgeColor", "ConstrainedDimColor"):
+        rgb = "#%06X" % (p[key] >> 8)
+        assert branded.contrast(rgb, c["vp-bottom"]) >= 3, (mode, key)
+    assert all(k in {"Bool", "String", "Int", "Unsigned", "Float"} for _, k, _, _ in branded.brand_params("x", mode))

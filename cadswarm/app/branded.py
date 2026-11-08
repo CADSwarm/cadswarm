@@ -365,6 +365,52 @@ def brand_params(theme_file, mode="light"):
         (view, "Bool", "ShowFPS", False),
         (view, "Bool", "UseVBO", True),
         (view, "Bool", "ShowNaviCube", True),
+    ] + view_colour_params(mode)
+
+
+def view_colour_params(mode="light"):
+    """The 3D view's axes, the navigation cube and the sketcher in token colours (light or dark).
+
+    The engine's defaults draw sketch edges white, which disappears on CADSwarm's light grey view; here
+    geometry is ink, construction lines muted, fully constrained geometry green, dimensions orange."""
+    c = colours(mode)
+    view = "BaseApp/Preferences/View"
+    cube = "BaseApp/Preferences/NaviCube"
+    sk = "BaseApp/Preferences/Mod/Sketcher/General"
+    u = rgba_uint
+    dims = c["signal-ink"] if mode == "light" else c["signal"]
+    return [
+        (view, "Unsigned", "AxisXColor", u(c["axis-x"])),
+        (view, "Unsigned", "AxisYColor", u(c["axis-y"])),
+        (view, "Unsigned", "AxisZColor", u(c["axis-z"])),
+        # Navigation cube: a panel-coloured block, ink labels and edges, orange under the pointer.
+        (cube, "Unsigned", "BaseColor", u(c["panel"], 0xE0)),
+        (cube, "Unsigned", "EmphaseColor", u(c["ink"])),
+        (cube, "Unsigned", "HiliteColor", u(c["signal"])),
+        (cube, "Float", "BorderWidth", 2.0),
+        (cube, "Int", "InactiveOpacity", 70),
+        # Sketcher.
+        (view, "Unsigned", "SketchEdgeColor", u(c["sk-full"])),
+        (view, "Unsigned", "SketchVertexColor", u(c["sk-full"])),
+        (view, "Unsigned", "EditedEdgeColor", u(c["sk-under"])),
+        (view, "Unsigned", "EditedVertexColor", u(c["sk-under"])),
+        (view, "Unsigned", "ConstructionColor", u(c["sk-construction"])),
+        (view, "Unsigned", "InternalAlignedGeoColor", u(c["sk-driven"])),
+        (view, "Unsigned", "FullyConstrainedColor", u(c["ok"])),
+        (view, "Unsigned", "FullyConstraintElementColor", u(c["ok"])),
+        (view, "Unsigned", "FullyConstraintConstructionElementColor", u(c["ok"])),
+        (view, "Unsigned", "FullyConstraintInternalAlignmentColor", u(c["ok"])),
+        (view, "Unsigned", "InvalidSketchColor", u(c["sk-over"])),
+        (view, "Unsigned", "ConstrainedDimColor", u(dims)),
+        (view, "Unsigned", "ConstrainedIcoColor", u(dims)),
+        (view, "Unsigned", "NonDrivingConstrDimColor", u(c["sk-driven"])),
+        (view, "Unsigned", "ExprBasedConstrDimColor", u(c["sk-under"])),
+        (view, "Unsigned", "DeactivatedConstrDimColor", u(c["muted"])),
+        (view, "Unsigned", "CreateLineColor", u(c["signal"])),
+        (view, "Unsigned", "CursorTextColor", u(c["ink"])),
+        (view, "Unsigned", "CursorCrosshairColor", u(c["ink"])),
+        (sk, "Unsigned", "GridLineColor", u(c["hairline"])),
+        (sk, "Unsigned", "GridDivLineColor", u(c["muted"])),
     ]
 
 
