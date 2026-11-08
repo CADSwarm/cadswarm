@@ -86,6 +86,9 @@ class Rebrander(QtCore.QObject):
                     except (RuntimeError, TypeError):
                         pass
                     act.triggered.connect(self.show_about)
+                act.setText(f"&About {branded.APP_NAME}")
+                act.setToolTip(f"About {branded.APP_NAME}")
+                act.setStatusTip(act.toolTip())
             if name == "Start_Start" and not act.property("cadswarm_home"):
                 act.setProperty("cadswarm_home", True)
                 try:
