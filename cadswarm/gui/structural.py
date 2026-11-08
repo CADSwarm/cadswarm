@@ -100,6 +100,11 @@ class OptimizeDialog(QtGui.QDialog):
         self.log = QtGui.QPlainTextEdit()
         self.log.setReadOnly(True)
         layout.addWidget(self.log)
+        # The finished report is Markdown (tables); show it rendered, not as raw pipes and dashes.
+        self.report_view = QtGui.QTextBrowser()
+        self.report_view.setOpenExternalLinks(True)
+        self.report_view.hide()
+        layout.addWidget(self.report_view, 1)
         self.section_button = QtGui.QPushButton("Show section view (display only)")
         self.section_button.setCheckable(True)
         self.section_button.setEnabled(False)
@@ -123,7 +128,7 @@ class OptimizeDialog(QtGui.QDialog):
         self.inputs.setVisible(visible)
         self.inputs_button.setText("Hide inputs" if visible else "Show inputs / run again")
         self.layout().activate()
-        fit_to_screen(self, 760, 820 if visible else 350)
+        fit_to_screen(self, 760, 820 if visible else 640)
 
     def load_demo(self):
         for key, value in {**DEMO["material"], **DEMO["constraints"], "pitch_mm": 3, "force": "[0, 0, -200]"}.items():
@@ -165,11 +170,23 @@ class OptimizeDialog(QtGui.QDialog):
             self.files_button.setEnabled(False)
             self.result = None
             self.close_preview()
+            self.show_report(None)
             self.log.setPlainText("Starting isolated analysis process…")
             self.process.start(python, ["-m", "cadswarm.structural.job", str(request_path), str(self.output)])
         except Exception as exc:
             self.log.appendPlainText(str(exc))
             self.start_button.setEnabled(True)
+
+    def show_report(self, markdown):
+        """Rendered report instead of the process log (None goes back to the log)."""
+        if markdown is None:
+            self.report_view.hide()
+            self.log.show()
+            return
+        self.log.setPlainText(markdown)  # kept for copy/paste and for tests that read the log
+        self.report_view.setMarkdown(markdown)
+        self.log.hide()
+        self.report_view.show()
 
     def process_error(self, error):
         self.log.appendPlainText("Analysis process error: " + self.process.errorString())
@@ -190,7 +207,7 @@ class OptimizeDialog(QtGui.QDialog):
             return
         try:
             report = json.loads((self.output / "report.json").read_text(encoding="utf-8"))
-            self.log.setPlainText((self.output / "report.md").read_text(encoding="utf-8"))
+            self.show_report((self.output / "report.md").read_text(encoding="utf-8"))
             self.set_inputs_visible(False)
             self.files_button.setEnabled(True)
             if report["status"] != "improved":
