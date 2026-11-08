@@ -50,8 +50,27 @@ class Rebrander(QtCore.QObject):
         self.theme_watcher = ThemeWatcher.attach()
         self.fix_title(self.mw)
         self.fix_menus()
+        self.add_logo(icon)
         QtCore.QTimer.singleShot(0, self.show_home)
         return self
+
+    def add_logo(self, icon):
+        """CADSwarm's mark and name at the left end of the menu bar, like any branded desktop app.
+        Clicking it opens the home page."""
+        btn = QtWidgets.QToolButton(self.mw.menuBar())
+        btn.setObjectName("CADSwarmLogo")
+        btn.setIcon(icon)
+        btn.setIconSize(QtCore.QSize(20, 20))
+        btn.setText(branded.APP_NAME)
+        btn.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        btn.setAutoRaise(True)
+        btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip("CADSwarm home")
+        btn.setStyleSheet("QToolButton#CADSwarmLogo { font-weight: 600; padding: 2px 10px 2px 6px; border: none; }")
+        btn.clicked.connect(self.show_home)
+        self.mw.menuBar().setCornerWidget(btn, QtCore.Qt.Corner.TopLeftCorner)
+        btn.show()
+        self.logo = btn
 
     # --- titles -----------------------------------------------------------------------------------------
     def fix_title(self, w):
