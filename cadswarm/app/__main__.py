@@ -250,13 +250,13 @@ def run(args, log_file=None):
     engine.apply_params(FreeCAD, branded.brand_params(theme_file, mode))
 
     import FreeCADGui
-    FreeCADGui.showMainWindow()
     from PySide6 import QtCore, QtWidgets
-    from cadswarm.app.rebrand_qt import Rebrander
-    # Qt appends the display name (by default the executable, "pythonw") to titles without it.
+    # Qt names the app after the executable ("pythonw"); FreeCAD puts that name in the window title.
+    QtCore.QCoreApplication.setApplicationName(branded.APP_NAME)
     QtWidgets.QApplication.setApplicationDisplayName(branded.APP_NAME)
+    FreeCADGui.showMainWindow()
+    from cadswarm.app.rebrand_qt import Rebrander
     mw = FreeCADGui.getMainWindow()
-    mw.setWindowTitle(mw.windowTitle())
     Rebrander(mw).install()
     mw.showMaximized()
 
@@ -264,8 +264,8 @@ def run(args, log_file=None):
     if server is not None and server.start():
         def _handoffs():
             for files in server.drain():
-                raise_window(mw)
                 open_files(files)
+                raise_window(mw)
         poll = QtCore.QTimer(mw)
         poll.timeout.connect(_handoffs)
         poll.start(250)
