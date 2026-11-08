@@ -8,7 +8,8 @@ in the agent's own folder, after `cadswarm setup` wrote that folder's .mcp.json.
 role the prompt names: PLANNER (two numbered steps), WORKER (next_step loop), REVIEWER (checks and a
 verdict) or a handoff pick-up. It never touches the team except through MCP tools.
 
-Request it plans: a base plate and a post on it (step 2 depends on step 1).
+The default build is a base plate and post. The opt-in drill scenario builds seven named subassemblies and
+uses independent first steps so the host can start up to three workers in parallel.
 """
 import json
 import os
@@ -75,7 +76,7 @@ class Mcp:
             self.p.kill()
 
 
-STEPS = [
+BASE_STEPS = [
     {"n": 1, "id": "s01", "name": "Base plate", "kind": "part", "objects": ["FakeBase"], "depends_on": [],
      "summary": "The base plate: a 60 x 60 x 6 mm slab every other part stands on.",
      "ops": ["Extrude FakeBase", "Save part"],
@@ -88,14 +89,53 @@ STEPS = [
 ]
 
 
-def plan(m, brief):
-    steps = []
-    for s in STEPS:
+DRILL_STEPS = [
+    {"n": 1, "id": "d01", "name": "Chuck assembly", "kind": "part", "objects": ["ChuckAssembly"],
+     "depends_on": [], "summary": "A stepped chuck shell aligned to the drill axis.",
+     "build": {"kind": "cylinder", "props": {"Radius": 20, "Height": 34},
+               "placement": {"base": [0, 0, 0], "rotation": {"axis": [0, 1, 0], "angle": 90}}}},
+    {"n": 2, "id": "d02", "name": "Planetary gear train", "kind": "part", "objects": ["PlanetaryGearTrain"],
+     "depends_on": [], "summary": "A compact planetary gear stage reduces motor speed at the spindle.",
+     "build": {"kind": "cylinder", "props": {"Radius": 25, "Height": 32},
+               "placement": {"base": [72, 0, 0], "rotation": {"axis": [0, 1, 0], "angle": 90}}}},
+    {"n": 3, "id": "d03", "name": "Electric motor assembly", "kind": "part",
+     "objects": ["ElectricMotorAssembly"], "depends_on": [],
+     "summary": "A cylindrical electric motor follows the gear train on the drill axis.",
+     "build": {"kind": "cylinder", "props": {"Radius": 22, "Height": 50},
+               "placement": {"base": [106, 0, 0], "rotation": {"axis": [0, 1, 0], "angle": 90}}}},
+    {"n": 4, "id": "d04", "name": "Pistol grip housing", "kind": "part", "objects": ["PistolGripHousing"],
+     "depends_on": [], "summary": "A pistol grip housing hangs below the motor and gearbox.",
+     "build": {"kind": "box", "props": {"Length": 42, "Width": 40, "Height": 70},
+               "placement": {"base": [158, -20, -88]}}},
+    {"n": 5, "id": "d05", "name": "Spindle assembly", "kind": "part", "objects": ["SpindleAssembly"],
+     "depends_on": ["d01", "d02"], "summary": "The spindle transmits chuck torque into the gearbox.",
+     "build": {"kind": "cylinder", "props": {"Radius": 6, "Height": 36},
+               "placement": {"base": [35, 0, 0], "rotation": {"axis": [0, 1, 0], "angle": 90}}}},
+    {"n": 6, "id": "d06", "name": "Trigger switch assembly", "kind": "part",
+     "objects": ["TriggerSwitchAssembly"], "depends_on": ["d04"],
+     "summary": "A separate trigger switch sits along the front face of the pistol grip.",
+     "build": {"kind": "box", "props": {"Length": 14, "Width": 18, "Height": 22},
+               "placement": {"base": [172, 21, -44]}}},
+    {"n": 7, "id": "d07", "name": "Battery pack", "kind": "part", "objects": ["BatteryPack"],
+     "depends_on": ["d04"], "summary": "A removable battery pack attaches beneath the pistol grip.",
+     "build": {"kind": "box", "props": {"Length": 50, "Width": 50, "Height": 40},
+               "placement": {"base": [154, -25, -129]}}},
+]
+
+
+def steps_for_prompt(prompt):
+    return DRILL_STEPS if "drill" in prompt.lower() else BASE_STEPS
+
+
+def plan(m, brief, steps):
+    plan_steps = []
+    for s in steps:
         t = m.call("create_task", title=f"{s['n']}. {s['name']}", detail=json.dumps(s["build"]), objects=s["objects"],
                    brief=brief)
-        steps.append({k: v for k, v in s.items() if k != "build"} | {"task": t.get("id") or t.get("task_id"),
-                                                                      "assignee": ""})
-    m.call("set_brief_plan", brief_id=brief, plan_json={"version": 2, "title": "Fake post", "steps": steps})
+        plan_steps.append({k: v for k, v in s.items() if k != "build"} | {"task": t.get("id") or t.get("task_id"),
+                                                                           "assignee": ""})
+    title = "Cordless drill cutaway" if "drill" in m.last_prompt.lower() else "Fake post"
+    m.call("set_brief_plan", brief_id=brief, plan_json={"version": 2, "title": title, "steps": plan_steps})
 
 
 def work(m, brief):
@@ -115,26 +155,41 @@ def work(m, brief):
             if "already" not in str(e).lower():
                 continue
         name = step["objects"][0]
-        spec = next(s["build"] for s in STEPS if s["objects"][0] == name)
+        detail = task.get("detail") or "{}"
+        spec = json.loads(detail) if isinstance(detail, str) else detail
         m.call("lock_objects", names=[name])
         m.call("get_inbox")
         m.call("create_primitive", kind=spec["kind"], name=name, props=spec["props"], placement=spec["placement"])
         m.call("point_at", name=name, mode="editing")
         clash = m.call("check_interference")
+        model = m.call("model_status", detail=True)
+        built = next((o for o in model.get("objects", []) if o.get("name") == name), {})
+        if float(built.get("volume") or 0) <= 0:
+            raise RuntimeError(f"{name} missing or has zero volume in model_status")
         m.call("report_result", task_id=tid, status="done",
-               summary=f"{name} built ({spec['kind']} {spec['props']}); interference: {json.dumps(clash)[:200]}",
+               summary=f"{name} built ({spec['kind']} {spec['props']}); volume={built.get('volume')}; "
+                       f"interference: {json.dumps(clash)[:200]}",
                evidence=[name])
         m.call("release_objects", names=[name])
     raise RuntimeError("worker ran out of time")
 
 
 def review(m, brief, rnd):
-    m.call("build_progress", brief_id=brief)
-    m.call("model_status")
-    for s in STEPS:
-        m.call("point_at", name=s["objects"][0], mode="inspecting")
-    m.call("check_interference")
-    m.call("report_review", brief_id=brief, round=rnd, passed=True, findings=[])
+    progress = m.call("build_progress", brief_id=brief)
+    names = [name for s in progress.get("steps", []) for name in s.get("objects", [])]
+    model = m.call("model_status", detail=True)
+    objects = {o.get("name"): o for o in model.get("objects", [])}
+    missing = [name for name in names if name not in objects or float(objects[name].get("volume") or 0) <= 0]
+    for name in names:
+        if name in objects:
+            m.call("point_at", name=name, mode="inspecting")
+    interference = m.call("check_interference", names=names) if names else {"clashes": []}
+    clashes = interference.get("clashes", [])
+    passed = not missing and not clashes
+    findings = ([{"object": name, "problem": "missing or zero-volume shared model object"} for name in missing]
+                + [{"object": c.get("a"), "problem": f"interferes with {c.get('b')} by {c.get('volume')} mm^3"}
+                   for c in clashes])
+    m.call("report_review", brief_id=brief, round=rnd, passed=passed, findings=findings)
 
 
 def main():
@@ -149,7 +204,8 @@ def main():
             m.call("accept_handoff", handoff_id=hid)
             m.call("model_status")
         elif "PLANNER" in prompt:
-            plan(m, brief)
+            m.last_prompt = prompt
+            plan(m, brief, steps_for_prompt(prompt))
         elif "WORKER" in prompt:
             work(m, brief)
         elif "REVIEWER" in prompt:

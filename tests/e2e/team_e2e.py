@@ -1,6 +1,7 @@
 """End-to-end check of CADSwarm's multiplayer on a real local team. Documented in tests/e2e/README.md.
 
-    python tests/e2e/team_e2e.py [--out DIR] [--scenario team|build|remote|all] [--runs N] [--agent claude|codex|opencode|fake]
+    python tests/e2e/team_e2e.py [--out DIR] [--scenario team|build|drill|remote|handoff|all] [--runs N]
+                               [--agent claude|codex|opencode|fake]
 
 What it does, the way a user would:
   * starts a SpacetimeDB on this computer (a private data folder, port 3000) unless one is already there,
@@ -296,6 +297,7 @@ def scenario_build(team, out, agent="claude", request=BUILD_REQUEST, timeout=150
         pass
     return {"ok": all(checks.values()), "checks": checks, "brief": bid, "seconds_to_finish": round(time.time() - t0),
             "timeline": seen, "error": (final or {}).get("error") if final and final["status"] != "ready" else None,
+            "step_objects": step_objects,
             "steps": [{k: s.get(k) for k in ("n", "name", "kind", "status", "owner", "objects", "depends_on",
                                              "started_at", "finished_at")} for s in steps],
             "order_violations": check_order(steps),
@@ -374,7 +376,27 @@ def scenario_handoff(team, out, part="HandoffBlock"):
 
 # ------------------------------------------------------------------------------------------ main
 
-SCENARIOS = {"team": scenario_team, "build": scenario_build, "remote": scenario_remote, "handoff": scenario_handoff}
+DRILL_REQUEST = (
+    "Build a cordless drill cutaway as named subassemblies in dependency order: ChuckAssembly, "
+    "SpindleAssembly, PlanetaryGearTrain, ElectricMotorAssembly, PistolGripHousing, "
+    "TriggerSwitchAssembly, and BatteryPack. Use separate valid solids and keep each component named exactly."
+)
+
+
+def scenario_drill(team, out, agent="claude"):
+    """Exercise the same planner/worker/reviewer path with the named cordless-drill components."""
+    result = scenario_build(team, out, agent, request=DRILL_REQUEST)
+    expected = {"ChuckAssembly", "SpindleAssembly", "PlanetaryGearTrain", "ElectricMotorAssembly",
+                "PistolGripHousing", "TriggerSwitchAssembly", "BatteryPack"}
+    result["checks"]["named_drill_subassemblies"] = expected <= set(result.get("step_objects") or [])
+    result["ok"] = all(result["checks"].values())
+    result["expected_drill_subassemblies"] = sorted(expected)
+    return result
+
+
+SCENARIOS = {"team": scenario_team, "build": scenario_build, "drill": scenario_drill,
+             "remote": scenario_remote, "handoff": scenario_handoff}
+ALL_SCENARIOS = ("team", "build", "remote", "handoff")
 
 
 def main(argv=None):
@@ -385,7 +407,7 @@ def main(argv=None):
     ap.add_argument("--runs", type=int, default=1)
     args = ap.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
-    names = list(SCENARIOS) if args.scenario == "all" else [args.scenario]
+    names = list(ALL_SCENARIOS) if args.scenario == "all" else [args.scenario]
     summary = {"out": args.out, "runs": []}
     for run in range(args.runs):
         out = os.path.join(args.out, f"run{run + 1}")
@@ -398,7 +420,8 @@ def main(argv=None):
             for n in names:
                 t0 = time.time()
                 try:
-                    res[n] = SCENARIOS[n](team, out) if n != "build" else SCENARIOS[n](team, out, args.agent)
+                    res[n] = (SCENARIOS[n](team, out, args.agent) if n in ("build", "drill")
+                              else SCENARIOS[n](team, out))
                 except Exception as e:  # noqa: BLE001
                     import traceback
                     res[n] = {"ok": False, "error": traceback.format_exc()[-1500:]}

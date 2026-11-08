@@ -1,0 +1,336 @@
+{
+  "out": "C:\\Users\\sachc\\AppData\\Local\\Temp\\cadswarm-e2e-234828",
+  "runs": [
+    {
+      "drill": {
+        "ok": true,
+        "checks": {
+          "finished_ready": true,
+          "numbered_step_plan": true,
+          "all_steps_done": true,
+          "built_in_dependency_order": true,
+          "parts_in_shared_model": true,
+          "reviewed": true,
+          "agents_retired": true,
+          "named_drill_subassemblies": true
+        },
+        "brief": "b_2185d5a8",
+        "seconds_to_finish": 27,
+        "timeline": [
+          {
+            "t": 0,
+            "status": "new",
+            "progress": null
+          },
+          {
+            "t": 3,
+            "status": "planning",
+            "progress": null
+          },
+          {
+            "t": 6,
+            "status": "planning",
+            "progress": "0 of 7 done"
+          },
+          {
+            "t": 9,
+            "status": "planning",
+            "progress": "0 of 7 done \u00b7 now: Chuck assembly"
+          },
+          {
+            "t": 12,
+            "status": "building",
+            "progress": "0 of 7 done \u00b7 now: Chuck assembly, Planetary gear train, Electric motor assembly"
+          },
+          {
+            "t": 15,
+            "status": "building",
+            "progress": "5 of 7 done \u00b7 now: Trigger switch assembly, Battery pack"
+          },
+          {
+            "t": 18,
+            "status": "building",
+            "progress": "7 of 7 done"
+          },
+          {
+            "t": 21,
+            "status": "reviewing",
+            "progress": "7 of 7 done"
+          },
+          {
+            "t": 27,
+            "status": "ready",
+            "progress": "7 of 7 done"
+          }
+        ],
+        "error": null,
+        "step_objects": [
+          "ChuckAssembly",
+          "PlanetaryGearTrain",
+          "ElectricMotorAssembly",
+          "PistolGripHousing",
+          "SpindleAssembly",
+          "TriggerSwitchAssembly",
+          "BatteryPack"
+        ],
+        "steps": [
+          {
+            "n": 1,
+            "name": "Chuck assembly",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker1-2185d5a8",
+            "objects": [
+              "ChuckAssembly"
+            ],
+            "depends_on": [],
+            "started_at": 1794124123.331,
+            "finished_at": 1794124127.764
+          },
+          {
+            "n": 2,
+            "name": "Planetary gear train",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker2-2185d5a8",
+            "objects": [
+              "PlanetaryGearTrain"
+            ],
+            "depends_on": [],
+            "started_at": 1794124124.912,
+            "finished_at": 1794124127.321
+          },
+          {
+            "n": 3,
+            "name": "Electric motor assembly",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker3-2185d5a8",
+            "objects": [
+              "ElectricMotorAssembly"
+            ],
+            "depends_on": [],
+            "started_at": 1794124126.419,
+            "finished_at": 1794124128.082
+          },
+          {
+            "n": 4,
+            "name": "Pistol grip housing",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker2-2185d5a8",
+            "objects": [
+              "PistolGripHousing"
+            ],
+            "depends_on": [],
+            "started_at": 1794124127.392,
+            "finished_at": 1794124129.067
+          },
+          {
+            "n": 5,
+            "name": "Spindle assembly",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker1-2185d5a8",
+            "objects": [
+              "SpindleAssembly"
+            ],
+            "depends_on": [
+              "d01",
+              "d02"
+            ],
+            "started_at": 1794124127.839,
+            "finished_at": 1794124129.511
+          },
+          {
+            "n": 6,
+            "name": "Trigger switch assembly",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker2-2185d5a8",
+            "objects": [
+              "TriggerSwitchAssembly"
+            ],
+            "depends_on": [
+              "d04"
+            ],
+            "started_at": 1794124129.139,
+            "finished_at": 1794124130.818
+          },
+          {
+            "n": 7,
+            "name": "Battery pack",
+            "kind": "part",
+            "status": "done",
+            "owner": "worker3-2185d5a8",
+            "objects": [
+              "BatteryPack"
+            ],
+            "depends_on": [
+              "d04"
+            ],
+            "started_at": 1794124129.25,
+            "finished_at": 1794124130.924
+          }
+        ],
+        "order_violations": [],
+        "objects": {
+          "Params": {
+            "volume": 0.0,
+            "bbox": null,
+            "locked_by": null
+          },
+          "ChuckAssembly": {
+            "volume": 42725.66,
+            "bbox": [
+              -0.0,
+              -19.994,
+              -20.0,
+              34.0,
+              19.994,
+              20.0
+            ],
+            "locked_by": null
+          },
+          "PlanetaryGearTrain": {
+            "volume": 62831.853,
+            "bbox": [
+              72.0,
+              -24.992,
+              -25.0,
+              104.0,
+              24.992,
+              25.0
+            ],
+            "locked_by": null
+          },
+          "ElectricMotorAssembly": {
+            "volume": 76026.542,
+            "bbox": [
+              106.0,
+              -21.993,
+              -22.0,
+              156.0,
+              21.993,
+              22.0
+            ],
+            "locked_by": null
+          },
+          "PistolGripHousing": {
+            "volume": 117600.0,
+            "bbox": [
+              158.0,
+              -20.0,
+              -88.0,
+              200.0,
+              20.0,
+              -18.0
+            ],
+            "locked_by": null
+          },
+          "SpindleAssembly": {
+            "volume": 4071.504,
+            "bbox": [
+              35.0,
+              -5.998,
+              -6.0,
+              71.0,
+              5.998,
+              6.0
+            ],
+            "locked_by": null
+          },
+          "TriggerSwitchAssembly": {
+            "volume": 5544.0,
+            "bbox": [
+              172.0,
+              21.0,
+              -44.0,
+              186.0,
+              39.0,
+              -22.0
+            ],
+            "locked_by": null
+          },
+          "BatteryPack": {
+            "volume": 100000.0,
+            "bbox": [
+              154.0,
+              -25.0,
+              -129.0,
+              204.0,
+              25.0,
+              -89.0
+            ],
+            "locked_by": null
+          }
+        },
+        "reviews": [
+          {
+            "round": 1,
+            "passed": true,
+            "findings_json": "[]"
+          }
+        ],
+        "host_log": [
+          "[host] brief b_2185d5a8: starting planner-2185d5a8",
+          "[host] brief b_2185d5a8: starting worker1-2185d5a8",
+          "[host] brief b_2185d5a8: starting worker2-2185d5a8",
+          "[host] brief b_2185d5a8: starting worker3-2185d5a8",
+          "[host] brief b_2185d5a8: starting reviewer-2185d5a8 (round 1)"
+        ],
+        "expected_drill_subassemblies": [
+          "BatteryPack",
+          "ChuckAssembly",
+          "ElectricMotorAssembly",
+          "PistolGripHousing",
+          "PlanetaryGearTrain",
+          "SpindleAssembly",
+          "TriggerSwitchAssembly"
+        ],
+        "seconds": 27.5
+      },
+      "host_log_tail": [
+        "wrote C:\\Users\\sachc\\AppData\\Local\\Temp\\cadswarm-e2e-234828\\run1\\host\\host.json",
+        "[host] connected as Identity(c20056eb7a3eddb35343d429b6c67ba8a072e80adb5c4a1147bf3e20019104d3)",
+        "[host] 4 boards from C:\\Users\\sachc\\Projects\\cadswarm-fc\\boards\\boards.json",
+        "cadswarm-host running on http://127.0.0.1:3000 / cadswarm-e2e-88a7c91f (fence 2)",
+        "[host] brief b_2185d5a8: starting planner-2185d5a8",
+        "[host] brief b_2185d5a8: starting worker1-2185d5a8",
+        "[host] brief b_2185d5a8: starting worker2-2185d5a8",
+        "[host] brief b_2185d5a8: starting worker3-2185d5a8",
+        "[host] op o_c4e846397125 create_primitive -> done",
+        "[host] op o_6f171ebf5fae create_primitive -> done",
+        "[host] op o_81fbb0fb4c19 get_object -> done",
+        "[host] op o_47160c1e404a create_primitive -> done",
+        "[host] op o_16df7027256c get_object -> done",
+        "[host] op o_a8a7009b8c11 interference -> done",
+        "[host] op o_dbac50cb99b5 get_object -> done",
+        "[host] op o_9ac96e109c2e interference -> done",
+        "[host] op o_b7c49be55368 create_primitive -> done",
+        "[host] op o_b5d9aee73fed interference -> done",
+        "[host] op o_c508577f6830 create_primitive -> done",
+        "[host] op o_cdb201f78f80 get_object -> done",
+        "[host] op o_47c74f6a48ba get_object -> done",
+        "[host] op o_71b93e821caa interference -> done",
+        "[host] op o_2a4cc2499588 interference -> done",
+        "[host] op o_2105222104e3 create_primitive -> done",
+        "[host] op o_8946ebe620e0 create_primitive -> done",
+        "[host] op o_dabf5fef8ce5 get_object -> done",
+        "[host] op o_12472f675d2c get_object -> done",
+        "[host] op o_665306da6c81 interference -> done",
+        "[host] op o_0f92a2d2aa7f interference -> done",
+        "[host] brief b_2185d5a8: starting reviewer-2185d5a8 (round 1)",
+        "[host] op o_9163fd4eabea get_object -> done",
+        "[host] op o_948857294658 get_object -> done",
+        "[host] op o_14505321c4ed get_object -> done",
+        "[host] op o_a468e22b3404 get_object -> done",
+        "[host] op o_273260689875 get_object -> done",
+        "[host] op o_c9e5bbe0d123 get_object -> done",
+        "[host] op o_e3fbd326d5e1 get_object -> done",
+        "[host] op o_43c97a75f536 interference -> done",
+        "[host] op o_da1a87974a03 export -> done"
+      ]
+    }
+  ]
+}

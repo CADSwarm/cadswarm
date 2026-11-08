@@ -858,9 +858,31 @@ def q_brep(a):
 
 
 def q_interference(a):
-    names = a.get("names") or [o.Name for o in doc.Objects
-                               if getattr(o, "Visibility", False) and hasattr(o, "Shape")
-                               and not o.Shape.isNull() and o.Shape.Solids]
+    names = a.get("names")
+    if not names:
+        candidates = [o for o in doc.Objects
+                      if getattr(o, "Visibility", False) and hasattr(o, "Shape")
+                      and not o.Shape.isNull() and o.Shape.Solids]
+        candidate_names = {o.Name for o in candidates}
+
+        def owns_solid_descendant(obj):
+            """An assembly aggregate and its visible child solids are one displayed assembly."""
+            pending = list(getattr(obj, "Group", ()) or ())
+            seen = set()
+            while pending:
+                child = pending.pop()
+                if child.Name in seen:
+                    continue
+                seen.add(child.Name)
+                if child.Name in candidate_names:
+                    return True
+                pending.extend(getattr(child, "Group", ()) or ())
+            return False
+
+        # App::Part exposes an aggregate Shape as well as its visible children. Comparing both creates
+        # duplicate parent-child clashes, so default to terminal visible solids. An explicit names list
+        # still allows callers to inspect an aggregate shape intentionally.
+        names = [o.Name for o in candidates if not owns_solid_descendant(o)]
     shapes = [(n, get_obj(n).Shape) for n in names]
     tol = float(a.get("min_volume") or setting(a, "interference_min_vol", 1e-3))
     clashes = []

@@ -1,0 +1,440 @@
+{
+  "build_version": "1.0",
+  "document": "CordlessDriverCutaway",
+  "component_count": 37,
+  "missing_subassemblies": [],
+  "invalid_components": [],
+  "groups": [
+    {
+      "name": "ChuckAndSpindle",
+      "children": [
+        "DriverBit",
+        "BitHex",
+        "ChuckBody",
+        "ChuckSleeve",
+        "ChuckCollar",
+        "OutputSpindle",
+        "SpindleBearing"
+      ],
+      "valid": true
+    },
+    {
+      "name": "PlanetaryGearbox",
+      "children": [
+        "GearcaseRing",
+        "GearStageFront",
+        "GearStageRear",
+        "SunGear",
+        "PlanetGear1",
+        "PlanetGear2",
+        "PlanetGear3",
+        "CarrierPins",
+        "ReductionOutput"
+      ],
+      "valid": true
+    },
+    {
+      "name": "ElectricMotor",
+      "children": [
+        "MotorCan",
+        "MotorEndBellFront",
+        "MotorEndBellRear",
+        "RotorCore",
+        "ArmatureShaft",
+        "CopperWindings",
+        "Commutator",
+        "CoolingFan"
+      ],
+      "valid": true
+    },
+    {
+      "name": "TriggerAndBatteryGrip",
+      "children": [
+        "TriggerSwitch",
+        "TriggerPaddle",
+        "ReverseSelector",
+        "BatteryCells",
+        "BatteryTerminal",
+        "GripInsertNear",
+        "GripInsertFar"
+      ],
+      "valid": true
+    },
+    {
+      "name": "CutawayHousing",
+      "children": [
+        "HousingFarShell",
+        "HousingNearCutaway",
+        "GearboxSupportWeb",
+        "MotorCradle"
+      ],
+      "valid": true
+    },
+    {
+      "name": "Fasteners",
+      "children": [
+        "HousingScrews",
+        "RetainingRings"
+      ],
+      "valid": true
+    }
+  ],
+  "clearance_checks": [
+    {
+      "pair": "SunGear / PlanetGear1",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "PlanetGear1 / CarrierPins",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "SunGear / PlanetGear2",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "PlanetGear2 / CarrierPins",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "SunGear / PlanetGear3",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "PlanetGear3 / CarrierPins",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "PlanetGear1 / PlanetGear2",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "PlanetGear1 / PlanetGear3",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "PlanetGear2 / PlanetGear3",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "MotorCan / RotorCore",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "MotorCan / ArmatureShaft",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "MotorCan / CopperWindings",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "HousingNearCutaway / MotorCan",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "HousingNearCutaway / BatteryCells",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "BatteryCells / BatteryTerminal",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "Battery cell 1 / 2",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "Battery cell 1 / 3",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    },
+    {
+      "pair": "Battery cell 2 / 3",
+      "common_volume_mm3": 0.0,
+      "passed": true
+    }
+  ],
+  "failed_clearances": [],
+  "components": [
+    {
+      "name": "DriverBit",
+      "label": "Driver bit \u00b7 62 mm",
+      "solids": 1,
+      "volume_mm3": 1753.009,
+      "valid": true
+    },
+    {
+      "name": "BitHex",
+      "label": "Hex shank",
+      "solids": 1,
+      "volume_mm3": 504.0,
+      "valid": true
+    },
+    {
+      "name": "ChuckBody",
+      "label": "Keyless chuck body",
+      "solids": 1,
+      "volume_mm3": 16009.556,
+      "valid": true
+    },
+    {
+      "name": "ChuckSleeve",
+      "label": "Grip sleeve",
+      "solids": 1,
+      "volume_mm3": 9676.891,
+      "valid": true
+    },
+    {
+      "name": "ChuckCollar",
+      "label": "Torque collar",
+      "solids": 1,
+      "volume_mm3": 6283.185,
+      "valid": true
+    },
+    {
+      "name": "OutputSpindle",
+      "label": "Output spindle",
+      "solids": 1,
+      "volume_mm3": 6047.566,
+      "valid": true
+    },
+    {
+      "name": "SpindleBearing",
+      "label": "Spindle bearing",
+      "solids": 1,
+      "volume_mm3": 3619.115,
+      "valid": true
+    },
+    {
+      "name": "GearcaseRing",
+      "label": "Gearcase ring",
+      "solids": 1,
+      "volume_mm3": 21136.635,
+      "valid": true
+    },
+    {
+      "name": "GearStageFront",
+      "label": "Front carrier plate",
+      "solids": 1,
+      "volume_mm3": 8015.774,
+      "valid": true
+    },
+    {
+      "name": "GearStageRear",
+      "label": "Rear carrier plate",
+      "solids": 1,
+      "volume_mm3": 8015.774,
+      "valid": true
+    },
+    {
+      "name": "SunGear",
+      "label": "Sun gear \u00b7 12 tooth",
+      "solids": 13,
+      "volume_mm3": 2868.582,
+      "valid": true
+    },
+    {
+      "name": "PlanetGear1",
+      "label": "Planet gear 1",
+      "solids": 11,
+      "volume_mm3": 6037.873,
+      "valid": true
+    },
+    {
+      "name": "PlanetGear2",
+      "label": "Planet gear 2",
+      "solids": 11,
+      "volume_mm3": 6037.873,
+      "valid": true
+    },
+    {
+      "name": "PlanetGear3",
+      "label": "Planet gear 3",
+      "solids": 11,
+      "volume_mm3": 6037.873,
+      "valid": true
+    },
+    {
+      "name": "CarrierPins",
+      "label": "Carrier pins",
+      "solids": 3,
+      "volume_mm3": 1779.021,
+      "valid": true
+    },
+    {
+      "name": "ReductionOutput",
+      "label": "Reduction output hub",
+      "solids": 1,
+      "volume_mm3": 4398.23,
+      "valid": true
+    },
+    {
+      "name": "MotorCan",
+      "label": "Motor stator can \u00b7 hollow",
+      "solids": 1,
+      "volume_mm3": 7260.849,
+      "valid": true
+    },
+    {
+      "name": "MotorEndBellFront",
+      "label": "Front end bell",
+      "solids": 1,
+      "volume_mm3": 5274.734,
+      "valid": true
+    },
+    {
+      "name": "MotorEndBellRear",
+      "label": "Rear end bell",
+      "solids": 1,
+      "volume_mm3": 5274.734,
+      "valid": true
+    },
+    {
+      "name": "RotorCore",
+      "label": "Laminated rotor \u00b7 bored",
+      "solids": 1,
+      "volume_mm3": 15580.289,
+      "valid": true
+    },
+    {
+      "name": "ArmatureShaft",
+      "label": "Armature shaft",
+      "solids": 1,
+      "volume_mm3": 4172.035,
+      "valid": true
+    },
+    {
+      "name": "CopperWindings",
+      "label": "Copper field windings",
+      "solids": 6,
+      "volume_mm3": 4809.464,
+      "valid": true
+    },
+    {
+      "name": "Commutator",
+      "label": "Commutator",
+      "solids": 1,
+      "volume_mm3": 1029.437,
+      "valid": true
+    },
+    {
+      "name": "CoolingFan",
+      "label": "Motor cooling fan",
+      "solids": 5,
+      "volume_mm3": 2720.575,
+      "valid": true
+    },
+    {
+      "name": "TriggerSwitch",
+      "label": "Trigger switch",
+      "solids": 1,
+      "volume_mm3": 6000.0,
+      "valid": true
+    },
+    {
+      "name": "TriggerPaddle",
+      "label": "Trigger paddle",
+      "solids": 1,
+      "volume_mm3": 2880.0,
+      "valid": true
+    },
+    {
+      "name": "ReverseSelector",
+      "label": "Forward / reverse selector",
+      "solids": 1,
+      "volume_mm3": 468.0,
+      "valid": true
+    },
+    {
+      "name": "BatteryCells",
+      "label": "Battery cells \u00d7 3",
+      "solids": 3,
+      "volume_mm3": 16996.268,
+      "valid": true
+    },
+    {
+      "name": "BatteryTerminal",
+      "label": "Battery terminal block",
+      "solids": 1,
+      "volume_mm3": 5859.0,
+      "valid": true
+    },
+    {
+      "name": "GripInsertNear",
+      "label": "Soft grip \u00b7 near side",
+      "solids": 1,
+      "volume_mm3": 7474.0,
+      "valid": true
+    },
+    {
+      "name": "GripInsertFar",
+      "label": "Soft grip \u00b7 far side",
+      "solids": 1,
+      "volume_mm3": 7474.0,
+      "valid": true
+    },
+    {
+      "name": "HousingFarShell",
+      "label": "Housing \u00b7 far side",
+      "solids": 1,
+      "volume_mm3": 108356.5,
+      "valid": true
+    },
+    {
+      "name": "HousingNearCutaway",
+      "label": "Housing \u00b7 near-side cutaway",
+      "solids": 1,
+      "volume_mm3": 37163.1,
+      "valid": true
+    },
+    {
+      "name": "GearboxSupportWeb",
+      "label": "Gearbox support webs",
+      "solids": 2,
+      "volume_mm3": 1800.0,
+      "valid": true
+    },
+    {
+      "name": "MotorCradle",
+      "label": "Motor cradle rails",
+      "solids": 2,
+      "volume_mm3": 1760.0,
+      "valid": true
+    },
+    {
+      "name": "HousingScrews",
+      "label": "Housing fasteners \u00d7 6",
+      "solids": 6,
+      "volume_mm3": 273.696,
+      "valid": true
+    },
+    {
+      "name": "RetainingRings",
+      "label": "Chuck retaining rings",
+      "solids": 2,
+      "volume_mm3": 606.202,
+      "valid": true
+    }
+  ],
+  "ok": true,
+  "output": "C:\\Users\\sachc\\Projects\\cadswarm-fc\\demo\\cordless_driver_cutaway.FCStd",
+  "gui_generated": true,
+  "gui_document_active": true
+}
