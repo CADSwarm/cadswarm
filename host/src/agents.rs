@@ -181,7 +181,7 @@ impl Agent {
         let dir: PathBuf = cfg.data_dir.join("agents").join(name);
         std::fs::create_dir_all(&dir)?;
         // PYTHONSAFEPATH, not -I: -I would also drop PYTHONPATH, which is how a guide-hosted team
-        // (FreeCAD's own Python) finds the package; both keep a checkout in the cwd from being imported.
+        // The configured Python finds the package; this keeps a checkout in the cwd from being imported.
         let run_setup = |ephemeral: bool| {
             let mut args = vec!["-m", "cadswarm.cli", "setup"];
             if ephemeral {
@@ -253,139 +253,53 @@ impl Agent {
 }
 
 /// The closed op vocabulary a plan's `ops` and the narrated op feed use (cadswarm/step_plan.py OP_VOCABULARY).
-pub const OP_VOCABULARY: &str = "Create sketch, Extrude, Cut, Revolve, Fillet, Chamfer, Hole, Pattern, Mirror, Shell, \
-    Insert component, Place standard part, Mate, Set color, Check interference, Check printability, Render, Save part";
+pub const OP_VOCABULARY: &str = "Create sketch, Import STEP/STL, Primitive, Extrude, Revolve, Pocket, Hole, Fillet, Chamfer, \
+    Pattern, Boolean, Set dimensions, Set placement, Check interference, Export STEP/STL";
 
-/// The planner writes no geometry: it turns the brief into a numbered, dependency-ordered step plan
-/// (plan_json version 2), one task per step, the way an engineer would sequence the build.
+/// The planner creates a task plan using only operations supported by the standalone model worker.
 pub fn planner_prompt(brief_id: &str, text: &str, board: &str, params: &[(String, String)]) -> String {
-    let list: Vec<String> = params.iter().map(|(k, v)| format!("{k} = {v}")).collect();
-    let has_board = !params.is_empty() || !(board.is_empty() || board == "none given");
-    let board_block = if has_board {
-        format!(
-            "Board: {board}. The shared Params sheet already holds its measured dimensions:\n{}\n\
-             Where the design houses or mounts this board, build around those Params: the inner size clears the \
-             board by the team's fits (e.g. inner length = pcb_l + 2*gap), a standoff or boss sits at each mounting \
-             hole hole_N_x/hole_N_y (height standoff_h, bore hole_d), each port cutout is centred on its <port>_pos \
-             and <port>_z, and a lid or cover keeps a clearance gap. The board itself is a library step \
-             (insert_component), never modelled. Do not turn the design into an enclosure unless the person asked \
-             for one.\n",
-            if list.is_empty() { "(no Params seeded)".to_string() } else { list.join("\n") }
-        )
-    } else {
-        "Board: none given. Do not assume an enclosure: design exactly what the person asked for.\n".to_string()
-    };
+    let shared = params.iter().map(|(key, value)| format!("{key} = {value}")).collect::<Vec<_>>().join("\n");
     format!(
-        "You are the PLANNER for CadSwarm brief {brief_id}.\n\
-         The person asked: \"{text}\"\n\
-         {board_block}\n\
-         Plan the build as a numbered, dependency-ordered list of steps, the way a mechanical engineer sequences \
-         a build. Do NOT build any geometry yourself.\n\
-         RULES FOR STEPS\n\
-         1. One step = ONE component, ONE library placement, ONE assembly action, or ONE check. Never two parts in \
-            one step. kind is \"part\" (modelled), \"library\" (bought or standard), \"assembly\" (placing and mating \
-            already-built components) or \"check\" (interference, printability).\n\
-         2. Every step has a one-sentence engineering summary that names the component, its function and its key \
-            features, e.g. \"The pitch link: a turnbuckle rod with a spherical rod end at each end; it pushes the \
-            horn as the swashplate tilts.\"\n\
-         3. Order like a machinist and assembler would: the fixed base or frame (the grounded part) first, then each \
-            part after the part it attaches to (along the load path). A library step comes right after the part \
-            that hosts it (holes exist before their screws). An assembly step comes after the components it \
-            places, one per sub-group. A final check step comes last. Every depends_on names EARLIER steps only, \
-            so the numbers n are a valid build order; independent steps share no dependency and can run in parallel.\n\
-         4. Library first: every screw, nut, washer, insert, bearing, pin, magnet, board, motor or other bought part \
-            is a library step. Call recommend_components (or search_components) for it and put the chosen library \
-            id, or {{\"family\", \"size\", \"length\"}} of a standard part, in the step's `component`. Never plan to \
-            model one.\n\
-         5. Shared sizes go in Params (lock Params, set_param, release it) and every detail states geometry in \
-            Params names. Gaps use the team's fits, which are Params too (tol_clearance, tol_slip_fit, tol_press_fit).\n\
-         6. Optional but valuable: `params` (the step's key dimensions in mm), `targets` ({{\"bbox_mm\": [x, y, z], \
-            \"tol_mm\": 0.5, \"holes\": 4, \"min_wall_mm\": 1.2}}), `ports` (named interfaces the part exposes for \
-            mating, e.g. {{\"name\": \"mast_axis\", \"type\": \"axis\"}}). Assembly steps list `mates` over ports: \
-            [{{\"type\": \"fixed\", \"a\": \"Base\"}}, {{\"type\": \"concentric\", \"a\": \"Base.mast_bore\", \"b\": \"Mast.mast_axis\"}}], \
-            types fixed, coincident, concentric, distance, angle, parallel, revolute, slider (distance and angle \
-            need a `value`). Exactly one part is fixed in the whole plan and the mates form a tree (no loops).\n\
-         7. `ops` lists the CAD operations the step will run, each starting with one of: {OP_VOCABULARY} \
-            (e.g. \"Create sketch SK_Mast\", \"Revolve Mast\", \"Set color\", \"Save part\").\n\
-         WHAT TO CALL\n\
-         a. For each step, in order, call create_task with title \"<n>. <name>\" (e.g. \"3. Pitch link\"), \
-            brief = \"{brief_id}\", objects = the exact FreeCAD object names the step creates, and a detail with the \
-            full build instructions: the sketch and features in order, every dimension bound to Params, the colour, \
-            the library component and the hole it needs (hole_size), or for an assembly step which parts it places \
-            and how. Pass assignee only if the person asked for a named teammate to build that step.\n\
-         b. Then call set_brief_plan with brief_id \"{brief_id}\" and plan_json = \
-            {{\"version\": 2, \"title\": \"<short design name>\", \"steps\": [{{\"n\": 1, \"id\": \"s01\", \"name\": ..., \
-            \"kind\": ..., \"summary\": ..., \"task\": <the task id create_task returned>, \"objects\": [...], \
-            \"depends_on\": [], \"ops\": [...], \"assignee\": \"\"}}, ...]}} (library steps add \"component\"). \
-            If it answers bad_plan, fix every listed problem (create a missing task if needed) and call it again.\n\
-         Stop after set_brief_plan succeeds."
+        "You are the CADSwarm planner for brief {brief_id}. Request: {text}. Board reference: {board}.\n\
+         Shared Params:\n{shared}\n\
+         Do not build geometry. Plan CADSwarm-owned parts in feature dependency order, plus an optional final \
+         check step. Only plan supported standalone operations: {OP_VOCABULARY}. Do not plan library insertion, \
+         assemblies, mates, FEA, printability, lattice, or arbitrary scripts. Shared dimensions belong in Params.\n\
+         For every step, call create_task with title \"<n>. <name>\", brief=\"{brief_id}\", exact feature names \
+         in objects, and concise build instructions in detail. Then call set_brief_plan with version 2 JSON: \
+         {{\"version\":2,\"title\":\"<design>\",\"steps\":[{{\"n\":1,\"id\":\"s01\",\"name\":\"<name>\", \
+         \"kind\":\"part\",\"summary\":\"<engineering purpose>\",\"task\":\"<create_task id>\", \
+         \"objects\":[\"<feature names>\"],\"depends_on\":[],\"ops\":[\"<supported op>\"],\"assignee\":\"\"}}]}}. \
+         Every dependency must refer to an earlier step. Use only kinds \"part\" and \"check\". If set_brief_plan \
+         returns bad_plan, fix every listed issue and retry. Stop after the plan succeeds."
     )
 }
 
-/// A worker builds one step at a time, in dependency order, from `next_step`.
+/// A worker builds one supported standalone part/check step at a time, in dependency order.
 pub fn worker_prompt(brief_id: &str, n: usize) -> String {
     format!(
-        "You are WORKER {n} building CadSwarm brief {brief_id} step by step.\n\
-         LOOP:\n\
-         1. Call next_step(brief_id=\"{brief_id}\").\n\
-            - {{\"done\": true}} or {{\"stuck\": true}}: stop.\n\
-            - {{\"wait\": true}}: the remaining steps wait for steps others are building. Call wait_for_changes, \
-              then next_step again.\n\
-            - a step: claim_task its task (skip this if it says you already hold it). If the claim answers \
-              not_ready or the task is taken, go back to 1.\n\
-         2. lock_objects the step's objects. Read get_inbox and do any steer message first.\n\
-         3. Build that ONE step completely before anything else, following its task detail and summary. \
-            point_at the part as you go so the team sees where you are.\n\
-            - kind \"part\": build it the way a CAD engineer would, one feature at a time: sketch or primitive, the \
-              main feature (extrude, revolve, cut), then refinements (holes, fillets, patterns), then set its colour. \
-              Bind every dimension to Params with expressions (e.g. \"Params.pcb_l + 2 * Params.gap\").\n\
-            - kind \"library\": never model it. recommend_components or search_components for the step's \
-              `component`, then insert_component or add_standard_part, placed where the detail says.\n\
-            - kind \"assembly\": place the already-built components with set_placement and the constraint tools, \
-              following the step's mates (the fixed part does not move). Run check_interference afterwards.\n\
-            - kind \"check\": check_interference on all parts and check_printability; fix clashes in parts you hold, \
-              message the owner of any other part.\n\
-            - kind \"fix\": a reviewer's fix task: do exactly what its detail says.\n\
-         4. Verify before you report: the part is a valid closed solid with volume above 0, its size is within the \
-            step's targets (bbox_mm +- tol_mm, hole count, min wall) when it has any, its ports exist, and \
-            check_interference against the parts already built (`built_objects` from next_step) shows no clash. \
-            If verification fails, fix it, at most 3 attempts; from the second attempt try a different construction \
-            instead of repeating the first. Still failing: report_result blocked with what fails. Never report a \
-            failing step as done.\n\
-         5. report_result done with evidence (object names, volumes, bounding boxes, the interference result), \
-            release_objects for parts others need to mate against, then go back to 1."
+        "You are CADSwarm worker {n} for brief {brief_id}. Repeat this workflow until done: call \
+         next_step(brief_id=\"{brief_id}\"). If it returns done or stuck, stop. If it returns wait, call \
+         wait_for_changes then try again. For a step, claim_task its task, read get_inbox, and lock every \
+         existing feature you will change. Build only that step using supported standalone operations: sketches, \
+         primitives, extrude, revolve, pocket, hole, fillet, chamfer, patterns, booleans, dimension edits, placement, \
+         and interference checks. Bind shared dimensions to Params. Do not use library, assembly, mates, FEA, \
+         printability, lattice, or arbitrary scripts. A check step runs check_interference. Verify the solid and \
+         requested dimensions, then report_result with feature names, volume, bounds, and check evidence. Release \
+         locks other workers need, then call next_step again. Never report a failed build as done."
     )
 }
 
 /// The reviewer is an ordinary spawned agent with a reviewer identity: the module lets it read and report
 /// but refuses every write op from a `reviewer` member, so it cannot change the model it judges.
 pub fn review_prompt(brief_id: &str, text: &str, board: &str, bed: [f64; 3], round: u32, style: &str) -> String {
-    let style_check = if style.trim().is_empty() {
-        String::new()
-    } else {
-        format!("\n5. Team design style: the rules below are how this team designs. Each part that breaks one is a \
-                 problem; write its `problem` as \"style: <the rule> (<what the part does instead>)\".\n{style}\n")
-    };
     format!(
-        "You are the design REVIEWER for CadSwarm brief {brief_id} (review round {round}).\n\
-         The person asked: \"{text}\". Board: {board}. Printer bed: {} x {} x {} mm.\n\
-         build_progress(\"{brief_id}\") lists the numbered build steps; name a step by its number and name \
-         (\"step 3, Pitch link\") in every finding.\n\
-         Check, using the tools only (you cannot change geometry), step by step in build order:\n\
-         0. Your arrow shows the team which part you are on: call point_at(\"<part>\") before you check it,\n\
-            and point_at again when you move to the next one. It only moves your pointer, never the model.\n\
-         1. model_status: read the Params sheet (the board's measured dimensions) and the parts.\n\
-         2. check_interference on all parts: any clash between separate parts is a problem.\n\
-         3. Fit: each step's part matches its summary and targets; library steps placed real library parts.\n\
-            Where the design houses a board: the inner size must exceed pcb_l/pcb_w by at least 2*gap; standoffs\n\
-            must sit at hole_N_x/hole_N_y; each port cutout must be centred on its <port>_pos and <port>_z.\n\
-         4. check_printability: every part must fit the bed, be a closed solid, and have no wall under 1.2 mm.\n\
-         {style_check}\
-         For each problem: create_task titled \"Fix step <n>: <what>\", assigned to the part's owner (see locked_by\n\
-         in model_status), with a precise fix, brief set to \"{brief_id}\", and send_message to that owner.\n\
-         Finish by calling report_review(brief_id=\"{brief_id}\", round={round}, passed=<true only if no problems>,\n\
-         findings=[{{\"step\": <n>, \"object\", \"problem\": \"step <n> (<name>): ...\", \"task_id\"}}]).",
-        bed[0], bed[1], bed[2]
+        "You are the read-only reviewer for CADSwarm brief {brief_id}, round {round}. Request: {text}. \
+         Board: {board}. Printer bed reference: {} x {} x {} mm. Review model_status and task results, then use \
+         check_interference for clashes. Check parts against their requested dimensions and report only evidence \
+         available from the standalone model. This alpha has no FEA, printability, library, or assembly validation; \
+         do not claim those were checked. Team design style rules, if any: {style}. Create precise fix tasks and \
+         report_review with passed=true only when there are no supported findings.", bed[0], bed[1], bed[2]
     )
 }
 
@@ -396,7 +310,7 @@ pub fn handoff_prompt(handoff_id: &str, context_json: &str) -> String {
     let from = ctx["from"].as_str().unwrap_or("a teammate");
     let note = ctx["note"].as_str().filter(|n| !n.is_empty()).unwrap_or("(no note: infer it from their recent work)");
     format!(
-        "You are picking up exactly where {from} left off in the shared CadSwarm FreeCAD model.\n\
+        "You are picking up exactly where {from} left off in the shared CADSwarm model.\n\
          FIRST call accept_handoff(handoff_id=\"{handoff_id}\"): it gives you their locked parts and tasks.\n\
          Their note, which is your main instruction: {note}\n\
          Where they left off (JSON: what they were pointing at, the parts they hold, their in-progress tasks, \
@@ -445,8 +359,8 @@ mod tests {
 
     fn cfg(client: &str, command: Vec<String>, data: PathBuf) -> HostConfig {
         HostConfig {
-            mode: "local".into(), uri: "http://127.0.0.1:3000".into(), db: "db".into(), token: "t".into(),
-            data_dir: data, freecad_python: PathBuf::from("freecad"), worker_script: PathBuf::from("w.py"),
+            engine: "standalone".into(), mode: "local".into(), uri: "http://127.0.0.1:3000".into(), db: "db".into(), token: "t".into(),
+            data_dir: data, geometry_python: PathBuf::from("python"), worker_script: PathBuf::from("w.py"), model_path: None,
             web_url: String::new(), cadswarm_python: PathBuf::from("python"), agent_client: client.into(),
             agent_command: command,
         }
@@ -510,40 +424,36 @@ mod tests {
     #[test]
     fn the_planner_writes_a_numbered_step_plan_with_one_task_per_step() {
         let p = planner_prompt("b_1", "a four-blade rotor head", "none given", &[]);
-        assert!(p.contains("\"version\": 2") && p.contains("set_brief_plan") && p.contains("depends_on"));
-        assert!(p.contains("ONE component") && p.contains("\"<n>. <name>\"") && p.contains("brief = \"b_1\""));
-        assert!(p.contains("recommend_components") && p.contains("`component`") && p.contains("library"));
-        assert!(p.contains("fixed base or frame") && p.contains("final check step"));
-        assert!(p.contains("pitch link") && p.contains("bad_plan") && p.contains("Create sketch"));
-        // Not every brief is an enclosure: without a board there is no board guidance.
-        assert!(p.contains("Do not assume an enclosure") && !p.contains("hole_N_x"));
-        assert!(!p.contains("{{") && !p.contains("}}"), "format braces must be unescaped in the output");
+        assert!(p.contains("set_brief_plan") && p.contains("depends_on") && p.contains("\"version\":2"));
+        assert!(p.contains("create_task") && p.contains("<n>. <name>") && p.contains("brief=\"b_1\""));
+        assert!(p.contains("CADSwarm-owned parts") && p.contains("final check step"));
+        assert!(p.contains("bad_plan") && p.contains("Create sketch") && p.contains("STEP/STL"));
+        assert!(p.contains("Do not plan library insertion") && !p.contains("hole_N_x"));
         let params = vec![("pcb_l".to_string(), "69".to_string()), ("hole_1_x".to_string(), "3.5".to_string())];
         let b = planner_prompt("b_2", "a case", "ESP32-S3 DevKitC-1", &params);
-        assert!(b.contains("pcb_l = 69") && b.contains("hole_N_x") && b.contains("tol_clearance"));
-        assert!(b.contains("ESP32-S3") && b.contains("insert_component"));
+        assert!(b.contains("pcb_l = 69") && b.contains("hole_1_x = 3.5"));
+        assert!(b.contains("ESP32-S3"));
     }
 
     #[test]
     fn the_worker_loops_on_next_step_and_builds_one_step_completely() {
         let p = worker_prompt("b_1", 2);
-        assert!(p.contains("WORKER 2") && p.contains("next_step(brief_id=\"b_1\")"));
-        let order = ["next_step", "claim_task", "lock_objects", "Build that ONE step", "check_interference", "report_result"];
+        assert!(p.contains("worker 2") && p.contains("next_step(brief_id=\"b_1\")"));
+        let order = ["next_step", "claim_task", "get_inbox", "lock", "interference", "report_result"];
         let at: Vec<usize> = order.iter().map(|w| p.find(w).unwrap_or_else(|| panic!("missing {w}"))).collect();
         assert!(at.windows(2).all(|w| w[0] < w[1]), "the loop is in order: {at:?}");
-        assert!(p.contains("wait_for_changes") && p.contains("\"done\": true") && p.contains("not_ready"));
-        assert!(p.contains("add_standard_part") && p.contains("set_placement") && p.contains("Params."));
-        assert!(p.contains("3 attempts") && p.contains("different construction") && p.contains("blocked"));
-        assert!(!p.contains("list_tasks"), "workers no longer pick any open task");
+        assert!(p.contains("wait_for_changes") && p.contains("done or stuck") && p.contains("Never report a failed build"));
+        assert!(p.contains("primitives") && p.contains("Params"));
+        assert!(p.contains("Do not use library") && !p.contains("add_standard_part"));
     }
 
     #[test]
     fn the_reviewer_prompt_checks_fit_and_reports_a_verdict() {
         let p = review_prompt("b_x", "a case for my board", "esp32", [220.0, 220.0, 250.0], 2, "");
-        assert!(p.contains("check_interference") && p.contains("check_printability"));
-        assert!(p.contains("report_review") && p.contains("round=2") && p.contains("esp32"));
-        assert!(p.contains("build_progress(\"b_x\")") && p.contains("Fix step <n>") && p.contains("\"step\": <n>"));
-        assert!(!p.contains("Team design style"), "no style rules learned yet");
+        assert!(p.contains("check_interference") && p.contains("no FEA, printability"));
+        assert!(p.contains("report_review") && p.contains("round 2") && p.contains("esp32"));
+        assert!(p.contains("requested dimensions") && p.contains("precise fix tasks"));
+        assert!(p.contains("Team design style rules, if any"));
         let with_style = review_prompt("b_x", "a case", "esp32", [220.0, 220.0, 250.0], 1, "- walls are 2.4 mm");
         assert!(with_style.contains("walls are 2.4 mm"));
     }

@@ -195,7 +195,7 @@ const H = (id: number, name: string, kind: string, client: string, role = 'membe
 export function startMockSwarm(store: Store): { stop: () => void; api: Api } {
   const members: Member[] = [
     H(1, 'you', 'human', 'web'), H(2, 'planner', 'agent', 'claude', 'lead'), H(3, 'worker1', 'agent', 'claude'),
-    H(4, 'worker2', 'agent', 'claude'), H(5, 'reviewer', 'reviewer', 'claude'), H(6, 'maya', 'human', 'freecad'),
+    H(4, 'worker2', 'agent', 'claude'), H(5, 'reviewer', 'reviewer', 'claude'), H(6, 'maya', 'human', 'desktop'),
     H(7, 'jon', 'human', 'phone'),
   ];
   const byName = (n: string) => members.find(m => m.name === n);

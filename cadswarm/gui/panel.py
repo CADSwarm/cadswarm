@@ -127,15 +127,15 @@ def friendly_error(e, hub=""):
     if code == "unreachable" or getattr(e, "status", None) == 0:
         return (f"Couldn't reach your team's server at {hub or 'that address'}.\n"
                 "Check your internet connection, and that whoever is hosting the team has it running "
-                "(CADSwarm ▸ Get started ▸ Reconnect).")
+                "(CADSwarm ▸ Host or join a team).")
     if code in (404, 503) or getattr(e, "status", None) in (404, 503):
         if 503 in (code, getattr(e, "status", None)):
             return ("That project's database is paused on SpacetimeDB, so it can't answer yet.\n"
                     "On spacetimedb.com, open the database and click Start Database, then reconnect. "
-                    "(Or start a new team on this computer: CADSwarm ▸ Get started.)")
+                    "(Or start a new team on this computer: CADSwarm ▸ Host or join a team.)")
         return ("That project's database isn't on this computer's team server any more — it was rebuilt "
                 "from empty.\nYour files are still in the project folder, so start the team again "
-                "(CADSwarm ▸ Get started) or open the project's model.FCStd.")
+                "(CADSwarm ▸ Host or join a team) or open the project's model.FCStd.")
     return {
         "bad_invite": "That invite code has already been used or has expired. Ask your teammate for a new one.",
         "not_member": "Your saved sign-in isn't part of this team any more. Join again with a new invite code.",
@@ -922,10 +922,13 @@ class TeamPanel(QtGui.QDockWidget):
         bl.addWidget(self.banner_text)
         brow = QtGui.QHBoxLayout()
         # A teammate joins from their own FreeCAD with the code; a phone's QR lives in the Remote tab.
-        self.invite_button = action_button("Invite a teammate", "Copy a single-use invite code for a teammate",
+        self.invite_button = action_button("Invite a teammate", "Invite someone on another computer to join this team",
                                            invite_teammates)
+        self.prompt_button = action_button("Prompt team", "Describe a build for the team in the CAD window",
+                                           self.prompt_team)
         self.banner_button = action_button("", "", self.banner_action)
         brow.addWidget(self.invite_button)
+        brow.addWidget(self.prompt_button)
         brow.addWidget(self.banner_button)
         bl.addLayout(brow)
         lay.addWidget(self.banner)
@@ -960,17 +963,19 @@ class TeamPanel(QtGui.QDockWidget):
         self.suggest_lay.setSpacing(8)
         self.suggest_box.hide()
         tl.addWidget(self.suggest_box)
-        head = QtGui.QHBoxLayout()
-        head.addWidget(caption("Who's here"), 1)
-        new = QtGui.QPushButton("＋ New helper")
-        new.setObjectName("quiet")
-        new.setToolTip("Start another AI helper on this computer. You can have as many as you like.")
-        new.clicked.connect(self.new_helper)
-        head.addWidget(new)
-        tl.addLayout(head)
+        tl.addWidget(caption("Teammates"))
         self.people = QtGui.QLabel("")
         self.people.setWordWrap(True)
         tl.addWidget(self.people)
+
+        head = QtGui.QHBoxLayout()
+        head.addWidget(caption("AI agents"), 1)
+        new = QtGui.QPushButton("＋ Connect AI agent")
+        new.setObjectName("quiet")
+        new.setToolTip("Connect Claude Code, Codex, or OpenCode to this team on this computer.")
+        new.clicked.connect(self.new_helper)
+        head.addWidget(new)
+        tl.addLayout(head)
         self.team = QtGui.QTreeWidget()
         self.team.setObjectName("list")
         self.team.setHeaderLabels(["Helper", "Task", "Status"])
@@ -1017,7 +1022,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.chat.verticalScrollBar().rangeChanged.connect(lambda *_: self.chat_grew())
         row = QtGui.QHBoxLayout()
         self.msg = QtGui.QLineEdit()
-        self.msg.setPlaceholderText("@helper what to do, or a message for your team")
+        self.msg.setPlaceholderText("@agent give it a task · @team plan a build · or message your team")
         self.msg.returnPressed.connect(self.send)
         self.msg.textEdited.connect(self.maybe_complete)
         row.addWidget(self.msg, 1)
@@ -1035,8 +1040,8 @@ class TeamPanel(QtGui.QDockWidget):
             self.completer.activated[str].connect(self.insert_mention)
         except (KeyError, TypeError, IndexError):
             self.completer.activated.connect(self.insert_mention)
-        hint_ = QtGui.QLabel("<small style='color:#8b949e'><b>@name</b> gives a helper a task · <b>@team</b> plans "
-                             "and builds a whole request · <b>@all</b> tells every helper · no @ is chat between "
+        hint_ = QtGui.QLabel("<small style='color:#8b949e'><b>@name</b> gives an AI agent a task · <b>@team</b> plans "
+                             "and builds a whole request · <b>@all</b> tells every agent · no @ is chat between "
                              "people</small>")
         hint_.setWordWrap(True)
         tl.addWidget(hint_)
@@ -1204,12 +1209,12 @@ class TeamPanel(QtGui.QDockWidget):
                                  library_ui.show_settings),
                                 ("Learned design style…", "The design rules CADSwarm learned from your team",
                                  style_ui.show_style))),
-                ("AI helpers", (("Set up a helper step by step…", "Connect Claude Code, Codex or OpenCode",
+                ("AI agents", (("Connect an AI agent…", "Connect Claude Code, Codex or OpenCode",
                                  add_helper),
                                 ("Invite a teammate…", "Copy a single-use invite code", invite_teammates),
-                                ("Restart my AI helpers", "Restart the helpers that run on this computer",
+                                ("Restart my AI agents", "Restart the agents that run on this computer",
                                  restart_helpers),
-                                ("Show my AI helpers' logs", "What your helpers wrote while working",
+                                ("Show my AI agents' logs", "What your agents wrote while working",
                                  show_helper_log))),
                 ("Parts", (("Hold the selected parts", "Only you can change them until you let go", self.lock),
                            ("Let go of the selected parts", "Anyone can change them again", self.release),
@@ -1475,7 +1480,7 @@ class TeamPanel(QtGui.QDockWidget):
     BANNERS = {
         # state: (status colour, status word, headline, button)
         "connecting": ("#d29922", "Joining…", "Rejoining your team…", ""),
-        "disconnected": ("#d29922", "Not joined", "You haven't joined a team session yet.", "Get started…"),
+        "disconnected": ("#d29922", "Not joined", "You haven't joined a team session yet.", "Host or join…"),
         "offline": ("#f85149", "Reconnecting", "Lost contact with your team. Retrying automatically…",
                     "Retry now"),
         "ended": ("#f85149", "Signed out", "You're no longer in the team session.", "Join again…"),
@@ -1501,10 +1506,10 @@ class TeamPanel(QtGui.QDockWidget):
             elif stopped:
                 headline = "You stopped hosting the team. Your project is saved."
             detail = ("Join again to keep working with your team." if left else
-                      "Your team's AI helpers are offline until you start it again "
-                      "(Get started ▸ Reconnect)." if stopped else
+                      "Your team's AI agents are offline until you start the team again "
+                      "(CADSwarm ▸ Host or join a team)." if stopped else
                       "Start or join a team to watch the shared model being built and work with your "
-                      "team's AI helpers."
+                      "team's AI agents."
                       + (f"<br><i>{s.state_detail}</i>".replace("\n", " ") if s.state_detail else ""))
         elif s.state in ("offline", "ended"):
             detail = s.state_detail.replace("\n", "<br>")
@@ -1525,6 +1530,7 @@ class TeamPanel(QtGui.QDockWidget):
             self.banner_button.style().unpolish(self.banner_button)
             self.banner_button.style().polish(self.banner_button)
         self.invite_button.setVisible(s.state == "connected")
+        self.prompt_button.setVisible(s.state == "connected")
         if s.state != "connected" and self.remote_url:  # a code minted for the team you just left is dead weight
             self.remote_for = self.remote_url = self.remote_code = ""
             if getattr(self, "remote_page", None) is not None:
@@ -1545,6 +1551,11 @@ class TeamPanel(QtGui.QDockWidget):
             s.request_refresh()
         else:
             connect_dialog()
+
+    def prompt_team(self):
+        """Jump straight to the in-CAD prompt that plans and starts a team build."""
+        self.show_tab(self.build_page)
+        self.build_page.focus_prompt()
 
     def changed(self, name, key):
         """True (and remembers `key`) when list `name` must be rebuilt."""
@@ -1636,7 +1647,7 @@ class TeamPanel(QtGui.QDockWidget):
             return
         self.team.clear()
         if not rows:
-            empty = QtGui.QTreeWidgetItem(["No AI helpers yet. Click ＋ New helper.", "", ""])
+            empty = QtGui.QTreeWidgetItem(["No AI agents yet. Connect an agent to start building as a team.", "", ""])
             empty.setFlags(QtCore.Qt.NoItemFlags)
             empty.setFirstColumnSpanned(True)
             self.team.addTopLevelItem(empty)
@@ -1754,7 +1765,7 @@ class TeamPanel(QtGui.QDockWidget):
             to = ""
             if m["to"] not in ("all", None, me) and not (mine and f"@{m['to']}".lower() in m["body"].lower()):
                 to = f" <span style='color:#8b949e'>to {html.escape(m['to'])}</span>"
-            tag = " <span style='color:#8b949e'>(AI helper)</span>" if helper and not mine else ""
+            tag = " <span style='color:#8b949e'>(AI agent)</span>" if helper and not mine else ""
             status = ""
             c = states.get(m["id"])
             if c:
@@ -1948,7 +1959,7 @@ class TeamPanel(QtGui.QDockWidget):
         if unknown and not helpers and not special:
             people = {p["name"].lower() for p in self.session.model["participants"] if p.get("kind") == "human"}
             if unknown[0].lower() not in people:
-                hint(f"There's no AI helper called @{unknown[0]}. Type @ to pick one from the list.")
+                hint(f"There's no AI agent called @{unknown[0]}. Type @ to pick one from the list.")
                 return
         self.msg.clear()
         what = strip_mentions(text) or text
@@ -2032,7 +2043,9 @@ class TeamPanel(QtGui.QDockWidget):
         (getattr(menu, "exec", None) or menu.exec_)(self.team.viewport().mapToGlobal(pos))
 
     def new_helper(self):
-        if not self.session.ensure_connected("start an AI helper"):
+        if not self.session.connected:
+            from .wizard import run_wizard
+            run_wizard(start="agent")
             return
         dlg = NewHelperDialog(self.session)
         (getattr(dlg, "exec", None) or dlg.exec_)()
@@ -2173,7 +2186,7 @@ class TeamPanel(QtGui.QDockWidget):
         if not p or p.get("kind") == "human":
             helpers = [x["name"] for x in self.session.model["participants"] if takes_instructions(x)]
             if not helpers:
-                hint("No AI helper has joined yet. Click ＋ New helper.")
+                hint("No AI agent has joined yet. Click ＋ Connect AI agent.")
                 return
             helper, ok = QtGui.QInputDialog.getItem(self, "Ask a helper to start", "Which helper should do it?",
                                                     helpers, 0, False)
@@ -2326,8 +2339,8 @@ def chat_line(at, who, colour, after_name, body, status):
             f"<b style='color:{colour}'>{who}</b>{after_name}{status}<br>{text}</p>")
 
 
-CLIENT_WORDS = {"claude": "Claude Code helper", "codex": "Codex helper",
-                "opencode": "OpenCode helper"}
+CLIENT_WORDS = {"claude": "Claude Code agent", "codex": "Codex agent",
+                "opencode": "OpenCode agent"}
 # Readable next to the 3D view, but narrow enough for a laptop screen: the panel scrolls when it's short.
 PANEL_MIN_WIDTH = 300
 PANEL_WIDTH = 520
@@ -2338,7 +2351,7 @@ PANEL_STYLE = theme.PANEL
 SUGGEST_SECONDS = 20     # how often the panel re-reads what AI helpers suggested
 SUGGESTIONS_SHOWN = 4    # cards on the Team tab; any more wait in Tools
 NOTICES_KEPT = 20        # local chat lines kept (a brief handed to the team, and the like)
-TEAM_HANDED = "Handed to the team: it plans the work and starts AI helpers. Watch the Tasks tab."
+TEAM_HANDED = "Handed to the team: it plans the work and starts AI agents. Watch the Tasks tab."
 
 
 def page_layout(page):
@@ -2810,26 +2823,26 @@ def away_tip(p, local, db=""):
     if state == "paused":
         return f"<b>{n}</b> is {html.escape(local.get('detail') or 'paused')}. It carries on within the hour."
     if state == "gone":
-        return f"<b>{n}</b> is no longer on the team. Start a new one with ＋ New helper."
+        return f"<b>{n}</b> is no longer on the team. Connect another AI agent from the Team tab."
     if state == "stopped" and (local or {}).get("off"):
         return (f"<b>{n}</b> is set to run in a terminal. Open it there, or use the Tools tab ▸ Restart my AI "
-                "helpers to run it in the background again.")
+                "agents to run it in the background again.")
     if state == "stopped":
         # The runner process is gone (an upgrade, a crash, or FreeCAD was closed): it will not come back on
         # its own, so this must not say "starting" and leave the person waiting.
         return (f"<b>{n}</b> isn't running: nothing on this computer is watching for your messages. The Tools "
-                "tab ▸ Restart my AI helpers starts it again.")
+                "tab ▸ Restart my AI agents starts it again.")
     if state == "offline":
         return (f"<b>{n}</b> is running here but can't reach the team right now; it keeps retrying. Check this "
                 "computer's connection to the team.")
     if state == "error":
         return (f"<b>{n}</b> is here, but {html.escape((local or {}).get('detail') or 'its last run failed')}. "
-                "If its AI isn't signed in yet, open it once in a terminal; the Tools tab ▸ Show my AI "
-                "helpers' logs has the rest.")
+                "If its CLI isn't signed in yet, open it once in a terminal; the Tools tab ▸ Show my AI "
+                "agents' logs has the rest.")
     if state not in ("starting", "listening", None, ""):
         return (f"<b>{n}</b> is reported as {html.escape(str(state))} on this computer. The Tools tab ▸ Restart "
-                "my AI helpers starts it again.")
-    return f"<b>{n}</b> is starting on this computer. It answers in the Chat in a moment."
+                "my AI agents starts it again.")
+    return f"<b>{n}</b> is starting on this computer. It answers in Team chat in a moment."
 
 
 def local_helper_folders():
@@ -2960,7 +2973,7 @@ class NewHelperDialog(QtGui.QDialog):
         theme.apply(self)
         from ..agent_setup import CLIENTS, agent_ready
         self.session = session
-        self.setWindowTitle("CADSwarm: new AI helper")
+        self.setWindowTitle("Connect an AI agent to this team")
         fit_to_screen(self, 460, 260)
         lay = QtGui.QVBoxLayout(self)
         form = QtGui.QFormLayout()
@@ -2999,7 +3012,7 @@ class NewHelperDialog(QtGui.QDialog):
         row.addStretch(1)
         cancel = QtGui.QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
-        self.ok = QtGui.QPushButton("Start helper")
+        self.ok = QtGui.QPushButton("Connect agent")
         self.ok.setDefault(True)
         self.ok.clicked.connect(self.create)
         row.addWidget(cancel)
@@ -3007,7 +3020,7 @@ class NewHelperDialog(QtGui.QDialog):
         lay.addLayout(row)
         if not installed:
             links = " or ".join(f"<a href='{i['install_url']}'>{i['label']}</a>" for i in CLIENTS.values())
-            self.note.setText(f"No AI helper is installed on this computer yet. Install {links}, sign in to it "
+            self.note.setText(f"No AI agent CLI is installed on this computer yet. Install {links}, sign in to it "
                               "once, then try again.")
             self.note.setOpenExternalLinks(True)
         self.show_models()
@@ -3097,13 +3110,13 @@ def restart_helpers():
         return
     started = start_local_helpers(SESSION, restart=True)
     hint(f"Restarted {', '.join(started)}." if started else
-         "No AI helper is set up on this computer yet. Click ＋ New helper in the CADSwarm panel.")
+         "No AI agent is set up on this computer yet. Click ＋ Connect AI agent in the CADSwarm panel.")
 
 
 def show_helper_log():
     helpers = local_helpers(SESSION)
     if not helpers:
-        hint("No AI helper is set up on this computer yet. Click ＋ New helper in the CADSwarm panel.")
+        hint("No AI agent is set up on this computer yet. Click ＋ Connect AI agent in the CADSwarm panel.")
         return
     from .wizard import open_folder
     for _name, (folder, _cfg) in helpers.items():
@@ -3784,7 +3797,7 @@ def open_previous_team():
     from .wizard import run_wizard
     teams = recent_teams()
     if not teams:
-        hint("You haven't joined a team on this computer yet. Start or join one from CADSwarm ▸ Get started.")
+        hint("You haven't joined a team on this computer yet. Start or join one from CADSwarm ▸ Host or join a team.")
         return
     chosen = projects_ui.pick_team(teams, Gui.getMainWindow())
     if chosen is None:
@@ -3811,9 +3824,10 @@ def invite_teammates():
     QtGui.QApplication.clipboard().setText(code)
     QtGui.QMessageBox.information(
         Gui.getMainWindow(), "Invite teammates",
-        "The invite code is copied. Paste it to one teammate (email, Discord, text...).\n\n"
+        "The invite code is copied. Paste it to one teammate (email, Discord, text...). They can join from their "
+        "own computer, then connect Claude Code, Codex, or OpenCode to the shared team.\n\n"
         f"{code}\n\nThis code works once. Make a new one for each teammate.\n\nThey open FreeCAD, pick "
-        "CADSwarm, click Get started, then \u201cJoin a teammate\u2019s project\u201d.")
+        "CADSwarm, click Host or join a team, then \u201cJoin a teammate\u2019s project\u201d.")
 
 
 STOPPED_HOSTING = "You stopped hosting the team."
@@ -4161,7 +4175,7 @@ class FeaReportDialog(QtGui.QDialog):
     def ask_fix(self):
         helpers = [x["name"] for x in SESSION.model["participants"] if takes_instructions(x)]
         if not helpers:
-            hint("No AI helper has joined yet. Click ＋ New helper.")
+            hint("No AI agent has joined yet. Click ＋ Connect AI agent.")
             return
         helper, ok = QtGui.QInputDialog.getItem(self, "Ask a helper to fix this", "Which helper should fix it?",
                                                 helpers, 0, False)
@@ -4287,11 +4301,12 @@ def release_selected():
 
 
 def register_commands():
-    Gui.addCommand("CadSwarm_Connect", Cmd("Get started…", "Start or join a team, step by step",
+    Gui.addCommand("CadSwarm_Connect", Cmd("Host or join a team…", "Create a team, join with an invite, or reconnect",
                                            lambda: connect_dialog(), False))
-    Gui.addCommand("CadSwarm_AddHelper", Cmd("Add AI helper…", "Connect an AI helper (Claude Code, Codex "
-                                                              "or OpenCode) to your team", add_helper))
-    Gui.addCommand("CadSwarm_Invite", Cmd("Invite…", "Copy a new invite code for a teammate", invite_teammates))
+    Gui.addCommand("CadSwarm_AddHelper", Cmd("Connect AI agent…", "Connect Claude Code, Codex, or OpenCode "
+                                                             "to the team from this computer", add_helper, False))
+    Gui.addCommand("CadSwarm_Invite", Cmd("Invite a teammate…", "Invite someone on another computer "
+                                           "to join this team", invite_teammates))
     Gui.addCommand("CadSwarm_StopHosting", Cmd("Stop hosting", "Stop the team server on this computer",
                                                stop_hosting, False))
     Gui.addCommand("CadSwarm_Panel", Cmd("Team panel", "Show presence, locks, tasks and chat", show_panel, False))
@@ -4314,7 +4329,7 @@ def register_commands():
     Gui.addCommand("CadSwarm_Style", Cmd("Learned design style…", "The design rules CADSwarm learned from how your "
                                                                  "team works; confirm, dismiss or teach one",
                                          style_ui.show_style))
-    Gui.addCommand("CadSwarm_TellHelper", Cmd("Chat with helpers", "Tell an AI helper what to do; it answers in the "
+    Gui.addCommand("CadSwarm_TellHelper", Cmd("Chat with AI agents", "Tell an AI agent what to do; it answers in the "
                                                                    "Chat", lambda: (
         show_panel(), SESSION.panel.msg.setText("@"), SESSION.panel.msg.setFocus(), SESSION.panel.maybe_complete())))
     Gui.addCommand("CadSwarm_Disconnect", Cmd("Leave team", "Leave the session (releases your locks)",

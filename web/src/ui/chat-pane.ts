@@ -64,7 +64,7 @@ function messageRow(i: ChatMessage) {
 interface Row { name: string; label: string; detail: string }
 
 /**
- * Chat: the whole team conversation (not a second inbox) and a composer that mirrors the FreeCAD panel.
+ * Chat: the whole team conversation (not a second inbox) and a composer that mirrors the desktop app.
  * Type @ for helpers, @team for a planned build, @all for every helper, or plain words for the people.
  */
 export function mountChat(el: HTMLElement, store: Store, api: Api | null, picked: () => string[]) {

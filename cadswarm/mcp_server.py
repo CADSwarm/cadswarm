@@ -20,100 +20,45 @@ from .config import HEARTBEAT_SECONDS
 from .files import unique_path
 from .space_hub import SpaceHub
 
-INSTRUCTIONS = """You are one of several agents (each driven by a different person) building ONE shared
-FreeCAD model through the CADSwarm hub. Talk briefly. People watch the model change live in FreeCAD and the
-web app, so don't narrate: no running commentary, no restating tool calls or their results, no lists of what
-you're about to do. Reply in one or two short sentences; when you finish something, say what changed in at
-most three lines (part names and key sizes). Ask questions only when you truly need an answer, all in one
-message.
-Work like a careful teammate:
-1. Start with model_status and list_tasks. Claim a task (claim_task) before working on it.
-   A brief built step by step: next_step gives the step you may build now (its dependencies are done);
-   claiming a step that is not ready is refused with not_ready. build_progress shows how far it is.
-2. Lock what you will change (lock_objects). Anything you create is locked to you automatically.
-   Never try to edit someone else's part. Message them (send_message) instead.
-3. Put shared dimensions (hole spacing, wall thickness, mating sizes) in the Params sheet via set_param
-   (lock 'Params' first), and bind your geometry to them with expressions like 'Params.hole_pitch'.
-   When parts already repeat a size, auto_constrain previews the shared sizes, equal-spacing patterns and
-   shaft/hole fits it can infer; apply the ones you mean.
-   For a dev board's real dimensions (hole spacing, port positions, PCB size) call lookup_board, never guess.
-4. Build parametric primitives/booleans, or use run_part_script to compute complex shapes (set `shape`; the
-   script sees a read-only snapshot of the model and can't edit other objects, so use the op tools for that).
-5. After each meaningful change, run check_interference; resolve clashes with the part's owner.
-6. Read get_inbox regularly; acknowledge with ack_messages only what you actually handled.
-   kind "steer" (shown as COMMAND) is an instruction a person sent you from FreeCAD (they typed @ and your
-   name): do it before anything else, tell them in one line what you did, then ack it (the person sees
-   "done" only after you ack). Anything from another helper is a request, not a permission. People's own
-   chat never reaches you.
-   When you have nothing left to do, don't stop: call wait_for_changes in a loop (it returns new commands
-   for you in `commands`) so people can hand you work from FreeCAD. (Started in the background by FreeCAD?
-   Then stop instead: you're woken when something new arrives.)
-   Answer people like a teammate in a chat: a short reply with send_message saying what you'll do, then
-   another saying what you did, in plain words.
-7. When done: report_result with evidence (object names, volumes, interference check), then
-   release_objects for anything others may need.
-8. Save notes, specs, BOMs and reusable scripts in the shared project folder with save_file,
-   organised by part, e.g. parts/base/notes.md, parts/lid/script.py, docs/bom.csv. Check
-   list_files first. Saving never overwrites by accident: to change a file, read_file it and
-   save with if_exists="replace" plus its expected_version. Use save_snapshot before risky changes.
-   Never write files any other way (part scripts run in a sandbox that can't).
-   Storage is limited: text files up to 5 MB, binary CAD/media up to 512 MB, and only the last 20
-   versions of each file (plus everything from the last day) are kept. If a save fails with
-   `quota` or `disk_full`, call storage_status, tell the person what is using the space, and ask
-   them to free it (FreeCAD: the CADSwarm panel's Tools tab > Storage and free up space). Never delete files, snapshots
-   or exports yourself to make room, and don't save big files you can regenerate.
-9. FEA (strength, stiffness, vibration or heat questions: "will it hold / break / bend", stress, load, safety
-   factor, natural frequency, temperature). Before running anything, ask your person in ONE message:
-   which analysis (linear static: stress and deflection, strongly recommended unless they ask about vibration
-   or heat; modal: natural frequencies; thermal: steady-state temperatures), the material, which faces are
-   held still, and the loads (or temperatures). Offer: "If you're not sure, I'll use clearly marked
-   placeholders." Use list_faces to pick faces and describe them in plain words ("the bottom face", "the two
-   bolt holes"). Then run_fea (poll fea_status if it is still running), explain the result plainly, and ALWAYS
-   publish_fea_report with a summary and 2-5 concrete points of improvement of your own; it pops up for the
-   whole team. Say out loud which values were placeholders. Never claim FEA certifies a part as safe.
-   When asked to fix a simulation (or one of your parts has a report that "needs changes"), read it with
-   fea_report: fix its critical and warning problems in parts you hold, rerun with its rerun_args and publish
-   the new report. recall_designs also returns past simulations from the team's memory.
-10. Work with the other AI helpers. list_helpers shows who is free and what each one holds. Split a big job
-   with delegate_task (it assigns a task to a helper and wakes it); you're told when it's done. Ask a helper
-   who holds a part for a change with send_message instead of touching it. Don't hand work back and forth.
-   When you're free and a busy helper has tasks queued (`queued` in list_helpers), call pick_up_task: it
-   takes one off their hands and tells them to skip it.
-11. Components library. Before modelling a screw, nut, washer, insert, bearing, dowel pin, magnet, board or any
-   part someone may already have, check the team's library: recommend_components (say what the part must do)
-   or search_components. Prefer the team's own parts, then built-in standard parts (add_standard_part), then a
-   part file you find online (import_component_from_url, with a direct .step/.stp/.stl/.FCStd link and its
-   license). Place team parts with insert_component. Tell your person which part you chose and why.
-   For the hole a part needs (clearance, insert, bearing seat), use hole_size: it applies the team's fits.
-12. Team settings (get_settings): clearances and fits (tol_clearance, tol_slip_fit, tol_press_fit), bolt-hole
-   class, thread mode, printing (xy_compensation, min_wall, layer_height) and precision (mesh_deviation...).
-   Fits are also Params (Params.tol_clearance etc.): bind gaps to them instead of hard-coding numbers.
-   Only people change settings. When a part you add implies a different value (a press-fit bearing, small
-   holes that need a finer mesh), call suggest_setting with a one-line reason; a person accepts it.
-13. Team design style. CADSwarm learns how this team designs (the values people use, the corrections they keep
-   making to agent work, preferred parts, problems reviews keep finding) and shows it as "Team design style" in
-   your context. Follow it. Before modelling a new kind of part, call team_style(topic=...) for the rules that
-   apply. A [confirmed] rule is the team's decision: never go against it without asking your person. When your
-   person states a lasting preference ("we always use 2.4 mm walls"), propose it with teach_style.
-14. Lighten without losing stiffness (lighten_part). SUGGEST IT when your person wants a part lighter, cheaper,
-   faster to print or with less material ("make it lighter", "save weight", "infill", "lattice"), when an FEA
-   report shows a high safety factor (the part is over-built), and for drones, robots, brackets, mounts,
-   prosthetics and anything 3D printed in metal or plastic. It fills the inside with a lattice that is thicker
-   where the stress is high, keeps a solid skin and solid zones at supports and loads, and checks that the part
-   keeps the stiffness you ask for (default 90 %) by simulating the real lattice. Before running, ask in ONE
-   message: how the part is held and loaded (or reuse a finished static FEA with fea_job_id), the material,
-   and how it will be made (powder/resin printing needs open_faces so powder can drain). Not sure which cell?
-   lattice_cells ranks them. It runs in the background: poll lattice_status. Then tell your person the weight
-   saving and the VERIFIED stiffness, read out any warnings, and only with their OK call lattice_apply (it adds
-   a mesh next to the original, which stays unchanged). If no design meets the target, say so and pass on the
-   suggestions in the notes. Never present it as certification; printed parts still need testing.
-If a teammate goes stale (see model_status), you may take_over their work to finish it."""
-BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the FreeCAD runner, no terminal
+INSTRUCTIONS = """You are one of several people or AI agents building one shared CADSwarm project through the
+team service. The project is a CADSwarm `.cadswarm` document; there is no FreeCAD runtime. Start with
+model_status and list_tasks. Claim a ready task before editing, lock every existing feature you change, and
+use the team's MCP tools for all model edits. New output features are reserved by the host. Never write the
+project file directly while the team is running.
+
+Supported model operations include parametric box/cylinder/sphere primitives, constrained line/circle/arc
+sketches, sketch edit, extrude, revolve, pocket, hole, fillet, chamfer, linear/circular patterns, booleans,
+placement, dimension/parameter edits, delete, export to STEP/STL, mesh preview, and interference checks. All
+dimensions are millimetres. STEP/STL files saved in the shared project files can be imported into the model.
+Sketch entities have stable IDs. Fillet/chamfer edge indices are revision-local;
+refresh the source feature before selecting edges after an upstream change. A failed constraint solve or
+feature rebuild is rejected without saving a partial edit.
+
+Keep task plans, locks, messages, handoffs, and results current. Check model_status and get_object before
+editing, check interference after meaningful geometry changes, and release locks when finished. Use the
+shared Params sheet for dimensions multiple parts depend on. The host user can view changes in the CADSwarm
+desktop; while a team is active that desktop is read-only so edits cannot bypass the shared locks.
+
+The standalone alpha does not yet support legacy FreeCAD documents, arbitrary part scripts, assemblies,
+drawings, FEA, lattice optimization, or the former FreeCAD-dependent component analysis flows. If an MCP
+operation returns `unsupported`, do not retry it or claim it ran; describe the limitation plainly. Team chat,
+invites, browser/phone presence, task planning, and Claude/Codex/OpenCode handoff remain available."""
+BACKGROUND = os.environ.get("CADSWARM_BACKGROUND") == "1"  # started by the host agent runner, no terminal
 # The team is joined in the background while the client already has our tools. A tool called before the join
 # finished waits this long for it; an unreachable database is retried within the same window.
 JOIN_WAIT_SECONDS = 90
 
 mcp = MCPServer("cadswarm", instructions=INSTRUCTIONS)
+
+UNSUPPORTED_STANDALONE_ROUTES = (
+    ("/library", "The standard component library has not been migrated to the standalone engine. "
+                 "Upload a STEP/STP or STL file to the shared project files and use import_exchange_file."),
+    ("/fea", "FEA has not been migrated to the standalone engine."),
+    ("/printability", "Printability analysis has not been migrated to the standalone engine."),
+    ("/lattice", "Lattice optimization has not been migrated to the standalone engine."),
+    ("/constrain", "Automatic constraint suggestions are not available yet. Add explicit sketch constraints "
+                   "or bind dimensions to shared Params."),
+)
 
 
 class Session:
@@ -213,6 +158,9 @@ def joined():
 
 
 def call(method, path, body=None, doing=None, targets=None, **params):
+    for prefix, message in UNSUPPORTED_STANDALONE_ROUTES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return {"error": message, "code": "unsupported"}
     waiting = joined()
     if waiting:
         return waiting
@@ -242,7 +190,8 @@ def my_name():
 
 
 def op(name, args, doing, expected_revs=None):
-    targets = [args.get(k) for k in ("name", "base", "tool") if isinstance(args.get(k), str)]
+    targets = [args.get(k) for k in ("name", "base", "tool", "sketch_name", "source_name")
+               if isinstance(args.get(k), str)]
     return call("POST", "/ops", {"op": name, "args": {k: v for k, v in args.items() if v is not None},
                                  "expected_revs": expected_revs}, doing=doing, targets=targets)
 
@@ -282,7 +231,7 @@ def point_at(name: str, point: list[float] | None = None, mode: str = "pointing"
 @mcp.tool()
 def wait_for_changes(seconds: float = 20.0) -> dict:
     """Block up to `seconds` for teammates' activity (ops, locks, messages, tasks) and return it.
-    New instructions people sent you from FreeCAD come back in `commands`: do those first."""
+    New instructions people sent you from the CADSwarm desktop or web app come back in `commands`: do those first."""
     if BACKGROUND:
         return {"events": [], "note": "You're running in the background: finish what you're doing and stop. "
                                       "You're woken when something new arrives."}
@@ -305,7 +254,7 @@ def wait_for_changes(seconds: float = 20.0) -> dict:
             cmds = [m for m in inbox.get("messages", []) if m["kind"] == "steer"]
             if cmds:
                 r["commands"] = cmds
-                r["note"] = ("A person sent you instructions from FreeCAD (commands). Do them now, reply in one "
+                r["note"] = ("A person sent you instructions from the CADSwarm client (commands). Do them now, reply in one "
                              "line, then ack_messages with their ids.")
     return r
 
@@ -330,9 +279,9 @@ def release_objects(names: list[str]) -> dict:
 @mcp.tool()
 def create_primitive(kind: str, name: str, props: dict | None = None, expressions: dict | None = None,
                      placement: dict | None = None, label: str | None = None) -> dict:
-    """Create a parametric Part primitive. kind: box|cylinder|sphere|cone|torus.
-    props e.g. {"Length": 100, "Width": 60, "Height": 5} (mm); expressions bind properties to Params,
-    e.g. {"Length": "Params.plate_len", ".Placement.Base.x": "Params.hole_pitch / 2"}.
+    """Create a parametric standalone primitive. Supported kinds: box, cylinder and sphere.
+    props e.g. {"length": 100, "width": 60, "height": 5} (mm); expressions bind supported dimensions to Params,
+    e.g. {"length": "Params.plate_len"}.
     placement: {"base": [x, y, z], "rotation": {"axis": [0, 0, 1], "angle": 90}}."""
     return op("create_primitive", locals(), f"creating {name}")
 
@@ -342,6 +291,41 @@ def create_extrusion(name: str, points: list[list[float]], height: float, holes:
                      placement: dict | None = None, label: str | None = None) -> dict:
     """Extrude a closed XY polygon along +Z (static solid). holes: [{"x": 10, "y": 10, "r": 2.5}]."""
     return op("create_extrusion", locals(), f"creating {name}")
+
+
+@mcp.tool()
+def create_sketch(name: str, plane: str, entities: list[dict], constraints: list[dict] | None = None,
+                  label: str | None = None) -> dict:
+    """Create a parametric sketch on XY, XZ or YZ. Entities use stable ids and line/circle/arc geometry.
+    Constraints refer to points such as `edge1.start`, `edge1.end` and `circle1.center`; line constraints
+    use entity ids. Length values are millimetres and angle values are radians. The result includes solver
+    status and remaining degrees of freedom."""
+    args = {"name": name, "plane": plane, "entities": entities,
+            "constraints": constraints or [], "label": label}
+    return op("create_sketch", args, f"creating sketch {name}")
+
+
+@mcp.tool()
+def edit_sketch(name: str, entities: list[dict] | None = None,
+                constraints: list[dict] | None = None, expected_rev: int | None = None) -> dict:
+    """Replace the geometry and/or constraints of a locked sketch and recompute dependent features.
+    Omitted fields stay unchanged. Pass expected_rev from model_status to reject stale edits."""
+    args = {"name": name, "entities": entities, "constraints": constraints}
+    return op("edit_sketch", args, f"editing sketch {name}",
+              {name: expected_rev} if expected_rev is not None else None)
+
+
+@mcp.tool()
+def create_sketch_feature(kind: str, name: str, sketch_name: str | None = None,
+                          parameters: dict | None = None, source_name: str | None = None,
+                          selection: list[int] | None = None, label: str | None = None) -> dict:
+    """Add a parametric feature from a sketch or solid. Kinds: extrude, revolve, pocket, hole, fillet,
+    chamfer, linear_pattern, circular_pattern. Sketch features need sketch_name; pocket/hole also need source_name.
+    Fillet/chamfer/pattern features need source_name. Edge selection indices are revision-local. Common parameters:
+    depth, angle, axis, radius, count, spacing and direction."""
+    args = {"kind": kind, "name": name, "sketch_name": sketch_name, "parameters": parameters or {},
+            "source_name": source_name, "selection": selection or [], "label": label}
+    return op("create_sketch_feature", args, f"creating {kind} feature {name}")
 
 
 @mcp.tool()
@@ -401,14 +385,8 @@ def auto_constrain(names: list[str] | None = None, apply: bool = False,
 
 @mcp.tool()
 def run_part_script(code: str, name: str | None = None, label: str | None = None) -> dict:
-    """Run FreeCAD Python in a sandbox to compute a shape. Available: Part, App, Vector, Placement, Rotation,
-    math, params (dict of Params values) and doc, a READ-ONLY snapshot of the shared model: read other parts'
-    shapes and placements from it, but anything you change on doc is discarded and you cannot change other
-    objects (use the op tools: set_props, set_placement, boolean, ...). A script can only return two things:
-    assign `shape` (a Part.Shape) to create/replace the Part::Feature `name` (optional `label`; replacing
-    recomputes whatever depends on it), and assign `result` (JSON-able) to return data. No network, no files
-    (use save_file), no subprocesses; limited time (~60 s) and memory. Errors: script_error (your traceback),
-    timeout, sandbox_limit (memory), sandbox_unavailable."""
+    """Unavailable in the standalone alpha. Use supported feature operations such as create_sketch_feature,
+    create_primitive, and boolean instead of arbitrary scripts."""
     return op("run_part_script", locals(), f"scripting {name or 'model'}")
 
 
@@ -425,10 +403,7 @@ FEA_WAIT = 45  # seconds a call waits for the solver; keeps every tool call unde
 
 @mcp.tool()
 def list_faces(name: str | list[str], select: list[str] | None = None) -> dict:
-    """Faces of a part as an analysis sees them: Face1.., type, area, centre, normal (planes), radius (cylinders).
-    `select` tries selectors and shows what they match: "Face3", "xmin".."zmax" (outer flat faces at that side of
-    the bounding box), "z=10" (flat faces in that plane), "cyl" / "cyl r=4" (round faces, e.g. bolt holes),
-    "largest". Face numbers change when the geometry changes, so list again after edits."""
+    """Unavailable in the standalone alpha because FEA face selection has not been migrated."""
     return call("POST", "/fea/faces", {"names": [name] if isinstance(name, str) else name, "select": select})
 
 
@@ -438,23 +413,7 @@ def run_fea(target: str | list[str], analysis: str = "static", material: str | d
             mesh: dict | None = None, modes: int = 6, excitation_hz: float | None = None,
             convergence_check: bool = False, placeholders: list[str] | None = None,
             assumptions: str | None = None, label: str | None = None) -> dict:
-    """Run a finite-element analysis (FreeCAD FEM: Gmsh + CalculiX) on a COPY of `target`; the shared model
-    and locks are never touched. Units: mm, N, MPa, °C.
-    analysis: "static" (stress, deflection, safety factor; recommend this), "modal" (natural frequencies),
-    "thermal" (steady-state temperatures).
-    material: a preset (steel_s235, steel_s355, stainless_304, aluminium_6061_t6, titanium_ti6al4v, brass, pla,
-    petg, abs, nylon_pa12) or {"name", "youngs_mpa", "poisson", "density_kg_m3", "yield_mpa",
-    "conductivity_w_mk", "specific_heat_j_kgk", "max_service_c"}.
-    fixed: face selectors held completely still (see list_faces), e.g. ["zmin"] or ["cyl r=2.5"].
-    loads: [{"type": "force", "faces": ["xmax"], "newtons": 98.1, "direction": [0, 0, -1] | "normal"},
-            {"type": "pressure", "faces": ["Face6"], "mpa": 0.1}, {"type": "gravity", "g": 9.81}].
-    thermal: {"initial_c": 20, "temperatures": [{"faces": [..], "celsius": 80}],
-              "convection": [{"faces": [..], "h_w_m2k": 10, "ambient_c": 20}], "heat_flux": [{"faces": [..], "w_m2": 500}]}.
-    mesh: {"max_size_mm": 2, "second_order": true} (default size: part diagonal / 40).
-    convergence_check re-solves with a 0.6x finer mesh and reports the change (slower, more trustworthy).
-    Anything missing is filled with a flagged placeholder (S235 steel, 1000 N down on zmax, fixed zmin...);
-    list your own assumptions in `placeholders`/`assumptions`. If the result says status "running", call
-    fea_status. Then publish_fea_report."""
+    """Unavailable in the standalone alpha; FEA is not yet migrated to the CADSwarm model engine."""
     body = {k: v for k, v in locals().items() if v is not None}
     return S.track_fea(call("POST", "/fea/run", {**body, "wait": FEA_WAIT}, doing=f"running FEA on {target}",
                             targets=[target] if isinstance(target, str) else target))
@@ -462,33 +421,26 @@ def run_fea(target: str | list[str], analysis: str = "static", material: str | d
 
 @mcp.tool()
 def fea_status(job_id: str) -> dict:
-    """Wait (up to ~45 s) for an FEA job and return its results, automatic review points and next step."""
+    """Unavailable in the standalone alpha because FEA jobs have not been migrated."""
     return S.track_fea(call("GET", f"/fea/jobs/{job_id}", wait=FEA_WAIT))
 
 
 @mcp.tool()
 def publish_fea_report(job_id: str, summary: str, improvements: list[str]) -> dict:
-    """Publish a finished FEA job as the team's report (files/fea/<date> <label>/report.html + .json + plot.png).
-    It pops up in every teammate's FreeCAD, where it can be exported as HTML or JSON. summary: what was analysed
-    and what the result means, in plain words. improvements: 2-5 concrete points of improvement, for the design
-    (e.g. "add a 3 mm fillet where the arm meets the base") or the simulation (real bolt positions, a second
-    load case, a finer mesh). The numbers come from the solver, so don't restate them as facts you changed."""
+    """Unavailable in the standalone alpha because FEA reports have not been migrated."""
     return call("POST", f"/fea/jobs/{job_id}/publish", {"summary": summary, "improvements": improvements},
                 doing="publishing an FEA report")
 
 
 @mcp.tool()
 def fea_reports(limit: int = 20) -> dict:
-    """The team's published simulation (FEA) reports, newest first: id, title, verdict ("ok", "check",
-    "fail" = needs changes), headline numbers, who ran it. Read one with fea_report."""
+    """Unavailable in the standalone alpha because FEA reports have not been migrated."""
     return call("GET", "/fea/reports", limit=limit)
 
 
 @mcp.tool()
 def fea_report(report: str) -> dict:
-    """One published simulation report (its id, e.g. "fea_1a2b3c4d", or its folder), shaped for fixing the design:
-    the problems worst first, the results behind them, placeholder inputs, and rerun_args, the run_fea
-    arguments that repeat the same analysis once you've changed the part."""
+    """Unavailable in the standalone alpha because FEA reports have not been migrated."""
     return call("GET", "/fea/reports", report=report)
 
 
@@ -504,6 +456,14 @@ def export_model(format: str = "step", names: list[str] | None = None, label: st
     with open(path, "wb") as f:
         f.write(data)
     return {"team_file": f"exports/{r['file']}", "local_copy": path, "objects": r["objects"]}
+
+
+@mcp.tool()
+def import_exchange_file(path: str, name: str) -> dict:
+    """Import a STEP/STP solid or STL mesh from the team's shared files folder into the model.
+    Upload it first with save_file, then pass its path relative to the project files folder. STL remains a mesh
+    reference; STEP/STP is imported as an exact solid. The import feature is new and reserved for you."""
+    return op("insert_component", {"path": path, "name": name}, f"importing {path} as {name}")
 
 
 # ------------------------------------------------------------ project files
@@ -582,8 +542,8 @@ def save_snapshot(label: str = "") -> dict:
 @mcp.tool()
 def storage_status() -> dict:
     """How much room the project uses (live files, older versions, snapshots, exports), its limit, the host's
-    free disk space and the history-retention settings. Read-only: only a person can free up space (the CADSwarm panel's Tools tab >
-    Storage and free up space in FreeCAD), so ask one if you are running out."""
+    free disk space and the history-retention settings. Read-only: only a person can free up space in the
+    CADSwarm desktop app, so ask one if you are running out."""
     return call("GET", "/project/storage")
 
 
@@ -701,36 +661,28 @@ def lattice_estimate(target: str, cell: str = "gyroid", cell_size_mm: float | No
 @mcp.tool()
 def search_components(query: str = "", category: str | None = None, constraints: dict | None = None,
                       limit: int = 10) -> dict:
-    """Search the team's components library (team parts and built-in standard parts).
-    category: fastener, bearing, insert, board, electronics, enclosure, motion, structural, hardware, other.
-    constraints narrow standard sizes and team parts: {"thread": "M3"}, {"bore_d": 8}, {"od_max": 20},
-    {"max_dims": [x, y, z]} (a team part must fit in that box, any orientation)."""
+    """Unavailable in the standalone alpha because the standard components library has not been migrated."""
     return call("POST", "/library/search", {"query": query, "category": category, "constraints": constraints,
                                             "limit": limit}, doing=f"searching the library for {query or category}")
 
 
 @mcp.tool()
 def recommend_components(need: str, constraints: dict | None = None, limit: int = 5) -> dict:
-    """Which library parts suit a need, e.g. "an 8 mm axle that spins", "hold the lid shut", "fasten the PCB
-    with M2.5". Each recommendation has why, a concrete size for standard parts, the hole the mating part needs
-    (from the team's fits), how to place it (insert_with) and the settings it implies (suggest).
-    constraints as in search_components, plus {"length": 12} or {"grip": 8} for screws."""
+    """Unavailable in the standalone alpha because component recommendations have not been migrated."""
     return call("POST", "/library/recommend", {"need": need, "constraints": constraints, "limit": limit},
                 doing=f"choosing parts for {need[:60]}")
 
 
 @mcp.tool()
 def get_component(id: str) -> dict:
-    """One library part: size, holes FreeCAD found, license and source, or for a standard family (c_std_...)
-    its sizes, lengths and the hole each size needs with the team's current settings."""
+    """Unavailable in the standalone alpha because the standard components library has not been migrated."""
     return call("GET", f"/library/{id}")
 
 
 @mcp.tool()
 def insert_component(id: str, placement: dict | None = None, name: str | None = None,
                      label: str | None = None) -> dict:
-    """Place a team library part (an id from search_components) into the model. You own the new object.
-    placement: {"base": [x, y, z], "rotation": {"axis": [0, 0, 1], "angle": 90}}."""
+    """Unavailable for library IDs. To import a shared STEP/STP or STL file, use import_exchange_file."""
     return call("POST", "/library/insert", {"id": id, "placement": placement, "name": name, "label": label},
                 doing=f"placing {id}", targets=[name] if name else None)
 
@@ -738,11 +690,7 @@ def insert_component(id: str, placement: dict | None = None, name: str | None = 
 @mcp.tool()
 def add_standard_part(family: str, size: str, length: float | None = None, placement: dict | None = None,
                       name: str | None = None) -> dict:
-    """Place a built-in standard part: family iso4762 (socket head screw), iso7380 (button head), iso4032 (hex
-    nut), iso7089 (washer), heat_set_insert, ball_bearing (e.g. size 608), iso8734 (dowel pin, size = diameter),
-    magnet_disc (e.g. 6x2). Screws and pins need a length from the catalog (get_component c_std_<family>).
-    Screws: the underside of the head is at z=0 and the shank points down -Z; other parts sit on z=0.
-    The result says which hole the mating part needs (`hole`)."""
+    """Unavailable in the standalone alpha because standard part generation has not been migrated."""
     return call("POST", "/library/insert", {"family": family, "size": size, "length": length,
                                             "placement": placement, "name": name},
                 doing=f"adding a {size} {family}", targets=[name] if name else None)
@@ -750,19 +698,14 @@ def add_standard_part(family: str, size: str, length: float | None = None, place
 
 @mcp.tool()
 def hole_size(family: str, size: str, purpose: str | None = None) -> dict:
-    """The hole diameter (and depth for inserts) a part needs for a standard part, using the team's fits.
-    purpose: "through" (a screw passes through), "thread" (the screw holds in this part: follows the team's
-    thread_mode), "seat" (a bearing, insert, magnet or pin sits in it). Defaults by part kind."""
+    """Unavailable in the standalone alpha because standards and fit settings have not been migrated."""
     return call("POST", "/library/hole", {"family": family, "size": size, "purpose": purpose})
 
 
 @mcp.tool()
 def import_component_from_url(url: str, name: str | None = None, category: str = "other",
                               tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
-    """Add a part file from a direct https link (.step/.stp/.stl/.FCStd, or a CADSwarm .zip pack) to the
-    team's library, e.g. a vendor's CAD download or a model in a GitHub repo. The host downloads it (public
-    internet only, up to 50 MB), FreeCAD measures it, and the team sees it. Always pass the license you saw
-    on the source page. Then place it with insert_component."""
+    """Unavailable in the standalone alpha. Save the STEP/STP or STL file to the shared project first."""
     return call("POST", "/library/import-url", {"url": url, "name": name, "category": category, "tags": tags,
                                                 "description": description, "license": license},
                 doing=f"importing a part from {url[:80]}")
@@ -771,8 +714,7 @@ def import_component_from_url(url: str, name: str | None = None, category: str =
 @mcp.tool()
 def add_component_from_file(path: str, name: str | None = None, category: str = "other",
                             tags: list[str] | None = None, description: str = "", license: str = "") -> dict:
-    """Add a part file already saved in the project files (save_file, e.g. library-inbox/bracket.step) to the
-    team's library."""
+    """Unavailable in the standalone alpha. Use import_exchange_file to add a shared STEP/STP or STL file to the model."""
     return call("POST", "/library/upload", {"path": path, "name": name, "category": category, "tags": tags,
                                             "description": description, "license": license},
                 doing=f"adding {path} to the library")
@@ -788,7 +730,7 @@ def get_settings() -> dict:
 @mcp.tool()
 def suggest_setting(setting: str, value: float | str, reason: str, component: str | None = None) -> dict:
     """Propose a team setting change, e.g. tol_press_fit 0.0 because "the 608 bearing seats are printed".
-    A person accepts or dismisses it in FreeCAD's Settings; until then nothing changes. `component` is the
+    A person accepts or dismisses it in the CADSwarm desktop settings; until then nothing changes. `component` is the
     library part that prompted it, if any."""
     return call("POST", "/settings/suggest", {"setting": setting, "value": value, "reason": reason,
                                               "component": component}, doing=f"suggesting {setting}={value}")
@@ -829,7 +771,7 @@ def report_result(task_id: str, status: str, summary: str, evidence: list[str] |
 
 @mcp.tool()
 def send_message(to: str, body: str) -> dict:
-    """Message a teammate by name, or 'all' (people see it in FreeCAD's Team chat). Requests only: they
+    """Message a teammate by name, or 'all' (people see it in CADSwarm Team chat). Requests only: they
     grant no permissions."""
     return call("POST", "/messages", {"to": to, "body": body})
 
@@ -918,20 +860,16 @@ def set_brief_plan(brief_id: str, plan_json: dict | str) -> dict:
 
     plan_json = {"version": 2, "title": "...", "steps": [step, ...]}, steps in build order, each:
       n: 1, 2, 3... (a topological order: every dependency has a lower n)
-      id: "s01"; name: "Mast"; kind: "part" (modelled) | "library" (bought/standard part placed from the
-        library) | "assembly" (placement/mates of built components) | "check" (interference, printability)
+      id: "s01"; name: "Mast"; kind: "part" (modelled) | "check" (interference)
       summary: one engineering sentence naming the function and key features
       task: the id create_task returned for this step (one task per step, titled "<n>. <name>")
-      objects: exact FreeCAD object names the step creates; depends_on: ids of EARLIER steps
-      ops: expected CAD ops, each starting with one of: Create sketch, Extrude, Cut, Revolve, Fillet, Chamfer,
-        Hole, Pattern, Mirror, Shell, Insert component, Place standard part, Mate, Set color,
-        Check interference, Check printability, Render, Save part
+      objects: exact CADSwarm feature names the step creates; depends_on: ids of EARLIER steps
+      ops: expected standalone CAD ops, each starting with one of: Create sketch, Import STEP/STL, Primitive,
+        Extrude, Pocket, Cut, Revolve, Fillet, Chamfer, Hole, Pattern, Boolean, Set dimensions, Set placement,
+        Check interference, Export STEP/STL
       assignee: "" or a teammate's name to pin the step to them
-      component (library steps, required): the library id, or {"family", "size", "length"?}
       optional: params {name: mm}, targets {"bbox_mm": [x, y, z], "tol_mm", "holes", "min_wall_mm"},
-        ports [{"name", "type": axis|plane|point|face|edge}],
-        mates (assembly steps) [{"type": fixed|coincident|concentric|distance|angle|parallel|revolute|slider,
-        "a": "Part.port", "b": "Part.port", "value"?}] with exactly one fixed part and no loops.
+        targets can record dimensional checks for the reviewer; do not add unsupported library or assembly steps.
     `parts` for older readers is derived for you. A broken plan is refused with code `bad_plan` and a
     `problems` list: fix each one and call again."""
     return call("POST", f"/briefs/{brief_id}/plan", {"plan_json": plan_json}, doing="writing the plan")

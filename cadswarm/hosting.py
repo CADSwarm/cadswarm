@@ -1,9 +1,7 @@
-"""Hosting a team from a normal person's computer: no terminal, no Python install.
+"""Host a CADSwarm team without opening a terminal or installing Python manually.
 
-The FreeCAD setup guide uses these to (1) download the agent packages once into a private
-folder with FreeCAD's own pip, (2) download the team server, database program and module once
-into the app folder, (3) create the team's SpacetimeDB database and start `cadswarm-host` as a
-quiet background process that survives closing FreeCAD, and (4) check on it. Stdlib only.
+These helpers provision the agent packages, team server and SpacetimeDB runtime, then create a
+team database and start `cadswarm-host` in the background. Stdlib only.
 """
 import hashlib
 import json
@@ -65,15 +63,27 @@ SPACETIME_ASSETS = {
 
 PROJECT_README = """This folder is a CADSwarm team project.
 
-  model.FCStd   the shared 3D model everyone's AI helpers are building (open a copy in FreeCAD any time)
+  model.FCStd  the shared FreeCAD document and editable feature history
   files/        notes, plans and scripts the team saved; subfolders appear as the project grows
-  exports/      3D files (STEP/STL) saved with "Save as 3D file"; never overwritten
+  exports/      STEP/STL and other CAD exports; never overwritten
   snapshots/    saved versions of the model
   AI helpers/   workspace folders for the AI helpers on this computer (they hold sign-ins: don't share)
   .cadswarm-team/  the team server's own data and older versions of files (the last 20 of each). Don't edit it.
 
-Please don't edit model.FCStd directly while the team is working: your changes would be lost
-the next time an AI helper changes the model. Copy it first, or work through CADSwarm.
+The CADSwarm panel shows the live team model. Use the panel or the team's MCP tools for shared edits so
+locks and change history stay in sync.
+"""
+
+STANDALONE_PROJECT_README = """This folder is a CADSwarm standalone team project.
+
+  model.cadswarm       the shared parametric 3D model
+  model.cadswarm.assets/ imported STEP/STL source files used by the model; keep this beside the model
+  files/        notes, plans and scripts the team saved
+  exports/      3D files (STEP/STL) saved by the team
+  snapshots/    saved versions of the model
+  .cadswarm-team/  the team server's own data and older versions of files
+
+Use the team's MCP tools for shared edits so locks and change history stay in sync.
 """
 
 
@@ -87,7 +97,7 @@ def deps_ready(python):
 
 
 def install_deps(python, on_line=None):
-    """pip-install the agent packages into deps_dir() with FreeCAD's own Python. Raises on failure."""
+    """Install the agent packages into the private CADSwarm dependency folder."""
     target = deps_dir()
     os.makedirs(target, exist_ok=True)
     cmd = [python, "-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--upgrade",
@@ -634,11 +644,9 @@ def ensure_tools(on_line=None):
 
 
 def host_env():
-    """What `cadswarm-host` and `spacetime` run with: this checkout on PYTHONPATH (inside FreeCAD the
-    package lives in the add-on folder, not site-packages) and the CLI's folder on PATH."""
+    """Environment for the host and SpacetimeDB: CADSwarm on PYTHONPATH and the CLI folder on PATH."""
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
-    # A FreeCAD AppImage exports PYTHONHOME for its own Python; passed on, it breaks every other Python the host
-    # starts (agent CLIs' tools, a system Python). FreeCAD's bundled Python finds its home without it.
+    # A caller's PYTHONHOME may belong to a different interpreter and break the host's child processes.
     env.pop("PYTHONHOME", None)
     env["PYTHONPATH"] = os.pathsep.join(p for p in (ROOT, env.get("PYTHONPATH")) if p)
     # A downloaded host lives in the app folder, far from this checkout's board library.
@@ -692,11 +700,11 @@ def _details(r):
     return ("\n\nDetails:\n" + "\n".join(tail)) if tail else ""
 
 
-def write_project_readme(root):
+def write_project_readme(root, engine="freecad"):
     readme = os.path.join(root, "README.txt")
     if not os.path.exists(readme):
         with open(readme, "w", encoding="utf-8") as f:
-            f.write(PROJECT_README)
+            f.write(STANDALONE_PROJECT_README if engine == "standalone" else PROJECT_README)
 
 
 def _publish_as(uri, db, token, wasm):
@@ -754,7 +762,7 @@ def _spawn(argv, lay, log_name, env=None):
     if os.name == "nt":
         kwargs["creationflags"] = NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
-        kwargs["start_new_session"] = True  # keep running after FreeCAD closes
+        kwargs["start_new_session"] = True  # keep running after the desktop closes
     return subprocess.Popen(argv, **kwargs).pid
 
 
@@ -844,7 +852,8 @@ def ensure_local_reachable(mode, data_dir, log=None):
     return new
 
 
-def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="claude", on_log=None):
+def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="claude", on_log=None,
+               engine="freecad", model_path=None):
     """Publish the team's database and start its host in the background.
 
     Returns {"host_pid", "spacetime_pid", "uri", "db", "mode"}. `db` must already be chosen; `init`
@@ -852,8 +861,21 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
     """
     if mode not in ("local", "maincloud"):
         raise ValueError("mode must be 'local' or 'maincloud'")
+    if engine not in ("freecad", "standalone"):
+        raise ValueError("engine must be 'freecad' or 'standalone'")
     if not db:
         raise ValueError("a database name is required")
+    existing_config = host_config(data_dir)
+    if existing_config:
+        configured_engine = existing_config.get("engine", "freecad")
+        if configured_engine != engine:
+            raise RuntimeError(f"This team folder uses the {configured_engine} geometry engine; create or choose a "
+                               f"team folder configured for {engine} instead of changing an existing model in place.")
+        if existing_config.get("db") != db:
+            raise RuntimeError(f"This team folder is already configured for database {existing_config.get('db')!r}.")
+        configured_path = existing_config.get("model_path")
+        if model_path and configured_path and os.path.abspath(configured_path) != os.path.abspath(model_path):
+            raise RuntimeError("This team folder is already linked to a different model document.")
     log = on_log or (lambda _line: None)
     ensure_tools(log)  # one-time downloads into the app folder; no-ops when already available
     host = host_bin()
@@ -863,7 +885,7 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
     lay = project_layout(data_dir)
     for key in ("files", "exports", "snapshots", "internal"):
         os.makedirs(lay[key], exist_ok=True)
-    write_project_readme(lay["root"])
+    write_project_readme(lay["root"], engine=engine)
     env = host_env()
     info = {"host_pid": None, "spacetime_pid": None, "db": db, "mode": mode,
             "uri": LOCAL_URI if mode == "local" else MAINCLOUD_URI}
@@ -884,10 +906,12 @@ def start_team(python, data_dir, mode="maincloud", db=None, web_url="", agent="c
                 _wait_port(LOCAL_PORT, 30, info["spacetime_pid"], data_dir)
         log(f"Creating your team's database “{db}” ({mode})")
         publish(db, mode, data_dir)
-        if not host_config(data_dir):
+        if not existing_config:
             log("Setting up the team server (one time)")
-            argv = [host, "--data", data_dir, "init", "--mode", mode, "--db", db, "--python", python,
+            argv = [host, "--data", data_dir, "init", "--engine", engine, "--mode", mode, "--db", db, "--python", python,
                     "--agent", agent]
+            if model_path:
+                argv += ["--model-path", os.path.abspath(os.path.expanduser(model_path))]
             if web_url:
                 argv += ["--web-url", web_url]
             try:

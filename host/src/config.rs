@@ -7,14 +7,22 @@ use std::process::Command;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostConfig {
+    /// Geometry backend. New teams use FreeCAD; standalone remains available for existing projects.
+    #[serde(default = "default_engine")]
+    pub engine: String,
     /// "local" or "maincloud"
     pub mode: String,
     pub uri: String,
     pub db: String,
     pub token: String,
     pub data_dir: PathBuf,
-    pub freecad_python: PathBuf,
+    /// Python interpreter used to run the selected geometry worker. Reads legacy `freecad_python` keys.
+    #[serde(alias = "freecad_python")]
+    pub geometry_python: PathBuf,
     pub worker_script: PathBuf,
+    /// Optional project document path. New standalone teams can share the user's .cadswarm project directly.
+    #[serde(default)]
+    pub model_path: Option<PathBuf>,
     pub web_url: String,
     /// The Python that has the `cadswarm` package installed (runs `cadswarm setup`).
     pub cadswarm_python: PathBuf,
@@ -40,7 +48,17 @@ impl HostConfig {
     pub fn load(data_dir: &Path) -> Result<Self> {
         let p = Self::path(data_dir);
         let text = std::fs::read_to_string(&p).with_context(|| format!("reading {} (run `cadswarm-host init` first)", p.display()))?;
-        Ok(serde_json::from_str(&text)?)
+        let config: Self = serde_json::from_str(&text)?;
+        let expected_worker = match config.engine.as_str() {
+            "freecad" => "freecad_worker.py",
+            "standalone" => "standalone_worker.py",
+            other => bail!("unsupported geometry engine {other:?}; use `freecad` or `standalone`"),
+        };
+        if config.worker_script.file_name().and_then(|n| n.to_str()) != Some(expected_worker) {
+            bail!("host.json engine {:?} must use {expected_worker}; run `cadswarm-host init` again",
+                  config.engine);
+        }
+        Ok(config)
     }
     pub fn save(&self) -> Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
@@ -48,16 +66,22 @@ impl HostConfig {
         Ok(())
     }
     pub fn doc_path(&self) -> PathBuf {
-        self.data_dir.join("model.FCStd")
+        self.model_path.clone().unwrap_or_else(|| {
+            let filename = if self.engine == "standalone" { "model.cadswarm" } else { "model.FCStd" };
+            self.data_dir.join(filename)
+        })
     }
 }
 
-/// Ask the Python package where FreeCAD and the worker script are, so both languages agree.
+fn default_engine() -> String {
+    "freecad".into()
+}
+
+/// Ask the Python package where the selected worker script is, so both languages agree.
 pub fn python_says(python: &Path, expr: &str) -> Result<PathBuf> {
     let out = Command::new(python)
-        // PYTHONSAFEPATH, not -I: inside FreeCAD the package lives in the add-on folder, which
-        // reaches Python through PYTHONPATH (set by the guide), and -I would drop it for every hosted
-        // team. PYTHONSAFEPATH still keeps a cadswarm checkout in the working directory off sys.path.
+        // PYTHONSAFEPATH, not -I: installed launchers may rely on PYTHONPATH, while this still keeps a
+        // cadswarm checkout in the working directory off sys.path.
         .env("PYTHONSAFEPATH", "1")
         .args(["-c", &format!("import cadswarm.config as c; print({expr})")])
         .output()

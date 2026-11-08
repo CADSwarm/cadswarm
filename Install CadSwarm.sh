@@ -1,6 +1,5 @@
 #!/bin/bash
-# Linux: run me to install CadSwarm into FreeCAD:  bash "Install CadSwarm.sh"
-# (or right-click > "Run as a Program" in your file manager).
+# Linux launcher retained for clarity while the standalone release is Windows-first.
 if [ ! -t 0 ] && [ -z "${CADSWARM_NO_TERMINAL:-}" ]; then
     # Started from a file manager without a terminal: reopen in one so the questions can be answered.
     for term in x-terminal-emulator gnome-terminal konsole xfce4-terminal xterm; do

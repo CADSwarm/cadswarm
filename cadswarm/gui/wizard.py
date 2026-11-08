@@ -70,7 +70,7 @@ def space_error(e):
     where = f" at {e.uri}" if getattr(e, "uri", "") else ""  # which database we couldn't reach, so it is clear
     return {
         "unreachable": f"Couldn't reach your team's database{where}. Check your internet connection and try "
-                       "again. If the database runs on this computer, restart it from Get started ▸ Reconnect.",
+                       "again. If the database runs on this computer, restart it from CADSwarm ▸ Host or join a team.",
         "bad_invite": "That invite code has already been used or has expired. Ask your teammate for a new one.",
         "name_in_use": "That name is already connected to this team. Pick a different one, or if it was your "
                        "own crashed session, wait a minute and try again.",
@@ -361,9 +361,9 @@ class SetupWizard(QtGui.QDialog):
     # --------------------------------------------------------------- welcome
 
     def page_welcome(self):
-        w, lay = self.page("Build 3D designs with your team's AI helpers",
-                           "Each teammate's AI helper (like Claude Code) builds part of one shared 3D model. "
-                           "You'll watch the parts appear here and can chat with the helpers to steer them. "
+        w, lay = self.page("Build 3D designs with your team and AI agents",
+                           "Every teammate can connect Claude Code, Codex, or OpenCode from their own computer. "
+                           "The agents work on one shared model; watch the parts appear and steer them from CADSwarm. "
                            "No CAD experience needed.")
         if self.reason:
             lay.addWidget(label(f"<b>{self.reason}</b>"))
@@ -606,7 +606,7 @@ class SetupWizard(QtGui.QDialog):
     def page_invite(self):
         w, lay = self.page("Your team is ready! 🎉",
                            "Send this invite code to a teammate by email, Discord, text, anything. "
-                           "They paste it into CADSwarm to join.")
+                           "They join from their own computer, then connect Claude Code, Codex, or OpenCode to the team.")
         box = QtGui.QPlainTextEdit()
         box.setObjectName("code")
         box.setReadOnly(True)
@@ -642,8 +642,10 @@ class SetupWizard(QtGui.QDialog):
         row.addWidget(fresh)
         row.addStretch(1)
         lay.addLayout(row)
-        lay.addWidget(label("This code works once. Make a new one for each teammate. They last a day, so "
-                            "there's no rush. You can also make one any time from the team panel (“Invite”).",
+        lay.addWidget(label("This person invite works once and lasts one day. Make a new code for each teammate. "
+                            "They open CADSwarm, click Host or join a team, and choose Join a teammate's project. "
+                            "After joining, connect their AI agent with the toolbar's Connect AI agent button. "
+                            "You can invite more people any time from the Team panel.",
                             "hint"))
         folder = self.p.GetString("HostDataDir")
         if folder:
@@ -661,12 +663,12 @@ class SetupWizard(QtGui.QDialog):
             "• Your team's database runs on SpacetimeDB's cloud, so teammates can join from anywhere.<br>")
             + "• Keep CADSwarm running on this computer while your team works; the host program keeps going "
               "even if you close FreeCAD.<br>"
-              "• If your team ever goes offline, reopen CADSwarm ▸ Get started ▸ Reconnect.", "hint"))
+              "• If your team ever goes offline, open CADSwarm ▸ Host or join a team and choose the saved project.", "hint"))
         lay.addStretch(1)
         return w
 
     def enter_invite(self):
-        self.buttons("Next: connect my AI helper ›", lambda: self.show_page("agent"),
+        self.buttons("Next: connect an AI agent ›", lambda: self.show_page("agent"),
                      "Skip, I'll just watch", self.finish)
 
     # ------------------------------------------------------------------ join
@@ -746,8 +748,9 @@ class SetupWizard(QtGui.QDialog):
     # ----------------------------------------------------------------- agent
 
     def page_agent(self):
-        w, lay = self.page("Connect your AI helper",
-                           "Pick the AI helper you use. It will build parts of the model for your team.")
+        w, lay = self.page("Connect an AI agent",
+                           "Choose Claude Code, Codex, or OpenCode. The agent joins this shared team and is visible "
+                           "to every teammate in the Team panel.")
         self.client_buttons = {}
         group = QtGui.QButtonGroup(w)
         found_any = None
@@ -777,7 +780,7 @@ class SetupWizard(QtGui.QDialog):
         none_card = QtGui.QFrame()
         none_card.setObjectName("card")
         nrow = QtGui.QHBoxLayout(none_card)
-        none_rb = QtGui.QRadioButton("No AI helper: I'll just watch and chat")
+        none_rb = QtGui.QRadioButton("No AI agent now: I'll just watch and chat")
         group.addButton(none_rb)
         none_rb.toggled.connect(lambda on: on and self.pick_client(None))
         nrow.addWidget(none_rb)
@@ -834,13 +837,13 @@ class SetupWizard(QtGui.QDialog):
         if key and not installed:
             self.missing_note.setText(f"Install {CLIENTS[key]['label']} first (click “How to install”), "
                                       "then click “check again”.")
-            self.buttons("Connect my AI helper ›", None)
+            self.buttons("Connect AI agent ›", None)
             self.primary.setEnabled(False)
         elif key:
             self.missing_note.setText("")
-            self.buttons("Connect my AI helper ›", lambda: self.show_page("agent_work"))
+            self.buttons("Connect AI agent ›", lambda: self.show_page("agent_work"))
         else:
-            self.missing_note.setText("You can add an AI helper later from the CADSwarm toolbar (“Add AI helper”).")
+            self.missing_note.setText("Connect an agent later with CADSwarm's toolbar button: Connect AI agent.")
             self.buttons("Finish", self.finish)
 
     def change_folder(self):
@@ -851,7 +854,7 @@ class SetupWizard(QtGui.QDialog):
             self.pick_client(self.client)
 
     def page_agent_work(self):
-        w, lay = self.page("Connecting your AI helper…")
+        w, lay = self.page("Connecting your AI agent…")
         self.agent_steps = Checklist(on_done=lambda: self.show_page("launch"))
         lay.addWidget(self.agent_steps, 1)
         return w
@@ -859,10 +862,10 @@ class SetupWizard(QtGui.QDialog):
     def enter_agent_work(self):
         self.buttons(secondary="Cancel", secondary_action=self.reject)
         label_ = CLIENTS[self.client]["label"]
-        steps = [("Get the helper software (one time, about 2 minutes)",
-                  "Downloading the small programs your AI helper uses to reach the team. Needs internet.",
+        steps = [("Prepare the CADSwarm connection (one time)",
+                  "Downloading the small packages the agent uses to reach the shared team. Needs internet.",
                   self.step_deps, False),
-                 (f"Connect {label_} to your team", None, self.step_write_config, False)]
+                 (f"Connect {label_} to the shared team", None, self.step_write_config, False)]
         if self.client == "codex" and self.trust_box.isChecked():
             steps.append(("Let Codex use this folder", None, lambda log: trust_in_codex(self.folder), False))
         self.agent_steps.set_steps(steps)
@@ -879,7 +882,7 @@ class SetupWizard(QtGui.QDialog):
 
     def step_write_config(self, log):
         if not panel.SESSION.connected:
-            raise RuntimeError("Join your team first (CADSwarm ▸ Get started), then add the AI helper.")
+            raise RuntimeError("Join your team first (CADSwarm ▸ Host or join a team), then connect the AI agent.")
         self.agent_name = f"{slug(self.name)}-{self.client}"
         # An AI helper is always a plain member: the person who started the team leads and hosts it.
         written = write_agent_config(self.folder, self.client, self.agent_invite("member"), self.agent_name,
@@ -895,8 +898,8 @@ class SetupWizard(QtGui.QDialog):
     def page_launch(self):
         label_ = CLIENTS[self.client]["label"]
         w, lay = self.page(f"Starting {label_}",
-                           "Your helper runs in the background. There's no window to keep open and nothing to type "
-                           "or paste: talk to it in the CADSwarm panel's Chat and it answers there.")
+                           "Your agent runs in the background. Talk to it in the CADSwarm panel's Team chat, or "
+                           "use Prompt team to hand the team a larger build request.")
         self.open_status = label("", "hint")
         lay.addWidget(self.open_status)
         if self.client == "claude":
@@ -907,7 +910,7 @@ class SetupWizard(QtGui.QDialog):
             lay.addWidget(label("If Codex has never been signed in on this computer, open it once in a terminal "
                                 "(type <code>codex</code>) and sign in. After that it starts by itself.", "hint"))
         lay.addSpacing(6)
-        self.helper_status = label("⏳ Waiting for your AI helper to join the team…")
+        self.helper_status = label("⏳ Waiting for your AI agent to join the team…")
         lay.addWidget(self.helper_status)
         watch = QtGui.QPushButton("Open it in a terminal instead")
         watch.setToolTip("Only if you'd like to watch it work or type to it directly")
@@ -940,7 +943,7 @@ class SetupWizard(QtGui.QDialog):
                 stop_runner(self.folder)
             open_agent_terminal(self.client, self.folder)
             self.open_status.setText("Opened ✓. Look for a new window on your screen. Restart the background "
-                                     "helper later with the Tools tab ▸ Restart my AI helpers.")
+                                     "agent later with the Tools tab ▸ Restart my AI agents.")
         except Exception as e:
             hint = (f"You can also open a terminal in <b>{self.folder}</b> and type "
                     f"<code>{CLIENTS[self.client]['exe']}</code>.")
@@ -957,7 +960,7 @@ class SetupWizard(QtGui.QDialog):
             self.poll.stop()
             self.helper_status.setObjectName("ok")
             self.helper_status.setStyleSheet("color: #4fb35a; font-weight: 600;")
-            self.helper_status.setText(f"✓ Your AI helper “{self.agent_name}” is on the team. Tell it what to "
+            self.helper_status.setText(f"✓ Your AI agent “{self.agent_name}” is on the team. Tell it what to "
                                        "build in the panel's Chat and watch the parts appear in "
                                        f"“{self.project or 'the live model'}”.")
             self.primary.setText("Done, show me the model")
@@ -989,7 +992,7 @@ class SetupWizard(QtGui.QDialog):
         db = self.p.GetString("Db") or stored.get("db")
         if not db:
             raise RuntimeError("This computer's team settings are incomplete. Start again from CADSwarm ▸ "
-                               "Get started.")
+                               "Host or join a team.")
         if hosting.team_ready(data_dir):
             log("Your team's server is already running.")
             status = hosting.host_status(data_dir)
@@ -1015,7 +1018,7 @@ class SetupWizard(QtGui.QDialog):
         ident = panel.load_identity(db) if db else {}
         if not (db and ident.get("token")):
             raise RuntimeError("Your sign-in for this team isn't on this computer any more. Join again with a "
-                               "new invite code from a teammate (CADSwarm ▸ Get started ▸ Join).")
+                               "new invite code from a teammate (CADSwarm ▸ Host or join a team ▸ Join).")
         try:
             panel.SESSION.connect({"uri": self.p.GetString("Uri"), "db": db}, ident, self.p.GetString("Name"),
                                   timeout=10)
@@ -1047,8 +1050,8 @@ def stop_hosting():
     if not p.GetString("HostDataDir"):
         QtGui.QMessageBox.information(Gui.getMainWindow(), "CADSwarm", "This computer isn't hosting a team.")
         return
-    if not panel.confirm("Stop hosting your team? Everyone's AI helpers will lose their connection until you "
-                         "start it again (CADSwarm ▸ Get started ▸ Reconnect). Your project is saved."):
+    if not panel.confirm("Stop hosting your team? Everyone's AI agents will lose their connection until you "
+                         "start it again (CADSwarm ▸ Host or join a team). Your project is saved."):
         return
     panel.SESSION.disconnect()
     hosting.stop_team({"host_pid": p.GetString("HostPid"), "spacetime_pid": p.GetString("SpacetimePid")})

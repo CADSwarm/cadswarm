@@ -1,6 +1,10 @@
 # CADSwarm as a standalone desktop CAD application
 
-Status: architecture chosen and prototyped (branch `feat/standalone-app`). Build phase waits for review.
+Status: superseded by [independent platform design](2026-11-07-independent-platform.md).
+
+> The original architecture below embedded FreeCAD's GUI and reused its viewport and task dock. The user
+> has since directed that CADSwarm must own its UI and model engine and use FreeCAD only as a reference.
+> Do not continue the FreeCAD embedding build plan below.
 
 ## Goal
 

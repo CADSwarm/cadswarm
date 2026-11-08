@@ -1,4 +1,4 @@
-//! cadswarm-host: runs the shared FreeCAD model for a CadSwarm workspace.
+//! cadswarm-host: runs a shared CADSwarm model using the configured geometry engine.
 
 mod agents;
 mod boards;
@@ -34,6 +34,9 @@ struct Cli {
 enum Cmd {
     /// Write host.json. The module must already be published (scripts/publish-*.ps1).
     Init {
+        /// Geometry engine for the shared model.
+        #[arg(long, default_value = "freecad")]
+        engine: String,
         #[arg(long, default_value = "local")]
         mode: String,
         #[arg(long, default_value = "cadswarm")]
@@ -43,6 +46,9 @@ enum Cmd {
         /// Python with the cadswarm package installed.
         #[arg(long, default_value = "python")]
         python: PathBuf,
+        /// Use this existing project document instead of <data>/model.cadswarm.
+        #[arg(long)]
+        model_path: Option<PathBuf>,
         /// The agent CLI that builds briefs: claude, codex or opencode.
         #[arg(long, default_value = "claude")]
         agent: String,
@@ -66,21 +72,28 @@ enum Cmd {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Init { mode, db, web_url, python, agent } => {
+        Cmd::Init { engine, mode, db, web_url, python, model_path, agent } => {
             if !config::AGENT_CLIENTS.contains(&agent.as_str()) {
                 anyhow::bail!("--agent must be one of {:?}", config::AGENT_CLIENTS);
             }
+            let worker_expr = match engine.as_str() {
+                "freecad" => "c.worker_script()",
+                "standalone" => "c.standalone_worker_script()",
+                _ => anyhow::bail!("--engine must be `freecad` or `standalone`"),
+            };
             let uri = if mode == "maincloud" { "https://maincloud.spacetimedb.com" } else { "http://127.0.0.1:3000" };
             std::fs::create_dir_all(&cli.data)?;
             let cfg = HostConfig {
+                engine: engine.clone(),
                 mode,
                 uri: uri.into(),
                 db,
                 token: config::spacetime_token()?,
-                // Not canonicalize: on Windows that yields a `\\?\` path FreeCAD and Python mishandle.
+                // Keep paths readable by external Python tools on Windows.
                 data_dir: std::path::absolute(&cli.data).unwrap_or(cli.data.clone()),
-                freecad_python: config::python_says(&python, "c.find_freecad_python()")?,
-                worker_script: config::python_says(&python, "c.worker_script()")?,
+                geometry_python: python.clone(),
+                worker_script: config::python_says(&python, worker_expr)?,
+                model_path: model_path.map(|path| std::path::absolute(&path).unwrap_or(path)),
                 web_url,
                 cadswarm_python: python,
                 agent_client: agent,
@@ -123,18 +136,19 @@ fn run(cfg: &HostConfig) -> Result<()> {
     let _instance = guard::InstanceGuard::acquire(&cfg.data_dir)?;
     let space = space::Space::connect(cfg)?;
     let mut worker = worker::WorkerDriver::new(
-        cfg.freecad_python.clone(),
+        cfg.geometry_python.clone(),
         cfg.worker_script.clone(),
         cfg.doc_path(),
         Duration::from_secs(120),
     );
-    // Optional: an old cadswarm package without helper.py still runs FreeCAD ops; file and
+    // Optional: an old cadswarm package without helper.py still runs geometry ops; file and
     // knowledge ops then complete as failed with `helper_unavailable`.
     let mut helper = match config::python_says(&cfg.cadswarm_python, "c.helper_script()") {
-        Ok(script) => Some(
-            worker::WorkerDriver::new(cfg.cadswarm_python.clone(), script, cfg.data_dir.clone(), Duration::from_secs(120))
-                .with_env("CADSWARM_FREECAD_PYTHON", cfg.freecad_python.to_string_lossy()),
-        ),
+        Ok(script) => {
+            Some(worker::WorkerDriver::new(
+                cfg.cadswarm_python.clone(), script, cfg.data_dir.clone(), Duration::from_secs(120),
+            ))
+        }
         Err(e) => {
             let why = e.to_string();
             eprintln!("[host] helper unavailable: {}", why.trim().lines().last().unwrap_or(""));

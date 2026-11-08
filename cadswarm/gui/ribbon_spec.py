@@ -161,10 +161,11 @@ RIBBON = [
         ("Review", [
             B("ai_review", "Review", "review", "Ask the reviewer to check the model", action="ai_review")]),
         ("Team", [
-            B("team_chat", "Chat", "chat", "Tell an AI helper what to do; it answers in the chat",
+            B("team_chat", "Chat", "chat", "Tell an AI agent what to do; it answers in team chat",
               ["CadSwarm_TellHelper"]),
             B("team_tasks", "Tasks", "tasks", "Every task and who has it", action="tasks"),
-            B("team_helper", "New\nHelper", "helper", "Connect another AI helper", ["CadSwarm_AddHelper"]),
+            B("team_helper", "Connect\nAgent", "helper", "Connect Claude Code, Codex, or OpenCode to this team",
+              ["CadSwarm_AddHelper"]),
             B("team_invite", "Invite", "invite", "Copy an invite code for a teammate", ["CadSwarm_Invite"]),
             B("team_lock", "Hold", "lock", "Only you can change the selected parts", ["CadSwarm_Lock"]),
             B("team_release", "Let Go", "release", "Anyone can change the selected parts again",

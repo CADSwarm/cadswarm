@@ -1,4 +1,4 @@
-"""FreeCAD as a geometry engine behind CADSwarm's own window.
+"""Historical FreeCAD embedding prototype; no longer used by the standalone app.
 
 CADSwarm is its own Qt application. FreeCAD's GUI library is started inside our process (FreeCAD's bundled
 Python runs us), its main window is created but never shown, and we adopt the two FreeCAD widgets we need:
@@ -16,7 +16,11 @@ Two traps this module exists to avoid:
 * FreeCAD's first-run page and Start page open as MDI tabs. They are switched off in our own parameter file before
   the GUI starts; FreeCAD's settings for CADSwarm live in CADSwarm's app folder, never the user's FreeCAD profile.
 
-Stdlib only at import time, so tests and the launcher can import it without FreeCAD.
+The current launcher is ``cadswarm.app.desktop`` and its model engine is
+``cadswarm.app.standalone_engine``. This file remains only as a behavior reference for the
+FreeCAD-based worker and its tests; do not use it for new desktop features.
+
+Stdlib only at import time, so the historical prototype's tests can import it without FreeCAD.
 """
 import glob
 import os

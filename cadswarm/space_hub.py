@@ -976,9 +976,13 @@ class SpaceHub(LibraryRoutes):
         task_ids = {t["id"] for t in self._rows("v_task") if t.get("brief") == bid}
         try:
             plan = step_plan.check(body.get("plan_json"), task_ids=task_ids)
+            standalone_issues = step_plan.standalone_problems(plan)
+            if standalone_issues:
+                raise step_plan.PlanError(standalone_issues)
         except step_plan.PlanError as e:
             raise HubRequestError(400, {
-                "error": f"The plan was not saved. Fix these and call set_brief_plan again: {'; '.join(e.problems)}",
+                "error": f"The plan was not saved. This standalone team supports only CADSwarm part and check steps. "
+                         f"Fix these and call set_brief_plan again: {'; '.join(e.problems)}",
                 "code": "bad_plan", "problems": e.problems})
         old = _json(b.get("plan_json") or "", {})
         if isinstance(old, dict) and old.get("sources") and "sources" not in plan:

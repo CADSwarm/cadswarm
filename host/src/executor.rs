@@ -1,4 +1,4 @@
-//! Runs one queued op in FreeCAD (or the Python helper) and writes the outcome back to SpacetimeDB.
+//! Runs one queued op in the configured CAD geometry worker (or the Python helper) and writes the outcome back.
 
 use crate::commit::{completion, touched};
 use crate::config::HostConfig;
@@ -11,20 +11,18 @@ use sha2::{Digest, Sha256};
 
 const MAX_INLINE_ARTIFACT: usize = 5 * 1024 * 1024;
 
-/// Ops the Python helper answers (plan 00 op kinds). Everything else goes to the FreeCAD worker.
+/// Project files, engineering simulations, the component library, design memory, and board knowledge
+/// are handled by the Python helper; geometry and document operations stay in the FreeCAD worker.
 pub const HELPER_KINDS: &[&str] = &[
     "list_files", "read_file", "file_history", "save_file", "make_folder", "move_file", "delete_file",
     "restore_file", "snapshot", "storage_status", "prune_storage", "lookup_board", "recall_designs",
-    "board_spec", "index_design",
+    "board_spec", "index_design", "fea_run", "fea_status", "fea_publish", "fea_reports",
+    "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status",
+    "lattice_list", "lattice_cancel", "lattice_result",
+    "library_add", "library_import_url", "library_import_pack", "library_delete", "library_search",
+    "library_recommend", "library_get", "library_export_pack", "standard_parts", "suggest_settings",
     // The team's learned design style (cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style", "teach_style", "resolve_style", "learn_style",
-    "fea_run", "fea_status", "fea_publish", "fea_reports",
-    // Lighten without losing stiffness (cadswarm/lattice_jobs.py).
-    "lattice_capabilities", "lattice_cells", "lattice_estimate", "lattice_start", "lattice_status", "lattice_list",
-    "lattice_cancel", "lattice_result",
-    "library_add", "library_import_url", "library_import_pack", "library_update", "library_delete",
-    "library_search", "library_recommend", "library_get", "library_export_pack", "standard_parts",
-    "suggest_settings",
 ];
 pub const MAX_INLINE_RESULT: usize = 32 * 1024;
 /// The artifact holding the team-wide style block that every agent's per-turn context shows.
@@ -67,9 +65,8 @@ pub fn take_mesh(analysis: &mut Value) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(b64.as_str()?).ok()
 }
 
-/// A library write's helper reply names parts FreeCAD should measure (`_analyze`). Measure each in the
-/// worker, let the helper merge the results (`library_finalize`), and return the reply carrying the
-/// finished rows. Preview meshes are collected for put_component_preview once the op is complete.
+/// A library write's helper reply can request worker-side geometry analysis (`_analyze`). This path is
+/// retained for the legacy worker and is unreachable from the standalone helper allowlist.
 pub fn analyze_library_parts(
     worker: &mut WorkerDriver,
     helper: &mut WorkerDriver,
@@ -307,13 +304,13 @@ pub fn refresh(space: &Space, worker: &mut WorkerDriver, names: &[String]) -> Re
     Ok(objects)
 }
 
-/// Tell the FreeCAD guide on this computer that hosting is up (plan 03 Task 6 reads it).
+/// Tell the local CADSwarm client that hosting is up.
 pub fn write_status(cfg: &HostConfig, worker: &mut WorkerDriver) -> Result<()> {
     let ping = worker.call("ping", &json!({}), None).unwrap_or(json!({}));
     let dir = cfg.data_dir.join(".cadswarm-team");
     std::fs::create_dir_all(&dir)?;
     let status = json!({"pid": std::process::id(), "uri": cfg.uri, "db": cfg.db, "ready": true,
-                        "freecad": ping["result"]["freecad"], "script_sandbox": ping["result"]["script_sandbox"]});
+                        "engine": ping["result"]["engine"]});
     std::fs::write(dir.join("host-status.json"), serde_json::to_string_pretty(&status)?)?;
     Ok(())
 }

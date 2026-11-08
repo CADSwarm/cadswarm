@@ -1,6 +1,5 @@
 #!/bin/bash
-# macOS: double-click me to install CadSwarm into FreeCAD. (If macOS says it can't be opened,
-# right-click this file, choose Open, then Open again.)
+# macOS launcher retained for clarity while the standalone release is Windows-first.
 bash "$(dirname "$0")/install/install.sh" "$@"
 status=$?
 if [ $status -ne 0 ]; then echo; echo "CadSwarm setup did not finish. Please read the message above."; fi

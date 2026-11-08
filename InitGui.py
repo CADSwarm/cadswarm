@@ -33,7 +33,7 @@ QtCore.QTimer.singleShot(2000, open_on_start)
 
 class CadSwarmWorkbench(Gui.Workbench):
     MenuText = "CADSwarm"
-    ToolTip = "Build one 3D model together with your team's AI helpers"
+    ToolTip = "Build one shared 3D model with teammates and their Claude Code, Codex, or OpenCode agents"
     Icon = """
 /* XPM */
 static char * icon_xpm[] = {
@@ -58,7 +58,8 @@ static char * icon_xpm[] = {
         workspace.register_command()
         # While the workbench is active its commands sit in the command ribbon (workspace.py), which hides the
         # stock toolbars; with the professional look off this toolbar opens the panel and the setup guide.
-        self.appendToolbar("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_ProLook"])
+        self.appendToolbar("CADSwarm", ["CadSwarm_Connect", "CadSwarm_AddHelper", "CadSwarm_Panel",
+                                        "CadSwarm_ProLook"])
         self.appendMenu("CADSwarm", ["CadSwarm_Connect", "CadSwarm_Panel", "CadSwarm_NewTask", "CadSwarm_TellHelper",
                                      "CadSwarm_EditPart", "CadSwarm_Library", "CadSwarm_Settings", "CadSwarm_Style",
                                      "CadSwarm_Constrain", "CadSwarm_AddHelper", "CadSwarm_Invite", "Separator", "CadSwarm_Interference",

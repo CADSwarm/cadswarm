@@ -12,12 +12,13 @@ pub const INVITE_MAX_TTL_SECS: u64 = 86_400;
 pub const MUTATING: &[&str] = &[
     "create_primitive", "create_extrusion", "boolean", "set_property", "set_props",
     "set_expression", "set_placement", "delete", "set_param", "run_part_script",
+    "create_sketch", "edit_sketch", "create_sketch_feature",
     // Components library: place a library part or a generated standard part into the model.
     "insert_component", "insert_standard_part",
     // A mesh from project files (a lattice from lighten_part) as a Mesh::Feature.
     "insert_mesh",
 ];
-/// Read-only ops the host answers: FreeCAD queries, board knowledge lookups, project file reads.
+/// Read-only ops the host answers: model queries, board knowledge lookups, and project file reads.
 pub const QUERIES: &[&str] = &[
     "get_object", "interference", "export", "dependents", "printability",
     "lookup_board", "recall_designs",
@@ -33,7 +34,7 @@ pub const QUERIES: &[&str] = &[
     // The team's learned design style (the host's helper, cadswarm/style_memory.py).
     "style_context", "style_inbox", "list_style",
 ];
-/// Project-file writes (files/ and snapshots/ on the host): no FreeCAD object locks, but they change things.
+/// Project-file writes (files/ and snapshots/ on the host): no model object locks, but they change things.
 pub const FILE_WRITES: &[&str] = &[
     "save_file", "make_folder", "move_file", "delete_file", "restore_file", "snapshot", "prune_storage",
     // FEA: a job copies the model and later writes its report into files/fea/.
@@ -95,8 +96,9 @@ fn str_arg(args: &Value, key: &str) -> Option<String> {
 /// Argument names an op must hold locks on, beyond the object it creates (core.py TARGETS).
 fn targets(kind: &str) -> &'static [&'static str] {
     match kind {
-        "set_property" | "set_props" | "set_expression" | "set_placement" | "delete" => &["name"],
+        "set_property" | "set_props" | "set_expression" | "set_placement" | "delete" | "edit_sketch" => &["name"],
         "boolean" => &["base", "tool"],
+        "create_sketch_feature" => &["sketch_name", "source_name"],
         _ => &[],
     }
 }
@@ -105,6 +107,7 @@ fn targets(kind: &str) -> &'static [&'static str] {
 pub fn created_name(kind: &str, args: &Value) -> Option<String> {
     match kind {
         "create_primitive" | "create_extrusion" | "boolean" | "run_part_script" | "insert_component"
+        | "create_sketch" | "create_sketch_feature"
         | "insert_standard_part" | "insert_mesh" => str_arg(args, "name"),
         _ => None,
     }
@@ -656,7 +659,7 @@ mod tests {
     fn file_writes_and_geometry_changes_count_as_writes_but_reads_do_not() {
         assert!(is_write("save_file") && is_write("set_props") && is_write("snapshot"));
         assert!(!is_write("read_file") && !is_write("recall_designs") && !is_write("interference"));
-        assert!(!is_mutating("save_file"), "file writes need no FreeCAD locks");
+        assert!(!is_mutating("save_file"), "file writes need no model locks");
     }
 
     #[test]

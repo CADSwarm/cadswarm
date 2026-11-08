@@ -189,7 +189,7 @@ class BuildPage(QtGui.QWidget):
         lay.setContentsMargins(0, 10, 0, 0)
         lay.setSpacing(8)
 
-        cap = QtGui.QLabel("DESCRIBE WHAT TO BUILD")
+        cap = QtGui.QLabel("PROMPT THE TEAM")
         cap.setObjectName("caption")
         lay.addWidget(cap)
         self.caption_labels = [cap]
@@ -205,9 +205,9 @@ class BuildPage(QtGui.QWidget):
         self.hint.setSizePolicy(QtGui.QSizePolicy.Ignored, QtGui.QSizePolicy.Preferred)
         self.hint.setStyleSheet("font-size: 11px;")
         row.addWidget(self.hint, 1)
-        self.build_button = QtGui.QPushButton("Build it")
+        self.build_button = QtGui.QPushButton("Plan & build")
         self.build_button.setObjectName("primary")
-        self.build_button.setToolTip("Hand the request to the team: it plans the steps and starts AI helpers")
+        self.build_button.setToolTip("Plan the request with your team and start AI agents on ready steps")
         self.build_button.clicked.connect(self.submit)
         row.addWidget(self.build_button)
         lay.addLayout(row)
@@ -421,7 +421,7 @@ class BuildPage(QtGui.QWidget):
             self.prompt.clear()
             self.brief_id = None
             self.session.notice(P.TEAM_HANDED)
-            P.say("Handed to the team: it plans the steps, then helpers build them one at a time.")
+            P.say("Handed to the team: it plans the steps, then AI agents build them one at a time.")
         self.session.act_async("POST", "/briefs", {"text": text}, purpose="hand the request to the team", done=done)
 
     def steps(self, states=None):
@@ -455,7 +455,7 @@ class BuildPage(QtGui.QWidget):
         step = ready[0]
         helpers = self._helpers(free_only=True) or self._helpers()
         if not helpers:
-            _p().hint("No AI helper has joined yet. Add one from the AI Build tab (New Helper).")
+            _p().hint("No AI agent has joined yet. Connect one from the Team tab.")
             return
         who = step["who"] if step["who"] in helpers else helpers[0]
         self._command(who, f"Build step {step['n']} now: “{step['name']}” (task {step['task']}). Claim it with "

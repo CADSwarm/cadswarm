@@ -57,11 +57,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - run: bash -n install/install.sh && bash -n "Install CadSwarm.command" && bash -n "Install CadSwarm.sh"
-      # With no FreeCAD on the runner the installer must stop with its friendly message (--yes: never
-      # downloads FreeCAD).
+      # The alpha is Windows-first and must not try to start the former FreeCAD installer.
       - run: |
           set +e
           out=$(HOME="$RUNNER_TEMP" XDG_DATA_HOME="$RUNNER_TEMP/share" bash install/install.sh --yes --no-launch </dev/null)
           code=$?
           echo "$out"
-          [ "$code" -eq 1 ] && echo "$out" | grep -q "FreeCAD isn't installed"
+          [ "$code" -eq 1 ] && echo "$out" | grep -q "supports Windows only"

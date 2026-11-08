@@ -1,4 +1,9 @@
-"""CADSwarm's main window: the regions, and the Context that feature packages register into.
+"""Historical FreeCAD-based shell prototype; the current desktop launch uses ``desktop.py``.
+
+The shell below remains as a behavior reference for layout concepts from the FreeCAD workbench.
+It is not imported by the standalone launcher.
+
+CADSwarm's main window: the regions, and the Context that feature packages register into.
 
     +------------------------------------------------------------------+
     | title bar (chrome package)                                        |  menuWidget: top stack

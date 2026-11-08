@@ -1,6 +1,6 @@
 // Step plans (Brief.plan_json version 2, with the version-1 `parts` fallback) and the progress every client
 // shows: "3 of 20 done · now: Pitch link", per-step state, and the CAD ops each step ran with their timings.
-// Pure: no DOM, no network. Mirrors cadswarm/step_plan.py so the app and FreeCAD read a plan the same way.
+// Pure: no DOM, no network. Mirrors cadswarm/step_plan.py so the app and host read a plan the same way.
 // Contract: docs/superpowers/specs/2026-11-06-step-build-and-pro-ui-design.md ("Progress model").
 import type { Op, Task } from './store';
 

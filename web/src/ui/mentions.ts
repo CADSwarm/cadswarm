@@ -1,4 +1,4 @@
-// @mentions in the web chat: the same rules as cadswarm/mentions.py, so a phone and FreeCAD send the
+// @mentions in the web chat: the same rules as cadswarm/mentions.py, so a phone and the desktop send the
 // same thing. Stdlib-free and DOM-free: unit-tested.
 const MENTION = /(?<![\w@])@([A-Za-z0-9_-]+)/g;
 const SPECIAL_ALL = new Set(['all', 'helpers', 'everyone']);

@@ -107,7 +107,7 @@ export function toRecommendations(v: Record<string, unknown> | null): Recommenda
 
 export interface Api {
   fence(): number;
-  /** Run one host op (a FreeCAD edit or query) and wait for it. `locks` are taken first and released after,
+  /** Run one host op (a CADSwarm model edit or query) and wait for it. `locks` are taken first and released after,
    * for edits of existing objects (set_placement, boolean…). Resolves the parsed result, or null on failure
    * (the failure is already shown as a notice). */
   runOp(kind: string, args: Record<string, unknown>, locks?: string[]): Promise<Record<string, unknown> | null>;
@@ -150,13 +150,13 @@ export interface Api {
   downloadArtifact(hash: string, filename: string): Promise<void>;
   /** Place a library part in the model; resolves true once the host has built it. */
   placeComponent(req: PlaceRequest): Promise<boolean>;
-  /** Upload a part file (STEP, FCStd, STL) to the team library. */
+  /** Upload a part file (STEP or STL) to the team library. */
   addComponent(filename: string, bytes: Uint8Array, meta: PartMeta): Promise<boolean>;
   importComponentUrl(url: string, meta: PartMeta): Promise<boolean>;
   setSetting(setting: string, num: number, text: string): Promise<void>;
   resetSetting(setting: string): Promise<void>;
   resolveSuggestion(id: string, accept: boolean): Promise<void>;
-  /** A library part's preview STL (null until FreeCAD has measured it). */
+  /** A library part's preview STL (null until the host has measured it). */
   componentPreview(id: string): Promise<Uint8Array | null>;
   /** The team's project folder: files and folders under files/ on the host. */
   listFiles(folder?: string): Promise<ProjectListing | null>;
@@ -505,7 +505,7 @@ export function connect(store: Store, uri: string, db: string, token: string | n
           ...(req.length ? { length: req.length } : {}) })
         : runOp('insert_component', { component: req.component, name: req.name, label: req.label }),
       addComponent: async (filename, bytes, meta) => {
-        if (bytes.length > 20 * 1024 * 1024) { report(new Error('Parts uploaded from here can be at most 20 MB; add bigger ones from FreeCAD.')); return false; }
+        if (bytes.length > 20 * 1024 * 1024) { report(new Error('Parts uploaded from here can be at most 20 MB; add bigger files from the host computer.')); return false; }
         const { toBase64 } = await import('./ui/library-data');
         return runOp('library_add', { base64: toBase64(bytes), filename, ...meta }, 120000);
       },

@@ -1,9 +1,9 @@
 """Connecting an AI helper (Claude Code, Codex or OpenCode) in a project folder to a team.
 
-Shared by `cadswarm setup` and the FreeCAD setup wizard, so stdlib only. Agent
+Shared by `cadswarm setup` and the CADSwarm desktop team setup, so stdlib only. Agent
 configs launch `cadswarm_launch.py` by absolute path with an explicit Python
-(FreeCAD's bundled one for hobbyists), so nothing has to be on PATH or pip-installed
-into the agent's environment.
+(the CADSwarm managed runtime when launched from the desktop), so nothing has to be on PATH or
+pip-installed into the agent's environment.
 """
 import glob
 import json
@@ -37,55 +37,35 @@ CLIENTS = {
 OPENCODE_SCHEMA = "https://opencode.ai/config.json"
 
 AGENT_DOC = """{begin}
-## CADSwarm: you are part of a team building one shared FreeCAD model
+## CADSwarm: you are part of a team building one shared CADSwarm model
 
-Your teammates' AI helpers are editing the same live model right now.
-All CAD work goes through the `cadswarm` MCP tools: never edit .FCStd files directly.
-Your human may be new to CAD: keep dimensions in mm and use plain words.
-If the `cadswarm` tools aren't there yet, they are still starting: wait about 5 seconds and look again
-(for up to a minute). Never start the CADSwarm server yourself and never read CADSwarm's code or config
-to find them: a second copy takes your seat on the team and can drop you from it.
+The shared document is CADSwarm's .cadswarm feature history. All model edits go through the cadswarm
+MCP tools; never write the project file directly. The host desktop shows the shared model and is read-only
+while the team is active. Keep dimensions in millimetres and explain choices in plain words.
 
-**Be brief.** People watch the model change live, so don't narrate: no running commentary, no restating tool
-calls or their results, no plans-before-acting. Reply in one or two short sentences; when you finish, say what
-changed in at most three lines. A person's COMMAND from FreeCAD or the web app gets a one-line answer.
+Start with model_status, list_tasks, and get_inbox. Claim a ready task before working. Lock existing
+features before changing them; ask their owners before editing work they hold. New output features are
+reserved by the host. Use next_step for a planned brief, then claim_task for its task. If no step is ready,
+call wait_for_changes.
 
-- Start every task with `model_status` and `list_tasks`; `claim_task` before working.
-- `lock_objects` before changing anything; what you create is yours. Ask owners, don't override them.
-- Shared dimensions go in the `Params` sheet (`set_param`); bind geometry with expressions
-  like `Params.hole_pitch` so a change propagates to every part that depends on it. When parts
-  already repeat a size, `auto_constrain` previews the shared sizes, equal-spacing patterns and
-  shaft/hole fits it can infer; apply the ones you mean.
-- After changes run `check_interference`; coordinate clashes with the other part's owner.
-- Read `get_inbox` often, `ack_messages` what you handled. A person's message to you (kind `steer`, sent
-  from FreeCAD's chat) comes first. Answer like a teammate in a chat: a short `send_message` saying what
-  you'll do, do it, then a short one saying what you did. People's own chat never reaches you. When you
-  run out of work, keep calling `wait_for_changes` so new messages and tasks reach you. (If FreeCAD started you in the background, stop instead: you're woken when needed.)
-- Work with the other AI helpers: `list_helpers` shows who is free; `delegate_task` hands one of them a
-  task and wakes it; ask the helper who holds a part (`send_message`) instead of touching it. Free while
-  a busy helper has tasks queued? `pick_up_task` takes one off its hands (it's told to skip it).
-- Save notes, specs, BOMs and reusable scripts with `save_file` in the shared project folder, in
-  subfolders per part (`parts/base/notes.md`, `parts/lid/hinge.py`, `docs/bom.csv`). Check
-  `list_files` first. Saving never overwrites by accident: to change a file, `read_file` it and
-  save with `if_exists="replace"` and its `expected_version`. `save_snapshot` before risky changes.
-  Never write files any other way; your own working folder is not shared with the team.
-- Finish with `report_result` (evidence: object names, volumes, interference) and release locks.
-- Strength, stiffness, vibration or heat questions ("will it hold?", stress, load, natural frequency,
-  temperature) are FEA tasks. First ask, in one message: which analysis (recommend **linear static**
-  unless it's about vibration or heat), the material, which faces are held still, and the loads or
-  temperatures; offer to use clearly marked placeholders if your human doesn't know. Pick faces with
-  `list_faces`, run `run_fea` (then `fea_status` while it runs), explain the result plainly, and always
-  `publish_fea_report` with a summary and 2-5 points of improvement: it pops up for the whole team.
-- Real parts come from the team's components library: `recommend_components` (say what the part must
-  do) or `search_components`, then `insert_component` for team parts or `add_standard_part` for standard
-  screws, nuts, washers, heat-set inserts, bearings, dowel pins and magnets. A part file you find online
-  goes in with `import_component_from_url` (a direct .step/.stl link, plus its license). Size mating holes
-  with `hole_size`, and bind gaps to the team's fits (`Params.tol_clearance`, `Params.tol_press_fit`...).
-- Team settings (`get_settings`: fits, bolt-hole class, thread mode, printing, mesh precision) are chosen by
-  people. When a part implies a different value, `suggest_setting` with a one-line reason; never assume it.
-- Team context (who holds what, what changed) is injected before each of your prompts. If you don't see a
-  team block at the start of a turn (Codex only shows it once its human has trusted the hook), call
-  `model_status` and `get_inbox` yourself first.
+The standalone model supports constrained line, circle, and arc sketches; box, cylinder, and sphere primitives;
+extrude, revolve, pocket, hole, fillet, chamfer, linear and circular patterns, booleans, placement, dimensions,
+shared Params expressions, interference checks, and STEP/STL exchange. A failed sketch solve or feature rebuild
+is rejected without saving a partial edit. Edge indices can change after upstream edits, so refresh the source
+feature before selecting edges.
+
+Use set_param for shared dimensions and bind feature dimensions with expressions such as Params.hole_pitch.
+Check check_interference after meaningful geometry changes. Finish each task with report_result, include
+feature names and available geometry evidence, and release locks when others need those features.
+
+Read get_inbox often. Handle a person's steer message before other work, reply briefly, and call ack_messages
+for messages you handled. Coordinate through team chat and handoffs when another agent owns a feature. Keep notes
+and shared project files in the team file tools, not by editing model files directly.
+
+Legacy FreeCAD documents, arbitrary part scripts, assemblies, drawings, FEA, printability validation, lattice
+optimization, and the former FreeCAD-dependent component analysis are not supported in this standalone alpha.
+If a tool returns unsupported, do not retry it or claim it ran. Team chat, invites, presence, locks, task
+planning, and Claude/Codex/OpenCode collaboration remain available.
 {end}
 """
 
@@ -287,9 +267,7 @@ def setup_opencode(project, python):
         "command": [python, LAUNCHER, "mcp"],
         "environment": {"CADSWARM_PROJECT": project},
         "enabled": True,
-        # FEA and lattice calls block while the solver runs (~75 s), and a heavy part script (a lofted
-        # 3-blade propeller) can take minutes of FreeCAD time: 120 s cut those off mid-build, so the helper
-        # saw a timeout, retried, and gave up. 5 minutes leaves room without hiding a real hang.
+        # Keep the timeout long enough for future long-running CAD analysis calls without hiding a real hang.
         "timeout": 300000,
     }
     cfg.setdefault("$schema", OPENCODE_SCHEMA)

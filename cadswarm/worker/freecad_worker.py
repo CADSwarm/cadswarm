@@ -54,6 +54,7 @@ add_freecad_paths(FREECAD_BIN)
 
 import FreeCAD  # noqa: E402
 import Part  # noqa: E402
+import Sketcher  # noqa: E402
 
 App = FreeCAD
 Vector = FreeCAD.Vector
@@ -202,7 +203,9 @@ def primary_fp(obj):
             parts.append((prop, value_repr(obj.getPropertyByName(prop))))
         except Exception:
             continue
-    if obj.TypeId == "Part::Feature":  # non-parametric: its Shape IS its primary data
+    if obj.TypeId == "Part::Feature" and not getattr(obj, "CadSwarmKind", ""):
+        # Plain Part::Feature geometry (imports / polygon extrusion) is directly authored; linked
+        # CADSwarm pattern outputs carry their source and dimensions as primary data instead.
         parts.append(("Shape", repr(shape_sig(obj.Shape))))
     if obj.TypeId == "Spreadsheet::Sheet":
         parts.append(("cells", repr(sheet_contents(obj))))
@@ -238,8 +241,8 @@ def get_obj(name):
 
 
 def new_name(name):
-    if not name or not str(name).replace("_", "").isalnum():
-        raise OpError("bad_args", "name must be alphanumeric/underscore, e.g. 'MotorMount'")
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", name, re.ASCII):
+        raise OpError("bad_args", "name must start with an ASCII letter and contain only letters, numbers or underscores")
     if doc.getObject(name) is not None:
         raise OpError("exists", f"An object named {name!r} already exists")
     return name
@@ -277,20 +280,414 @@ def coerce(obj, prop, value):
     return value
 
 
+def require_allowed(names, allowed):
+    """Check that the caller holds locks for every existing feature this op consumes or edits."""
+    if allowed is None:
+        return
+    missing = sorted({name for name in names if name} - set(allowed))
+    if missing:
+        raise OpError("lock_violation", f"This operation needs locks on {missing}. Lock them first or ask their owner.")
+
+
+def is_internal(obj):
+    return bool(obj is not None and getattr(obj, "CadSwarmInternal", False))
+
+
+def _property_name(obj, prop):
+    """Accept the shared API's lower-case dimension names as well as FreeCAD property names."""
+    raw = str(prop)
+    kind = str(getattr(obj, "CadSwarmKind", "") or "")
+    if kind:
+        aliases = {
+            "extrude": {"depth": "CadSwarmDepth"},
+            "pocket": {"depth": "CadSwarmDepth"},
+            "hole": {"depth": "CadSwarmDepth"},
+            "fillet": {"radius": "CadSwarmRadius"},
+            "chamfer": {"radius": "CadSwarmRadius"},
+            "linear_pattern": {"count": "CadSwarmCount", "spacing": "CadSwarmSpacing",
+                               "direction": "CadSwarmDirection"},
+            "circular_pattern": {"count": "CadSwarmCount", "angle": "CadSwarmAngle",
+                                 "axis": "CadSwarmAxis"},
+            "revolve": {"axis": "CadSwarmAxisName", "angle": "Angle"},
+        }.get(kind, {})
+        mapped = aliases.get(raw.lower())
+        if mapped:
+            return mapped
+    if raw in obj.PropertiesList:
+        return raw
+    aliases = {"length": "Length", "width": "Width", "height": "Height", "radius": "Radius",
+               "angle": "Angle", "axis": "Axis", "placement": "Placement", "label": "Label"}
+    mapped = aliases.get(raw.lower())
+    return mapped if mapped in obj.PropertiesList else raw
+
+
 def apply_props(obj, props, expressions):
     for prop, value in (props or {}).items():
-        if prop not in obj.PropertiesList:
+        actual = _property_name(obj, prop)
+        if actual not in obj.PropertiesList:
             raise OpError("bad_args", f"{obj.TypeId} has no property {prop!r}")
-        setattr(obj, prop, coerce(obj, prop, value))
+        setattr(obj, actual, coerce(obj, actual, value))
     for prop, expr in (expressions or {}).items():
-        obj.setExpression(prop, expr)
+        actual = _property_name(obj, prop)
+        if actual not in obj.PropertiesList:
+            raise OpError("bad_args", f"{obj.TypeId} has no property {prop!r}")
+        obj.setExpression(actual, expr)
+
+
+def add_meta(obj, type_name, name, value, description="", hidden=True):
+    if name not in obj.PropertiesList:
+        obj.addProperty(type_name, name, "CADSwarm", description)
+    setattr(obj, name, value)
+    if hidden:
+        obj.setEditorMode(name, 2)
+
+
+def add_internal(obj):
+    add_meta(obj, "App::PropertyBool", "CadSwarmInternal", True, "Internal helper used by a CADSwarm feature")
+
+
+def sketch_plane(plane):
+    plane = str(plane or "").upper()
+    if plane == "XY":
+        return plane, Rotation()
+    if plane == "XZ":
+        return plane, Rotation(Vector(1, 0, 0), 90)
+    if plane == "YZ":
+        # Local sketch X/Y map to world Y/Z, with the normal along world X.
+        return plane, Rotation(Vector(1, 1, 1), 120)
+    raise OpError("bad_args", "Sketch plane must be XY, XZ or YZ.")
+
+
+def sketch_normal(sketch):
+    return sketch.Placement.Rotation.multVec(Vector(0, 0, 1))
+
+
+def _finite(value, label):
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise OpError("bad_args", f"{label} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise OpError("bad_args", f"{label} must be a finite number")
+    return number
+
+
+def _entity_geometry(entity):
+    if not isinstance(entity, dict):
+        raise OpError("bad_args", "Sketch entities must be objects")
+    kind = str(entity.get("type", "")).lower()
+    if kind == "line":
+        start, end = entity.get("start"), entity.get("end")
+        if not isinstance(start, (list, tuple)) or len(start) != 2 or not isinstance(end, (list, tuple)) or len(end) != 2:
+            raise OpError("bad_args", "Line entities need two-coordinate start and end points")
+        return kind, Part.LineSegment(Vector(_finite(start[0], "x"), _finite(start[1], "y"), 0),
+                                      Vector(_finite(end[0], "x"), _finite(end[1], "y"), 0))
+    if kind in ("circle", "arc"):
+        center = entity.get("center")
+        if not isinstance(center, (list, tuple)) or len(center) != 2:
+            raise OpError("bad_args", f"{kind.title()} entities need a two-coordinate center")
+        cx, cy = _finite(center[0], "center x"), _finite(center[1], "center y")
+        radius = _finite(entity.get("radius"), "radius")
+        if radius <= 0:
+            raise OpError("bad_args", f"{kind.title()} radius must be greater than zero")
+        circle = Part.Circle(Vector(cx, cy, 0), Vector(0, 0, 1), radius)
+        if kind == "circle":
+            return kind, circle
+        start = _finite(entity.get("start_angle"), "arc start angle")
+        end = _finite(entity.get("end_angle"), "arc end angle")
+        if abs(end - start) <= 1e-12:
+            raise OpError("bad_args", "Arc start and end angles must be different")
+        return kind, Part.ArcOfCircle(circle, start, end)
+    raise OpError("unsupported", f"Sketch geometry type {kind!r} is not supported; use line, circle or arc")
+
+
+def _point_position(entity_kind, point_name, reference):
+    valid = {"line": {"start": 1, "end": 2}, "circle": {"center": 3},
+             "arc": {"start": 1, "end": 2, "center": 3}}
+    if point_name not in valid.get(entity_kind, {}):
+        raise OpError("bad_args", f"{reference!r} is not a supported point on this sketch entity")
+    return valid[entity_kind][point_name]
+
+
+def _sketch_point(reference, index_by_id, kind_by_id):
+    match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_]*)\.(start|end|center)", str(reference or ""), re.ASCII)
+    if not match or match.group(1) not in index_by_id:
+        raise OpError("bad_args", f"Invalid sketch point reference: {reference!r}")
+    entity_id, point_name = match.groups()
+    return index_by_id[entity_id], _point_position(kind_by_id[entity_id], point_name, reference)
+
+
+def _constraint_specs(constraint, index_by_id, kind_by_id):
+    if not isinstance(constraint, dict):
+        raise OpError("bad_args", "Sketch constraints must be objects")
+    kind = str(constraint.get("type", "")).lower()
+    refs = constraint.get("points") or []
+    entities = constraint.get("entities") or []
+    value = constraint.get("value")
+    try:
+        if kind == "coincident" and len(refs) == 2:
+            a = _sketch_point(refs[0], index_by_id, kind_by_id)
+            b = _sketch_point(refs[1], index_by_id, kind_by_id)
+            return [Sketcher.Constraint("Coincident", a[0], a[1], b[0], b[1])]
+        if kind in ("horizontal", "vertical") and len(entities) == 1:
+            geo = index_by_id.get(str(entities[0]))
+            if geo is None or kind_by_id[str(entities[0])] != "line":
+                raise OpError("bad_args", f"{kind.title()} needs one line entity")
+            return [Sketcher.Constraint(kind.title(), geo)]
+        if kind in ("parallel", "perpendicular", "equal", "angle") and len(entities) == 2:
+            names = [str(e) for e in entities]
+            if any(name not in index_by_id or kind_by_id[name] != "line" for name in names):
+                raise OpError("bad_args", f"{kind.title()} needs two line entities")
+            if kind == "angle":
+                return [Sketcher.Constraint("Angle", index_by_id[names[0]], index_by_id[names[1]],
+                                             _finite(value, "angle"))]
+            return [Sketcher.Constraint(kind.title(), index_by_id[names[0]], index_by_id[names[1]])]
+        if kind == "distance" and len(refs) == 2:
+            a = _sketch_point(refs[0], index_by_id, kind_by_id)
+            b = _sketch_point(refs[1], index_by_id, kind_by_id)
+            distance = _finite(value, "distance")
+            if distance < 0:
+                raise OpError("bad_args", "Distance must be non-negative")
+            return [Sketcher.Constraint("Distance", a[0], a[1], b[0], b[1], distance)]
+        if kind in ("radius", "diameter") and len(entities) == 1:
+            entity_id = str(entities[0])
+            if entity_id not in index_by_id or kind_by_id[entity_id] not in ("circle", "arc"):
+                raise OpError("bad_args", f"{kind.title()} needs one circle or arc entity")
+            number = _finite(value, kind)
+            if number <= 0:
+                raise OpError("bad_args", f"{kind.title()} must be greater than zero")
+            return [Sketcher.Constraint(kind.title(), index_by_id[entity_id], number)]
+        if kind == "concentric" and len(entities) == 2:
+            names = [str(e) for e in entities]
+            if any(name not in index_by_id or kind_by_id[name] not in ("circle", "arc") for name in names):
+                raise OpError("bad_args", "Concentric needs two circle or arc entities")
+            return [Sketcher.Constraint("Coincident", index_by_id[names[0]], 3, index_by_id[names[1]], 3)]
+        if kind == "fixed" and len(refs) == 1:
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise OpError("bad_args", "Fixed point value must be [x, y]")
+            geo, pos = _sketch_point(refs[0], index_by_id, kind_by_id)
+            x, y = _finite(value[0], "fixed x"), _finite(value[1], "fixed y")
+            return [Sketcher.Constraint("DistanceX", geo, pos, -1, 1, x),
+                    Sketcher.Constraint("DistanceY", geo, pos, -1, 1, y)]
+    except OpError:
+        raise
+    except Exception as exc:
+        raise OpError("bad_args", f"Invalid {kind or 'unknown'} sketch constraint: {exc}") from exc
+    raise OpError("unsupported", f"Sketch constraint {kind!r} is not supported or has invalid references")
+
+
+def _sketch_solver(sketch):
+    try:
+        dof = int(sketch.DoF)
+    except Exception:
+        dof = None
+    conflicting = list(getattr(sketch, "ConflictingConstraints", []) or [])
+    malformed = list(getattr(sketch, "MalformedConstraints", []) or [])
+    redundant = list(getattr(sketch, "RedundantConstraints", []) or [])
+    if malformed:
+        status = "malformed"
+    elif conflicting:
+        status = "conflicting"
+    elif redundant:
+        status = "redundant"
+    elif bool(getattr(sketch, "FullyConstrained", False)):
+        status = "fully_constrained"
+    else:
+        status = "underconstrained"
+    return {"status": status, "dof": dof, "conflicting": conflicting,
+            "malformed": malformed, "redundant": redundant}
+
+
+def _sketch_definition(sketch):
+    try:
+        entities = json.loads(sketch.CadSwarmEntities or "[]")
+        constraints = json.loads(sketch.CadSwarmConstraints or "[]")
+    except Exception:
+        entities, constraints = [], []
+    return {"name": sketch.Name, "kind": "sketch", "plane": getattr(sketch, "CadSwarmPlane", "XY"),
+            "entities": entities, "constraints": constraints, "solver": _sketch_solver(sketch)}
+
+
+def _put_sketch_definition(sketch, entities, constraints):
+    if not isinstance(entities, list) or not entities:
+        raise OpError("bad_args", "A sketch needs at least one line, circle or arc")
+    if not isinstance(constraints, list):
+        raise OpError("bad_args", "Sketch constraints must be a list")
+    index_by_id, kind_by_id = {}, {}
+    geometries = []
+    for entity in entities:
+        entity_id = entity.get("id") if isinstance(entity, dict) else None
+        if not isinstance(entity_id, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", entity_id, re.ASCII) or entity_id in index_by_id:
+            raise OpError("bad_args", "Every sketch entity needs a unique ASCII id starting with a letter")
+        kind, geometry = _entity_geometry(entity)
+        index_by_id[entity_id] = len(geometries)
+        kind_by_id[entity_id] = kind
+        geometries.append(geometry)
+    specs = []
+    constraint_ids = set()
+    for constraint in constraints:
+        constraint_id = constraint.get("id") if isinstance(constraint, dict) else None
+        if constraint_id is not None:
+            if not isinstance(constraint_id, str) or constraint_id in constraint_ids:
+                raise OpError("bad_args", "Constraint ids must be unique strings")
+            constraint_ids.add(constraint_id)
+        specs.extend(_constraint_specs(constraint, index_by_id, kind_by_id))
+    try:
+        sketch.delConstraints(list(range(sketch.ConstraintCount)))
+        sketch.delGeometry(list(reversed(range(sketch.GeometryCount))))
+        sketch.addGeometry(geometries, False)
+        if specs:
+            sketch.addConstraint(specs)
+        sketch.CadSwarmEntities = json.dumps(entities, separators=(",", ":"))
+        sketch.CadSwarmConstraints = json.dumps(constraints, separators=(",", ":"))
+    except Exception as exc:
+        raise OpError("bad_args", f"FreeCAD could not build the sketch: {exc}") from exc
+
+
+def _feature_args(kind, params):
+    if not isinstance(params, dict):
+        raise OpError("bad_args", "Feature parameters must be an object")
+    out = dict(params)
+    if kind in ("extrude", "pocket", "hole"):
+        depth = _finite(out.get("depth", 10 if kind != "hole" else 10000), "depth")
+        if depth <= 0:
+            raise OpError("bad_args", "Depth must be greater than zero")
+        out["depth"] = depth
+    elif kind in ("fillet", "chamfer"):
+        radius = _finite(out.get("radius", 1), "radius")
+        if radius <= 0:
+            raise OpError("bad_args", "Radius must be greater than zero")
+        out["radius"] = radius
+    elif kind == "revolve":
+        angle = _finite(out.get("angle", 360), "angle")
+        axis = str(out.get("axis", "Z")).upper()
+        if not 0 < angle <= 360 or axis not in ("X", "Y", "Z"):
+            raise OpError("bad_args", "Revolve angle must be in (0, 360] and axis must be X, Y or Z")
+        out.update(angle=angle, axis=axis)
+    elif kind == "linear_pattern":
+        count = out.get("count", 2)
+        if isinstance(count, bool) or int(count) != count or not 2 <= int(count) <= 1000:
+            raise OpError("bad_args", "Pattern count must be an integer between 2 and 1000")
+        direction = out.get("direction", [1, 0, 0])
+        if not isinstance(direction, (list, tuple)) or len(direction) != 3:
+            raise OpError("bad_args", "Linear pattern direction must be a three-coordinate vector")
+        direction = [_finite(x, "direction") for x in direction]
+        if sum(x * x for x in direction) <= 1e-24:
+            raise OpError("bad_args", "Linear pattern direction cannot be zero")
+        spacing = _finite(out.get("spacing", 10), "spacing")
+        out.update(count=int(count), direction=direction, spacing=spacing)
+    elif kind == "circular_pattern":
+        count = out.get("count", 2)
+        if isinstance(count, bool) or int(count) != count or not 2 <= int(count) <= 1000:
+            raise OpError("bad_args", "Pattern count must be an integer between 2 and 1000")
+        axis = out.get("axis", [0, 0, 1])
+        if not isinstance(axis, (list, tuple)) or len(axis) != 3:
+            raise OpError("bad_args", "Circular pattern axis must be a three-coordinate vector")
+        axis = [_finite(x, "axis") for x in axis]
+        if sum(x * x for x in axis) <= 1e-24:
+            raise OpError("bad_args", "Circular pattern axis cannot be zero")
+        angle = _finite(out.get("angle", 360), "angle")
+        out.update(count=int(count), axis=axis, angle=angle)
+    return out
+
+
+def _internal_name(target, suffix):
+    base = "_CSW_" + re.sub(r"[^A-Za-z0-9_]", "_", target)[:48] + "_" + suffix
+    name, counter = base, 1
+    while doc.getObject(name) is not None:
+        name = f"{base}_{counter}"
+        counter += 1
+    return name
+
+
+def _make_cadswarm_feature(obj, kind, source=None, sketch=None, auxiliary=None):
+    add_meta(obj, "App::PropertyString", "CadSwarmKind", kind, "CADSwarm feature type")
+    if source is not None:
+        add_meta(obj, "App::PropertyLink", "CadSwarmSource", source, "Input feature")
+    if sketch is not None:
+        add_meta(obj, "App::PropertyLink", "CadSwarmSketch", sketch, "Profile sketch")
+    if auxiliary is not None:
+        add_meta(obj, "App::PropertyLink", "CadSwarmAuxiliary", auxiliary, "Internal cutter feature")
+
+
+def _rebuild_cadswarm_features():
+    """Rebuild the CADSwarm pattern features from their persisted links and parameters."""
+    pending = [o for o in doc.Objects if getattr(o, "CadSwarmKind", "") in ("linear_pattern", "circular_pattern")]
+    done = set()
+    while pending:
+        progress = False
+        for obj in list(pending):
+            source = getattr(obj, "CadSwarmSource", None)
+            if source is None or (getattr(source, "CadSwarmKind", "") in ("linear_pattern", "circular_pattern")
+                                  and source.Name not in done):
+                continue
+            shape = getattr(source, "Shape", None)
+            if shape is None or shape.isNull() or not shape.isValid():
+                raise OpError("recompute_error", f"Pattern source {source.Name} has no valid shape")
+            count = int(obj.CadSwarmCount)
+            copies = []
+            if obj.CadSwarmKind == "linear_pattern":
+                direction = obj.CadSwarmDirection
+                if direction.Length <= 1e-12:
+                    raise OpError("bad_args", "Linear pattern direction cannot be zero")
+                direction = direction.normalize()
+                spacing = float(obj.CadSwarmSpacing)
+                copies = [shape.copy().translated(direction * spacing * index) for index in range(count)]
+            else:
+                axis = obj.CadSwarmAxis
+                if axis.Length <= 1e-12:
+                    raise OpError("bad_args", "Circular pattern axis cannot be zero")
+                angle = float(obj.CadSwarmAngle)
+                copies = [shape.copy().rotate(Vector(0, 0, 0), axis, angle * index / count)
+                          for index in range(count)]
+            obj.Shape = Part.makeCompound(copies)
+            pending.remove(obj)
+            done.add(obj.Name)
+            progress = True
+        if not progress:
+            raise OpError("recompute_error", "Pattern features contain a missing source or dependency cycle")
+
+
+def _rebuild_native_dimensions():
+    """Apply CADSwarm's named parameters to native FreeCAD feature properties before recompute."""
+    for obj in doc.Objects:
+        kind = str(getattr(obj, "CadSwarmKind", "") or "")
+        if kind == "extrude":
+            sketch = getattr(obj, "CadSwarmSketch", None)
+            if sketch is None:
+                raise OpError("recompute_error", f"Extrude {obj.Name} has no profile sketch")
+            obj.Dir = sketch_normal(sketch) * float(obj.CadSwarmDepth)
+        elif kind in ("pocket", "hole"):
+            sketch = getattr(obj, "CadSwarmSketch", None)
+            tool = getattr(obj, "CadSwarmAuxiliary", None)
+            if sketch is None or tool is None:
+                raise OpError("recompute_error", f"{kind.title()} {obj.Name} has no profile or cutter")
+            tool.Dir = sketch_normal(sketch) * -float(obj.CadSwarmDepth)
+        elif kind == "revolve":
+            axes = {"X": Vector(1, 0, 0), "Y": Vector(0, 1, 0), "Z": Vector(0, 0, 1)}
+            axis_name = str(obj.CadSwarmAxisName).upper()
+            if axis_name not in axes:
+                raise OpError("bad_args", "Revolution axis must be X, Y or Z")
+            obj.Axis = axes[axis_name]
+        elif kind in ("fillet", "chamfer"):
+            source = getattr(obj, "CadSwarmSource", None)
+            if source is None or not hasattr(source, "Shape"):
+                raise OpError("recompute_error", f"{kind.title()} {obj.Name} has no source feature")
+            selected = json.loads(obj.CadSwarmSelection or "[]")
+            count = len(source.Shape.Edges)
+            indexes = selected if selected else list(range(count))
+            if any(isinstance(i, bool) or not isinstance(i, int) or i < 0 or i >= count for i in indexes):
+                raise OpError("bad_args", f"{kind.title()} selection no longer matches the source edges")
+            radius = float(obj.CadSwarmRadius)
+            obj.Base = source
+            obj.Edges = [(i + 1, radius, radius) for i in indexes]
 
 
 # --------------------------------------------------------------------------
 # Mutating ops (run inside a transaction by `mutate`)
 # --------------------------------------------------------------------------
 
-def op_create_primitive(a):
+def op_create_primitive(a, allowed=None):
     kind = str(a.get("kind", "")).lower()
     if kind not in PRIMITIVES:
         raise OpError("bad_args", f"kind must be one of {sorted(PRIMITIVES)}")
@@ -303,7 +700,7 @@ def op_create_primitive(a):
     return {"name": obj.Name}
 
 
-def op_create_extrusion(a):
+def op_create_extrusion(a, allowed=None):
     """Closed XY polygon (+ optional round holes) extruded along Z: a static Part::Feature."""
     pts = a.get("points") or []
     if len(pts) < 3:
@@ -324,52 +721,83 @@ def op_create_extrusion(a):
     return {"name": obj.Name, "volume": solid.Volume}
 
 
-def op_boolean(a):
+def op_boolean(a, allowed=None):
     kind = str(a.get("kind", "")).lower()
     if kind not in BOOLEANS:
         raise OpError("bad_args", f"kind must be one of {sorted(BOOLEANS)}")
     base, tool = get_obj(a.get("base")), get_obj(a.get("tool"))
+    require_allowed((base.Name, tool.Name), allowed)
     obj = doc.addObject(BOOLEANS[kind], new_name(a.get("name")))
     obj.Base, obj.Tool = base, tool
     base.Visibility = tool.Visibility = False
     return {"name": obj.Name, "consumed": [base.Name, tool.Name]}
 
 
-def op_set_property(a):
+def op_set_property(a, allowed=None):
     obj = get_obj(a.get("name"))
+    require_allowed((obj.Name,), allowed)
     apply_props(obj, {a["prop"]: a.get("value")}, None)
     return {"name": obj.Name}
 
 
-def op_set_props(a):
+def op_set_props(a, allowed=None):
     obj = get_obj(a.get("name"))
+    require_allowed((obj.Name,), allowed)
     apply_props(obj, a.get("props"), a.get("expressions"))
     return {"name": obj.Name}
 
 
-def op_set_expression(a):
+def op_set_expression(a, allowed=None):
     obj = get_obj(a.get("name"))
-    obj.setExpression(a["prop"], a.get("expr"))  # None clears the binding
+    require_allowed((obj.Name,), allowed)
+    prop = _property_name(obj, a["prop"])
+    if prop not in obj.PropertiesList:
+        raise OpError("bad_args", f"{obj.TypeId} has no property {a['prop']!r}")
+    obj.setExpression(prop, a.get("expr"))  # None clears the binding
     return {"name": obj.Name}
 
 
-def op_set_placement(a):
+def op_set_placement(a, allowed=None):
     obj = get_obj(a.get("name"))
+    require_allowed((obj.Name,), allowed)
     obj.Placement = to_placement(a.get("placement"))
     return {"name": obj.Name, "placement": placement_json(obj.Placement)}
 
 
-def op_delete(a):
+def _dependent_delete_order(obj):
+    order, visiting, seen = [], set(), set()
+
+    def visit(current):
+        if current.Name in seen:
+            return
+        if current.Name in visiting:
+            raise OpError("in_use", "The feature dependency graph contains a cycle")
+        visiting.add(current.Name)
+        for user in current.InList:
+            if user.Name != PARAMS:
+                visit(user)
+        visiting.remove(current.Name)
+        seen.add(current.Name)
+        order.append(current.Name)
+
+    visit(obj)
+    return order
+
+
+def op_delete(a, allowed=None):
     obj = get_obj(a.get("name"))
     if obj.Name == PARAMS:
         # Every part binds its sizes to it: a helper deleted it twice in one demo, and every set_param
         # after that failed with not_found until the worker restarted.
         raise OpError("not_allowed", "Params is the team's shared dimensions sheet and can't be deleted; "
                                      "change a value with set_param instead")
-    users = [o.Name for o in obj.InList]
+    users = [o.Name for o in obj.InList if o.Name != PARAMS]
     if users and not a.get("force"):
         raise OpError("in_use", f"{obj.Name} is used by {users}; delete those first or pass force")
-    doc.removeObject(obj.Name)
+    names = _dependent_delete_order(obj) if a.get("force") else [obj.Name]
+    require_allowed(names, allowed)
+    for name in names:
+        doc.removeObject(name)
     return {"name": a["name"]}
 
 
@@ -380,9 +808,10 @@ def find_param_row(sheet, alias):
     return None
 
 
-def op_set_param(a):
+def op_set_param(a, allowed=None):
     alias = str(a.get("alias", ""))
-    if not alias.replace("_", "").isalnum() or alias[:1].isdigit():
+    require_allowed((PARAMS,), allowed)
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", alias, re.ASCII):
         raise OpError("bad_args", "alias must be an identifier like hole_pitch")
     sheet = params_sheet()
     row = find_param_row(sheet, alias)
@@ -397,6 +826,118 @@ def op_set_param(a):
     if a.get("note"):
         sheet.set(f"C{row}", str(a["note"]))
     return {"alias": alias, "cell": f"B{row}"}
+
+
+def op_create_sketch(a, allowed=None):
+    name = new_name(a.get("name"))
+    plane, rotation = sketch_plane(a.get("plane"))
+    sketch = doc.addObject("Sketcher::SketchObject", name)
+    sketch.Placement = Placement(Vector(0, 0, 0), rotation)
+    add_meta(sketch, "App::PropertyString", "CadSwarmPlane", plane, "Sketch coordinate plane")
+    add_meta(sketch, "App::PropertyString", "CadSwarmEntities", "[]", "Stable sketch entity definitions")
+    add_meta(sketch, "App::PropertyString", "CadSwarmConstraints", "[]", "Stable sketch constraint definitions")
+    _put_sketch_definition(sketch, a.get("entities") or [], a.get("constraints") or [])
+    if a.get("label"):
+        sketch.Label = str(a["label"])
+    doc.recompute()
+    solver = _sketch_solver(sketch)
+    if solver["conflicting"] or solver["malformed"]:
+        raise OpError("recompute_error", f"Sketch constraints did not solve: {solver}")
+    return {"name": sketch.Name, "feature": _sketch_definition(sketch)}
+
+
+def op_edit_sketch(a, allowed=None):
+    sketch = get_obj(a.get("name"))
+    require_allowed((sketch.Name,), allowed)
+    if sketch.TypeId != "Sketcher::SketchObject":
+        raise OpError("bad_args", f"{sketch.Name!r} is not a sketch")
+    current = _sketch_definition(sketch)
+    entities = current["entities"] if a.get("entities") is None else a.get("entities")
+    constraints = current["constraints"] if a.get("constraints") is None else a.get("constraints")
+    _put_sketch_definition(sketch, entities, constraints)
+    doc.recompute()
+    solver = _sketch_solver(sketch)
+    if solver["conflicting"] or solver["malformed"]:
+        raise OpError("recompute_error", f"Sketch constraints did not solve: {solver}")
+    return {"name": sketch.Name, "feature": _sketch_definition(sketch)}
+
+
+def op_create_sketch_feature(a, allowed=None):
+    kind = str(a.get("kind", "")).lower()
+    if kind not in ("extrude", "revolve", "pocket", "hole", "fillet", "chamfer", "linear_pattern", "circular_pattern"):
+        raise OpError("unsupported", f"Sketch feature kind {kind!r} is not supported")
+    name = new_name(a.get("name"))
+    params = _feature_args(kind, a.get("parameters") or {})
+    selection = a.get("selection") or []
+    if not isinstance(selection, list) or any(isinstance(i, bool) or not isinstance(i, int) or i < 0 for i in selection):
+        raise OpError("bad_args", "Edge selection must be a list of non-negative zero-based indices")
+
+    sketch = None
+    source = None
+    if kind in ("extrude", "revolve", "pocket", "hole"):
+        sketch = get_obj(a.get("sketch_name"))
+        if sketch.TypeId != "Sketcher::SketchObject":
+            raise OpError("bad_args", f"{sketch.Name!r} is not a sketch")
+    if kind in ("pocket", "hole", "fillet", "chamfer", "linear_pattern", "circular_pattern"):
+        source = get_obj(a.get("source_name"))
+        if not hasattr(source, "Shape") or source.Shape.isNull():
+            raise OpError("bad_args", f"{source.Name} has no shape to use as a feature source")
+    require_allowed([x.Name for x in (sketch, source) if x is not None], allowed)
+
+    if kind == "extrude":
+        feature = doc.addObject("Part::Extrusion", name)
+        feature.Base = sketch
+        feature.Solid = True
+        _make_cadswarm_feature(feature, kind, sketch=sketch)
+        add_meta(feature, "App::PropertyLength", "CadSwarmDepth", params["depth"], "Extrusion distance")
+    elif kind == "revolve":
+        plane = str(getattr(sketch, "CadSwarmPlane", "XY"))
+        axes = {"XY": ("X", "Y"), "XZ": ("X", "Z"), "YZ": ("Y", "Z")}
+        if params["axis"] not in axes.get(plane, ()):
+            raise OpError("bad_args", f"Revolve axis {params['axis']} must lie in the {plane} sketch plane")
+        feature = doc.addObject("Part::Revolution", name)
+        feature.Source = sketch
+        feature.Base = Vector(0, 0, 0)
+        feature.Axis = Vector(*{"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}[params["axis"]])
+        feature.Angle = params["angle"]
+        feature.Solid = True
+        _make_cadswarm_feature(feature, kind, sketch=sketch)
+        add_meta(feature, "App::PropertyString", "CadSwarmAxisName", params["axis"], "Revolution axis")
+    elif kind in ("pocket", "hole"):
+        tool = doc.addObject("Part::Extrusion", _internal_name(name, "cutter"))
+        add_internal(tool)
+        tool.Base = sketch
+        tool.Solid = True
+        tool.Dir = sketch_normal(sketch) * -params["depth"]
+        tool.Visibility = False
+        feature = doc.addObject("Part::Cut", name)
+        feature.Base, feature.Tool = source, tool
+        _make_cadswarm_feature(feature, kind, source=source, sketch=sketch, auxiliary=tool)
+        add_meta(feature, "App::PropertyLength", "CadSwarmDepth", params["depth"], "Cut depth")
+    elif kind in ("fillet", "chamfer"):
+        feature = doc.addObject("Part::Fillet" if kind == "fillet" else "Part::Chamfer", name)
+        _make_cadswarm_feature(feature, kind, source=source)
+        add_meta(feature, "App::PropertyLength", "CadSwarmRadius", params["radius"], "Dress-up size")
+        add_meta(feature, "App::PropertyString", "CadSwarmSelection", json.dumps(selection), "Zero-based source edge indices")
+    else:
+        feature = doc.addObject("Part::Feature", name)
+        _make_cadswarm_feature(feature, kind, source=source)
+        add_meta(feature, "App::PropertyInteger", "CadSwarmCount", params["count"], "Pattern occurrence count")
+        if kind == "linear_pattern":
+            add_meta(feature, "App::PropertyLength", "CadSwarmSpacing", params["spacing"], "Pattern spacing")
+            add_meta(feature, "App::PropertyVector", "CadSwarmDirection", Vector(*params["direction"]), "Pattern direction")
+        else:
+            add_meta(feature, "App::PropertyAngle", "CadSwarmAngle", params["angle"], "Pattern sweep angle")
+            add_meta(feature, "App::PropertyVector", "CadSwarmAxis", Vector(*params["axis"]), "Pattern axis")
+    if a.get("label"):
+        feature.Label = str(a["label"])
+    if sketch is not None:
+        sketch.Visibility = False
+    if source is not None:
+        source.Visibility = False
+    return {"name": feature.Name, "feature": {"name": feature.Name, "kind": kind,
+            "parameters": params, "selection": selection,
+            "sketch_name": sketch.Name if sketch else None, "source_name": source.Name if source else None}}
 
 
 def op_run_part_script(a):
@@ -565,12 +1106,27 @@ def tag_component(obj, ref, label):
 
 
 def op_insert_component(a):
-    """{"component", "name", "placement"?, "label"?} -> a Part::Feature holding the library part's shape."""
-    path, fmt = library_file(a.get("component"))
-    shape = load_part_shape(path, fmt)
-    obj = doc.addObject("Part::Feature", new_name(a.get("name")))
-    obj.Shape = shape
-    tag_component(obj, a["component"], a.get("label") or a["name"])
+    """Import a library part or a STEP/STL file from the team's shared files into the FCStd document."""
+    if a.get("component"):
+        path, fmt = library_file(a.get("component"))
+        shape = load_part_shape(path, fmt)
+        obj = doc.addObject("Part::Feature", new_name(a.get("name")))
+        obj.Shape = shape
+        tag_component(obj, a["component"], a.get("label") or a["name"])
+    elif a.get("path") or a.get("file"):
+        path = project_file(a.get("path") or a.get("file"))
+        fmt = LIB_FORMATS.get(os.path.splitext(path)[1].lower())
+        if fmt == "stl":
+            return op_insert_mesh({**a, "file": a.get("path") or a.get("file")})
+        if fmt != "step":
+            raise OpError("bad_args", "Shared exchange imports support STEP/STP and STL files")
+        shape = load_part_shape(path, fmt)
+        obj = doc.addObject("Part::Feature", new_name(a.get("name")))
+        obj.Shape = shape
+        if a.get("label"):
+            obj.Label = str(a["label"])
+    else:
+        raise OpError("bad_args", "Provide a library component id or a project files path")
     if a.get("placement"):
         obj.Placement = to_placement(a["placement"])
     bb = shape.BoundBox
@@ -698,6 +1254,10 @@ def op_insert_mesh(a):
 MUTATIONS = {
     "create_primitive": op_create_primitive,
     "create_extrusion": op_create_extrusion,
+    "create_sketch": op_create_sketch,
+    "edit_sketch": op_edit_sketch,
+    "update_sketch": op_edit_sketch,
+    "create_sketch_feature": op_create_sketch_feature,
     "boolean": op_boolean,
     "set_property": op_set_property,
     "set_props": op_set_props,
@@ -711,28 +1271,70 @@ MUTATIONS = {
     "insert_mesh": op_insert_mesh,
 }
 
+LOCK_AWARE_MUTATIONS = {"create_sketch", "edit_sketch", "update_sketch", "create_sketch_feature", "boolean",
+                        "set_property", "set_props", "set_expression", "set_placement", "delete", "set_param"}
+
+
+def _shape_error(obj):
+    """Return a readable kernel error for a touched shape or sketch, if one exists."""
+    if obj is None or obj.TypeId in ("Spreadsheet::Sheet",):
+        return None
+    if obj.TypeId == "Sketcher::SketchObject":
+        solver = _sketch_solver(obj)
+        if solver["conflicting"] or solver["malformed"]:
+            return f"Sketch constraints did not solve: {solver}"
+        return None
+    shape = getattr(obj, "Shape", None)
+    if shape is not None:
+        if shape.isNull():
+            return "feature produced an empty shape"
+        try:
+            if shape.Faces and not shape.isValid():
+                return "feature produced an invalid OpenCASCADE shape"
+        except Exception:
+            pass
+    return None
+
 
 def mutate(op, args, allowed):
     before = snapshot()
+    before_internal = {o.Name: is_internal(o) for o in doc.Objects}
     doc.openTransaction(f"cadswarm:{op}")
     try:
-        result = MUTATIONS[op](args)
+        mutator = MUTATIONS[op]
+        result = mutator(args, allowed) if op in LOCK_AWARE_MUTATIONS else mutator(args)
+        # FreeCAD recomputes native links and expressions. CADSwarm's pattern outputs are stored as
+        # ordinary FCStd shapes with explicit source/parameter properties, so rebuild them in document order.
+        doc.recompute()
+        _rebuild_native_dimensions()
+        doc.recompute()
+        _rebuild_cadswarm_features()
+        doc.recompute()
+        _rebuild_native_dimensions()
         doc.recompute()
         after = snapshot()
-        created = sorted(set(after) - set(before))
-        deleted = sorted(set(before) - set(after))
+        all_created = sorted(set(after) - set(before))
+        all_deleted = sorted(set(before) - set(after))
         common = set(after) & set(before)
-        modified = sorted(n for n in common if after[n][0] != before[n][0])
-        recomputed = sorted(n for n in common if n not in modified and after[n][1] != before[n][1])
+        all_modified = sorted(n for n in common if after[n][0] != before[n][0])
+        all_recomputed = sorted(n for n in common if n not in all_modified and after[n][1] != before[n][1])
         if allowed is not None:
-            violations = sorted((set(modified) | set(deleted)) - set(allowed))
+            violations = sorted((set(all_modified) | set(all_deleted)) - set(allowed))
             if violations:
                 raise OpError("lock_violation",
                               f"This op would change objects you have not locked: {violations}. "
                               "Lock them first (lock_objects) or ask their owner.")
-        broken = [n for n in created + modified if is_broken(doc.getObject(n))]
+        created = [n for n in all_created if not is_internal(doc.getObject(n))]
+        deleted = [n for n in all_deleted if not before_internal.get(n, False)]
+        modified = [n for n in all_modified if not is_internal(doc.getObject(n))]
+        recomputed = [n for n in all_recomputed if not is_internal(doc.getObject(n))]
+        broken = [n for n in all_created + all_modified if is_broken(doc.getObject(n))]
         if broken:
             raise OpError("recompute_error", f"Objects failed to recompute: {broken}")
+        invalid = [(n, _shape_error(doc.getObject(n))) for n in all_created + all_modified]
+        invalid = [(n, message) for n, message in invalid if message]
+        if invalid:
+            raise OpError("recompute_error", "; ".join(f"{n}: {message}" for n, message in invalid))
         # Persist while the transaction is still open: if the file can't be written the abort below
         # puts memory back to match the disk (and the hub, which records nothing for a failed op).
         save()
@@ -798,13 +1400,19 @@ def anchor_of(shape):
 def obj_summary(o):
     info = {"name": o.Name, "label": o.Label, "type": o.TypeId,
             "visible": bool(getattr(o, "Visibility", True)),
-            "uses": sorted(x.Name for x in o.OutList), "used_by": sorted(x.Name for x in o.InList),
+            "uses": sorted(x.Name for x in o.OutList if not is_internal(x)),
+            "used_by": sorted(x.Name for x in o.InList if not is_internal(x)),
             "expressions": {p: e for p, e in (o.ExpressionEngine or [])},
             "broken": is_broken(o)}
     if hasattr(o, "Placement"):
         info["placement"] = placement_json(o.Placement)
     if getattr(o, "CadSwarmComponent", ""):
         info["component"] = o.CadSwarmComponent  # placed from the components library
+    if o.TypeId == "Sketcher::SketchObject":
+        info["solver"] = _sketch_solver(o)
+        info["plane"] = getattr(o, "CadSwarmPlane", "XY")
+    if getattr(o, "CadSwarmKind", ""):
+        info["feature_kind"] = o.CadSwarmKind
     shape = getattr(o, "Shape", None)
     if shape is not None and not shape.isNull():
         bb = shape.BoundBox
@@ -822,12 +1430,14 @@ def obj_summary(o):
 
 
 def q_status(a):
-    return {"objects": [obj_summary(o) for o in doc.Objects], "params": params_dict(),
+    return {"objects": [obj_summary(o) for o in doc.Objects if not is_internal(o)], "params": params_dict(),
             "doc_path": DOC_PATH}
 
 
 def q_get_object(a):
     o = get_obj(a.get("name"))
+    if is_internal(o):
+        raise OpError("not_found", f"No public object named {o.Name!r}")
     info = obj_summary(o)
     props = {}
     for p in o.PropertiesList:
@@ -840,12 +1450,14 @@ def q_get_object(a):
     info["properties"] = props
     if o.TypeId == "Spreadsheet::Sheet":
         info["cells"] = dict(sheet_contents(o))
+    if o.TypeId == "Sketcher::SketchObject":
+        info["feature"] = _sketch_definition(o)
     return info
 
 
 def q_brep(a):
     out = {}
-    for name in a.get("names") or [o.Name for o in doc.Objects]:
+    for name in a.get("names") or [o.Name for o in doc.Objects if not is_internal(o)]:
         o = doc.getObject(name)
         shape = getattr(o, "Shape", None) if o else None
         if o is None:
@@ -987,8 +1599,10 @@ def q_mesh(a):
     out = {}
     for name in a.get("names") or [o.Name for o in doc.Objects]:
         obj = doc.getObject(name)
-        if obj is not None and obj.TypeId.startswith("Mesh::") and hasattr(obj, "Mesh"):
+        if obj is not None and not is_internal(obj) and obj.TypeId.startswith("Mesh::") and hasattr(obj, "Mesh"):
             out[name] = base64.b64encode(_mesh_stl(obj, budget)).decode()
+            continue
+        if is_internal(obj):
             continue
         shape = _solid_shape(obj)
         if shape is None:

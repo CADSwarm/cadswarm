@@ -1,8 +1,9 @@
 """Step plans for briefs (`Brief.plan_json`, version 2).
 
-A plan is an ordered, numbered list of steps. Each step is ONE component (`part` modelled, `library` placed
-from the library) or one `assembly` / `check` action, with the ids of the earlier steps it depends on and the
-task that tracks it. A version-1 plan (only `parts`) reads as steps in list order with no dependencies.
+A plan is an ordered, numbered list of steps. Standalone teams accept `part` and `check` steps; older plan
+kinds and operations remain readable for compatibility but are rejected for new standalone plans. Each step
+records the ids of earlier dependencies and the task that tracks it. A version-1 plan (only `parts`) reads as
+steps in list order with no dependencies.
 
 Contract: docs/superpowers/specs/2026-11-06-step-build-and-pro-ui-design.md. Pure Python, no FreeCAD.
 """
@@ -17,9 +18,14 @@ ACTIVE = ("claimed", "awaiting_takeover")
 COMPONENT_KINDS = ("part", "library")
 # The closed op vocabulary: a plan's `ops` entries start with one of these, and the narrated op feed uses
 # the same words, so the feed can be matched against the plan ("Create sketch SK_Mast", "Extrude Mast").
-OP_VOCABULARY = ("Create sketch", "Extrude", "Cut", "Revolve", "Fillet", "Chamfer", "Hole", "Pattern", "Mirror",
-                 "Shell", "Insert component", "Place standard part", "Mate", "Set color", "Check interference",
+OP_VOCABULARY = ("Create sketch", "Import STEP/STL", "Primitive", "Extrude", "Pocket", "Cut", "Revolve", "Fillet", "Chamfer", "Hole",
+                 "Pattern", "Mirror", "Shell", "Boolean", "Set dimensions", "Set placement", "Export STEP/STL",
+                 "Insert component", "Place standard part", "Mate", "Set color", "Check interference",
                  "Check printability", "Render", "Save part")
+STANDALONE_PLAN_KINDS = ("part", "check")
+STANDALONE_OP_VOCABULARY = ("Create sketch", "Import STEP/STL", "Primitive", "Extrude", "Pocket", "Cut", "Revolve", "Fillet",
+                             "Chamfer", "Hole", "Pattern", "Boolean", "Set dimensions", "Set placement",
+                             "Check interference", "Export STEP/STL")
 # Assembly mates over named ports ("Base.mast_bore"). Exactly one part is grounded with `fixed`, and the mate
 # graph between parts stays an acyclic tree.
 MATE_TYPES = ("fixed", "coincident", "concentric", "distance", "angle", "parallel", "revolute", "slider")
@@ -392,6 +398,21 @@ def check(plan, task_ids=None):
     return p
 
 
+def standalone_problems(plan):
+    """Describe plan kinds and operations the CADSwarm-owned feature worker cannot execute."""
+    problems = []
+    for step in plan.get("steps", []):
+        label = f"step {step.get('n')}" + (f" ({step.get('name')})" if step.get("name") else "")
+        kind = step.get("kind")
+        if kind not in STANDALONE_PLAN_KINDS:
+            problems.append(f"{label}: kind {kind!r} is unsupported by the standalone worker; use part or check")
+        for op in step.get("ops", []):
+            if not any(op.lower() == word.lower() or op.lower().startswith(word.lower() + " ")
+                       for word in STANDALONE_OP_VOCABULARY):
+                problems.append(f"{label}: operation {op!r} is unsupported by the standalone worker")
+    return problems
+
+
 # --------------------------------------------------------------- progress
 
 def _status_map(tasks):
@@ -551,28 +572,30 @@ def summary_line(done, total, current):
 # ---------------------------------------------------------------- op feed
 
 # Op kinds the host runs, in the plan's op vocabulary.
-KIND_LABELS = {"create_sketch": "Create sketch", "create_extrusion": "Extrude", "extrude": "Extrude",
-               "pad": "Extrude", "pocket": "Cut", "revolve": "Revolve", "fillet": "Fillet", "chamfer": "Chamfer",
+KIND_LABELS = {"create_sketch": "Create sketch", "create_primitive": "Primitive",
+               "create_extrusion": "Extrude", "extrude": "Extrude", "pad": "Extrude",
+               "pocket": "Pocket", "revolve": "Revolve", "fillet": "Fillet", "chamfer": "Chamfer",
                "hole": "Hole", "pattern": "Pattern", "mirror": "Mirror", "shell": "Shell",
-               "insert_component": "Insert component", "add_standard_part": "Place standard part",
-               "set_placement": "Mate", "constrain": "Mate", "mate": "Mate", "set_color": "Set color",
+               "insert_component": "Import STEP/STL", "add_standard_part": "Place standard part",
+               "boolean": "Boolean", "set_property": "Set dimensions", "set_props": "Set dimensions",
+               "set_expression": "Set dimensions", "set_param": "Set dimensions",
+               "set_placement": "Set placement", "constrain": "Mate", "mate": "Mate", "set_color": "Set color",
                "check_interference": "Check interference", "interference": "Check interference",
                "check_printability": "Check printability", "printability": "Check printability",
-               "render": "Render", "save_part": "Save part", "export": "Save part"}
+               "render": "Render", "save_part": "Save part", "export": "Export STEP/STL"}
 
 
 def op_label(kind, args=None):
-    """The feed label for an op: the vocabulary word where there is one (`boolean` cut -> `Cut`)."""
+    """Map a model operation to the vocabulary used by standalone plan steps."""
     k = _str(kind).lower()
+    a = args if isinstance(args, dict) else _args(args)
+    if k == "create_sketch_feature":
+        return {"extrude": "Extrude", "revolve": "Revolve", "pocket": "Pocket", "hole": "Hole",
+                "fillet": "Fillet", "chamfer": "Chamfer", "linear_pattern": "Pattern",
+                "circular_pattern": "Pattern"}.get(_str(a.get("kind")).lower(), "Feature")
     if k == "boolean":
-        a = args if isinstance(args, dict) else _args(args)
-        return "Cut" if _str(a.get("op") or a.get("kind")).lower() in ("cut", "difference", "") else humanise(
-            a.get("op") or a.get("kind"))
-    if k == "set_props":
-        a = args if isinstance(args, dict) else _args(args)
-        props = a.get("props") if isinstance(a.get("props"), dict) else {}
-        if any("color" in str(x).lower() for x in props):
-            return "Set color"
+        operation = _str(a.get("op") or a.get("kind")).lower()
+        return "Cut" if operation in ("cut", "difference", "") else f"Boolean {operation or 'operation'}"
     return KIND_LABELS.get(k) or humanise(kind)
 
 

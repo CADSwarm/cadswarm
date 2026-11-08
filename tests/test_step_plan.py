@@ -264,8 +264,8 @@ def test_two_mates_between_the_same_parts_are_one_joint_not_a_loop():
 def test_op_labels_use_the_plan_vocabulary():
     assert sp.op_label("create_extrusion") == "Extrude"
     assert sp.op_label("boolean", '{"kind": "cut"}') == "Cut"
-    assert sp.op_label("boolean", {"kind": "fuse"}) == "Fuse"
+    assert sp.op_label("boolean", {"kind": "fuse"}) == "Boolean fuse"
     assert sp.op_label("add_standard_part") == "Place standard part"
-    assert sp.op_label("set_props", {"props": {"ShapeColor": [1, 0, 0]}}) == "Set color"
-    assert sp.op_label("set_placement") == "Mate"
+    assert sp.op_label("set_props", {"props": {"Length": 20}}) == "Set dimensions"
+    assert sp.op_label("set_placement") == "Set placement"
     assert sp.op_label("run_part_script") == "Run part script"

@@ -1,116 +1,97 @@
-# CADSwarm installer for Windows. Run via "Install CadSwarm.cmd" (double-click).
-# Copies this folder into FreeCAD's add-on folder, optionally adds a desktop shortcut,
-# then opens FreeCAD in CADSwarm, where a step-by-step guide takes over.
-param([switch]$NoLaunch)  # -NoLaunch: install only (used for testing)
+# Windows installer for the standalone CADSwarm desktop application.
+# Copies this checkout to the per-user app folder, creates an isolated Python runtime,
+# installs CADSwarm's desktop dependencies, and adds Start Menu/Desktop shortcuts.
+param([switch]$NoLaunch)
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$InstallRoot = Join-Path $env:LOCALAPPDATA "Programs\CADSwarm"
+$AppDir = Join-Path $InstallRoot "app"
+$Venv = Join-Path $InstallRoot "runtime"
+$Python = Join-Path $Venv "Scripts\python.exe"
+$PythonW = Join-Path $Venv "Scripts\pythonw.exe"
 
 function Say($text, $color = "White") { Write-Host $text -ForegroundColor $color }
-function Finish($code) { Write-Host ""; Read-Host "Press Enter to close this window" | Out-Null; exit $code }
+function Find-PythonLauncher {
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        $Candidate = & py -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1
+        if ($LASTEXITCODE -eq 0 -and $Candidate) { return [string]$Candidate }
+    }
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $Candidate = & python -c "import sys; print(sys.executable if sys.version_info >= (3, 11) else '')" 2>$null |
+            Select-Object -Last 1
+        if ($LASTEXITCODE -eq 0 -and $Candidate) { return [string]$Candidate }
+    }
+    return $null
+}
 
 Say ""
-Say "  CADSwarm setup" "Cyan"
-Say "  Build 3D designs together with your team's AI helpers." "Gray"
+Say "  CADSwarm standalone setup" "Cyan"
+Say "  Collaborative parametric CAD for Windows." "Gray"
 Say ""
 
-# 1. Find FreeCAD
-function FindFreeCAD {
-    $found = @()
-    foreach ($root in @("$env:LOCALAPPDATA\Programs", $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
-        if ($root -and (Test-Path $root)) {
-            $found += Get-ChildItem -Path $root -Directory -Filter "FreeCAD*" -ErrorAction SilentlyContinue |
-                ForEach-Object { Join-Path $_.FullName "bin\freecad.exe" } | Where-Object { Test-Path $_ }
-        }
+$Launcher = Find-PythonLauncher
+if (-not $Launcher) {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        throw "Python 3.11+ is required. Install Python from python.org, then run this installer again."
     }
-    return $found
-}
-$candidates = FindFreeCAD
-if (-not $candidates) {
-    Say "FreeCAD isn't installed on this computer yet." "Yellow"
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        $answer = Read-Host "  Install the official FreeCAD now with winget? (Y/n)"
-        if ($answer -notmatch "^[nN]") {
-            winget install --id FreeCAD.FreeCAD --exact --accept-package-agreements --accept-source-agreements
-            $candidates = FindFreeCAD
-        }
-    }
-}
-if (-not $candidates) {
-    Say "Opening the FreeCAD download page. Install it (the default options are fine),"
-    Say "then double-click 'Install CadSwarm' again."
-    Start-Process "https://www.freecad.org/downloads.php"
-    Finish 1
-}
-# Newest version wins; sort by the number in the folder name, since as text "1.9" would beat "1.10".
-function FolderVersion($exe) {
-    $m = [regex]::Match((Split-Path (Split-Path $exe)), '(\d+(?:\.\d+)+)')
-    if ($m.Success) { try { return [version]$m.Groups[1].Value } catch {} }
-    return [version]"0.0"
-}
-$FreeCAD = ($candidates | Sort-Object { FolderVersion $_ } -Descending | Select-Object -First 1)
-$Python = Join-Path (Split-Path $FreeCAD) "python.exe"
-Say "  [ok] Found FreeCAD: $FreeCAD" "Green"
-
-# 2. Where FreeCAD keeps add-ons for this user
-# Windows PowerShell 5.1 turns any stderr output from a native program into a terminating error under
-# "Stop", so relax it for this call: FreeCAD's python may print warnings, which are harmless.
-$ErrorActionPreference = "Continue"
-$UserDir = & $Python -c "import sys,os; sys.path.append(os.path.dirname(sys.executable)); import FreeCAD; print(FreeCAD.getUserAppDataDir())" 2>$null |
-    Select-Object -Last 1
-$ErrorActionPreference = "Stop"
-if (-not $UserDir) { Say "Couldn't ask FreeCAD where its add-ons go." "Red"; Finish 1 }
-$Dest = Join-Path $UserDir "Mod\CadSwarm"
-
-if (Get-Process -Name "freecad" -ErrorAction SilentlyContinue) {
-    Say "FreeCAD is open. Please close it (save your work first), then press Enter." "Yellow"
-    Read-Host | Out-Null
+    Say "Installing the managed Python runtime..." "Cyan"
+    & winget install --id Python.Python.3.12 --exact --scope user --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "Python installation failed (winget exit $LASTEXITCODE)." }
+    $env:PATH = "$env:LOCALAPPDATA\Programs\Python\Python312;$env:LOCALAPPDATA\Programs\Python\Python312\Scripts;$env:PATH"
+    $Launcher = Find-PythonLauncher
+    if (-not $Launcher) { throw "Python was installed, but its launcher could not be found. Sign out and back in, then retry." }
 }
 
-# 3. Copy CADSwarm into FreeCAD
-# A clean copy each time (updates included). Only code lives here: projects are in Documents.
-# If this script was started from the installed copy there is nothing to copy (and deleting $Dest
-# would delete the files we are running from).
-function SamePath($a, $b) {
-    $norm = { param($p) [IO.Path]::GetFullPath($p).TrimEnd([char[]]'\/') }
-    return (& $norm $a) -ieq (& $norm $b)
-}
-if (SamePath $Here $Dest) {
-    Say "  [ok] CADSwarm is already installed in FreeCAD" "Green"
-} else {
-    if (Test-Path $Dest) { Remove-Item -Recurse -Force $Dest }
-    New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-    robocopy $Here $Dest /E /NFL /NDL /NJH /NJS /NP `
-        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target `
+New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+if ((Resolve-Path -LiteralPath $Here).Path -ne (Resolve-Path -LiteralPath $AppDir -ErrorAction SilentlyContinue).Path) {
+    if (Test-Path -LiteralPath $AppDir) { Remove-Item -LiteralPath $AppDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $AppDir | Out-Null
+    robocopy $Here $AppDir /E /NFL /NDL /NJH /NJS /NP `
+        /XD .git .venv __pycache__ .pytest_cache cadswarm-data exports .cadswarm *.egg-info node_modules target .claude `
         /XF *.pyc | Out-Null
-    if ($LASTEXITCODE -ge 8) { Say "Copying CADSwarm into FreeCAD failed (robocopy code $LASTEXITCODE)." "Red"; Finish 1 }
-    # The team server's database module: a local build if there is one, else the module the installer
-    # downloaded beside the code (build folders aren't copied). Never leave a freshly installed
-    # workbench to a stale download in the app folder.
-    $Wasm = Join-Path $Here "module\target\wasm32-unknown-unknown\release\cadswarm_module.wasm"
-    if (-not (Test-Path $Wasm)) { $Wasm = Join-Path $Here "module\cadswarm_module.wasm" }
-    if (Test-Path $Wasm) { Copy-Item $Wasm (Join-Path $Dest "module\cadswarm_module.wasm") }
-    Say "  [ok] Installed CADSwarm into FreeCAD" "Green"
+    if ($LASTEXITCODE -ge 8) { throw "Copying CADSwarm failed (robocopy code $LASTEXITCODE)." }
 }
 
-$Opener = Join-Path $Dest "cadswarm\gui\open_cadswarm.py"
+if (-not (Test-Path -LiteralPath $Python)) {
+    & $Launcher -m venv $Venv
+    if ($LASTEXITCODE -ne 0) { throw "Could not create CADSwarm's isolated Python runtime." }
+}
+Say "Installing CADSwarm and its CAD engine (this may take a few minutes)..." "Cyan"
+& $Python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { throw "Could not prepare the package installer." }
+& $Python -m pip install "$($AppDir)[desktop]"
+if ($LASTEXITCODE -ne 0) { throw "CADSwarm or its desktop dependencies could not be installed." }
 
-# 4. Optional desktop shortcut that opens FreeCAD straight into CADSwarm
-$answer = Read-Host "  Add a 'CADSwarm' shortcut to your desktop? (Y/n)"
-if ($answer -notmatch "^[nN]") {
-    $Shell = New-Object -ComObject WScript.Shell
-    $Link = $Shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath("Desktop")) "CadSwarm.lnk"))
-    $Link.TargetPath = $FreeCAD
-    $Link.Arguments = "`"$Opener`""
-    $Link.IconLocation = "$FreeCAD,0"
-    $Link.Description = "Build 3D designs with your team's AI helpers"
+$Programs = [Environment]::GetFolderPath("Programs")
+$StartMenu = Join-Path $Programs "CADSwarm"
+New-Item -ItemType Directory -Force -Path $StartMenu | Out-Null
+$Shell = New-Object -ComObject WScript.Shell
+foreach ($ShortcutPath in @((Join-Path $StartMenu "CADSwarm.lnk"),
+        (Join-Path ([Environment]::GetFolderPath("Desktop")) "CADSwarm.lnk"))) {
+    $Link = $Shell.CreateShortcut($ShortcutPath)
+    $Link.TargetPath = $PythonW
+    $Link.Arguments = "-m cadswarm.app"
+    $Link.WorkingDirectory = $AppDir
+    $Link.Description = "CADSwarm collaborative CAD"
     $Link.Save()
-    Say "  [ok] Added a CADSwarm shortcut to your desktop" "Green"
 }
+$DesktopShortcut = Join-Path ([Environment]::GetFolderPath("Desktop")) "CADSwarm.lnk"
+$UninstallScript = Join-Path $InstallRoot "uninstall.ps1"
+$InstallRootLiteral = $InstallRoot.Replace("'", "''")
+$StartMenuLiteral = $StartMenu.Replace("'", "''")
+$DesktopShortcutLiteral = $DesktopShortcut.Replace("'", "''")
+@"
+Remove-Item -LiteralPath '$InstallRootLiteral' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '$StartMenuLiteral' -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath '$DesktopShortcutLiteral' -Force -ErrorAction SilentlyContinue
+"@ | Set-Content -LiteralPath $UninstallScript -Encoding utf8
+$Uninstall = Join-Path $StartMenu "Uninstall CADSwarm.lnk"
+$Link = $Shell.CreateShortcut($Uninstall)
+$Link.TargetPath = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+$Link.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$UninstallScript`""
+$Link.Description = "Uninstall CADSwarm"
+$Link.Save()
 
-Say ""
-if ($NoLaunch) { Say "All set! Open FreeCAD and pick CADSwarm to see the guide." "Cyan" }
-else { Say "All set! FreeCAD will open now and show you the CADSwarm guide." "Cyan" }
-Say "(The first time FreeCAD starts it may ask about language and theme; any choice is fine.)" "Gray"
-if (-not $NoLaunch) { Start-Process -FilePath $FreeCAD -ArgumentList "`"$Opener`"" }
-Start-Sleep -Seconds 2
-exit 0
+Say "  [ok] Installed CADSwarm without FreeCAD" "Green"
+Say "  Start Menu: CADSwarm" "Gray"
+if (-not $NoLaunch) { Start-Process -FilePath $PythonW -ArgumentList "-m cadswarm.app" -WorkingDirectory $AppDir }

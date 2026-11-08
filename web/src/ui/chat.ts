@@ -1,5 +1,5 @@
 // Chat routing and the team thread, mirroring cadswarm/mentions.py and cadswarm/gui/panel.py:
-// the same words send the same thing from a phone as from FreeCAD, and the same messages show in the thread.
+// the same words send the same thing from a phone as from the desktop, and the same messages show in the thread.
 import type { Brief, Message, Receipt, State } from '../store';
 import { parseMentions, stripMentions } from './mentions';
 

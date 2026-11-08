@@ -26,7 +26,7 @@ export function decodeTicket(s: string): Ticket {
   }
 }
 
-// ---- Invite codes: the same text people paste into FreeCAD (mirrors cadswarm/invite.py) ----
+// ---- Invite codes: the same text people paste into the desktop app (mirrors cadswarm/invite.py) ----
 
 export const INVITE_PREFIX = 'cadswarm-2:';
 /** A decoded ticket plus the project name a `cadswarm-2:` code carries. */
@@ -69,7 +69,7 @@ function longest(parts: string[], decode: (s: string) => unknown): Record<string
 const base32Json = (s: string) => JSON.parse(new TextDecoder().decode(base32Decode(s)));
 
 /**
- * Read whatever the person pasted: a `cadswarm-2:` invite code (FreeCAD's Invite button), the bare ticket
+ * Read whatever the person pasted: a `cadswarm-2:` invite code (the desktop app's Invite button), the bare ticket
  * `cadswarm-host invite` prints, or a phone link with `#t=`. Throws an Error with a plain-language message.
  */
 export function readInvite(text: string): Invite {

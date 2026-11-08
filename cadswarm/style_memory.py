@@ -1,4 +1,4 @@
-"""Team design style: CADSwarm learns how this team uses FreeCAD and its agents, and teaches the agents.
+"""Team design style: CADSwarm learns how this team models and collaborates, and teaches the agents.
 
 The loop (observe -> distil -> gate -> recall -> observe again):
 
@@ -46,12 +46,14 @@ CREATE TABLE IF NOT EXISTS style_rules (
 """
 STATUSES = ("candidate", "active", "confirmed", "dismissed", "expired")
 # Ops that change the model; queries never teach anything about style.
-MUTATING = {"create_primitive", "create_extrusion", "boolean", "set_property", "set_props", "set_expression",
-            "set_placement", "delete", "set_param", "run_part_script", "insert_component",
+MUTATING = {"create_primitive", "create_extrusion", "create_sketch", "edit_sketch", "create_sketch_feature",
+            "boolean", "set_property", "set_props", "set_expression", "set_placement", "delete", "set_param",
+            "run_part_script", "insert_component",
             "insert_standard_part"}
-CREATES = {"create_primitive", "create_extrusion", "boolean", "run_part_script", "insert_component",
+CREATES = {"create_primitive", "create_extrusion", "create_sketch", "create_sketch_feature", "boolean",
+           "run_part_script", "insert_component",
            "insert_standard_part"}
-EDITS = {"set_property", "set_props", "set_expression", "set_placement", "delete"}
+EDITS = {"set_property", "set_props", "set_expression", "set_placement", "edit_sketch", "delete"}
 # What the reviewer records when it never reported: about the reviewer, not about the design.
 # Shared with design memory so a design never learns them as a lesson (see cadswarm.knowledge).
 

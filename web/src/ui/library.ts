@@ -30,7 +30,7 @@ export function mountLibrary(el: HTMLElement, store: Store, api: Api | null) {
     </div>
     <details class="lib-add"${api ? '' : ' hidden'}><summary>Add a part to the library</summary>
       <form class="lib-form">
-        <label>File (STEP, FreeCAD or STL)<input type="file" name="file" accept=".step,.stp,.fcstd,.stl"></label>
+        <label>File (STEP or STL)<input type="file" name="file" accept=".step,.stp,.stl"></label>
         <label>…or a link to the file<input type="url" name="url" placeholder="https://…/part.step"></label>
         <label>Name<input name="name" maxlength="80"></label>
         <label>Kind<select name="category">${CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select></label>
@@ -65,7 +65,7 @@ export function mountLibrary(el: HTMLElement, store: Store, api: Api | null) {
     else store.set({ notice: { text: 'Choose a file or paste a link first.', at: Date.now() } });
     button.disabled = false;
     button.textContent = 'Add to library';
-    if (ok) { form.reset(); store.set({ notice: { text: 'Added to the team library. FreeCAD is measuring it…', at: Date.now() } }); }
+    if (ok) { form.reset(); store.set({ notice: { text: 'Added to the team library.', at: Date.now() } }); }
   });
 
   el.addEventListener('click', async e => {
@@ -89,7 +89,7 @@ export function mountLibrary(el: HTMLElement, store: Store, api: Api | null) {
     }
     b.disabled = false;
     b.textContent = 'Place';
-    if (ok) store.set({ notice: { text: 'Placed in the model at the origin. Move it from FreeCAD or ask a helper.', at: Date.now() } });
+    if (ok) store.set({ notice: { text: 'Placed in the model at the origin. Move it in the CADSwarm desktop app or ask a helper.', at: Date.now() } });
   });
   el.addEventListener('change', e => {
     const t = e.target as HTMLElement;

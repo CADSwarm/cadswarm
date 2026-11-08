@@ -1,6 +1,6 @@
 # One-line CADSwarm install for Windows (paste into PowerShell):
 #   irm https://raw.githubusercontent.com/SachchitBalamurugan/cadswarm/main/install/quick-install.ps1 | iex
-# Downloads CADSwarm, then runs install\install.ps1. $env:CADSWARM_REF picks a branch or tag.
+# Downloads CADSwarm, then runs the standalone Windows installer. $env:CADSWARM_REF picks a branch or tag.
 $ErrorActionPreference = "Stop"
 $Repo = "SachchitBalamurugan/cadswarm"
 $Ref = if ($env:CADSWARM_REF) { $env:CADSWARM_REF } else { "main" }
@@ -13,9 +13,7 @@ try {
     Invoke-WebRequest -UseBasicParsing -Uri "https://codeload.github.com/$Repo/zip/$Ref" -OutFile $Zip
     Expand-Archive -Path $Zip -DestinationPath $Tmp
     $Src = Get-ChildItem -Path $Tmp -Directory | Select-Object -First 1
-    # Ship the release's database module inside the workbench, so it wins over any stale download
-    # in the app folder. A local build (module\target) still wins inside the installer. Only main or
-    # a release tag pairs a release module with the code; another branch may be ahead of it.
+    # Ship the release database module when available. The standalone host can also fetch it on first use.
     if (($Ref -eq "main" -or $Ref -match '^v\d') -and -not (Test-Path (Join-Path $Src.FullName "module\cadswarm_module.wasm"))) {
         $Base = if ($env:CADSWARM_RELEASE_BASE) { $env:CADSWARM_RELEASE_BASE.TrimEnd('/') }
                 elseif ($Ref -match '^v\d') { "https://github.com/$Repo/releases/download/$Ref" }

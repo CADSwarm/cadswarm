@@ -1,5 +1,5 @@
 @echo off
-rem Double-click me to install CadSwarm into FreeCAD.
+rem Double-click me to install the standalone CADSwarm desktop application.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install\install.ps1"
 if errorlevel 1 (
     echo.

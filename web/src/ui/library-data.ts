@@ -96,7 +96,7 @@ export function libraryEntries(team: Component[], cat: Catalog, query = '', cate
   return [...teamOut, ...stdOut];
 }
 
-/** A free FreeCAD object name for a placed part: 'M3x10 socket head cap screw' -> 'M3x10SocketHead1' (space_library.part_name). */
+/** A free CADSwarm feature name for a placed part: 'M3x10 socket head cap screw' -> 'M3x10SocketHead1'. */
 export function partName(label: string, taken: Iterable<string>): string {
   const used = new Set(taken);
   const words = (label.match(/[A-Za-z0-9]+/g) ?? ['Part']).slice(0, 3);

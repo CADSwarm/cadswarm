@@ -39,7 +39,7 @@ export function mountJoin(app: HTMLElement, opts: JoinOptions): JoinScreen {
       </header>
       <div class="join-body">
         <h1>Open your team’s build</h1>
-        <p class="join-lede">The host runs CADSwarm in FreeCAD. Scan the invite QR it shows, or paste the code a
+        <p class="join-lede">The host runs the CADSwarm desktop app. Scan the invite QR it shows, or paste the code a
           teammate sent you.</p>
         <button type="button" class="join-scan" data-scan>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8 12h8"/></svg>
