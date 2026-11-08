@@ -26,7 +26,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TOKENS = os.path.join(REPO, "design", "tokens.json")
-LOGO = os.path.join(REPO, "cadswarm", "gui", "cadswarm.svg")
+LOGO = os.path.join(REPO, "design", "icon", "cadswarm-256.png")  # built by cadswarm/app/app_icon.py
 
 APP_NAME = "CADSwarm"
 
@@ -37,6 +37,7 @@ BRAND_CONFIG = {
     "ExeVendor": APP_NAME,
     "WindowTitle": APP_NAME,
     "StartWorkbench": "PartDesignWorkbench",
+    "WindowIcon": LOGO,
 }
 
 # Help-menu commands that send people to FreeCAD's website, forum, wiki or donation pages.
@@ -47,6 +48,38 @@ FREECAD_LINK_COMMANDS = {
 }
 
 _WORD = re.compile(r"\bFreeCAD\b")
+
+ENGINE_LINE = ("CADSwarm runs on the open-source FreeCAD engine (LGPL&nbsp;2.1+), used unmodified, "
+               "with Open CASCADE Technology underneath.")
+
+
+def cadswarm_version(pyproject=os.path.join(REPO, "pyproject.toml")):
+    """CADSwarm's version from pyproject.toml ("" when it cannot be read)."""
+    try:
+        with open(pyproject, encoding="utf-8") as f:
+            m = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
+def engine_version(version_list):
+    """'1.1.4' from FreeCAD.Version() (['1', '1', '4', 'rev', ...]); '' when unknown."""
+    parts = [str(p) for p in (version_list or [])[:3] if str(p).strip()]
+    return ".".join(parts)
+
+
+def about_html(version="", engine=""):
+    """The About box's text: CADSwarm first, the engine credited honestly."""
+    import html
+    rows = [("Version", version or "dev")]
+    if engine:
+        rows.append(("Engine", f"FreeCAD {engine}"))
+    table = "".join(f"<tr><td style='padding-right:12px'>{html.escape(k)}</td>"
+                    f"<td><b>{html.escape(v)}</b></td></tr>" for k, v in rows)
+    return (f"<h2 style='margin:0'>{APP_NAME}</h2>"
+            "<p>Parametric 3D CAD where your team and its AI helpers build one model together.</p>"
+            f"<table>{table}</table><p>{ENGINE_LINE}</p>")
 
 
 def rebrand_text(text):

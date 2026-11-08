@@ -118,3 +118,44 @@ def test_write_stylesheet_and_brand_params_use_it(tmp_path, mode):
 def test_brand_params_fall_back_to_freecad_qss(tmp_path):
     as_dict = {(g, k): v for g, _, k, v in branded.brand_params(str(tmp_path / "Themes" / "x.yaml"))}
     assert as_dict[("BaseApp/Preferences/MainWindow", "StyleSheet")] == "FreeCAD.qss"
+
+
+def test_ico_from_pngs_directory():
+    import struct
+    from cadswarm.app import app_icon
+    png = b"\x89PNG\r\n\x1a\nfake"
+    data = app_icon.ico_from_pngs({256: png + b"big", 16: png})
+    reserved, kind, count = struct.unpack("<HHH", data[:6])
+    assert (reserved, kind, count) == (0, 1, 2)
+    first = struct.unpack("<BBBBHHII", data[6:22])
+    second = struct.unpack("<BBBBHHII", data[22:38])
+    assert first[0] == 16 and second[0] == 0  # 0 means 256
+    assert data[first[7]:first[7] + first[6]] == png
+    assert data[second[7]:second[7] + second[6]] == png + b"big"
+    with pytest.raises(ValueError):
+        app_icon.ico_from_pngs({16: b"GIF89a"})
+
+
+def test_built_icon_files_exist():
+    from cadswarm.app import app_icon
+    assert os.path.exists(app_icon.ICO) and os.path.exists(app_icon.PNG)
+    assert [s for s, _ in app_icon.icon_files()] == list(app_icon.PNG_SIZES)
+    with open(app_icon.ICO, "rb") as f:
+        assert f.read(4) == b"\x00\x00\x01\x00"
+    assert branded.BRAND_CONFIG["WindowIcon"] == branded.LOGO and os.path.exists(branded.LOGO)
+
+
+def test_about_text_names_cadswarm_and_credits_the_engine():
+    text = branded.about_html("0.1.0", "1.1.4")
+    assert text.startswith("<h2") and "CADSwarm" in text and "0.1.0" in text
+    assert "FreeCAD 1.1.4" in text and "LGPL" in text and "unmodified" in text
+    assert branded.engine_version(["1", "1", "4", "20260928", "git"]) == "1.1.4"
+    assert branded.engine_version(None) == ""
+    assert branded.cadswarm_version()  # read from pyproject.toml
+
+
+def test_cadswarm_version_reads_pyproject(tmp_path):
+    p = tmp_path / "pyproject.toml"
+    p.write_text('[project]\nname = "x"\nversion = "2.3.4"\n', encoding="utf-8")
+    assert branded.cadswarm_version(str(p)) == "2.3.4"
+    assert branded.cadswarm_version(str(tmp_path / "missing.toml")) == ""
