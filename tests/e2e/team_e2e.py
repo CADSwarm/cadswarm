@@ -41,6 +41,8 @@ PORT = hosting.LOCAL_PORT
 
 
 def log(*a):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     print("[e2e]", *a, flush=True)
 
 
@@ -303,9 +305,45 @@ def scenario_build(team, out, agent="claude", request=BUILD_REQUEST, timeout=150
             "host_log": [l for l in team.host_log(200) if bid in l or "brief" in l][-30:]}
 
 
+# ----------------------------------------------------------------------------------------- remote
+
+def scenario_remote(team, out, part="PhoneBox"):
+    """The web app's api.ts (the phone's code) joins with an invite and drives the live team; a desktop-side
+    member checks that what the phone did arrived."""
+    web = os.path.join(ROOT, "web")
+    if not os.path.isdir(os.path.join(web, "node_modules")):
+        return {"ok": False, "skipped": "run `npm ci` in web/ first"}
+    watcher = team.member("erin", "human", "script")
+    env = dict(os.environ, CADSWARM_E2E_INVITE=team.invite(), CADSWARM_E2E_OUT=out, CADSWARM_E2E_PART=part)
+    npx = "npx.cmd" if os.name == "nt" else "npx"
+    r = subprocess.run([npx, "vitest", "run", "test/remote.live.test.ts"], cwd=web, env=env, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=300, shell=os.name == "nt")
+    with open(os.path.join(out, "web-remote.log"), "w", encoding="utf-8") as f:
+        f.write(r.stdout + r.stderr)
+    model = watcher.get("/model")
+    obj = next((o for o in model["objects"] if o["name"] == part), None)
+    names = {p["name"]: p.get("status") for p in model["participants"]}
+    heard = [m["body"] for m in watcher.get("/messages").get("messages", [])]
+    pointers = [p for p in watcher._rows("v_pointer") if p.get("object") == part]
+    checks = {
+        "web_test_passed": r.returncode == 0 and "1 passed" in r.stdout,
+        "phone_is_a_member": names.get("phone") == "active",
+        "desktop_heard_phone_chat": "hello from the phone" in heard,
+        "phone_built_part_on_host": bool(obj) and (obj.get("volume") or 0) > 0,
+        "phone_holds_lock": bool(obj) and obj.get("locked_by") == "phone",
+        "phone_pointer_visible": bool(pointers),
+    }
+    try:
+        watcher.post("/leave")
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": all(checks.values()), "checks": checks, "web": read_json(os.path.join(out, "web-remote.json")),
+            "vitest_tail": (r.stdout + r.stderr)[-1500:] if r.returncode else ""}
+
+
 # ------------------------------------------------------------------------------------------ main
 
-SCENARIOS = {"team": scenario_team, "build": scenario_build}
+SCENARIOS = {"team": scenario_team, "build": scenario_build, "remote": scenario_remote}
 
 
 def main(argv=None):
