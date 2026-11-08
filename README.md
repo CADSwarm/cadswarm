@@ -603,6 +603,10 @@ cd web; npm test
 Current counts on a Windows checkout: Python 728 passed (16 skipped where FreeCAD or the platform
 sandbox is unavailable), host 53, rules 26, web 107.
 
+Multiplayer end to end (a real local team, two CADSwarm app windows, agents building over MCP, the web app's
+remote control, handoff): `tests\e2e\team_e2e.py`, also as `pytest -m e2e` with `CADSWARM_E2E=1`. See
+[tests/e2e/README.md](tests/e2e/README.md).
+
 `tests\freecad_panel_live.py` is a manual live check, not part of pytest: it opens a real FreeCAD
 window, joins a running team as a person, sends `@team ...` through the panel, waits for the host to
 plan, build and review it, and exercises the CLI picker. Pass it an output folder, the joined project

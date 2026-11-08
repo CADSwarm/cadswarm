@@ -24,3 +24,4 @@ cadswarm = ["worker/*.py", "settings_spec.json", "library/*.json", "lattice/*.js
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["e2e: multiplayer end to end on a real local team (CADSWARM_E2E=1; tests/e2e/README.md)"]

@@ -341,9 +341,40 @@ def scenario_remote(team, out, part="PhoneBox"):
             "vitest_tail": (r.stdout + r.stderr)[-1500:] if r.returncode else ""}
 
 
+# ---------------------------------------------------------------------------------------- handoff
+
+def scenario_handoff(team, out, part="HandoffBlock"):
+    """A person holding a part hands off now: the host starts an agent that calls accept_handoff first and
+    takes over the person's locks and task."""
+    fay = team.member("fay", "human", "script")
+    fay.post("/locks", {"names": [part]})
+    fay.post("/ops", {"op": "create_primitive", "args": {"kind": "box", "name": part,
+                                                         "props": {"Length": 10, "Width": 10, "Height": 10}}})
+    t = fay.post("/tasks", {"title": "finish the block", "objects": [part]})
+    fay.post(f"/tasks/{t['id']}/claim", {})
+    hid = "h_" + uuid.uuid4().hex[:8]
+    fay._f("request_handoff", hid, "please finish the block: add nothing, just keep it", "now")
+    t0 = time.time()
+    row = wait(lambda: next((h for h in fay._rows("v_handoff") if h["id"] == hid and h["status"] == "accepted"), None),
+               600, 2)
+    names = {m["id"]: m["name"] for m in fay._rows("v_member")}
+    taker = names.get(row["taker"]) if row else None
+    # The lock moved to the agent the moment it accepted (it may already be off the team and the lock freed).
+    events = [a for a in fay._rows("v_activity") if "handoff" in (a.get("kind") or "") or "picked up" in (a.get("summary") or "")]
+    checks = {"accepted": bool(row), "taken_by_a_handoff_agent": bool(taker and taker.startswith("handoff-")),
+              "agent_retired_after": bool(wait(lambda: not any(m["name"] == taker and m["status"] == "active"
+                                                                for m in fay._rows("v_member")), 300, 2)) if taker else False}
+    try:
+        fay.post("/leave")
+    except Exception:  # noqa: BLE001
+        pass
+    return {"ok": all(checks.values()), "checks": checks, "taker": taker, "seconds": round(time.time() - t0),
+            "events": [a.get("summary") for a in events][-5:]}
+
+
 # ------------------------------------------------------------------------------------------ main
 
-SCENARIOS = {"team": scenario_team, "build": scenario_build, "remote": scenario_remote}
+SCENARIOS = {"team": scenario_team, "build": scenario_build, "remote": scenario_remote, "handoff": scenario_handoff}
 
 
 def main(argv=None):
@@ -359,7 +390,8 @@ def main(argv=None):
     for run in range(args.runs):
         out = os.path.join(args.out, f"run{run + 1}")
         os.makedirs(out, exist_ok=True)
-        team = Team(out, args.agent, None)
+        fake = [sys.executable, os.path.join(HERE, "fake_agent.py"), "{prompt}"] if args.agent == "fake" else None
+        team = Team(out, args.agent, fake)
         res = {}
         try:
             team.start()
