@@ -62,3 +62,59 @@ def test_link_addon_links_repo(tmp_path):
     (repo / "InitGui.py").write_text("# repo", encoding="utf-8")
     dest = branded.link_addon(str(tmp_path / "home"), repo=str(repo))
     assert os.path.exists(os.path.join(dest, "InitGui.py"))
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_theme_text_is_readable_on_every_background(mode):
+    over = branded.theme_overrides(mode)
+    for fg, bg in branded.TEXT_PAIRS:
+        ratio = branded.contrast(over[fg], over[bg])
+        assert ratio >= 4.5, (mode, fg, bg, ratio)
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_active_tab_never_follows_the_3d_view_colour(mode):
+    over = branded.theme_overrides(mode)
+    assert not over["ActiveTabBackgroundColor"].startswith("@")
+    assert not over["3DViewBackgroundRefColor"].startswith("@")
+    assert over["ButtonTopBackgroundColor"] == over["ButtonBottomBackgroundColor"]  # flat, no gradient
+
+
+def test_blend_and_contrast():
+    assert branded.blend("#000000", "#FFFFFF", 0) == "#000000"
+    assert branded.blend("#000000", "#FFFFFF", 1) == "#FFFFFF"
+    assert branded.blend("#000000", "#FFFFFF", 0.5) == "#808080"
+    assert round(branded.contrast("#000000", "#FFFFFF"), 1) == 21.0
+    assert branded.contrast("#111111", "#111111") == 1.0
+
+
+def test_square_corners_keeps_radio_dots_round():
+    qss = ("QPushButton { border-radius: 3px; color: red; }\n"
+           "QRadioButton::indicator { border-radius: 6.55px; }\n"
+           "QTabBar::tab:top { border-top-left-radius: 3px; border-top-right-radius: 7px; }")
+    out = branded.square_corners(qss)
+    assert "QPushButton { border-radius: 0px; color: red; }" in out
+    assert "border-radius: 6.55px" in out
+    assert "border-top-left-radius: 0px" in out and "border-top-right-radius: 0px" in out
+
+
+@pytest.mark.parametrize("mode", ["light", "dark"])
+def test_write_stylesheet_and_brand_params_use_it(tmp_path, mode):
+    root = tmp_path / "fc"
+    sheets = root / "data" / "Gui" / "Stylesheets"
+    (sheets / "parameters").mkdir(parents=True)
+    (sheets / "FreeCAD.qss").write_text("QToolTip { border-radius: 5px; }\n", encoding="utf-8")
+    theme = branded.write_theme(str(root), str(tmp_path / "home"), mode)
+    qss = branded.stylesheet_path(str(tmp_path / "home"), mode)
+    text = open(qss, encoding="utf-8").read()
+    assert "border-radius: 0px" in text and branded.colours(mode)["signal"] in text
+    as_dict = {(g, k): v for g, _, k, v in branded.brand_params(theme, mode)}
+    assert as_dict[("BaseApp/Preferences/MainWindow", "StyleSheet")] == qss
+
+
+def test_brand_params_fall_back_to_freecad_qss(tmp_path):
+    as_dict = {(g, k): v for g, _, k, v in branded.brand_params(str(tmp_path / "Themes" / "x.yaml"))}
+    assert as_dict[("BaseApp/Preferences/MainWindow", "StyleSheet")] == "FreeCAD.qss"
