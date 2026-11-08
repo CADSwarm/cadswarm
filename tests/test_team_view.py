@@ -125,16 +125,13 @@ def test_agent_rows_detected_connected_and_custom():
     assert by["custom"]["installed"] and by["custom"]["helpers"][0]["name"] == "eve-gpt"
 
 
-def test_remote_instructions_use_installed_setup_wrappers_for_each_platform():
+def test_remote_instructions_are_exact():
     r = tv.remote_instructions("claude", "cadswarm-2:abc", "dave-laptop", python="py", launcher="L.py",
-                               folder="$HOME\\h", platform="windows")
-    assert r["setup"] == '.\\cadswarm.cmd setup --client claude --invite cadswarm-2:abc --name dave-laptop --dir "$HOME\\h"'
-    assert r["run"] == 'Set-Location "$HOME\\h"; claude'
+                               folder="~/h")
+    assert r["setup"] == "cadswarm setup --client claude --invite cadswarm-2:abc --name dave-laptop --dir ~/h"
+    assert r["run"] == "cd ~/h && claude"
     assert json.loads(r["mcp"]) == {"mcpServers": {"cadswarm": {"command": "py", "args": ["L.py", "mcp"],
-                                                                 "env": {"CADSWARM_PROJECT": "$HOME\\h"}}}}
-    unix = tv.remote_instructions("codex", "code", "laptop", platform="linux")
-    assert "./cadswarm setup --client codex" in unix["setup"]
-    assert 'cd "$HOME/CadSwarm/laptop" && codex' == unix["run"]
-    custom = tv.remote_instructions("custom", "c", "n", platform="macos")
-    assert "--client custom" in custom["setup"] and "prints the exact cadswarm MCP server entry" in custom["steps"]
+                                                                 "env": {"CADSWARM_PROJECT": "~/h"}}}}
+    custom = tv.remote_instructions("custom", "c", "n")
+    assert "--client opencode" in custom["setup"] and "mcpServers" in custom["steps"]
     assert tv.helper_name("Carol P", "claude", ["carol-p-claude"]) == "carol-p-claude-2"

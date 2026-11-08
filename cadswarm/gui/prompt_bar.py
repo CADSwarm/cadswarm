@@ -131,7 +131,7 @@ class PromptBar(QtGui.QFrame):
         self.target.setToolTip("Who gets this: the AI build (the team plans numbered steps and builds them), one AI "
                                "helper, every helper, or the people on the team. Typing @name wins.")
         self.target.setSizeAdjustPolicy(QtGui.QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.target.setMinimumContentsLength(9)  # compact docks show a short label; the menu has full names
+        self.target.setMinimumContentsLength(10)  # narrow panels keep their width; the list shows full names
         head.addWidget(self.target)
         self.keys = QtGui.QLabel(SHORTCUT)
         self.keys.setObjectName("kbd")
@@ -226,7 +226,8 @@ class PromptBar(QtGui.QFrame):
                 line = team_view.selection_context(sel, limit=3).replace("Selected in the model: ", "")
                 self.context.setText(f"◆ {len(sel)} selected: {line} · goes along as context")
             else:
-                self.context.setText("Select parts in the model to point the AI at them")
+                self.context.setText("")
+            self.context.setVisible(bool(sel))  # no room taken while nothing is selected
 
     def choose(self, key):
         self.refresh()

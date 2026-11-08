@@ -67,7 +67,8 @@ class DemoClient:
         self.session, self.snap = session, snap
 
     def _echo(self):
-        QtCore.QTimer.singleShot(400, lambda: self.session.apply_snapshot(self.snap))
+        # Called from the panel's worker threads: hand the new state to the GUI thread through the event queue.
+        self.session.events.put(("snapshot", self.snap))
 
     def request(self, method, path, body=None, params=None):
         if method == "GET":
@@ -88,7 +89,9 @@ class DemoClient:
             self.snap["tasks"].append(t)
             self._echo()
             return t
-        elif path == "/briefs":
+        elif path not in ("/briefs",):
+            raise RuntimeError(f"No route in the demo: {path}")
+        if path == "/briefs":
             self.snap["briefs"].append({"id": f"b{next(_ids)}", "text": body.get("text") or "", "status": "planning",
                                         "by": me, "at": time.time(), "tasks": 0, "done": 0})
         self._echo()
@@ -112,6 +115,10 @@ def seed(session):
     session.state = "connected"
     session.mirror = lambda: type("Doc", (), {"Objects": []})()
     session.apply_snapshot(snap)
+    if session.timer is None:  # what a real join starts: the GUI thread drains what the workers hand back
+        session.timer = QtCore.QTimer()
+        session.timer.timeout.connect(session.drain)
+    session.timer.start(250)
     if session.panel:
         session.panel.show_state(session)
     return snap
@@ -129,19 +136,10 @@ def tour(session, folder, start_ms=6000, step_ms=1500):
     mw = Gui.getMainWindow()
     shots = [("build", lambda: p.show_tab(p.build_page)),
              ("chat", lambda: p.show_tab(p.chat_page)),
-             ("chatinfo", lambda: print("CHATINFO", p.height(), p.widget().viewport().height(),
-                                        [(p.tabs.tabText(i), p.tabs.widget(i).minimumSizeHint().height(),
-                                          p.tabs.widget(i).sizePolicy().verticalPolicy())
-                                         for i in range(p.tabs.count())],
-                                        p.tabs.minimumSizeHint().height(), p.prompt_bar.height(),
-                                        p.banner.height(), p.widget().widget().minimumSizeHint().height(),
-                                        p.widget().widget().layout().hasHeightForWidth(),
-                                        p.widget().widget().heightForWidth(p.widget().viewport().width()),
-                                        p.chat_page.layout().hasHeightForWidth(), p.chat.sizeHint().height(),
-                                        p.widget().verticalScrollBar().maximum(), flush=True)),
              ("team", lambda: p.show_tab(p.team_page)),
              ("agents", lambda: p.show_tab(p.agents_page)),
              ("more", lambda: p.show_tab(p.tasks_page)),
+             ("verify", lambda: verify(session, folder)),
              ("ask", lambda: open_ask(p))]
     t = start_ms
 
@@ -165,3 +163,38 @@ def open_ask(p):
     overlay = prompt_bar.OVERLAY or prompt_bar.install(p.session)
     overlay.open()
     overlay.bar.edit.setText("@bob-codex make the grip bolt M4")
+
+
+def verify(session, folder=None):
+    """What the tour checks in the real app: Ctrl+K opens the ask bar, clicking a step selects its parts.
+    Printed as one VERIFY line (the milestone log)."""
+    import FreeCADGui as Gui
+    from PySide import QtGui
+    from . import prompt_bar
+    out = {}
+    try:
+        from PySide6 import QtTest
+        overlay = prompt_bar.OVERLAY
+        overlay.close_bar()
+        target = QtGui.QApplication.focusWidget() or Gui.getMainWindow()
+        QtTest.QTest.keyClick(target, QtCore.Qt.Key_K, QtCore.Qt.ControlModifier)
+        QtGui.QApplication.processEvents()
+        out["ctrl_k_opens_bar"] = overlay.bar.isVisible() and overlay.bar.edit.hasFocus()
+        overlay.close_bar()
+    except Exception as e:  # noqa: BLE001
+        out["ctrl_k_opens_bar"] = repr(e)
+    try:
+        page = session.panel.build_page
+        step = next(s for s in page.model["steps"] if s["name"] == "Blade grip")
+        Gui.Selection.clearSelection()
+        page.toggle(step)
+        out["step_click_selects"] = [o.Name for o in Gui.Selection.getSelection()]
+    except Exception as e:  # noqa: BLE001
+        out["step_click_selects"] = repr(e)
+    print("VERIFY", out, flush=True)
+    if folder:
+        import json
+        import os
+        with open(os.path.join(folder, "verify.json"), "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=1)
+    return out

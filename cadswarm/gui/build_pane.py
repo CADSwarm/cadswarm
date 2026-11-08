@@ -444,6 +444,9 @@ class BuildPage(QtGui.QWidget):
                               else html.escape(build_view.view({"steps": []})["line"]))
         else:
             self.line.setText("Steps appear here once the team has planned the request.")
+        self.card.setVisible(bool(brief or model["total"]))  # no request yet: the next-step box explains
+        for cap in self.caption_labels:
+            cap.setVisible(bool(model["total"]))
         self.show_next(model, brief)
         participants = (getattr(self.session, "model", None) or {}).get("participants") or []
         key = key + (tuple((p.get("name"), p.get("kind")) for p in participants),)

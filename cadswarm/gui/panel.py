@@ -51,6 +51,19 @@ def prefs():
     return App.ParamGet(PARAMS_PATH)
 
 
+class _Colours:
+    """C.MUTED, C.OK, ...: the panel's colours as they are now (light or dark), read when the text is drawn."""
+
+    def __getattr__(self, name):
+        try:
+            return prompt_bar.colours()[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+
+C = _Colours()
+
+
 def identity_path(db):
     """This computer's sign-in for one team, kept outside every project folder (it is a secret)."""
     return os.path.join(app_dir(), "gui", re.sub(r"[^A-Za-z0-9_.-]+", "_", db or "team") + ".json")
@@ -1058,7 +1071,7 @@ class TeamPanel(QtGui.QDockWidget):
             self.completer.activated[str].connect(self.insert_mention)
         except (KeyError, TypeError, IndexError):
             self.completer.activated.connect(self.insert_mention)
-        hint_ = QtGui.QLabel("<small style='color:#8b949e'><b>@helper</b> a task · <b>@team</b> a whole build · "
+        hint_ = QtGui.QLabel(f"<small style='color:{C.MUTED}'><b>@helper</b> a task · <b>@team</b> a whole build · "
                              "<b>@all</b> every helper · no @: the people</small>")
         hint_.setWordWrap(True)
         tl.addWidget(hint_)
@@ -1568,16 +1581,17 @@ class TeamPanel(QtGui.QDockWidget):
 
     BANNERS = {
         # state: (status colour, status word, headline, button)
-        "connecting": ("#d29922", "Joining…", "Rejoining your team…", ""),
-        "disconnected": ("#d29922", "Not joined", "You haven't joined a team session yet.", "Get started…"),
-        "offline": ("#f85149", "Reconnecting", "Lost contact with your team. Retrying automatically…",
+        "connecting": ("WARN", "Joining…", "Rejoining your team…", ""),
+        "disconnected": ("WARN", "Not joined", "You haven't joined a team session yet.", "Get started…"),
+        "offline": ("ERR", "Reconnecting", "Lost contact with your team. Retrying automatically…",
                     "Retry now"),
-        "ended": ("#f85149", "Signed out", "You're no longer in the team session.", "Join again…"),
-        "connected": ("#3fb950", "Connected", "", "Leave"),
+        "ended": ("ERR", "Signed out", "You're no longer in the team session.", "Join again…"),
+        "connected": ("OK", "Connected", "", "Leave"),
     }
 
     def show_state(self, s):
-        colour, word, headline, button = self.BANNERS[s.state]
+        tone, word, headline, button = self.BANNERS[s.state]
+        colour = getattr(C, tone)
         project = s.project or prefs().GetString("ProjectName")
         self.title.setText("Team" + (f" · {html.escape(project)}" if project else ""))
         self.status.setText(f"<span style='color:{colour}'>●&nbsp;{word}</span>")
@@ -1607,9 +1621,12 @@ class TeamPanel(QtGui.QDockWidget):
                      "<br>FreeCAD stays usable while this finishes."
         if s.state == "disconnected" and s.rejoin_error:
             headline = "Couldn't reach your team just now."
-        self.banner_text.setText(f"<b>{headline}</b>" + (f"<br><span style='color:#8b949e'>{detail}</span>"
+        self.banner_text.setText(f"<b>{headline}</b>" + (f"<br><span style='color:{C.MUTED}'>{detail}</span>"
                                                           if detail else "")
-                                 if s.state != "connected" else f"<span style='color:#8b949e'>{headline}</span>")
+                                 if s.state != "connected" else f"<span style='color:{C.MUTED}'>{headline}</span>")
+        # In the team: the title and the status say it all; the line under them is for not being in one yet.
+        self.banner_text.setVisible(s.state != "connected")
+        self.banner.setToolTip(re.sub(r"<[^>]+>", "", headline) if s.state == "connected" else "")
         self.banner_button.setText("Try again" if (s.state == "disconnected" and s.rejoin_error) else button)
         self.banner_button.setVisible(s.state != "connecting")  # nothing to press while it joins by itself
         # Not in a team: joining is the one thing to do, so its button stands out.
@@ -1663,7 +1680,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.sizes_page.render(s)
         self.files_page.render(s)
         params = s.model.get("params") or {}
-        self.params.setText("<small><span style='color:#8b949e'>Shared sizes</span>&nbsp; " + html.escape(" · ".join(
+        self.params.setText(f"<small><span style='color:{C.MUTED}'>Shared sizes</span>&nbsp; " + html.escape(" · ".join(
             f"{k.replace('_', ' ')} {v:g} mm" if isinstance(v, (int, float)) else f"{k.replace('_', ' ')} {v}"
             for k, v in params.items()) or "none yet") + "</small>")
         if not self.keys.get("suggestions_read"):
@@ -1679,20 +1696,20 @@ class TeamPanel(QtGui.QDockWidget):
             size = " x ".join(f"{float(v):g}" for v in bed[:3])
         except (TypeError, ValueError):
             size = "180 x 180 x 180"
-        lines = [f"<span style='color:#8b949e'>Printer bed</span> {size} mm"]
+        lines = [f"<span style='color:{C.MUTED}'>Printer bed</span> {size} mm"]
         if not s.reviews:
-            lines.append("<span style='color:#8b949e'>No review yet. The reviewer checks the model before it is "
+            lines.append(f"<span style='color:{C.MUTED}'>No review yet. The reviewer checks the model before it is "
                          "ready.</span>")
         else:
             r = s.reviews[0]
             passed = bool(r.get("passed"))
-            colour = "#2da44e" if passed else "#d9822b"
+            colour = C.OK if passed else C.ACCENT
             word = "passed" if passed else "asks for changes"
             findings = [f for f in (r.get("findings") or []) if f]
             lines.append(f"<b style='color:{colour}'>Round {int(r.get('round') or 0)} {word}</b>")
             lines.extend("· " + html.escape(str(f)) for f in findings[:3])
             if len(findings) > 3:
-                lines.append(f"<span style='color:#8b949e'>and {len(findings) - 3} more</span>")
+                lines.append(f"<span style='color:{C.MUTED}'>and {len(findings) - 3} more</span>")
         self.review_box.setText("<br>".join(lines))
 
     def render_team(self, s):
@@ -1718,7 +1735,7 @@ class TeamPanel(QtGui.QDockWidget):
         self.people.setText("<br>".join(
             f"<span style='color:{dot_colour(p['id'])}; font-size:13pt'>●</span>&nbsp;{html.escape(p['name'])}"
             + (" (you)" if p["name"] == me else "")
-            + f" <span style='color:#8b949e'>· {'online' if p.get('status') == 'active' else 'away'}"
+            + f" <span style='color:{C.MUTED}'>· {'online' if p.get('status') == 'active' else 'away'}"
             + (f" · {html.escape(team_view.holds_text(team_view.presence([p])[0]))}"
                if [x for x in p.get('locks') or [] if x != 'Params'] else "") + "</span>"
             for p in people))
@@ -1754,8 +1771,8 @@ class TeamPanel(QtGui.QDockWidget):
                 font.setBold(True)
                 item.setFont(0, font)
             if not task:
-                item.setForeground(1, QtGui.QBrush(QtGui.QColor("#8b949e")))
-            colour = {"working": "#d9822b", "ready": "#2da44e", "away": "#8b949e"}.get(state)
+                item.setForeground(1, QtGui.QBrush(QtGui.QColor(C.MUTED)))
+            colour = {"working": C.ACCENT, "ready": C.OK, "away": C.MUTED}.get(state)
             if colour:
                 item.setForeground(2, QtGui.QBrush(QtGui.QColor(colour)))
             if state == "working":
@@ -1792,7 +1809,7 @@ class TeamPanel(QtGui.QDockWidget):
             item = QtGui.QTreeWidgetItem([f"🧠 {b['text']}", word])
             item.setToolTip(0, f"{b['text']}\n(asked by {b['by']})")
             item.setForeground(1, QtGui.QBrush(QtGui.QColor(
-                {"ready": "#4fb35a", "failed": "#ff7b72", "cancelled": "#8b949e"}.get(b["status"], "#d9822b"))))
+                {"ready": C.OK, "failed": C.ERR, "cancelled": C.MUTED}.get(b["status"], C.ACCENT))))
             item.setData(0, QtCore.Qt.UserRole, None)
             item.setData(0, QtCore.Qt.UserRole + 1, b["id"])
             self.task_list.addTopLevelItem(item)
@@ -1812,8 +1829,8 @@ class TeamPanel(QtGui.QDockWidget):
             item.setData(0, QtCore.Qt.UserRole, t["id"])
             item.setToolTip(0, (t.get("detail") or t["title"])[:600])
             item.setToolTip(1, f"{word}, {who}")
-            colour = {"claimed": "#d9822b", "done": "#4fb35a", "blocked": "#ff7b72",
-                      "awaiting_takeover": "#e3b341", "cancelled": "#8b949e"}.get(t["status"])
+            colour = {"claimed": C.ACCENT, "done": C.OK, "blocked": C.ERR,
+                      "awaiting_takeover": C.WARN, "cancelled": C.MUTED}.get(t["status"])
             if colour:
                 item.setForeground(1, QtGui.QBrush(QtGui.QColor(colour)))
             if parent is not None:
@@ -1848,19 +1865,19 @@ class TeamPanel(QtGui.QDockWidget):
             mine = m["from"] == me
             sender = s.participant(m["from"])
             helper = sender is not None and sender.get("kind") != "human"
-            colour = "#4fb35a" if mine else "#a371f7" if helper else "#3e9be9"
+            colour = C.OK if mine else C.ACCENT if helper else C.SELECT
             who = "You" if mine else html.escape(m["from"] or "?")
             to = ""
             if m["to"] not in ("all", None, me) and not (mine and f"@{m['to']}".lower() in m["body"].lower()):
-                to = f" <span style='color:#8b949e'>to {html.escape(m['to'])}</span>"
-            tag = " <span style='color:#8b949e'>(AI helper)</span>" if helper and not mine else ""
+                to = f" <span style='color:{C.MUTED}'>to {html.escape(m['to'])}</span>"
+            tag = f" <span style='color:{C.MUTED}'>(AI helper)</span>" if helper and not mine else ""
             status = ""
             c = states.get(m["id"])
             if c:
-                status = (f" <span style='color:{ {'sent': '#e3b341', 'seen': '#d9822b', 'done': '#4fb35a'}[c['state']] }'>"
+                status = (f" <span style='color:{ {'sent': C.WARN, 'seen': C.ACCENT, 'done': C.OK}[c['state']] }'>"
                           f"{COMMAND_WORDS[c['state']]}</span>")
             if not mine:  # Reply puts "@who re “…”: " in the box
-                status += (f" &nbsp;<a href='reply:{html.escape(str(m['id']))}' style='color:#8b949e; "
+                status += (f" &nbsp;<a href='reply:{html.escape(str(m['id']))}' style='color:{C.MUTED}; "
                            "text-decoration:none'>↩ Reply</a>")
             if panes.is_refusal(m["body"]):
                 stamp = time.strftime('%H:%M', time.localtime(m["at"]))
@@ -1873,14 +1890,14 @@ class TeamPanel(QtGui.QDockWidget):
                                         "background-color:rgba(43,108,217,0.12)'>", 1)
                 lines.append(line)
         for o in self.outbox:
-            lines.append(chat_line(o["at"], "You", "#8b949e", "", o["body"],
-                                   " <span style='color:#8b949e'>sending…</span>"))
+            lines.append(chat_line(o["at"], "You", C.MUTED, "", o["body"],
+                                   f" <span style='color:{C.MUTED}'>sending…</span>"))
         for n in s.notices:
             stamp = time.strftime('%H:%M', time.localtime(n["at"]))
-            lines.append(f"<p style='margin:0 0 8px 0'><span style='color:#8b949e'>{stamp} "
+            lines.append(f"<p style='margin:0 0 8px 0'><span style='color:{C.MUTED}'>{stamp} "
                          f"{html.escape(n['text'])}</span></p>")
         if not lines:
-            lines.append("<p style='color:#8b949e'>No messages yet. Type <b>@</b> and pick a helper to give it "
+            lines.append(f"<p style='color:{C.MUTED}'>No messages yet. Type <b>@</b> and pick a helper to give it "
                          "something to build. It answers here as it works.</p>")
         self.chat_rendering = True
         try:
@@ -1915,7 +1932,7 @@ class TeamPanel(QtGui.QDockWidget):
         AI helpers show there too, so people can see them working together."""
         k = ev["kind"]
         me = self.session.ident["name"] if self.session.ident else None
-        stamp = f"<span style='color:#8b949e'>{time.strftime('%H:%M', time.localtime(ev['ts']))}</span>"
+        stamp = f"<span style='color:{C.MUTED}'>{time.strftime('%H:%M', time.localtime(ev['ts']))}</span>"
         if k == "message":
             sender = self.session.participant(ev["name"])
             target = self.session.participant(ev.get("to"))
@@ -1923,11 +1940,11 @@ class TeamPanel(QtGui.QDockWidget):
                 return  # it's in the chat
             body = html.escape(ev["body"])
             if ev.get("message_kind") == "steer":
-                self.note_activity(f"{stamp} <b style='color:#d9822b'>{html.escape(ev['name'])}</b> asked "
+                self.note_activity(f"{stamp} <b style='color:{C.ACCENT}'>{html.escape(ev['name'])}</b> asked "
                                    f"<b>{html.escape(ev['to'])}</b>: {body}")
             elif sender and sender.get("kind") != "human" and (ev.get("to") == "all" or
                                                                 (target and target.get("kind") != "human")):
-                self.note_activity(f"{stamp} 🤝 <b style='color:#a371f7'>{html.escape(ev['name'])}</b> → "
+                self.note_activity(f"{stamp} 🤝 <b style='color:{C.ACCENT}'>{html.escape(ev['name'])}</b> → "
                                    f"<b>{html.escape(ev['to'])}</b>: {body}")
             return
         if k == "library" and self.library.loaded:
@@ -1937,12 +1954,12 @@ class TeamPanel(QtGui.QDockWidget):
         if k == "op_failed" and panes.is_refusal(str(ev.get("error") or "")):
             stamp = time.strftime('%H:%M', time.localtime(ev['ts']))
             self.note_activity(panes.refusal_html(stamp, html.escape(ev.get("name") or "Someone"),
-                                                 "#a371f7", str(ev.get("error") or ""),
+                                                 C.ACCENT, str(ev.get("error") or ""),
                                                  op=ev.get("op") or ""))
             return
         line = describe_event(ev)
         if line:
-            self.note_activity(f"{stamp} <span style='color:#a78bfa'>{html.escape(line)}</span>")
+            self.note_activity(f"{stamp} <span style='color:{C.ACCENT}'>{html.escape(line)}</span>")
 
     # ---------------------------------------------------------- suggestions for you
 
@@ -1972,11 +1989,11 @@ class TeamPanel(QtGui.QDockWidget):
         self.suggest_box.setVisible(bool(rows))
         if not rows:
             return
-        self.suggest_lay.addWidget(caption(f"Waiting for you · {len(rows)}", colour="#d9822b"))
+        self.suggest_lay.addWidget(caption(f"Waiting for you · {len(rows)}", colour=C.ACCENT))
         for r in rows[:SUGGESTIONS_SHOWN]:
             self.suggest_lay.addWidget(self.suggestion_row(r))
         if len(rows) > SUGGESTIONS_SHOWN:
-            more = QtGui.QLabel(f"<small style='color:#8b949e'>{len(rows) - SUGGESTIONS_SHOWN} more in "
+            more = QtGui.QLabel(f"<small style='color:{C.MUTED}'>{len(rows) - SUGGESTIONS_SHOWN} more in "
                                 "Tools ▸ Precision settings</small>")
             more.setWordWrap(True)
             self.suggest_lay.addWidget(more)
@@ -2268,7 +2285,7 @@ class TeamPanel(QtGui.QDockWidget):
             text = "This task was cancelled. Its result is kept; leave it in the Cancelled group."
         else:
             text = ""
-        self.task_hint.setText(f"<small style='color:#8b949e'>{text}</small>" if text else "")
+        self.task_hint.setText(f"<small style='color:{C.MUTED}'>{text}</small>" if text else "")
 
     def new_task(self):
         if not self.session.ensure_connected("create a task"):
@@ -2434,7 +2451,7 @@ def open_log(folder):
 def chat_line(at, who, colour, after_name, body, status):
     stamp = time.strftime('%H:%M', time.localtime(at))
     text = html.escape(body).replace("\n", "<br>")
-    return (f"<p style='margin:0 0 8px 0'><span style='color:#8b949e'>{stamp}</span> "
+    return (f"<p style='margin:0 0 8px 0'><span style='color:{C.MUTED}'>{stamp}</span> "
             f"<b style='color:{colour}'>{who}</b>{after_name}{status}<br>{text}</p>")
 
 
@@ -2460,8 +2477,9 @@ def page_layout(page):
     return lay
 
 
-def caption(text, colour="#8b949e"):
+def caption(text, colour=None):
     """A small spaced-out heading in capitals, like WHO'S HERE."""
+    colour = colour or C.MUTED
     label = QtGui.QLabel(text.upper())
     font = label.font()
     if font.pointSizeF() > 0:
@@ -2683,7 +2701,7 @@ def setting_suggestion(g, spec):
             "text": f"<b>{html.escape(g.get('by') or 'An AI helper')}</b> suggests changing "
                     f"<b>{html.escape(g['label'])}</b>" + (f" from {html.escape(now)}" if now else "")
                     + f" to <b>{html.escape(new)}</b>"
-                    + (f"<br><small style='color:#8b949e'>{why}</small>" if why else "")}
+                    + (f"<br><small style='color:{C.MUTED}'>{why}</small>" if why else "")}
 
 
 def style_summary(box):
@@ -2691,7 +2709,7 @@ def style_summary(box):
     kinds = ", ".join(f"{s['count']} {html.escape(s['label'].lower())}" for s in (box.get("sections") or [])[:3])
     ready = (f" · <b>{box['ready']} ready</b>" if box.get("ready") else "")
     text = (f"<b>{box['rules']} design rules</b> are waiting: {box['decisions']} decisions{ready}."
-            + (f"<br><small style='color:#8b949e'>Mostly {kinds}</small>" if kinds else ""))
+            + (f"<br><small style='color:{C.MUTED}'>Mostly {kinds}</small>" if kinds else ""))
     return {"key": "style:inbox", "id": None, "kind": "style_inbox",
             "yes": f"Review {box['decisions']} decisions",
             "plain": f"{box['decisions']} design rules", "text": text}
@@ -2809,7 +2827,7 @@ class NewTaskDialog(QtGui.QDialog):
         p = self.session.participant(name) if name else None
         local = local_helper_status(self.session)
         if kind == "helper" and p and helper_state(p, local.get(name))[0] == "away":
-            self.note.setText(f"<small style='color:#e3b341'>"
+            self.note.setText(f"<small style='color:{C.WARN}'>"
                               f"{away_tip(p, local.get(name), team_db(self.session))}</small>")
         elif kind == "team":
             self.note.setText("<small>The team server plans it into parts, starts AI helpers and builds it. "
@@ -3197,7 +3215,7 @@ class NewHelperDialog(QtGui.QDialog):
         typed = re.sub(r"[^A-Za-z0-9_-]+", "-", self.name.text().strip()).strip("-_")[:40]
         taken = {p["name"].lower() for p in self.session.model.get("participants", [])}
         if typed and typed.lower() in taken:
-            self.note.setText(f"<span style='color:#ff7b72'>Someone on the team is already called {typed}.</span>")
+            self.note.setText(f"<span style='color:{C.ERR}'>Someone on the team is already called {typed}.</span>")
             return
         name = typed
         if not name:
@@ -3404,8 +3422,8 @@ class EditPartDialog(QtGui.QDialog):
     def update_state(self):
         props, moved = self.changes()
         bits = ([f"size ({', '.join(props)})"] if props else []) + (["position"] if moved else [])
-        self.state.setText(f"<small style='color:#d9822b'>Not saved yet: {', '.join(bits)}</small>" if bits else
-                           "<small style='color:#4fb35a'>Everyone sees the same as you.</small>")
+        self.state.setText(f"<small style='color:{C.ACCENT}'>Not saved yet: {', '.join(bits)}</small>" if bits else
+                           f"<small style='color:{C.OK}'>Everyone sees the same as you.</small>")
         self.save_b.setEnabled(bool(bits))
         self.revert_b.setEnabled(bool(bits))
 
@@ -4262,16 +4280,16 @@ class FeaReportDialog(QtGui.QDialog):
         lay = QtGui.QVBoxLayout(self)
         color, word = VERDICT_WORDS.get(r["verdict"], VERDICT_WORDS["check"])
         head = QtGui.QLabel(f"<b style='font-size:13pt'>{html.escape(r['title'])}</b><br>"
-                            f"<span style='color:#8b949e'>{html.escape(r['analysis_name'])} by {html.escape(r['by'])}"
+                            f"<span style='color:{C.MUTED}'>{html.escape(r['analysis_name'])} by {html.escape(r['by'])}"
                             f"</span><br><span style='background:{color};color:white;font-weight:bold'>&nbsp;{word}&nbsp;"
                             f"</span>&nbsp; {html.escape(r['headline'])}"
-                            + ("<br><span style='color:#e3b341'><b>Uses placeholder values</b>: see the yellow box"
+                            + (f"<br><span style='color:{C.WARN}'><b>Uses placeholder values</b>: see the yellow box"
                                "</span>" if r["inputs"]["placeholders"] else ""))
         head.setTextFormat(QtCore.Qt.RichText)
         lay.addWidget(head)
         self.view = QtGui.QTextBrowser()
         self.view.setOpenExternalLinks(True)
-        self.view.setStyleSheet("QTextBrowser { background: white; color: #1f2328; }")  # paper, even in dark themes
+        self.view.setStyleSheet(f"QTextBrowser {{ background: {C.SURFACE}; color: {C.TEXT}; }}")  # the theme's paper
         if self.png:
             img = QtGui.QImage.fromData(self.png)
             self.view.document().addResource(QtGui.QTextDocument.ImageResource, QtCore.QUrl("plot.png"), img)
@@ -4287,7 +4305,7 @@ class FeaReportDialog(QtGui.QDialog):
             b = QtGui.QPushButton(label)
             b.clicked.connect(fn)
             row.addWidget(b)
-        row.addWidget(QtGui.QLabel(f"<small style='color:#8b949e'>Saved in the project: files/{html.escape(folder)}"
+        row.addWidget(QtGui.QLabel(f"<small style='color:{C.MUTED}'>Saved in the project: files/{html.escape(folder)}"
                                    "</small>"))
         row.addStretch(1)
         close = QtGui.QPushButton("Close")

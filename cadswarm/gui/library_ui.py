@@ -44,6 +44,9 @@ def _err(e):
 class LibraryTab(QtGui.QWidget):
     """Search box and category filter, the parts list, details, and what you can do with a part."""
 
+    def heightForWidth(self, width):  # a hidden tab must not set the panel's scroll height (panel.TabPage)
+        return super().heightForWidth(width) if self.isVisible() else -1
+
     def __init__(self, session):
         super().__init__()
         self.session = session

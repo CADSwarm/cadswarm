@@ -138,6 +138,9 @@ def value_text(value):
 class SharedSizesTab(QtGui.QWidget):
     """One sheet every part reads from: each size, its value, and a change that reaches the team."""
 
+    def heightForWidth(self, width):  # a hidden tab must not set the panel's scroll height (panel.TabPage)
+        return super().heightForWidth(width) if self.isVisible() else -1
+
     def __init__(self, session):
         super().__init__()
         self.session = session
@@ -373,6 +376,9 @@ def _file_icon(path):
 
 class FilesTab(QtGui.QWidget):
     """The team's project folder: every saved file, its version and who saved it, plus history."""
+
+    def heightForWidth(self, width):  # a hidden tab must not set the panel's scroll height (panel.TabPage)
+        return super().heightForWidth(width) if self.isVisible() else -1
 
     def __init__(self, session):
         super().__init__()
